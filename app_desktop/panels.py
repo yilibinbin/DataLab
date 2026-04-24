@@ -721,7 +721,10 @@ def build_left_panel(self):
     self.constants_file_row.setVisible(False)
     const_wrapper_layout.addWidget(self.constants_file_row)
 
-    # Constants table (Name | Value) — same style as data table
+    # Constants table (Name | Value) — same style as data table.
+    # Also supports a text-view toggle so users can paste a whole
+    # block of "NAME VALUE" lines at once (matches the data area's
+    # existing "文本视图" button).
     const_table_toolbar = QHBoxLayout()
     const_add_row_btn = QPushButton(self._tr("+ 行", "+ Row"))
     self._register_text(const_add_row_btn, "+ 行", "+ Row")
@@ -729,21 +732,45 @@ def build_left_panel(self):
     const_clear_btn = QPushButton(self._tr("清除", "Clear"))
     self._register_text(const_clear_btn, "清除", "Clear")
     const_clear_btn.clicked.connect(lambda: _clear_constants_table(self))
+    self._constants_view_toggle = QPushButton(self._tr("文本视图", "Text View"))
+    self._register_text(self._constants_view_toggle, "文本视图", "Text View")
+    self._constants_view_toggle.clicked.connect(
+        lambda: _toggle_constants_view(self)
+    )
     const_table_toolbar.addWidget(const_add_row_btn)
     const_table_toolbar.addWidget(const_clear_btn)
+    const_table_toolbar.addWidget(self._constants_view_toggle)
     const_table_toolbar.addStretch()
     const_toolbar_w = QWidget()
     const_toolbar_w.setLayout(const_table_toolbar)
     const_wrapper_layout.addWidget(const_toolbar_w)
+
+    # Stacked widget: table view (0) / text view (1) — mirrors
+    # self._data_stack for the main data-input area.
+    self._constants_stack = QStackedWidget()
 
     self.constants_table = QTableWidget(4, 2)
     self.constants_table.setHorizontalHeaderLabels(["Name", "Value"])
     self.constants_table.horizontalHeader().setStretchLastSection(True)
     self.constants_table.setMinimumHeight(160)
     self.constants_table.setStyleSheet(_get_table_style())
-    const_wrapper_layout.addWidget(self.constants_table)
-    # Keep a legacy attribute for backward compat
-    self.manual_constants_edit = None
+    self._constants_stack.addWidget(self.constants_table)
+
+    # Plain-text editor for bulk paste. Previously set to ``None`` in
+    # baseline; now a real QPlainTextEdit so paste workflows like
+    # "paste 20 constants from a spreadsheet" work without having to
+    # click through each row individually.
+    self.manual_constants_edit = QPlainTextEdit()
+    self.manual_constants_edit.setPlaceholderText(
+        self._tr(
+            "每行一个常数，如 ALPHA 7.2973525693(11)[-3]",
+            "One constant per line, e.g. ALPHA 7.2973525693(11)[-3]",
+        )
+    )
+    self._constants_stack.addWidget(self.manual_constants_edit)
+
+    self._constants_stack.setCurrentIndex(0)  # table view by default
+    const_wrapper_layout.addWidget(self._constants_stack)
     error_layout.addWidget(self.constants_widget)
 
     # Error propagation method (Taylor vs Monte Carlo)
@@ -1638,6 +1665,65 @@ def _serialize_constants_table(self) -> str:
         if name or val:
             lines.append(f"{name}\t{val}")
     return "\n".join(lines)
+
+
+def _load_text_into_constants_table(self, text: str) -> None:
+    """Parse ``NAME VALUE``-per-line text and populate the constants
+    QTableWidget.
+
+    Accepts any whitespace (tab, space, multiple spaces) between the
+    name and the value; everything after the first whitespace run on
+    each line becomes the Value field so multi-part values like
+    ``7.2973525693(11)[-3]`` survive intact.
+    """
+    table = self.constants_table
+    text = (text or "").strip()
+    lines = [ln for ln in text.split("\n") if ln.strip()]
+
+    # Keep at least 4 rows so the blank table always looks intentional.
+    table.setRowCount(max(len(lines), 4))
+    # Clear any prior contents before refilling so a smaller text
+    # doesn't leave stale rows behind.
+    for r in range(table.rowCount()):
+        for c in range(table.columnCount()):
+            table.setItem(r, c, QTableWidgetItem(""))
+
+    for r, raw_line in enumerate(lines):
+        parts = raw_line.strip().split(None, 1)
+        if not parts:
+            continue
+        name = parts[0]
+        value = parts[1] if len(parts) > 1 else ""
+        table.setItem(r, 0, QTableWidgetItem(name))
+        table.setItem(r, 1, QTableWidgetItem(value))
+
+
+def _toggle_constants_view(self) -> None:
+    """Flip the constants input between QTableWidget (cell-by-cell
+    edit) and QPlainTextEdit (bulk paste). Round-trips cleanly:
+    - table → text: serialise current rows via ``_serialize_constants_table``
+    - text → table: parse with ``_load_text_into_constants_table``
+
+    Mirrors the behaviour of ``_toggle_data_view`` so users see a
+    consistent interaction model in both input areas.
+    """
+    stack = self._constants_stack
+    if stack.currentIndex() == 0:
+        # Leaving the table — serialise into the text widget.
+        self.manual_constants_edit.setPlainText(_serialize_constants_table(self))
+        stack.setCurrentIndex(1)
+        self._constants_view_toggle.setText(
+            self._tr("表格视图", "Table View")
+        )
+    else:
+        # Leaving text — parse back into the table.
+        _load_text_into_constants_table(
+            self, self.manual_constants_edit.toPlainText()
+        )
+        stack.setCurrentIndex(0)
+        self._constants_view_toggle.setText(
+            self._tr("文本视图", "Text View")
+        )
 
 
 class _TablePasteFilter(QObject):
