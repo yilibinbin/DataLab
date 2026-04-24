@@ -1,25 +1,31 @@
-"""Clipboard-tabular-data parser for DataLab's manual-input table.
+"""Shared text-parsing primitives used across DataLab.
 
-Real users copy from Excel / Numbers / Origin / Matlab and expect the
-manual-input table to "just work" across locales:
+Two families of helpers live here so neither the desktop GUI nor the
+LaTeX export layer has to reach across module boundaries for a purely
+syntactic parser:
 
-- US: ``1,234.56`` (comma thousands, dot decimal)
-- EU: ``1.234,56`` (dot thousands, comma decimal)
-- Scientific: ``1.5e-3`` / ``2.5E+4``
-- Matlab: spaces, semicolons, ragged columns
-- Numbers.app / Office on Windows: NBSP around cells
+1. **Clipboard-tabular parser** — ``parse_clipboard_tabular`` handles
+   data pasted from Excel / Numbers / Origin / Matlab across locales:
 
-``parse_clipboard_tabular`` returns a ``ParseResult`` with headers and
-rows. Non-numeric cells come back as ``None`` rather than being dropped
-— callers decide whether to surface or skip them.
+   - US: ``1,234.56`` (comma thousands, dot decimal)
+   - EU: ``1.234,56`` (dot thousands, comma decimal)
+   - Scientific: ``1.5e-3`` / ``2.5E+4``
+   - Matlab: spaces, semicolons, ragged columns
+   - Numbers.app / Office on Windows: NBSP around cells
 
-Hard limits:
-- ``MAX_CLIPBOARD_CHARS`` caps input size to prevent an accidental
-  multi-gigabyte paste from freezing the UI.
+   Returns a ``ParseResult`` with headers and rows. Non-numeric cells
+   come back as ``None`` rather than being dropped — callers decide
+   whether to surface or skip them. ``MAX_CLIPBOARD_CHARS`` caps input
+   size so an accidental multi-gigabyte paste cannot freeze the UI.
+
+2. **Name/value tokenizer** — ``parse_name_value_pairs`` is the shared
+   ``# comment`` / blank-line tolerant splitter used by the constants
+   text view, the error-propagation parser, and any future feature that
+   wants the same "one ``name value`` per line" syntax.
 
 This module is import-safe from headless contexts; it has no Qt
-dependency so the web front-end (Phase 2 Task 2.2 sub-task) can run
-the same logic via pyodide or via a parallel JS port.
+dependency so the web front-end can run the same logic via pyodide or
+via a parallel JS port.
 """
 
 from __future__ import annotations
@@ -29,13 +35,14 @@ import enum
 import io as _io
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterable, Optional
 
 __all__ = [
     "LocaleHint",
     "MAX_CLIPBOARD_CHARS",
     "ParseResult",
     "parse_clipboard_tabular",
+    "parse_name_value_pairs",
 ]
 
 
@@ -436,3 +443,37 @@ def parse_clipboard_tabular(
         data_rows.append(parsed_row)
 
     return ParseResult(headers=headers, rows=data_rows)
+
+
+def parse_name_value_pairs(text_or_lines: str | Iterable[str]) -> list[tuple[str, str]]:
+    """Split a free-form constants text block into ``(name, value)`` tuples.
+
+    Rules, shared by every caller:
+
+    - Lines are ``.strip()``-ed before inspection.
+    - Blank lines are skipped.
+    - Lines beginning with ``#`` are treated as comments and skipped.
+    - Each remaining line is split on whitespace once (``split(None, 1)``);
+      the first token becomes the name, the remainder becomes the value.
+    - Lines that do not split into exactly two tokens are silently dropped
+      here — it is the caller's responsibility to warn the user if that
+      matters (``_process_constants_lines`` does, with ``verbose=True``).
+
+    Accepts either a single ``str`` (which is ``splitlines()``-ed) or any
+    iterable of line strings, so callers that already hold a ``list`` of
+    lines (``file.readlines()``) don't pay for a re-join.
+    """
+    if isinstance(text_or_lines, str):
+        lines: Iterable[str] = text_or_lines.splitlines()
+    else:
+        lines = text_or_lines
+
+    pairs: list[tuple[str, str]] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split(None, 1)
+        if len(parts) == 2:
+            pairs.append((parts[0], parts[1]))
+    return pairs

@@ -70,6 +70,14 @@ _REFCOL_AUTO_MAX_DIFF_KEY = "auto_max_diff"
 _REFCOL_AUTO_MAX_DIFF_ZH = "最大差异列"
 _REFCOL_AUTO_MAX_DIFF_EN = "Max-diff column"
 
+# Stack-page indices for the two QStackedWidgets used by the left panel (the
+# data table / manual editor, and the constants table / text editor). Both
+# stacks share the same convention: table view on page 0, free-form text on
+# page 1. Centralised here so the toggle helpers and the worker-facing
+# serialiser agree on the mapping.
+_STACK_PAGE_TABLE = 0
+_STACK_PAGE_TEXT = 1
+
 # --- Theme-aware stylesheets ---
 
 # Thin overlay scrollbar — fades to near-invisible when idle
@@ -443,7 +451,7 @@ def build_left_panel(self):
     self.manual_data_edit = QPlainTextEdit()
     self._data_stack.addWidget(self.manual_data_edit)
 
-    self._data_stack.setCurrentIndex(0)  # table view by default
+    self._data_stack.setCurrentIndex(_STACK_PAGE_TABLE)  # table view by default
     manual_layout.addWidget(self._data_stack)
     self.left_layout.addWidget(self.manual_box)
 
@@ -773,7 +781,7 @@ def build_left_panel(self):
     )
     self._constants_stack.addWidget(self.manual_constants_edit)
 
-    self._constants_stack.setCurrentIndex(0)  # table view by default
+    self._constants_stack.setCurrentIndex(_STACK_PAGE_TABLE)  # table view by default
     const_wrapper_layout.addWidget(self._constants_stack)
     error_layout.addWidget(self.constants_widget)
 
@@ -1535,23 +1543,30 @@ def _add_table_row(self):
     table.setRowCount(table.rowCount() + 1)
 
 
+def _view_toggle_label(self, current_index: int) -> str:
+    """Label shown on a view-toggle button based on which page is *now* visible.
+
+    When the stack is showing the table, the button offers the text view (and
+    vice versa). Centralising this here keeps both the data and constants
+    toggles in sync — and keeps the ``_STACK_PAGE_*`` convention in one place.
+    """
+    if current_index == _STACK_PAGE_TABLE:
+        return self._tr("文本视图", "Text View")
+    return self._tr("表格视图", "Table View")
+
+
 def _toggle_data_view(self):
     """Switch between table view and plain-text view."""
     stack = self._data_stack
-    if stack.currentIndex() == 0:
+    if stack.currentIndex() == _STACK_PAGE_TABLE:
         # Table → Text: serialize table into text edit
         self.manual_data_edit.setPlainText(_serialize_table(self))
-        stack.setCurrentIndex(1)
-        self._data_view_toggle.setText(
-            self._tr("表格视图", "Table View")
-        )
+        stack.setCurrentIndex(_STACK_PAGE_TEXT)
     else:
         # Text → Table: load text into table
         _load_text_into_table(self, self.manual_data_edit.toPlainText())
-        stack.setCurrentIndex(0)
-        self._data_view_toggle.setText(
-            self._tr("文本视图", "Text View")
-        )
+        stack.setCurrentIndex(_STACK_PAGE_TABLE)
+    self._data_view_toggle.setText(_view_toggle_label(self, stack.currentIndex()))
 
 
 def _serialize_table(self) -> str:
@@ -1714,7 +1729,7 @@ def _serialize_constants_table(self) -> str:
     """
     stack = getattr(self, "_constants_stack", None)
     edit = getattr(self, "manual_constants_edit", None)
-    if stack is not None and edit is not None and stack.currentIndex() == 1:
+    if stack is not None and edit is not None and stack.currentIndex() == _STACK_PAGE_TEXT:
         return edit.toPlainText()
 
     table = self.constants_table
@@ -1751,29 +1766,16 @@ def _serialize_constants_table_as_text(self) -> str:
 def _load_text_into_constants_table(self, text: str) -> None:
     """Parse the free-form text buffer and populate the constants QTableWidget.
 
-    Format mirrors ``_process_constants_lines`` in
-    ``datalab_latex/latex_tables_error_propagation.py``:
-
-    - blank lines are skipped
-    - lines starting with ``#`` are treated as comments and skipped
-    - every other line is split on whitespace (first token = name, remainder
-      = value)
-
-    Lines that cannot be split into two tokens are silently dropped at this
-    layer; downstream parsing will still produce a warning when ``verbose``
-    is set.
+    Shares the line-tokenizer with ``_process_constants_lines`` in
+    ``datalab_latex/latex_tables_error_propagation.py`` via
+    ``shared.parsing.parse_name_value_pairs``. Lines that don't split into
+    exactly two tokens are dropped here; the downstream parser still warns
+    when ``verbose=True``.
     """
-    table = self.constants_table
-    raw = (text or "").strip()
-    pairs: list[tuple[str, str]] = []
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        parts = stripped.split(None, 1)
-        if len(parts) == 2:
-            pairs.append((parts[0], parts[1]))
+    from shared.parsing import parse_name_value_pairs
 
+    pairs = parse_name_value_pairs(text or "")
+    table = self.constants_table
     table.setRowCount(max(len(pairs), 4))
     table.clearContents()
     for r, (name, val) in enumerate(pairs):
@@ -1791,7 +1793,7 @@ def _toggle_constants_view(self) -> None:
     the buffer through ``_load_text_into_constants_table``.
     """
     stack = self._constants_stack
-    if stack.currentIndex() == 0:
+    if stack.currentIndex() == _STACK_PAGE_TABLE:
         # Table → Text: seed the edit buffer with the current table contents
         # only when the buffer is empty. Guarding BEFORE serialization avoids
         # the unnecessary table walk when the user has already typed into
@@ -1800,13 +1802,12 @@ def _toggle_constants_view(self) -> None:
             self.manual_constants_edit.setPlainText(
                 _serialize_constants_table_as_text(self)
             )
-        stack.setCurrentIndex(1)
-        self._constants_view_toggle.setText(self._tr("表格视图", "Table View"))
+        stack.setCurrentIndex(_STACK_PAGE_TEXT)
     else:
         # Text → Table: parse the buffer into table rows.
         _load_text_into_constants_table(self, self.manual_constants_edit.toPlainText())
-        stack.setCurrentIndex(0)
-        self._constants_view_toggle.setText(self._tr("文本视图", "Text View"))
+        stack.setCurrentIndex(_STACK_PAGE_TABLE)
+    self._constants_view_toggle.setText(_view_toggle_label(self, stack.currentIndex()))
 
 
 class _TablePasteFilter(QObject):
