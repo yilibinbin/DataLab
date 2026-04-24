@@ -4,14 +4,189 @@ Integrates with existing PDF-to-image conversion pipeline.
 """
 
 import logging
+import os
 import subprocess
 import tempfile
 import shutil
+import threading
+from collections import OrderedDict
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Any, NamedTuple, Optional, Tuple, List
 from PIL import Image, ImageOps
 
 logger = logging.getLogger(__name__)
+
+# ----------------------------------------------------------------------------
+# Per-call LRU cache for ``convert_pdf_to_images`` (#10)
+# ----------------------------------------------------------------------------
+#
+# Every PDF preview frame — page navigation, zoom change, dark-mode toggle —
+# calls ``convert_pdf_to_images`` with the same ``(pdf_path, dpi)``. Each
+# invocation spawns a pdftoppm / gs subprocess (~200-800 ms) and re-decodes
+# every page. For an editing session where the user hammers next-page a few
+# dozen times, that dominates the preview latency.
+#
+# We cache on ``(pdf_abspath, pdf_mtime_ns, pdf_size, dpi, max_pages, tool_name)``.
+# mtime+size together catch the "user re-exported the PDF" case without
+# a full hash — both values change on every meaningful rewrite, and the
+# filesystem supplies them in O(1) from ``stat()``. The ``tool_name``
+# suffix distinguishes pdftoppm and ghostscript outputs (pixel-identical
+# most of the time, but not guaranteed — separate cache entries keep the
+# byte-identity invariant on each tool).
+#
+# Values are the already-RGBA'd PIL images in memory. PIL's lazy-load is
+# forced by the ``.convert("RGBA")`` inside the converters, so the images
+# survive the ``TemporaryDirectory`` cleanup on the source files.
+
+# Worst-case memory at the enforced ceilings: 16 entries × 50 pages × ~140 MB
+# per A4 page at 600 dpi RGBA ≈ 112 GB. At typical desktop use (DPI=200,
+# ~5 pages, A4) it's ~800 MB. The hard caps on DPI and page count (below)
+# are load-bearing for this calculation — callers that bypass those caps
+# could blow past the memory budget. **DO NOT expose this function to a
+# web route with user-controlled dpi or max_pages.** It is desktop-only
+# today (grep across app_web/ confirms no blueprint calls it). Any web
+# exposure must add an explicit allow-list + rate limit.
+_PDF_RASTER_CACHE_MAXSIZE = 16
+_pdf_raster_cache: "OrderedDict[tuple, List[Image.Image]]" = OrderedDict()
+_pdf_raster_cache_lock = threading.Lock()
+_pdf_raster_cache_stats = {"hits": 0, "misses": 0}
+
+# DPI bounds. 36 is pdftoppm's practical lower bound (below that pages
+# come out illegibly small); 600 matches the desktop's
+# ``window_latex_pdf_mixin._clamp_dpi`` ceiling. Enforced before any
+# subprocess / cache work so an untrusted caller can't request a
+# memory-exhausting raster.
+_DPI_MIN_RASTER = 36
+_DPI_MAX_RASTER = 600
+
+# Hard ceiling on pages rasterised per call — defuses the "PDF bomb"
+# attack where a 10 000-page PDF (legitimate edge case or adversarial
+# input) would explode memory. Callers passing ``max_pages=None``
+# (no explicit cap) implicitly opt into this ceiling; callers passing
+# a lower value get their requested cap.
+_ABSOLUTE_MAX_PAGES = 50
+
+
+def _clamp_dpi_raster(dpi: Any) -> int:
+    """Validate+clamp the raster DPI. Raises ValueError on non-integer
+    input so programming errors aren't silently swallowed."""
+    try:
+        value = int(dpi)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"dpi must be an integer, got {dpi!r}") from exc
+    if value < _DPI_MIN_RASTER or value > _DPI_MAX_RASTER:
+        raise ValueError(
+            f"dpi={value} is outside the safe range "
+            f"[{_DPI_MIN_RASTER}, {_DPI_MAX_RASTER}] — "
+            "rasterisation at this resolution would risk memory exhaustion"
+        )
+    return value
+
+
+def _resolve_max_pages(max_pages: Optional[int]) -> int:
+    """Apply the ``_ABSOLUTE_MAX_PAGES`` ceiling. ``None`` (no cap from
+    caller) maps to the absolute ceiling; an explicit value is clamped
+    down to it."""
+    if max_pages is None:
+        return _ABSOLUTE_MAX_PAGES
+    try:
+        value = int(max_pages)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"max_pages must be an integer or None, got {max_pages!r}"
+        ) from exc
+    if value <= 0:
+        raise ValueError(f"max_pages must be positive, got {value}")
+    return min(value, _ABSOLUTE_MAX_PAGES)
+
+
+class _PdfRasterCacheInfo(NamedTuple):
+    """Hit/miss counters plus current LRU occupancy. Mirrors the shape of
+    ``functools._CacheInfo`` so callers can share diagnostic code with
+    the other LRU layers in DataLab."""
+
+    hits: int
+    misses: int
+    currsize: int
+    maxsize: int
+
+
+def _pdf_cache_key(
+    pdf_path: Path,
+    dpi: int,
+    max_pages: Optional[int],
+    tool_name: str,
+) -> tuple:
+    """Build a cache key that invalidates when the file changes.
+
+    Uses ``(resolved_abs_path, mtime_ns, size, dpi, max_pages, tool_name)``.
+
+    Uses ``Path.resolve()`` (not ``os.path.abspath``) so symlinks are
+    canonicalised to their target. Two callers passing different symlink
+    paths that resolve to the same file share a cache entry (correct —
+    they're rendering the same bytes). ``resolve()`` can raise
+    ``OSError`` (missing target, broken symlink chain) — the caller
+    catches this and bypasses the cache.
+
+    Both mtime and size are required: a same-size-same-time overwrite is
+    extraordinarily rare but possible (e.g., an atomic replace followed
+    by a backdate); using both makes accidental stale hits near-impossible.
+    """
+    resolved = pdf_path.resolve(strict=True)
+    st = resolved.stat()
+    return (
+        str(resolved),
+        st.st_mtime_ns,
+        st.st_size,
+        int(dpi),
+        max_pages,
+        tool_name,
+    )
+
+
+def clear_pdf_raster_cache() -> None:
+    """Drop all cached pages. Call on PDF-export completion to ensure the
+    user sees a fresh render even if mtime resolution fooled the cache."""
+    with _pdf_raster_cache_lock:
+        _pdf_raster_cache.clear()
+        _pdf_raster_cache_stats["hits"] = 0
+        _pdf_raster_cache_stats["misses"] = 0
+
+
+def pdf_raster_cache_info() -> _PdfRasterCacheInfo:
+    """Snapshot of the raster LRU state."""
+    with _pdf_raster_cache_lock:
+        return _PdfRasterCacheInfo(
+            hits=_pdf_raster_cache_stats["hits"],
+            misses=_pdf_raster_cache_stats["misses"],
+            currsize=len(_pdf_raster_cache),
+            maxsize=_PDF_RASTER_CACHE_MAXSIZE,
+        )
+
+
+def _cache_get(key: tuple) -> Optional[List[Image.Image]]:
+    """LRU-aware fetch: moves the entry to the end on hit. Returns a
+    copy of the image list (so a caller mutating the list — e.g., zoom
+    in place — doesn't poison the cache for the next caller)."""
+    with _pdf_raster_cache_lock:
+        entry = _pdf_raster_cache.get(key)
+        if entry is None:
+            _pdf_raster_cache_stats["misses"] += 1
+            return None
+        _pdf_raster_cache.move_to_end(key)
+        _pdf_raster_cache_stats["hits"] += 1
+        # Shallow-copy the list; individual PIL images are reused (safe —
+        # they're treated as immutable by every caller in DataLab).
+        return list(entry)
+
+
+def _cache_put(key: tuple, value: List[Image.Image]) -> None:
+    """Store and evict to ``_PDF_RASTER_CACHE_MAXSIZE`` LRU entries."""
+    with _pdf_raster_cache_lock:
+        _pdf_raster_cache[key] = list(value)
+        _pdf_raster_cache.move_to_end(key)
+        while len(_pdf_raster_cache) > _PDF_RASTER_CACHE_MAXSIZE:
+            _pdf_raster_cache.popitem(last=False)
 
 
 def find_pdf_conversion_tool() -> Optional[Tuple[str, str]]:
@@ -46,13 +221,31 @@ def convert_pdf_to_images(
 
     Args:
         pdf_path: Path to PDF file
-        dpi: Render DPI
-        max_pages: Limit number of pages to convert
+        dpi: Render DPI. Clamped to ``[_DPI_MIN_RASTER, _DPI_MAX_RASTER]``
+          — values outside that range raise ``ValueError`` rather than
+          silently requesting a multi-gigabyte raster.
+        max_pages: Limit number of pages to convert. ``None`` applies
+          the ``_ABSOLUTE_MAX_PAGES`` hard cap; an explicit value is
+          clamped down to that cap. Non-positive values raise.
         tool: (tool_name, tool_path) tuple
 
     Returns:
         List of PIL Image objects (RGBA)
+
+    LRU-cached by ``(resolved_abs_path, mtime_ns, size, dpi,
+    effective_max_pages, tool)`` so repeat previews of an unchanged PDF
+    skip the subprocess entirely. A rewritten PDF (new mtime or size)
+    invalidates its entry. Cache misses preserve the original (uncached)
+    behaviour exactly, so ``FileNotFoundError`` on a missing PDF still
+    propagates.
     """
+    # Validate BEFORE anything expensive. A dpi=0 or dpi=100000 must fail
+    # fast with a clear error, not get far enough to exhaust memory.
+    safe_dpi = _clamp_dpi_raster(dpi)
+    effective_max_pages = _resolve_max_pages(max_pages)
+
+    # Raise cleanly **before** touching the cache — a stale cached entry
+    # must never mask a deleted file.
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
@@ -63,20 +256,61 @@ def convert_pdf_to_images(
             raise RuntimeError("No PDF conversion tool found (pdftoppm or ghostscript)")
 
     tool_name, tool_path = tool
-    images = []
 
+    # Cache lookup: build the key from stat() (cheap), then either
+    # return the cached images or fall through to the converter.
+    try:
+        cache_key = _pdf_cache_key(
+            pdf_path, safe_dpi, effective_max_pages, tool_name
+        )
+    except OSError as exc:
+        # stat()/resolve() failed between the exists() check and now.
+        # Log at WARNING so repeated races (e.g. an attacker cycling a
+        # symlink target) surface in production monitoring — silently
+        # bypassing the cache at DEBUG level would hide the signal.
+        logger.warning(
+            "[pdf] stat/resolve failed after exists(), bypassing cache "
+            "(possible race or broken symlink): %s",
+            exc,
+        )
+        cache_key = None
+
+    if cache_key is not None:
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            logger.debug(
+                f"[pdf] cache hit: {pdf_path.name} @ {safe_dpi} dpi ({len(cached)} pages)"
+            )
+            return cached
+
+    images: List[Image.Image] = []
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
 
         try:
             if tool_name == "pdftoppm":
-                images = _convert_pdftoppm(pdf_path, tmp_path, dpi, max_pages, tool_path)
+                images = _convert_pdftoppm(
+                    pdf_path, tmp_path, safe_dpi, effective_max_pages, tool_path
+                )
             elif tool_name == "gs":
-                images = _convert_ghostscript(pdf_path, tmp_path, dpi, max_pages, tool_path)
+                images = _convert_ghostscript(
+                    pdf_path, tmp_path, safe_dpi, effective_max_pages, tool_path
+                )
             else:
                 raise RuntimeError(f"Unknown tool: {tool_name}")
 
             logger.info(f"[pdf] Converted {len(images)} pages using {tool_name}")
+            # Force the PIL lazy-loader to actually read bytes before the
+            # TemporaryDirectory vanishes. ``convert("RGBA")`` in
+            # ``_convert_pdftoppm`` / ``_convert_ghostscript`` already
+            # triggers load, but belt-and-braces here prevents silent
+            # read-after-close bugs if either converter is refactored.
+            for img in images:
+                img.load()
+
+            if cache_key is not None and images:
+                _cache_put(cache_key, images)
+
             return images
 
         except Exception as e:
