@@ -49,7 +49,16 @@ except ImportError:
         with tempfile.TemporaryDirectory() as tmpdir:
             tex_path = Path(tmpdir) / f"{label}.tex"
             tex_path.write_text(tex_text, encoding="utf-8")
-            cmd = [engine, "-interaction=nonstopmode", "-halt-on-error", tex_path.name]
+            # Match the primary compile_latex_safe: never trust tex to omit
+            # \write18 — force shell-escape off even on the fallback path so a
+            # missing security module can't quietly enable command execution.
+            cmd = [
+                engine,
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "-no-shell-escape",
+                tex_path.name,
+            ]
             try:
                 subprocess.run(
                     cmd,

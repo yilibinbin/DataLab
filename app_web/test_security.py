@@ -139,7 +139,7 @@ class TestLaTeXSecurity:
 
     def test_latex_engine_whitelist_invalid(self):
         """Test invalid LaTeX engines are rejected."""
-        with pytest.raises(ValueError, match="不支持的LaTeX引擎"):
+        with pytest.raises(ValueError, match="不支持的 LaTeX 引擎"):
             validate_latex_engine('bash')
 
         with pytest.raises(ValueError):

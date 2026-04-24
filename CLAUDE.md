@@ -41,6 +41,8 @@ pytest --cov=. --cov-report=term-missing                                     # w
 
 Test config bootstrap is in `tests/conftest.py` (puts the project root on `sys.path`).
 
+Desktop-GUI tests use `pytest-qt`; set `QT_QPA_PLATFORM=offscreen` on machines without a display server (CI, SSH, containers) or the Qt tests will fail to create a `QApplication`.
+
 ### Build native bundles (PyInstaller, fully self-contained)
 
 ```bash
@@ -82,7 +84,7 @@ A TeX distribution providing `pdflatex` or `xelatex` is required for PDF export.
 ### Cross-cutting conventions (follow these)
 
 - **Bilingual messages**: user-facing errors and labels use `_dual_msg(zh, en)` returning `"汉语 / English"`. The locale layer splits on `" / "` to extract the active language. Don't return single-language strings from new code paths.
-- **Precision discipline**: every numerical computation wraps work in `with precision_guard(dps): ...`. Don't mutate `mp.dps` directly — direct mutations leak across threads/jobs. Defaults: power-law=50, accelerators=80, fitting=formula-dependent.
+- **Precision discipline**: every numerical computation wraps work in `with precision_guard(dps): ...`. Don't mutate `mp.dps` directly — direct mutations leak across threads/jobs. Defaults: power-law=50, accelerators=80, fitting=formula-dependent. `mp.dps` is **process-global** in mpmath; existing workers (`CalcJob`, `FitJob`, `AutoFitJob`) already enter `precision_guard` at their entry point. Any new worker or new code path that calls mpmath directly must wrap the same way, or concurrent jobs will corrupt each other's precision.
 - **Single expression engine**: extrapolation custom formulas, error-propagation formulas, and fitting model expressions all flow through `data_extrapolation_latex_latest` / `datalab_latex/expression_engine.py`. Add new functions to its whitelist; don't write a second parser.
 - **Config/Result DTO pattern**: each method has a `<Method>Config` and `<Method>Result` dataclass. Mirror this when adding new methods.
 
@@ -101,3 +103,5 @@ A TeX distribution providing `pdflatex` or `xelatex` is required for PDF export.
 - **Two requirements files for two frontends.** Installing only `web_requirements.txt` will not give you PySide6, and vice-versa. Pick the one that matches what you're working on.
 - **Windows ≠ Gunicorn.** The web deploy doc (`docs/web/deploy.md`) mandates Waitress on Windows (Gunicorn imports `fcntl`). Production WSGI is Waitress.
 - **`Document.md` is obsolete** (marked as such in its header). For recent design decisions, prefer the latest `CODE_REVIEW_R*.md` (highest number) and `FITTING_REVIEW_UPDATED.md`.
+- **Keep desktop and web in sync.** `shared/ui_specs.py` and `shared/help_specs.json` are the **single source of truth** for parameter widgets and help popovers — editing them updates both frontends. Editing a mixin in `app_desktop/` or a blueprint in `app_web/` without touching the shared specs when a user-visible parameter changes will cause drift between the two UIs.
+- **Adding a math function requires whitelisting it.** `datalab_latex/expression_engine.py` rejects unknown identifiers by AST inspection. If fitting, extrapolation custom formulas, or error propagation needs a new function (e.g. `erf`, `besselj`), add it to the whitelist in `expression_engine.py` — not to a local import list — so all three code paths see it.

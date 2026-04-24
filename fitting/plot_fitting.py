@@ -12,6 +12,8 @@ from matplotlib import rcParams  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 from mpmath import mp
 
+from shared.precision import precision_guard
+
 rcParams["font.family"] = "sans-serif"
 rcParams["font.sans-serif"] = [
     "Arial Unicode MS",
@@ -32,23 +34,29 @@ def sample_mp_function(
     x_values: Sequence[mp.mpf],
     precision: int | None = None,
 ) -> list[mp.mpf]:
-    """Evaluate an mp function across a sequence while preserving precision."""
+    """Evaluate an mp function across a sequence while preserving precision.
 
-    previous_dps = None
-    if precision is not None and precision > mp.dps:
-        previous_dps = mp.dps
-        mp.dps = precision
+    Uses ``shared.precision.precision_guard`` so ``mp.dps`` mutations are
+    routed through the single canonical context manager (thread-safe for
+    concurrent worker jobs — ``mp.dps`` is process-global in mpmath).
+    When ``precision`` is ``None``, ``mp.dps`` is not touched.
+    """
+
     samples: list[mp.mpf] = []
-    try:
+
+    def _evaluate() -> None:
         for value in x_values:
             mp_x = mp.mpf(value)
             try:
                 samples.append(mp.mpf(func(mp_x)))
             except Exception:
                 samples.append(mp.nan)
-    finally:
-        if previous_dps is not None:
-            mp.dps = previous_dps
+
+    if precision is None:
+        _evaluate()
+    else:
+        with precision_guard(precision):
+            _evaluate()
     return samples
 
 

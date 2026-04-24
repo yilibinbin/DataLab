@@ -190,6 +190,20 @@ def _lambdify_expression(
     lambda_symbols = [available_symbols[dep] for dep in dependencies]
     expr_lambda = sp.lambdify(lambda_symbols, expr, "mpmath")
 
+    # Defense-in-depth: sp.lambdify seeds the callable's __globals__ with the
+    # full builtins module (including __import__, open, eval, exec). The
+    # SymPy parser upstream (_parse_expr_safe) is already whitelist-restricted,
+    # but stripping __builtins__ here ensures a bypass of the parser can't
+    # reach dangerous primitives via the callable's globals. mpmath-backed
+    # lambdify callables do not need Python's builtins — all operators are
+    # pulled from the mpmath namespace already present in __globals__.
+    try:
+        expr_lambda.__globals__["__builtins__"] = {}
+    except Exception:
+        # Some exotic callables may not expose __globals__ as a writable dict;
+        # in that case the parser-level whitelist remains the primary defense.
+        pass
+
     def _evaluate(params, deps=tuple(dependencies), expr_lambda=expr_lambda):
         missing = [dep for dep in deps if dep not in params]
         if missing:

@@ -112,7 +112,7 @@ AUTO_MODELS = [
     AutoModelDefinition("M3", "三次多项式 / Cubic", basis3, texts3, ["b0", "b1", "b2", "b3"]),
     AutoModelDefinition("M4", "对数模型 / Log model", *_log_basis(), ["a", "b"], requires_positive_x=True),
     AutoModelDefinition("M4B", "对数多项式 / Log polynomial", *_log_poly_basis(), ["a", "b", "c"], requires_positive_x=True),
-    AutoModelDefinition("M5", "x^-1 级数 / 1/x series", *_inverse_basis(), ["A", "B", "C"]),
+    AutoModelDefinition("M5", "x^-1 级数 / 1/x series", *_inverse_basis(), ["A", "B", "C"], requires_positive_x=True),
     AutoModelDefinition("M6", "高次衰减 / High-order decay", *_fractional_decay_basis(), ["C1", "C2", "C3"], requires_positive_x=True),
     AutoModelDefinition("M7", "指数组合 / Exponential combo", *_exponential_combo_basis(), ["A", "B", "C"]),
     AutoModelDefinition("M7B", "通用指数基 / Exponential basis", *_exponential_flexible_basis(), ["A", "B", "C"]),
@@ -176,7 +176,7 @@ def fit_linear_model(
         x_series = [mp.mpf(x) for x in x_data]
         y_series = [mp.mpf(y) for y in y_data]
         if definition.requires_positive_x and any(value <= 0 for value in x_series):
-            raise ValueError("该模型需要所有 x 为正数。/ This model requires all x > 0.")
+            raise ValueError("该模型需要所有 x 为正数。 / This model requires all x > 0.")
         rows = len(x_series)
         cols = len(definition.basis_functions)
         weight_vec = None

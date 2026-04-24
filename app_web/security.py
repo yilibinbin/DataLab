@@ -32,35 +32,35 @@ def generate_csrf_token() -> str:
 
 
 def get_csrf_token() -> str:
-    """Get or create CSRF token for current session."""
-    # Prefer a stable double-submit cookie token when session cookies are unavailable.
-    # This avoids token churn (and CSRF failures) in environments where the session cookie
-    # is not persisted, e.g. SESSION_COOKIE_SECURE=True while serving over plain HTTP.
-    if 'csrf_token' not in session:
-        cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
-        if cookie_token:
-            session['csrf_token'] = cookie_token
-            return cookie_token
+    """Get or create the CSRF token bound to the current server-side session.
+
+    The token is generated and stored in ``session['csrf_token']``. The
+    ``datalab_csrf`` cookie is set in ``add_security_headers`` as a
+    client-readable mirror for frontend convenience, but we NEVER seed the
+    session from the cookie: doing so would let an attacker who can plant a
+    cookie (subdomain takeover, MITM on HTTP, etc.) forge the token.
+    """
     if 'csrf_token' not in session:
         session['csrf_token'] = generate_csrf_token()
     return session['csrf_token']
 
 
 def validate_csrf_token(token: str) -> bool:
-    """Validate CSRF token against session token."""
+    """Validate a submitted CSRF token against the server-side session token.
+
+    The authoritative value is ``session['csrf_token']``. If the session has
+    no token (e.g. a POST before a GET ever established one), validation
+    fails — we do NOT fall back to a cookie-to-submission comparison, because
+    that collapses CSRF protection to "attacker-controlled cookie matches
+    attacker-controlled submission".
+    """
     if not token:
         return False
 
     expected = session.get('csrf_token')
-    if expected:
-        return hmac.compare_digest(expected, token)
-
-    # Fallback: allow double-submit cookie mode when session cookies are not available
-    # (e.g. SESSION_COOKIE_SECURE misconfigured for http, or blocked session cookies).
-    cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
-    if not cookie_token:
+    if not expected:
         return False
-    return hmac.compare_digest(cookie_token, token)
+    return hmac.compare_digest(expected, token)
 
 
 def csrf_protect(f):
@@ -119,9 +119,10 @@ def validate_latex_engine(engine: str) -> str:
         remote_addr = request.remote_addr if has_request_context() else "unknown"
         logger = current_app.logger if has_app_context() else logging.getLogger(__name__)
         logger.error("Blocked dangerous LaTeX engine: %s from %s", engine, remote_addr)
+        allowed = ", ".join(sorted(ALLOWED_LATEX_ENGINES))
         raise ValueError(
-            f"不支持的LaTeX引擎: {engine}。"
-            f"允许的引擎: {', '.join(sorted(ALLOWED_LATEX_ENGINES))}"
+            f"不支持的 LaTeX 引擎: {engine}。允许的引擎: {allowed}。"
+            f" / Unsupported LaTeX engine: {engine}. Allowed engines: {allowed}."
         )
 
     return engine
@@ -157,6 +158,9 @@ def validate_text_size(text: str, field_name: str = "输入") -> str:
         raise ValueError(
             f"{field_name}过大。最大允许 {MAX_TEXT_INPUT_LENGTH:,} 字符，"
             f"实际 {len(text):,} 字符。"
+            f" / {field_name} is too large. "
+            f"Maximum allowed is {MAX_TEXT_INPUT_LENGTH:,} characters, "
+            f"got {len(text):,} characters."
         )
 
     lines = text.count('\n') + 1
@@ -164,6 +168,8 @@ def validate_text_size(text: str, field_name: str = "输入") -> str:
         raise ValueError(
             f"{field_name}行数过多。最大允许 {MAX_TEXT_LINES:,} 行，"
             f"实际 {lines:,} 行。"
+            f" / {field_name} has too many lines. "
+            f"Maximum allowed is {MAX_TEXT_LINES:,} lines, got {lines:,} lines."
         )
 
     return text

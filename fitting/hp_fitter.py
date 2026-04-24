@@ -449,13 +449,31 @@ def fit_custom_model(
             variants_tried = 0
 
             def _solve_seed(seed_variant: tuple[mp.mpf, ...]):
+                # Scale convergence to the requested precision: mpmath's
+                # default maxsteps=10 silently caps iterations regardless of
+                # mp.dps, so fitting at dps=100 would otherwise stop ~10
+                # digits shy of the user's configured precision. Tie the
+                # tolerance to mp.dps and give findroot enough budget to
+                # actually converge.
+                tol = mp.mpf(10) ** (-(mp.dps - 5))
+                maxsteps = max(50, mp.dps)
                 if len(gradient_funcs) == 1:
-                    root = mp.findroot(gradient_funcs[0], seed_variant[0])
+                    root = mp.findroot(
+                        gradient_funcs[0],
+                        seed_variant[0],
+                        tol=tol,
+                        maxsteps=maxsteps,
+                    )
                     return (mp.mpf(root),)
                 def system(*values):
                     return tuple(func(*values) for func in gradient_funcs)
 
-                candidate = mp.findroot(system, tuple(seed_variant))
+                candidate = mp.findroot(
+                    system,
+                    tuple(seed_variant),
+                    tol=tol,
+                    maxsteps=maxsteps,
+                )
                 if isinstance(candidate, mp.matrix):
                     candidate = tuple(candidate)
                 if not isinstance(candidate, (tuple, list)):

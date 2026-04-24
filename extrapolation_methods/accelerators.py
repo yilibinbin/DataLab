@@ -7,11 +7,8 @@ from typing import Sequence
 
 from mpmath import mp
 
+from shared.bilingual import _dual_msg
 from shared.precision import precision_guard
-
-
-def _dual_msg(zh: str, en: str) -> str:
-    return f"{zh} / {en}"
 
 
 class SequenceAccelerationError(RuntimeError):

@@ -109,6 +109,15 @@ def compile_latex_safe(
         warnings.append(f"{zh} / {en}")
         return None
 
+    # Pre-subprocess content filter (defense-in-depth alongside -no-shell-escape).
+    # Blocks \write18 and path-traversal \input before we ever spawn the LaTeX
+    # engine. If this returns not safe, we refuse to compile.
+    is_safe, content_warnings = validate_latex_content(tex_text)
+    if content_warnings:
+        warnings.extend(content_warnings)
+    if not is_safe:
+        return None
+
     with tempfile.TemporaryDirectory() as tmpdir:
         tex_path = Path(tmpdir) / f"{label}.tex"
         tex_path.write_text(tex_text, encoding="utf-8")
