@@ -920,6 +920,50 @@ def build_left_panel(self):
     self.fit_model_combo.currentIndexChanged.connect(self._on_model_type_changed)
     model_row.addWidget(self.fit_model_combo)
     fit_layout.addLayout(model_row)
+
+    # MCMC refinement opt-in (Phase 3 #12). Placed in the fit panel
+    # so users discover it when selecting a model — not buried in
+    # a menu. Disabled with an explanatory tooltip when emcee is
+    # missing, so the feature is discoverable but un-breakable.
+    self.fit_mcmc_refine = QCheckBox(self._tr(
+        "MCMC 精炼（拟合后运行）",
+        "Refine with MCMC (after fit)",
+    ))
+    self._register_text(
+        self.fit_mcmc_refine,
+        "MCMC 精炼（拟合后运行）",
+        "Refine with MCMC (after fit)",
+    )
+    self.fit_mcmc_refine.setChecked(False)
+    try:
+        from fitting.mcmc_fitter import HAS_EMCEE as _mcmc_has_emcee
+
+        if not _mcmc_has_emcee:
+            self.fit_mcmc_refine.setEnabled(False)
+            self.fit_mcmc_refine.setToolTip(self._tr(
+                "需要安装 emcee 包才能启用 MCMC 精炼。"
+                "pip install emcee numpy corner",
+                "Install the 'emcee' package to enable MCMC "
+                "refinement. pip install emcee numpy corner",
+            ))
+        else:
+            self.fit_mcmc_refine.setToolTip(self._tr(
+                "对最佳 AIC 模型的参数后验分布做 MCMC 采样，"
+                "给出更可靠的置信区间（可能耗时 10–60 秒）。",
+                "Run emcee MCMC on the best-AIC model to produce "
+                "robust credible intervals (may take 10–60 s).",
+            ))
+    except Exception:
+        # Defensive: a broken mcmc_fitter import must not crash
+        # panel construction.
+        self.fit_mcmc_refine.setEnabled(False)
+        self.fit_mcmc_refine.setToolTip(self._tr(
+            "MCMC 精炼不可用（fitting.mcmc_fitter 加载失败）。",
+            "MCMC refinement unavailable "
+            "(fitting.mcmc_fitter failed to load).",
+        ))
+    fit_layout.addWidget(self.fit_mcmc_refine)
+
     self.fit_model_hint = QLabel("")
     self.fit_model_hint.setStyleSheet("color:#aa5500;")
     self.fit_model_hint.setWordWrap(True)

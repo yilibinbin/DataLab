@@ -3,3 +3,11 @@ mpmath>=1.3.0
 PySide6>=6.7.0
 sympy>=1.13.0
 matplotlib>=3.10.0
+# MCMC posterior refinement (Phase 3 #12). Kept in the default
+# desktop install so the GUI checkbox is enabled out of the box;
+# the Web stack keeps these optional (pyproject [mcmc] extra).
+numpy>=1.26
+emcee>=3.1
+corner>=2.2
+# YAML config for the CLI batch mode (Phase 3 #14).
+pyyaml>=6.0

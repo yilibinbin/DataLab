@@ -179,6 +179,11 @@ class AutoFitJob:
     extra_models: list[AutoModelDefinition]
     verbose: bool = False
     render_plots: bool = True
+    # Phase 3 #12 — when True, run MCMC posterior refinement on the
+    # best-AIC candidate after least-squares completes. Opt-in because
+    # emcee typically takes 10–60 s on modest problems. Silently
+    # skipped if emcee isn't installed (mcmc_fitter.HAS_EMCEE=False).
+    refine_with_mcmc: bool = False
 
 
 def _execute_auto_fit_job(job: AutoFitJob):

@@ -27,8 +27,10 @@ from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
 __all__ = [
+    "HAS_CORNER",
     "HAS_EMCEE",
     "MCMCResult",
+    "render_corner_plot",
     "run_mcmc",
 ]
 
@@ -43,6 +45,14 @@ except ImportError:
     _emcee = None  # type: ignore[assignment]
     _np = None  # type: ignore[assignment]
     HAS_EMCEE = False
+
+try:
+    import corner as _corner  # noqa: F401
+
+    HAS_CORNER = True
+except ImportError:
+    _corner = None  # type: ignore[assignment]
+    HAS_CORNER = False
 
 
 @dataclass
@@ -173,3 +183,132 @@ def run_mcmc(
         hi_ci=hi_ci,
         acceptance_fraction=float(_np.mean(sampler.acceptance_fraction)),
     )
+
+
+# --------------------------------------------------------------------
+# Corner-plot rendering (Phase 3 #12 GUI wiring)
+# --------------------------------------------------------------------
+#
+# If ``corner`` is installed, use it (preferred — shows all 2D
+# projections of the posterior). Otherwise fall back to a matplotlib
+# 1D histogram-per-parameter grid so the desktop can still show
+# *something* when a user checks "Refine with MCMC" without having
+# installed corner. Both paths return PNG bytes.
+
+
+def _flatten_chain(chain: Any) -> Any:
+    """Reshape ``(walkers, steps, params)`` → ``(walkers * steps, params)``.
+
+    Accepts either a numpy ndarray or a nested Python list; the list
+    path exists so the regression tests don't require numpy.
+    """
+    if _np is not None:
+        try:
+            arr = _np.asarray(chain, dtype=float)
+            if arr.ndim == 3:
+                return arr.reshape(-1, arr.shape[-1])
+            return arr
+        except Exception:  # noqa: BLE001
+            pass
+    # Fallback: python-list flatten (walkers × steps → flat list of
+    # param-vectors).
+    flat: list[list[float]] = []
+    for walker in chain:
+        for step_vector in walker:
+            flat.append([float(v) for v in step_vector])
+    return flat
+
+
+def _render_fallback_corner(
+    flat_chain: Any,
+    param_names: list[str],
+) -> bytes:
+    """matplotlib-only fallback: histogram per parameter stacked into
+    a single PNG. Used when ``corner`` is not installed."""
+    from shared.plotting import plt
+
+    import io
+
+    n = len(param_names)
+    if n == 0:
+        fig = plt.figure(figsize=(4, 3), dpi=150)
+        fig.text(0.5, 0.5, "no parameters", ha="center", va="center")
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=150)
+        plt.close(fig)
+        return buf.getvalue()
+
+    cols = min(n, 3)
+    rows = (n + cols - 1) // cols
+    fig, axes = plt.subplots(
+        rows, cols, figsize=(3.5 * cols, 2.8 * rows), dpi=150,
+        squeeze=False,
+    )
+    for i, name in enumerate(param_names):
+        ax = axes[i // cols][i % cols]
+        # Extract param i values from flat chain — works for both
+        # numpy arrays and Python lists.
+        if _np is not None and hasattr(flat_chain, "shape"):
+            values = flat_chain[:, i]
+        else:
+            values = [row[i] for row in flat_chain]
+        ax.hist(values, bins=40, color="#1f77b4", alpha=0.7)
+        ax.set_title(name)
+        ax.grid(True, alpha=0.3)
+    # Blank the unused grid cells.
+    for j in range(n, rows * cols):
+        axes[j // cols][j % cols].axis("off")
+    fig.suptitle("MCMC posteriors (corner fallback)", fontsize=11)
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def render_corner_plot(result: Any) -> bytes:
+    """Render an MCMC posterior as PNG bytes.
+
+    Accepts ``MCMCResult`` or any object with ``.chain`` +
+    ``.param_names``. Uses ``corner.corner`` when available,
+    otherwise a per-parameter histogram fallback.
+
+    Never raises. Worst case (every backend unavailable) returns
+    a minimal matplotlib PNG with an error message drawn on it.
+    """
+    import io
+
+    from shared.plotting import plt
+
+    param_names = list(getattr(result, "param_names", []) or [])
+
+    try:
+        flat = _flatten_chain(result.chain)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("render_corner_plot: chain flatten failed: %s", exc)
+        fig = plt.figure(figsize=(4, 3), dpi=150)
+        fig.text(
+            0.5, 0.5,
+            f"corner plot failed: {exc}",
+            ha="center", va="center", wrap=True,
+        )
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=150)
+        plt.close(fig)
+        return buf.getvalue()
+
+    if HAS_CORNER and _np is not None:
+        try:
+            # Prefer the proper corner plot when both deps are present.
+            arr = _np.asarray(flat, dtype=float)
+            fig = _corner.corner(arr, labels=param_names, show_titles=True)
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=150)
+            plt.close(fig)
+            return buf.getvalue()
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "render_corner_plot: corner.corner raised (%s); "
+                "falling back to matplotlib histograms", exc,
+            )
+    return _render_fallback_corner(flat, param_names)
