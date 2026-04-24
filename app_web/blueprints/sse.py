@@ -84,10 +84,39 @@ MAX_SSE_WALLCLOCK_SECONDS = 90.0
 # request drop entries older than RATE_WINDOW_SECONDS. If the deque
 # length crosses RATE_MAX_REQUESTS the request is rejected with a
 # 429-equivalent SSE "rate_limited" event.
+#
+# A long-running server behind a wide NAT could accumulate thousands
+# of empty deques (one per source IP that fired a single request then
+# never returned). Every Nth admission we opportunistically evict IPs
+# whose deques are empty and whose last entry is older than one
+# RATE_WINDOW_SECONDS window. ``_RATE_GC_EVERY`` controls how often
+# — trading scan cost against max accumulation.
 _RATE_HISTORY: dict[str, collections.deque] = {}
 _RATE_LOCK = threading.Lock()
+_RATE_ADMISSIONS_SINCE_GC = 0
+_RATE_GC_EVERY = 256
 RATE_MAX_REQUESTS = 10
 RATE_WINDOW_SECONDS = 60.0
+
+
+def _rate_gc_locked(now: float) -> None:
+    """Evict empty / fully-expired deques from ``_RATE_HISTORY``.
+
+    Must be called with ``_RATE_LOCK`` held. O(N) scan but N is the
+    number of unique recent IPs, not the total requests seen — far
+    smaller.
+    """
+    cutoff = now - RATE_WINDOW_SECONDS
+    dead: list[str] = []
+    for ip, hist in _RATE_HISTORY.items():
+        # Drain expired timestamps; if the deque ends up empty the
+        # IP hasn't been seen in a full window and we can forget it.
+        while hist and hist[0] < cutoff:
+            hist.popleft()
+        if not hist:
+            dead.append(ip)
+    for ip in dead:
+        _RATE_HISTORY.pop(ip, None)
 
 
 def _check_rate_limit(client_ip: str) -> bool:
@@ -114,6 +143,8 @@ def _check_rate_limit(client_ip: str) -> bool:
     if _os.environ.get("DATALAB_SSE_DISABLE_RATE_LIMIT"):
         return True
 
+    global _RATE_ADMISSIONS_SINCE_GC
+
     now = time.monotonic()
     cutoff = now - RATE_WINDOW_SECONDS
     with _RATE_LOCK:
@@ -123,17 +154,42 @@ def _check_rate_limit(client_ip: str) -> bool:
         if len(hist) >= RATE_MAX_REQUESTS:
             return False
         hist.append(now)
+        _RATE_ADMISSIONS_SINCE_GC += 1
+        if _RATE_ADMISSIONS_SINCE_GC >= _RATE_GC_EVERY:
+            _rate_gc_locked(now)
+            _RATE_ADMISSIONS_SINCE_GC = 0
         return True
 
 
 def _client_ip() -> str:
-    """Best-effort client IP — trusts X-Forwarded-For only if the
-    first hop exists. For production this must be augmented with a
-    reverse-proxy-aware resolver; here we're conservative and fall
-    back to ``request.remote_addr``."""
-    xff = request.headers.get("X-Forwarded-For", "")
-    if xff:
-        return xff.split(",")[0].strip()
+    """Best-effort client IP, opt-in XFF trust.
+
+    ``X-Forwarded-For`` is trusted ONLY when the env var
+    ``DATALAB_TRUST_PROXY_HEADERS=1`` is set — i.e., an operator has
+    explicitly stated "we're behind a reverse proxy that controls
+    that header". Default-off, so an attacker on the Flask port who
+    sends ``X-Forwarded-For: 1.2.3.4`` cannot spoof their rate-limit
+    key — the real ``request.remote_addr`` is used instead.
+
+    Production deploys behind nginx / Cloudflare should either
+    - set ``DATALAB_TRUST_PROXY_HEADERS=1`` AND bind Flask to the
+      loopback so only the proxy can reach it, OR
+    - use ``werkzeug.middleware.proxy_fix.ProxyFix`` which
+      substitutes ``request.remote_addr`` with the real client IP
+      (preferred; doesn't need the env var).
+    """
+    import os as _os
+
+    trust_proxy = _os.environ.get(
+        "DATALAB_TRUST_PROXY_HEADERS", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+    if trust_proxy:
+        xff = request.headers.get("X-Forwarded-For", "")
+        if xff:
+            # Take the left-most entry — the originating client.
+            return xff.split(",")[0].strip() or (
+                request.remote_addr or "unknown"
+            )
     return request.remote_addr or "unknown"
 
 
@@ -241,7 +297,8 @@ def _single_fit_events(
             )
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
-            "fit_stream failed: %s", exc, exc_info=True
+            "fit_stream failed: model=%s n_points=%d precision=%d: %s",
+            model_id, len(xs), precision, exc, exc_info=True,
         )
         yield ("error", {
             "error": type(exc).__name__,
@@ -291,12 +348,18 @@ def _auto_fit_events(
     existing ``auto_fit_dataset`` builds everything in a list, which
     defeats streaming — we replicate the loop here for this endpoint.
 
-    Holds ``_MP_SERIAL_LOCK`` for the entire fit loop so the mp.dps
-    state isn't raced by a concurrent request. Honours
-    ``MAX_SSE_WALLCLOCK_SECONDS`` — if the total fit time exceeds the
-    budget, emits a ``timeout`` error event between iterations and
-    closes. Per-model exception text is sanitised to the class name
-    only to avoid leaking mpmath internals.
+    Lock discipline: ``_MP_SERIAL_LOCK`` is acquired ONLY around the
+    actual ``fit_linear_model`` call — not around the ``yield``. The
+    previous design held the lock across yields, which serialised
+    slow SSE clients with compute work and let one buffering proxy
+    pin the lock for minutes. With per-model acquisition, concurrent
+    SSE requests interleave at model boundaries and the lock is
+    never held during network I/O.
+
+    Honours ``MAX_SSE_WALLCLOCK_SECONDS`` — if the total fit time
+    exceeds the budget, emits a ``timeout`` error event between
+    iterations and closes. Per-model exception text is sanitised
+    to the class name only to avoid leaking mpmath internals.
     """
     import math
 
@@ -317,59 +380,69 @@ def _auto_fit_events(
 
     deadline = time.monotonic() + MAX_SSE_WALLCLOCK_SECONDS
     candidates: list[dict] = []
-    with _MP_SERIAL_LOCK, precision_guard(precision):
-        for index, definition in enumerate(AUTO_MODELS, start=1):
-            if time.monotonic() > deadline:
-                yield ("error", {
-                    "error": "Timeout",
-                    "message": (
-                        f"Auto-fit exceeded the "
-                        f"{MAX_SSE_WALLCLOCK_SECONDS:.0f}s wall-clock "
-                        f"budget after {index - 1}/{len(AUTO_MODELS)} models"
-                    ),
-                })
-                return
-            try:
+    for index, definition in enumerate(AUTO_MODELS, start=1):
+        if time.monotonic() > deadline:
+            yield ("error", {
+                "error": "Timeout",
+                "message": (
+                    f"Auto-fit exceeded the "
+                    f"{MAX_SSE_WALLCLOCK_SECONDS:.0f}s wall-clock "
+                    f"budget after {index - 1}/{len(AUTO_MODELS)} models"
+                ),
+            })
+            return
+
+        # Lock acquired per-model, released BEFORE the yield. mp.dps
+        # state leakage across iterations is fine because each fit
+        # re-enters precision_guard — the lock just prevents a
+        # concurrent SSE request from racing on mp.dps DURING a
+        # single fit_linear_model call.
+        try:
+            with _MP_SERIAL_LOCK, precision_guard(precision):
                 fit_result = fit_linear_model(
                     definition, xs, ys, precision=precision
                 )
-                aic = float(fit_result.aic) if fit_result.aic is not None else None
-                # NaN AIC is not less-than-anything — treat as missing
-                # for ranking purposes so float('nan') doesn't poison
-                # the sort key downstream.
-                if aic is not None and math.isnan(aic):
-                    aic = None
-                payload = {
-                    "model": definition.identifier,
-                    "label": definition.label,
-                    "status": "success",
-                    "index": index,
-                    "total": len(AUTO_MODELS),
-                    "aic": aic,
-                }
-                candidates.append({
-                    "model": definition.identifier,
-                    "label": definition.label,
-                    "aic": aic,
-                    "params": {
-                        k: float(v)
-                        for k, v in (fit_result.params or {}).items()
-                    },
-                })
-            except Exception as exc:  # noqa: BLE001
-                _logger.warning(
-                    "auto_fit_stream: model %s failed: %s",
-                    definition.identifier, exc, exc_info=True,
-                )
-                payload = {
-                    "model": definition.identifier,
-                    "label": definition.label,
-                    "status": "failed",
-                    "index": index,
-                    "total": len(AUTO_MODELS),
-                    "error": type(exc).__name__,
-                }
-            yield ("progress", payload)
+            aic = (
+                float(fit_result.aic) if fit_result.aic is not None else None
+            )
+            # NaN AIC is not less-than-anything — treat as missing
+            # for ranking purposes so float('nan') doesn't poison
+            # the sort key downstream.
+            if aic is not None and math.isnan(aic):
+                aic = None
+            payload = {
+                "model": definition.identifier,
+                "label": definition.label,
+                "status": "success",
+                "index": index,
+                "total": len(AUTO_MODELS),
+                "aic": aic,
+            }
+            candidates.append({
+                "model": definition.identifier,
+                "label": definition.label,
+                "aic": aic,
+                "params": {
+                    k: float(v)
+                    for k, v in (fit_result.params or {}).items()
+                },
+            })
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "auto_fit_stream: model %s failed: %s",
+                definition.identifier, exc, exc_info=True,
+            )
+            payload = {
+                "model": definition.identifier,
+                "label": definition.label,
+                "status": "failed",
+                "index": index,
+                "total": len(AUTO_MODELS),
+                "error": type(exc).__name__,
+            }
+        # Yield is OUTSIDE the lock so a slow client receiving the
+        # progress frame cannot pin the mp.dps serialiser.
+        yield ("progress", payload)
 
     if not candidates:
         # Every model failed — emit an error rather than a

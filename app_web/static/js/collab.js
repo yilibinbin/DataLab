@@ -19,14 +19,42 @@
 (function () {
   "use strict";
 
-  /** @type {null | {socket: any, sessionId: string, onUpdate: Function | null}} */
+  /** @type {null | {socket: any, sessionId: string, joinToken: string, onUpdate: Function | null}} */
   var _session = null;
 
   /**
-   * @returns {Promise<string>} session_id
+   * Find the CSRF token rendered by Flask. The server uses
+   * ``X-CSRF-Token`` header OR ``csrf_token`` form field. Pages that
+   * embed collab.js are expected to render the token in a
+   * <meta name="csrf-token" content="..."> tag or a
+   * <input name="csrf_token" ...> element.
+   *
+   * @returns {string}
+   */
+  function _findCsrfToken() {
+    try {
+      var meta = document.querySelector('meta[name="csrf-token"]');
+      if (meta && meta.content) return meta.content;
+      var input = document.querySelector('input[name="csrf_token"]');
+      if (input && input.value) return input.value;
+    } catch (e) { /* ignore */ }
+    return "";
+  }
+
+  /**
+   * Creates a new collaboration session server-side.
+   *
+   * @returns {Promise<{session_id: string, join_token: string}>}
    */
   function createSession() {
-    return fetch("/collab/session", { method: "POST" })
+    var csrf = _findCsrfToken();
+    var headers = { "Content-Type": "application/json" };
+    if (csrf) headers["X-CSRF-Token"] = csrf;
+    return fetch("/collab/session", {
+      method: "POST",
+      headers: headers,
+      credentials: "same-origin",
+    })
       .then(function (resp) {
         if (!resp.ok) {
           throw new Error("createSession: server returned " + resp.status);
@@ -34,20 +62,32 @@
         return resp.json();
       })
       .then(function (data) {
-        if (!data || typeof data.session_id !== "string") {
-          throw new Error("createSession: malformed response");
+        if (!data
+            || typeof data.session_id !== "string"
+            || typeof data.join_token !== "string") {
+          throw new Error(
+            "createSession: malformed response — need session_id + join_token"
+          );
         }
-        return data.session_id;
+        return {
+          session_id: data.session_id,
+          join_token: data.join_token,
+        };
       });
   }
 
   /**
+   * Join an existing session. Requires BOTH the session_id and the
+   * join_token minted at creation — the token must be transmitted
+   * out-of-band (e.g., alongside the session URL in a share link).
+   *
    * @param {string} sessionId
+   * @param {string} joinToken — bearer secret from createSession()
    * @param {string} participant — user-chosen display name
    * @param {Function} onUpdate — called with (patch) on each remote update
    * @returns {Promise<void>}
    */
-  function joinSession(sessionId, participant, onUpdate) {
+  function joinSession(sessionId, joinToken, participant, onUpdate) {
     if (typeof window.io !== "function") {
       return Promise.reject(new Error(
         "socket.io-client not loaded; include it before collab.js"
@@ -56,6 +96,9 @@
     if (!sessionId || typeof sessionId !== "string") {
       return Promise.reject(new Error("joinSession: session_id required"));
     }
+    if (!joinToken || typeof joinToken !== "string") {
+      return Promise.reject(new Error("joinSession: join_token required"));
+    }
     if (_session && _session.socket) {
       _session.socket.disconnect();
     }
@@ -63,6 +106,7 @@
     _session = {
       socket: socket,
       sessionId: sessionId,
+      joinToken: joinToken,
       onUpdate: typeof onUpdate === "function" ? onUpdate : null,
     };
     return new Promise(function (resolve, reject) {
@@ -70,6 +114,7 @@
       socket.on("connect", function () {
         socket.emit("join", {
           session_id: sessionId,
+          join_token: joinToken,
           participant: participant || "anonymous",
         });
       });
@@ -110,6 +155,11 @@
   }
 
   /**
+   * Broadcast a patch to all other participants in the current
+   * session. The server re-verifies the ``join_token`` on every
+   * send so a stale connection can't keep writing after the
+   * session expired.
+   *
    * @param {Object} patch — JSON-serialisable patch to merge into shared state
    */
   function sendStateUpdate(patch) {
@@ -118,6 +168,7 @@
     }
     _session.socket.emit("state_update", {
       session_id: _session.sessionId,
+      join_token: _session.joinToken,
       patch: patch || {},
     });
   }
