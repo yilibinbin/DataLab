@@ -1,0 +1,136 @@
+{
+  "formula_help": {
+    "zh": {
+      "title": "可用函数",
+      "content": "### 支持的数学函数\n\n外推自定义公式和误差传递公式支持以下函数（使用 Mathematica 风格）：\n\n**基本函数**：\n- `Sin[x]` - 正弦函数\n- `Cos[x]` - 余弦函数\n- `Tan[x]` - 正切函数\n- `Exp[x]` - 指数函数 e^x\n- `Log[x]` - 自然对数 ln(x)\n- `Sqrt[x]` - 平方根 √x\n- `Abs[x]` - 绝对值 |x|\n\n**变量引用**：\n- 使用表头列名（如 `A`、`B`、`E1`、`E2`）\n- 使用别名 `x1`、`x2`、`x3` ... 按列顺序引用\n- 外推模式下可使用 `A`、`B`、`C` 表示前三列\n\n**运算符**：\n- `+`、`-`、`*`、`/` - 四则运算\n- `^` - 幂运算\n- `()` - 括号分组\n\n**示例**：\n```\n(C - B)^2/(B - A) + C\nSin[x1]^2 + Cos[x1]^2\nExp[-x1*ALPHA] * x2\nLog[x1/x2] + Sqrt[x3]\n```\n\n**注意**：\n- 函数名首字母必须大写\n- 函数参数必须用中括号 `[]`\n- 常数名需在常数列表中定义"
+    },
+    "en": {
+      "title": "Available Functions",
+      "content": "### Supported Mathematical Functions\n\nCustom extrapolation formulas and error propagation formulas support the following functions (Mathematica-style syntax):\n\n**Basic Functions**:\n- `Sin[x]` - Sine function\n- `Cos[x]` - Cosine function\n- `Tan[x]` - Tangent function\n- `Exp[x]` - Exponential function e^x\n- `Log[x]` - Natural logarithm ln(x)\n- `Sqrt[x]` - Square root √x\n- `Abs[x]` - Absolute value |x|\n\n**Variable References**:\n- Use column headers (e.g., `A`, `B`, `E1`, `E2`)\n- Use aliases `x1`, `x2`, `x3` ... to reference columns by order\n- In extrapolation mode, use `A`, `B`, `C` for first three columns\n\n**Operators**:\n- `+`, `-`, `*`, `/` - Arithmetic operations\n- `^` - Power operation\n- `()` - Parentheses for grouping\n\n**Examples**:\n```\n(C - B)^2/(B - A) + C\nSin[x1]^2 + Cos[x1]^2\nExp[-x1*ALPHA] * x2\nLog[x1/x2] + Sqrt[x3]\n```\n\n**Notes**:\n- Function names must start with uppercase\n- Function arguments must use square brackets `[]`\n- Constant names must be defined in the constants list"
+    }
+  },
+  "extrapolation_methods": {
+    "power_law": {
+      "zh": {
+        "name": "幂律外推(三点外推)",
+        "description": "幂律外推（三点外推）\n\n适用场景：\n  • 数据呈幂律收敛趋势：f(x) ≈ f∞ + A·x^(-p)\n  • 物理量随参数变化趋于极限值\n  • 需要至少 3 个数据点\n\n参数说明：\n  • x1, x2, x3：三个自变量值（如网格大小、时间步长等）\n  • p（可选）：幂指数，留空则自动求解\n  • 初始猜测：用于优化算法的起始值\n\n注意事项：\n  • 要求数据单调收敛\n  • 对噪声敏感，建议数据较为干净\n  • x 值应足够分散以避免数值不稳定",
+        "parameters": {
+          "x1": "第一个点的 x 坐标",
+          "x2": "第二个点的 x 坐标",
+          "x3": "第三个点的 x 坐标",
+          "power_exponent": "固定幂指数 p（可选，留空自动求解）",
+          "power_seed": "幂指数 p 的初始值（默认 1.0）"
+        },
+        "use_cases": "常用于量子化学计算中的基组外推、数值积分精度外推等场景。"
+      },
+      "en": {
+        "name": "Power-law (3-point)",
+        "description": "Power Law Extrapolation (3-point)\n\nApplicable for:\n  • Data showing power-law convergence: f(x) ≈ f∞ + A·x^(-p)\n  • Physical quantities approaching a limit\n  • Requires at least 3 data points\n\nParameters:\n  • x1, x2, x3: Three x-values (grid sizes, time steps, etc.)\n  • p (optional): Power exponent, auto-solved if blank\n  • Initial guess: Starting value for optimization\n\nCautions:\n  • Requires monotonic convergence\n  • Sensitive to noise; works best with clean data\n  • x-values should be well-separated",
+        "parameters": {
+          "x1": "x coordinate of the first point",
+          "x2": "x coordinate of the second point",
+          "x3": "x coordinate of the third point",
+          "power_exponent": "Fixed power exponent p (optional, leave blank for auto-solve)",
+          "power_seed": "Initial value for power exponent p (default 1.0)"
+        },
+        "use_cases": "Commonly used in quantum chemistry for basis set extrapolation, numerical integration precision extrapolation, etc."
+      }
+    },
+    "richardson": {
+      "zh": {
+        "name": "Richardson 序列加速(三点外推)",
+        "description": "Richardson 序列加速\n\n适用场景：\n  • 误差展开形式已知：f(h) ≈ f∞ + c₁h^p₁ + c₂h^p₂ + ...\n  • 数值积分、微分的Richardson外推\n  • 有限差分方法的精度提升\n\n方法原理：\n  • 利用不同步长的结果构造更高阶的近似\n  • 消除误差展开的前导项\n  • 基于已知的收敛幂指数 p\n\n参数说明：\n  • p（收敛幂指数）：误差展开中的幂指数，默认 p=2\n    - p=2：二阶收敛方法（最常见）\n    - p=4：四阶收敛方法\n    - 其他值：根据具体问题确定\n\n注意事项：\n  • 需要准确知道误差阶数 p\n  • 要求误差展开形式规则\n  • 步长应成一定比例关系\n  • 错误的 p 值会导致外推失败",
+        "parameters": {
+          "p": "收敛幂指数（误差项 ~ h^p），默认 p=2；若已知误差阶数可在此指定。"
+        },
+        "use_cases": "数值微分、积分、有限差分方法等场景。"
+      },
+      "en": {
+        "name": "Richardson (3-point)",
+        "description": "Richardson Extrapolation\n\nApplicable for:\n  • Known error expansion: f(h) ≈ f∞ + c₁h^p₁ + c₂h^p₂ + ...\n  • Numerical integration/differentiation\n  • Finite difference accuracy improvement\n\nMethod:\n  • Constructs higher-order approximations from different step sizes\n  • Eliminates leading error terms\n  • Based on known convergence power p\n\nParameters:\n  • p (convergence power): Power exponent in error expansion, default p=2\n    - p=2: Second-order convergence (most common)\n    - p=4: Fourth-order convergence\n    - Other values: Problem-specific\n\nCautions:\n  • Requires accurate knowledge of error order p\n  • Needs regular error expansion\n  • Step sizes should be in proportion\n  • Wrong p value will cause extrapolation to fail",
+        "parameters": {
+          "p": "Convergence power (error term ~ h^p), default p=2. Specify if the error order is known."
+        },
+        "use_cases": "Numerical differentiation, integration, finite difference methods, etc."
+      }
+    },
+    "shanks": {
+      "zh": {
+        "name": "Shanks 变换",
+        "description": "Shanks 变换（非线性序列变换）\n\n适用场景：\n  • 线性收敛或对数收敛的序列加速\n  • 部分和序列的加速收敛\n  • 迭代算法的加速\n\n方法原理：\n  • 基于部分和的比值关系\n  • 构造新序列以加速收敛\n  • 等价于 Padé 逼近的对角线序列\n\n注意事项：\n  • 对振荡序列效果有限\n  • 需要足够多的序列项（至少3项）\n  • 可能产生不规则跳变",
+        "use_cases": "级数求和、迭代法加速、物理量计算等。"
+      },
+      "en": {
+        "name": "Shanks transform",
+        "description": "Shanks Transform (Nonlinear Sequence Transform)\n\nApplicable for:\n  • Linearly or logarithmically convergent sequences\n  • Accelerating partial sums\n  • Iterative algorithm speedup\n\nMethod:\n  • Based on ratio relations of partial sums\n  • Constructs new sequence with faster convergence\n  • Equivalent to diagonal Padé sequence\n\nCautions:\n  • Limited effectiveness for oscillating sequences\n  • Requires sufficient terms (at least 3)\n  • May produce irregular jumps",
+        "use_cases": "Series summation, iteration acceleration, physical quantity calculations, etc."
+      }
+    },
+    "levin_u": {
+      "zh": {
+        "name": "Levin u-transform",
+        "description": "Levin u 变换（序列加速方法）\n\n适用场景：\n  • 交替级数或振荡序列\n  • 对数收敛或缓慢收敛的序列\n  • 渐近展开的求和\n\n方法原理：\n  • 利用序列的\"余项\"信息构造加速序列\n  • 对交替序列特别有效\n  • 可调整变换阶数以适应不同收敛速度\n  • 支持自定义权重函数以优化收敛\n\n参数说明：\n  • variant：变换类型（u/t/v，默认u）\n    - u：最常用，适用于大多数序列\n    - t：专门用于级数求和\n    - v：专门用于积分加速\n\n  • 阶数（order）：控制变换的复杂度\n    - 阶数越高，精度越高，但需要更多数据点\n    - 需要至少 2N+1 项数据（N = 阶数）\n    - 推荐从 2 开始\n\n  • 权重函数（weight）：\n    - 默认 (1)：标准权重\n    - 1/(n+1)：倒数权重，适用于快速收敛序列\n    - 1/(n+β)：可调节倒数权重，β 可自定义\n\n注意事项：\n  • 需要至少 2N+1 项（N为变换阶数）\n  • 对严重振荡序列可能失效\n  • 权重选择会显著影响结果\n  • 建议先用默认参数，再根据效果调整",
+        "parameters": {
+          "variant": "Levin 变体（默认 'u'）",
+          "order": "变换阶数 N（至少需要 2N+1 项数据；越高越精确但更敏感）",
+          "weight": "权重函数类型：默认(1)、1/(n+1)、1/(n+β)（用于优化收敛）",
+          "beta": "β 参数（仅当权重为 1/(n+β) 时有效）"
+        },
+        "use_cases": "交替级数、振荡序列、积分变换等。"
+      },
+      "en": {
+        "name": "Levin u-transform",
+        "description": "Levin u-transform (Sequence Acceleration)\n\nApplicable for:\n  • Alternating or oscillating sequences\n  • Logarithmically or slowly convergent sequences\n  • Asymptotic expansion summation\n\nMethod:\n  • Uses sequence \"remainder\" information\n  • Particularly effective for alternating series\n  • Adjustable order for different convergence rates\n  • Supports custom weight functions for optimized convergence\n\nParameters:\n  • variant: Transform type (u/t/v, default u)\n    - u: Most common, suitable for most sequences\n    - t: Specialized for series summation\n    - v: Specialized for integral acceleration\n\n  • order: Controls transform complexity\n    - Higher order = higher accuracy, but needs more data points\n    - Requires at least 2N+1 data points (N = order)\n    - Recommended to start with 2\n\n  • weight function:\n    - Default (1): Standard weight\n    - 1/(n+1): Reciprocal weight, for fast-converging sequences\n    - 1/(n+β): Adjustable reciprocal weight with customizable β\n\nCautions:\n  • Requires at least 2N+1 terms (N = order)\n  • May fail for severely oscillating sequences\n  • Weight choice significantly affects results\n  • Recommend starting with default parameters, then adjust based on results",
+        "parameters": {
+          "variant": "Levin variant (default 'u')",
+          "order": "Transform order N (requires at least 2N+1 terms; higher can be more accurate but more sensitive)",
+          "weight": "Weight function type: Default (1), 1/(n+1), 1/(n+β) (to optimize convergence)",
+          "beta": "β parameter (only effective when weight is 1/(n+β))"
+        },
+        "use_cases": "Alternating series, oscillating sequences, integral transforms, etc."
+      }
+    },
+    "wynn_epsilon": {
+      "zh": {
+        "name": "Wynn-epsilon 算法",
+        "description": "Wynn-epsilon 算法（迭代加速方法）\n\n适用场景：\n  • 线性收敛序列的加速\n  • Shanks 变换的稳定数值实现\n  • 部分和序列或迭代序列\n\n方法原理：\n  • 使用 epsilon 算法的递推公式\n  • 数值稳定的 Padé 逼近计算\n  • 逐步构造加速序列\n\n注意事项：\n  • 对振荡序列不如 Levin 变换\n  • 可能出现数值不稳定（除零）\n  • 需要监控中间结果的合理性",
+        "use_cases": "级数求和、迭代法加速等。"
+      },
+      "en": {
+        "name": "Wynn-epsilon algorithm",
+        "description": "Wynn-epsilon Algorithm (Iterative Acceleration)\n\nApplicable for:\n  • Linearly convergent sequences\n  • Numerically stable Shanks transform\n  • Partial sum or iterative sequences\n\nMethod:\n  • Uses epsilon algorithm recursion\n  • Numerically stable Padé approximation\n  • Progressively constructs accelerated sequence\n\nCautions:\n  • Less effective than Levin for oscillating sequences\n  • May encounter numerical instability (division by zero)\n  • Monitor intermediate results for validity",
+        "use_cases": "Series summation, iteration acceleration, etc."
+      }
+    },
+    "custom": {
+      "zh": {
+        "name": "自定义公式(三点外推) (A,B,C)",
+        "description": "自定义公式外推\n\n适用场景：\n  • 已知特定的外推公式\n  • 需要基于物理模型的自定义计算\n  • 标准方法不适用时的灵活方案\n\n公式语法：\n  • 使用 A, B, C 代表三列数据（或列名、x1/x2/x3）\n  • 支持所有数学函数（见函数支持）\n  • 支持复杂表达式组合\n\n示例公式：\n  • (C - B)^2/(B - A) + C  （Richardson风格）\n  • Exp[-x1]*Sin[x2] + C  （自定义模型）\n  • Log[C/B]/Log[B/A]     （对数外推）\n\n注意事项：\n  • 公式需确保数学上有意义\n  • 避免除零、负数开方等非法运算\n  • 建议先用简单数据测试公式",
+        "parameters": {
+          "custom_formula": "自定义外推公式（使用 A/B/C 或 x1/x2/x3 引用列）"
+        },
+        "use_cases": "特殊外推公式、理论公式验证等。"
+      },
+      "en": {
+        "name": "Custom (A,B,C)",
+        "description": "Custom Formula Extrapolation\n\nApplicable for:\n  • Known specific extrapolation formula\n  • Physics-based custom calculations\n  • Flexible solution when standard methods don't apply\n\nFormula Syntax:\n  • Use A, B, C for three data columns (or column names, x1/x2/x3)\n  • Supports all mathematical functions (see function support)\n  • Supports complex expression combinations\n\nExample Formulas:\n  • (C - B)^2/(B - A) + C  (Richardson style)\n  • Exp[-x1]*Sin[x2] + C  (Custom model)\n  • Log[C/B]/Log[B/A]     (Logarithmic extrapolation)\n\nCautions:\n  • Formula must be mathematically valid\n  • Avoid division by zero, negative square roots\n  • Test formula with simple data first",
+        "parameters": {
+          "custom_formula": "Custom extrapolation formula (use A/B/C or x1/x2/x3 to reference columns)"
+        },
+        "use_cases": "Special extrapolation formulas, theoretical formula verification, etc."
+      }
+    },
+    "quadratic": {
+      "zh": {
+        "name": "默认三点公式",
+        "description": "默认三点公式\n\n默认三点公式：{{DEFAULT_THREE_POINT_FORMULA}}\n\n说明：\n  • 使用三列数据 A, B, C 计算外推极限值\n  • 该公式与程序实现保持一致（请以此处展示的公式为准）",
+        "use_cases": "快速外推、测试用途。"
+      },
+      "en": {
+        "name": "Default three-point formula",
+        "description": "Default three-point formula\n\nDefault three-point formula: {{DEFAULT_THREE_POINT_FORMULA}}\n\nNotes:\n  • Uses three columns A, B, C to extrapolate the limit\n  • The displayed formula is kept consistent with the implementation",
+        "use_cases": "Quick extrapolation, testing purposes."
+      }
+    }
+  }
+}

@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+import pytest
+from mpmath import mp
+
+from data_extrapolation_latex_latest import ExtrapolationOptions, process_data_string
+from extrapolation_methods.accelerators import (
+    SequenceAcceleratorConfig,
+    SequenceAccelerationError,
+    apply_sequence_accelerator,
+)
+
+
+def _build_row(values: list[mp.mpf], digits: int = 50) -> str:
+    return " ".join(mp.nstr(v, digits) for v in values)
+
+
+def test_richardson_requires_at_least_four_terms():
+    with mp.workdps(80):
+        seq = [mp.mpf("1.5"), mp.mpf("1.25"), mp.mpf("1.125")]
+        with pytest.raises(SequenceAccelerationError):
+            apply_sequence_accelerator("richardson", seq, SequenceAcceleratorConfig(precision=80))
+
+
+def test_richardson_extrapolation_converges_with_more_terms():
+    # Use a smooth 1/n^2 tail so Richardson can extrapolate meaningfully with >= 4 terms.
+    with mp.workdps(80):
+        limit = mp.mpf("1")
+        amp = mp.mpf("0.5")
+        terms = [limit + amp / mp.power(n, 2) for n in range(1, 9)]  # 8 columns
+        headers = [f"S{idx}" for idx in range(1, len(terms) + 1)]
+        data_text = " ".join(headers) + "\n" + _build_row(terms) + "\n"
+
+        opts = ExtrapolationOptions(method="richardson", mp_precision=80)
+        parsed_headers, rows, results = process_data_string(data_text, verbose=False, options=opts)
+
+        assert parsed_headers == headers
+        assert len(rows) == 1
+        assert len(results) == 1
+        res = results[0]
+        assert mp.fabs(res.value - limit) < mp.mpf("1e-2")
+
+
+@pytest.mark.parametrize("method", ["shanks", "wynn_epsilon"])
+def test_shanks_family_converges_on_geometric_tail(method: str):
+    # s_n = 1 + 2^{-n} -> 1. Shanks/Wynn should converge rapidly.
+    with mp.workdps(80):
+        limit = mp.mpf("1")
+        terms = [limit + mp.power(2, -n) for n in range(1, 7)]  # 6 columns
+        headers = [f"S{idx}" for idx in range(1, len(terms) + 1)]
+        data_text = " ".join(headers) + "\n" + _build_row(terms) + "\n"
+
+        opts = ExtrapolationOptions(method=method, mp_precision=80)
+        _, _, results = process_data_string(data_text, verbose=False, options=opts)
+        assert results
+        res = results[0]
+        assert mp.fabs(res.value - limit) < mp.mpf("1e-20")
+
+
+@pytest.mark.parametrize("variant", ["u", "t", "v"])
+def test_levin_variants_run_and_converge(variant: str):
+    # Same geometric tail; Levin variants should be close to the limit with enough terms.
+    with mp.workdps(80):
+        limit = mp.mpf("1")
+        terms = [limit + mp.power(2, -n) for n in range(1, 7)]
+        headers = [f"S{idx}" for idx in range(1, len(terms) + 1)]
+        data_text = " ".join(headers) + "\n" + _build_row(terms) + "\n"
+
+        opts = ExtrapolationOptions(method="levin_u", levin_variant=variant, mp_precision=80)
+        _, _, results = process_data_string(data_text, verbose=False, options=opts)
+        assert results
+        res = results[0]
+        assert mp.fabs(res.value - limit) < mp.mpf("1e-2")
+

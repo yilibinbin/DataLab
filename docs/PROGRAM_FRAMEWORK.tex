@@ -1,0 +1,303 @@
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+
+\usepackage{amsmath,amssymb}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+
+\geometry{margin=2.2cm}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue
+}
+
+\title{DataLab 软件框架与模块说明}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{软件总体设计}
+
+DataLab 面向高精度数值数据处理，提供外推（Extrapolation）、误差传递（Uncertainty Propagation）、拟合（Fitting）与统计平均（Statistics）等功能。软件在实现上采用“前端交互层 + 共享核心计算层 + 输出与报告层”的分层结构：桌面端（PySide6）与 Web 端（Flask）共享同一套核心计算与公式解析/函数白名单，从而保证不同入口下的计算结果、错误提示与函数支持提示保持一致。
+
+\subsection{系统框架划分}
+
+\begin{figure}[htbp]
+  \centering
+  \footnotesize
+  \begin{tikzpicture}[
+      node distance=6mm,
+      block/.style={
+          rectangle,
+          draw,
+          rounded corners=2pt,
+          align=left,
+          text width=0.92\textwidth,
+          inner sep=5pt
+        },
+      arrow/.style={-Latex, thick}
+    ]
+    \node[block] (entry) {\textbf{入口与前端层（UI Layer）}\\
+      \texttt{data\_extrapolation\_gui.py}：PySide6 桌面端 GUI（多标签页、后台任务、结果展示、导出）\\
+      \texttt{app\_web/server.py}：Flask Web 端（路由、模板渲染、接口返回 PDF/图片/CSV）};
+
+    \node[block, below=of entry] (input) {\textbf{输入与配置（Inputs \& Options）}\\
+      数据输入：文件/手动文本；不确定度数据：\texttt{value(unc)} 或分列格式\\
+      常数输入：文件/手动常数区；统一进入常数解析\\
+      运行选项：方法参数、误差传递阶数/Monte Carlo 样本、\texttt{mp.dps} 精度、表格格式等};
+    \draw[arrow] (entry) -- (input);
+
+    \node[block, below=of input] (parse) {\textbf{解析与校验（Parsing \& Validation）}\\
+      数据解析：\texttt{process\_data\_string}/\texttt{process\_uncertainty\_string}（表头、行、合法性）\\
+      常数解析：\texttt{process\_constants\_string}/\texttt{process\_constants\_file}\\
+      公式解析与安全执行：\texttt{data\_extrapolation\_latex\_latest.py} 中的 \texttt{safe\_eval}（AST 白名单，拒绝属性访问/任意导入）\\
+      函数与帮助：\texttt{formula\_help.py} + \texttt{shared/help\_specs.json}（单一事实来源）};
+    \draw[arrow] (input) -- (parse);
+
+    \node[block, below=of parse] (engine) {\textbf{核心计算引擎（Core Engines）}\\
+      外推：\texttt{extrapolation\_methods/}（幂律、Richardson、Shanks、Levin、Wynn-$\varepsilon$、自定义公式等）\\
+      误差传递：一阶/高阶 Taylor 与 Monte Carlo（符号/数值导数结合），入口统一复用安全公式解析\\
+      拟合：\texttt{fitting/}（自定义模型、自动模型、参数管理、拟合统计量）\\
+      统计平均：\texttt{statistics\_utils.py}（均值/加权、方差与不确定度等）};
+    \draw[arrow] (parse) -- (engine);
+
+    \node[block, below=of engine] (output) {\textbf{结果格式化与输出（Formatting \& Reporting）}\\
+      结果格式化：数值显示、带不确定度的 LaTeX/纯文本显示（统一格式化入口）\\
+      LaTeX 表格：\texttt{generate\_latex\_table}/\texttt{generate\_error\_propagation\_table} 等\\
+      PDF：桌面端 \texttt{shared/pdf\_preview*.py} 预览；Web 端 \texttt{app\_web/latex\_security.py} 安全编译\\
+      导出：CSV、图片（matplotlib），并在前端展示/下载};
+    \draw[arrow] (engine) -- (output);
+
+    \node[block, below=of output] (tests) {\textbf{测试与回归（Tests）}\\
+      \texttt{tests/}：覆盖外推/误差传递/拟合/统计平均；包含安全表达式拒绝与一致性回归测试};
+    \draw[arrow] (output) -- (tests);
+  \end{tikzpicture}
+  \caption{DataLab 源代码框架与主要模块关系（宽度受限于 A4 正文宽度）}
+  \label{fig:datalab-framework}
+\end{figure}
+
+\subsection{功能与子功能树状关系}
+
+从用户操作视角看，四大功能（外推、误差传递、拟合、统计平均）在交互流程上具有高度一致的“输入 $\rightarrow$ 配置 $\rightarrow$ 执行 $\rightarrow$ 输出/导出”结构；差异主要体现在：外推侧重“方法选择与方法参数”，误差传递侧重“公式 + 常数 + 阶数/采样”，拟合侧重“列选择 + 模型/参数配置”，统计平均侧重“列选择 + 批次/方差选项”。为避免单张树状图节点过多导致重叠，图~\ref{fig:datalab-function-tree-extrap}--\ref{fig:datalab-function-tree-stats} 分别给出四个功能的子功能树状关系。
+
+\begin{figure}[htbp]
+  \centering
+  \scriptsize
+  \begin{tikzpicture}[
+      grow=right,
+      level distance=45mm,
+      edge from parent/.style={draw, -Latex, thick},
+      edge from parent path={(\tikzparentnode.east) -- +(3mm,0) |- (\tikzchildnode.west)},
+      box/.style={
+          rectangle, draw, rounded corners=2pt,
+          align=center,
+          text width=3.0cm,       % 原来 3.4cm，建议略缩
+          inner sep=2pt,
+          minimum height=8mm      % 让短文本盒子别太扁，排版更稳定
+        },
+      level 1/.style={sibling distance=52mm}, % 原来 44mm，明显偏紧
+      level 2/.style={sibling distance=24mm}, % 原来 18mm
+      level 3/.style={sibling distance=14mm}, % 原来 10mm
+    ]
+    \node[box]{外推\\Extrapolation}
+    child { node[box]{输入\\Input}
+        child { node[box]{输入模式\\文件 / 手动} }
+        child { node[box]{数据输入\\三列(A,B,C)\\或多列表头} }
+        child { node[box]{不确定度参考列\\(可选)} }
+      }
+    child { node[box]{方法与参数\\Method}
+        child { node[box]{方法选择\\(内置/自定义)} }
+        child { node[box]{参数设置\\(按方法)} }
+        child { node[box]{自定义公式\\(仅自定义)} }
+      }
+    child { node[box]{精度与导出\\Precision \& Export}
+        child { node[box]{多精度\\mp.dps} }
+        child { node[box]{导出\\LaTeX/PDF/CSV/图} }
+      }
+    child { node[box]{输出\\Output}
+        child { node[box]{外推值\\不确定度} }
+        child { node[box]{趋势图\\(可选)} }
+      };
+  \end{tikzpicture}
+  \caption{外推功能的子功能树状关系}
+  \label{fig:datalab-function-tree-extrap}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \scriptsize
+  \begin{tikzpicture}[
+      grow=right,
+      level distance=45mm,
+      edge from parent/.style={draw, -Latex, thick},
+      edge from parent path={(\tikzparentnode.east) -- +(3mm,0) |- (\tikzchildnode.west)},
+      box/.style={rectangle, draw, rounded corners=2pt, align=center, text width=3.4cm, inner sep=2pt},
+      level 1/.style={sibling distance=44mm},
+      level 2/.style={sibling distance=18mm},
+      level 3/.style={sibling distance=10mm},
+    ]
+    \node[box]{误差传递\\Error Propagation}
+    child { node[box]{输入\\Input}
+        child { node[box]{输入模式\\文件 / 手动} }
+        child { node[box]{数据输入\\value(unc)\\或分列} }
+        child { node[box]{常数\\(可选; 文件/手动)} }
+        child { node[box]{公式输入\\(安全解析)} }
+      }
+    child { node[box]{方法与参数\\Method}
+        child { node[box]{方法选择\\Taylor / MC} }
+        child { node[box]{阶数/采样\\(按方法)} }
+      }
+    child { node[box]{精度与导出\\Precision \& Export}
+        child { node[box]{多精度\\mp.dps} }
+        child { node[box]{导出\\LaTeX/PDF/CSV/图} }
+      }
+    child { node[box]{输出\\Output}
+        child { node[box]{结果值\\不确定度} }
+        child { node[box]{贡献分解\\(表/图; 可选)} }
+      };
+  \end{tikzpicture}
+  \caption{误差传递功能的子功能树状关系}
+  \label{fig:datalab-function-tree-error}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \scriptsize
+  \begin{tikzpicture}[
+      grow=right,
+      level distance=45mm,
+      edge from parent/.style={draw, -Latex, thick},
+      edge from parent path={(\tikzparentnode.east) -- +(3mm,0) |- (\tikzchildnode.west)},
+      box/.style={
+          rectangle, draw, rounded corners=2pt,
+          align=center,
+          text width=3.0cm,       % 原来 3.4cm，建议略缩
+          inner sep=2pt,
+          minimum height=8mm      % 让短文本盒子别太扁，排版更稳定
+        },
+      level 1/.style={sibling distance=52mm}, % 原来 44mm，明显偏紧
+      level 2/.style={sibling distance=24mm}, % 原来 18mm
+      level 3/.style={sibling distance=14mm}, % 原来 10mm
+    ]
+    \node[box]{拟合\\Fitting}
+    child { node[box]{输入\\Input}
+        child { node[box]{输入模式\\文件 / 手动} }
+        child { node[box]{列选择\\$x,y,\sigma$(可选)} }
+        child { node[box]{拟合模式\\自动/自定义} }
+        child { node[box]{模型公式\\(仅自定义模式)} }
+      }
+    child { node[box]{参数与约束\\Parameters}
+        child { node[box]{参数列表\\(推断/指定)} }
+        child { node[box]{初值/边界/固定} }
+        child { node[box]{权重\\$\sigma$ / 等权} }
+      }
+    child { node[box]{精度与导出\\Precision \& Export}
+        child { node[box]{多精度\\mp.dps} }
+        child { node[box]{导出\\图/LaTeX/PDF/CSV} }
+      }
+    child { node[box]{输出\\Output}
+        child { node[box]{参数估计\\不确定度} }
+        child { node[box]{拟合统计量\\残差/协方差等} }
+      };
+  \end{tikzpicture}
+  \caption{拟合功能的子功能树状关系}
+  \label{fig:datalab-function-tree-fit}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \scriptsize
+  \begin{tikzpicture}[
+      grow=right,
+      level distance=45mm,
+      edge from parent/.style={draw, -Latex, thick},
+      edge from parent path={(\tikzparentnode.east) -- +(3mm,0) |- (\tikzchildnode.west)},
+      box/.style={
+          rectangle, draw, rounded corners=2pt,
+          align=center,
+          text width=3.0cm,       % 原来 3.4cm，建议略缩
+          inner sep=2pt,
+          minimum height=8mm      % 让短文本盒子别太扁，排版更稳定
+        },
+      level 1/.style={sibling distance=52mm}, % 原来 44mm，明显偏紧
+      level 2/.style={sibling distance=24mm}, % 原来 18mm
+      level 3/.style={sibling distance=14mm}, % 原来 10mm
+    ]
+    \node[box]{统计平均\\Statistics}
+    child { node[box]{输入\\Input}
+        child { node[box]{输入模式\\文件 / 手动} }
+        child { node[box]{列选择\\数值/$\sigma$(可选)} }
+        child { node[box]{批次分段\\(空行)} }
+      }
+    child { node[box]{统计设置\\Options}
+        child { node[box]{模式\\平均/加权等} }
+        child { node[box]{方差选项\\样本/总体\\加权方差} }
+      }
+    child { node[box]{精度与导出\\Precision \& Export}
+        child { node[box]{多精度\\mp.dps} }
+        child { node[box]{导出\\LaTeX/PDF/CSV/图} }
+      }
+    child { node[box]{输出\\Output}
+        child { node[box]{均值/标准差\\标准误差等} }
+        child { node[box]{误差棒/分布图\\(可选)} }
+      };
+  \end{tikzpicture}
+  \caption{统计平均功能的子功能树状关系}
+  \label{fig:datalab-function-tree-stats}
+\end{figure}
+
+\subsection{各模块职责说明}
+
+\subsubsection{入口与前端层}
+桌面端与 Web 端分别面向不同使用场景：桌面端强调交互式数据处理、结果浏览与本地 PDF 预览；Web 端强调轻量化部署、跨平台访问与在线导出。两者均不直接实现算法细节，而是负责：
+\begin{itemize}
+  \item 收集用户输入（数据/常数/公式/方法参数/精度设置）并构造计算任务；
+  \item 调用共享核心计算层完成计算，统一接收结果对象与告警信息；
+  \item 将结果以“数值 + 不确定度 + LaTeX 表达 + 可选图形/文件”的形式呈现并支持导出。
+\end{itemize}
+
+\subsubsection{输入与解析层}
+输入解析层负责将“文本/文件”转换为结构化数据，并做严格校验以避免后续计算的隐式错误：
+\begin{itemize}
+  \item 数据表解析：识别表头、逐行转换为高精度数值（\texttt{mp.mpf}），并报告缺列、非法字符、空行等问题；
+  \item 不确定度解析：支持 \texttt{value(unc)} 记号与分列输入，并统一为（名义值、标准不确定度）结构；
+  \item 常数解析：支持文件与手动输入两种来源，形成常数命名空间，供公式执行与拟合模型调用。
+\end{itemize}
+
+\subsubsection{公式解析与安全执行}
+外推自定义公式、误差传递公式与拟合自定义模型共享同一套“安全公式引擎”。其核心思路是：基于 AST 语法树解析表达式，仅允许白名单中的节点类型、函数调用与常数，并显式拒绝属性访问、导入、任意对象构造等危险行为。该设计的优点是：
+\begin{itemize}
+  \item 安全：避免 \texttt{eval/exec} 带来的代码执行风险；
+  \item 一致：所有“公式输入框”复用同一函数/常数注册表与错误提示风格；
+  \item 可扩展：在白名单内增加函数即可被三类场景同时继承（并同步到帮助文档与提示系统）。
+\end{itemize}
+
+\subsubsection{核心计算引擎}
+核心计算引擎实现四类计算任务，并通过统一的精度控制（\texttt{mp.dps}）保证高精度数值稳定性：
+\begin{itemize}
+  \item 外推：提供多种序列加速/外推方法以及三点自定义公式，并输出外推值与不确定度估计；
+  \item 误差传递：支持一阶线性估计、高阶 Taylor 贡献以及 Monte Carlo 采样，输出结果及其不确定度，并可生成贡献分解；
+  \item 拟合：支持自定义模型与自动模型，给出参数估计、拟合曲线与统计量（例如协方差矩阵/参数不确定度等）；
+  \item 统计平均：支持多批次统计与加权情形，输出均值、方差及标准误差等指标。
+\end{itemize}
+
+\subsubsection{结果格式化与输出}
+输出层将计算结果转换为便于阅读与复用的格式，支持“结果栏显示”和“生成 LaTeX 文件”两条路径，并保证两者在精度与格式规则上保持一致：
+\begin{itemize}
+  \item 带不确定度的显示格式：统一使用同一套 LaTeX/纯文本格式化入口，避免不同模块产生不一致；
+  \item LaTeX 表格：统一生成表格环境、数值列格式（\texttt{dcolumn}/\texttt{siunitx}）、分段表格等；
+  \item PDF：桌面端支持 PDF 预览与缩放；Web 端采用安全编译策略（引擎白名单、禁用 shell-escape、资源限制）。
+\end{itemize}
+
+\subsubsection{共享规范与一致性保障}
+为保证“不同界面、相同计算”的一致性，项目将函数支持、方法说明、参数可见性等 UI 相关规范集中维护：例如 \texttt{formula\_help.py} 与 \texttt{shared/help\_specs.json} 统一提供函数列表与帮助文本；\texttt{shared/ui\_specs.py} 统一描述方法参数与显示规则。前端仅负责渲染与交互，不在前端硬编码函数列表或重复维护规格。
+
+\subsubsection{测试与回归}
+项目通过 \texttt{pytest} 维护回归测试集合，覆盖计算正确性、一致性与安全性三类目标：对典型公式与特殊函数进行跨模块一致性比对；对危险表达式进行拒绝测试；并对新功能（高阶误差传递、拟合自定义模型等）提供针对性的单元测试与数值容差断言。
+
+\end{document}

@@ -1,0 +1,13 @@
+[
+  { "slug": "index", "title_zh": "桌面文档首页", "title_en": "Index" },
+  { "slug": "guide", "title_zh": "使用指南", "title_en": "User Guide" },
+  { "slug": "theory", "title_zh": "理论说明", "title_en": "Theory Notes" },
+  { "slug": "extrapolation", "title_zh": "序列外推", "title_en": "Extrapolation" },
+  { "slug": "uncertainty", "title_zh": "误差传递", "title_en": "Error Propagation" },
+  { "slug": "fitting", "title_zh": "拟合", "title_en": "Fitting" },
+  { "slug": "statistics", "title_zh": "统计平均", "title_en": "Statistics" },
+  { "slug": "export", "title_zh": "导出与排版", "title_en": "Export & Typesetting" },
+  { "slug": "deploy", "title_zh": "部署、打包与发布", "title_en": "Deployment & Release" },
+  { "slug": "roadmap", "title_zh": "开发路线图", "title_en": "Roadmap" },
+  { "slug": "faq", "title_zh": "常见问题", "title_en": "FAQ" }
+]
