@@ -16,6 +16,8 @@ import logging
 from functools import wraps
 from flask import request, session, abort, current_app, has_app_context, has_request_context, render_template
 
+from shared.bilingual import _dual_msg
+
 # ============================================================
 # CSRF Protection
 # ============================================================
@@ -23,7 +25,6 @@ from flask import request, session, abort, current_app, has_app_context, has_req
 CSRF_TOKEN_LENGTH = 32
 CSRF_HEADER_NAME = 'X-CSRF-Token'
 CSRF_FORM_NAME = 'csrf_token'
-CSRF_COOKIE_NAME = 'datalab_csrf'
 
 
 def generate_csrf_token() -> str:
@@ -32,35 +33,35 @@ def generate_csrf_token() -> str:
 
 
 def get_csrf_token() -> str:
-    """Get or create CSRF token for current session."""
-    # Prefer a stable double-submit cookie token when session cookies are unavailable.
-    # This avoids token churn (and CSRF failures) in environments where the session cookie
-    # is not persisted, e.g. SESSION_COOKIE_SECURE=True while serving over plain HTTP.
-    if 'csrf_token' not in session:
-        cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
-        if cookie_token:
-            session['csrf_token'] = cookie_token
-            return cookie_token
+    """Get or create the CSRF token bound to the current server-side session.
+
+    The token is generated and stored in ``session['csrf_token']`` only.
+    There is deliberately no ``datalab_csrf`` cookie mirror: seeding or
+    validating from a cookie would let an attacker who can plant a cookie
+    (subdomain takeover, MITM on HTTP, etc.) forge the token. Frontend code
+    should read the token from the rendered page (e.g. a meta tag) instead.
+    """
     if 'csrf_token' not in session:
         session['csrf_token'] = generate_csrf_token()
     return session['csrf_token']
 
 
 def validate_csrf_token(token: str) -> bool:
-    """Validate CSRF token against session token."""
+    """Validate a submitted CSRF token against the server-side session token.
+
+    The authoritative value is ``session['csrf_token']``. If the session has
+    no token (e.g. a POST before a GET ever established one), validation
+    fails — we do NOT fall back to a cookie-to-submission comparison, because
+    that collapses CSRF protection to "attacker-controlled cookie matches
+    attacker-controlled submission".
+    """
     if not token:
         return False
 
     expected = session.get('csrf_token')
-    if expected:
-        return hmac.compare_digest(expected, token)
-
-    # Fallback: allow double-submit cookie mode when session cookies are not available
-    # (e.g. SESSION_COOKIE_SECURE misconfigured for http, or blocked session cookies).
-    cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
-    if not cookie_token:
+    if not expected:
         return False
-    return hmac.compare_digest(cookie_token, token)
+    return hmac.compare_digest(expected, token)
 
 
 def csrf_protect(f):
@@ -119,9 +120,12 @@ def validate_latex_engine(engine: str) -> str:
         remote_addr = request.remote_addr if has_request_context() else "unknown"
         logger = current_app.logger if has_app_context() else logging.getLogger(__name__)
         logger.error("Blocked dangerous LaTeX engine: %s from %s", engine, remote_addr)
+        allowed = ", ".join(sorted(ALLOWED_LATEX_ENGINES))
         raise ValueError(
-            f"不支持的LaTeX引擎: {engine}。"
-            f"允许的引擎: {', '.join(sorted(ALLOWED_LATEX_ENGINES))}"
+            _dual_msg(
+                f"不支持的 LaTeX 引擎: {engine}。允许的引擎: {allowed}。",
+                f"Unsupported LaTeX engine: {engine}. Allowed engines: {allowed}.",
+            )
         )
 
     return engine
@@ -155,15 +159,23 @@ def validate_text_size(text: str, field_name: str = "输入") -> str:
 
     if len(text) > MAX_TEXT_INPUT_LENGTH:
         raise ValueError(
-            f"{field_name}过大。最大允许 {MAX_TEXT_INPUT_LENGTH:,} 字符，"
-            f"实际 {len(text):,} 字符。"
+            _dual_msg(
+                f"{field_name}过大。最大允许 {MAX_TEXT_INPUT_LENGTH:,} 字符，"
+                f"实际 {len(text):,} 字符。",
+                f"{field_name} is too large. Maximum allowed is "
+                f"{MAX_TEXT_INPUT_LENGTH:,} characters, got {len(text):,} characters.",
+            )
         )
 
     lines = text.count('\n') + 1
     if lines > MAX_TEXT_LINES:
         raise ValueError(
-            f"{field_name}行数过多。最大允许 {MAX_TEXT_LINES:,} 行，"
-            f"实际 {lines:,} 行。"
+            _dual_msg(
+                f"{field_name}行数过多。最大允许 {MAX_TEXT_LINES:,} 行，"
+                f"实际 {lines:,} 行。",
+                f"{field_name} has too many lines. Maximum allowed is "
+                f"{MAX_TEXT_LINES:,} lines, got {lines:,} lines.",
+            )
         )
 
     return text
@@ -299,25 +311,8 @@ def configure_app_security(app):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['X-XSS-Protection'] = '1; mode=block'
-
-        # CSRF cookie (double-submit) for robustness in environments where session cookies
-        # may not persist (e.g. Secure cookie on http). This keeps form CSRF working.
-        try:
-            csrf_token = session.get('csrf_token')
-            if csrf_token:
-                forwarded_proto = (request.headers.get('X-Forwarded-Proto') or '').split(',')[0].strip().lower()
-                is_secure = bool(request.is_secure or forwarded_proto == 'https')
-                response.set_cookie(
-                    CSRF_COOKIE_NAME,
-                    csrf_token,
-                    secure=is_secure,
-                    httponly=True,
-                    samesite='Lax',
-                    path='/',
-                )
-        except Exception:
-            # Never block a response due to cookie-setting issues.
-            pass
+        # CSRF is session-scoped by design (see get_csrf_token()); no CSRF
+        # cookie is emitted here.
         return response
 
     # Error handlers to prevent info leakage

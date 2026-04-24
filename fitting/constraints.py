@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Callable, Mapping
 
 import sympy as sp
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, convert_xor
 from mpmath import mp
+
+from shared.bilingual import _dual_msg
+
+_logger = logging.getLogger(__name__)
 
 _MIN_SYMPY_VERSION = (1, 13, 0)
 
@@ -142,7 +147,12 @@ def build_parameter_state(config: Mapping[str, Mapping[str, object]], parameter_
         )
 
     if not free_params:
-        raise ValueError("至少需要一个自由参数以执行拟合。/ Need at least one free parameter to fit.")
+        raise ValueError(
+            _dual_msg(
+                "至少需要一个自由参数以执行拟合。",
+                "Need at least one free parameter to fit.",
+            )
+        )
 
     return ParameterState(
         free_params=free_params,
@@ -184,11 +194,36 @@ def _lambdify_expression(
         if exclude and symbol_name == exclude:
             continue
         if symbol_name not in available_symbols:
-            raise ValueError(f"参数表达式引用了未知参数 {symbol_name}。/ Unknown parameter referenced: {symbol_name}.")
+            raise ValueError(
+                _dual_msg(
+                    f"参数表达式引用了未知参数 {symbol_name}。",
+                    f"Unknown parameter referenced: {symbol_name}.",
+                )
+            )
         dependencies.append(symbol_name)
     dependencies = sorted(set(dependencies), key=lambda item: order_index.get(item, 0))
     lambda_symbols = [available_symbols[dep] for dep in dependencies]
     expr_lambda = sp.lambdify(lambda_symbols, expr, "mpmath")
+
+    # Defense-in-depth: sp.lambdify seeds the callable's __globals__ with the
+    # full builtins module (including __import__, open, eval, exec). The
+    # SymPy parser upstream (_parse_expr_safe) is already whitelist-restricted,
+    # but stripping __builtins__ here ensures a bypass of the parser can't
+    # reach dangerous primitives via the callable's globals. mpmath-backed
+    # lambdify callables do not need Python's builtins — all operators are
+    # pulled from the mpmath namespace already present in __globals__.
+    try:
+        expr_lambda.__globals__["__builtins__"] = {}
+    except Exception:
+        # Some exotic callables may not expose __globals__ as a writable dict;
+        # in that case the parser-level whitelist remains the primary defense.
+        # Log at DEBUG so this is discoverable if it ever trips in the wild
+        # without changing behavior for callers.
+        _logger.debug(
+            "Could not strip __builtins__ from lambdify callable; "
+            "parser-level whitelist remains primary defense.",
+            exc_info=True,
+        )
 
     def _evaluate(params, deps=tuple(dependencies), expr_lambda=expr_lambda):
         missing = [dep for dep in deps if dep not in params]

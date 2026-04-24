@@ -7,11 +7,8 @@ from typing import Sequence
 
 from mpmath import mp
 
+from shared.bilingual import _dual_msg
 from shared.precision import precision_guard
-
-
-def _dual_msg(zh: str, en: str) -> str:
-    return f"{zh} / {en}"
 
 
 class PowerLawComputationError(RuntimeError):
@@ -77,7 +74,10 @@ def extrapolate_power_law(
         x1, x2, x3 = config.normalized_x()
         e_values = [_mpf_from_numeric(val, f"E{i+1}") for i, val in enumerate(energies)]
         E1, E2, E3 = e_values
-        eps = mp.power(10, -max(8, mp.dps // 2))
+        # Derive degeneracy eps from mp.eps (the unit roundoff at the current
+        # precision) with a modest safety factor, so the threshold tracks the
+        # user's requested dps rather than being clamped halfway down.
+        eps = mp.eps * mp.mpf(10) ** 2
 
         def _too_close(a: mp.mpf, b: mp.mpf) -> bool:
             scale = max(mp.fabs(a), mp.fabs(b), mp.mpf("1"))
@@ -132,12 +132,19 @@ def extrapolate_power_law(
                     if key not in seen:
                         seeds.append(seed)
                         seen.add(key)
+                # Scale findroot tolerance with the active precision so
+                # high-dps runs are not silently capped at mpmath's default
+                # maxsteps=10 / tol=1e-15 (mirrors R10 C4 fix in hp_fitter).
+                tol = mp.mpf(10) ** (-(mp.dps - 5))
+                maxsteps = max(50, mp.dps)
                 best_p: mp.mpf | None = None
                 best_resid: mp.mpf | None = None
                 last_error: Exception | None = None
                 for seed in seeds:
                     try:
-                        candidate = mp.findroot(residual, seed)
+                        candidate = mp.findroot(
+                            residual, seed, tol=tol, maxsteps=maxsteps
+                        )
                         r_val = mp.fabs(residual(candidate))
                         if best_resid is None or r_val < best_resid:
                             best_resid = r_val

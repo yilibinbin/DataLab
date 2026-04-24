@@ -7,6 +7,7 @@ from typing import Callable, Iterable, Sequence
 
 from mpmath import mp
 
+from shared.bilingual import _dual_msg
 from shared.numerics import noise_floor
 from shared.precision import precision_guard
 
@@ -177,7 +178,9 @@ def _compute_statistics(
         residuals.append(value - target)
     if weights:
         if any(w <= 0 for w in weights):
-            raise ValueError("权重必须为正。/ Weights must be positive.")
+            raise ValueError(
+                _dual_msg("权重必须为正。", "Weights must be positive.")
+            )
         chi2 = sum(weight * (r * r) for weight, r in zip(weights, residuals))
         total_weight = sum(weights)
         if total_weight > 0:
@@ -220,7 +223,9 @@ def _compute_covariance(
     if weights:
         for w in weights:
             if w <= 0:
-                raise ValueError("权重必须为正。/ Weights must be positive.")
+                raise ValueError(
+                    _dual_msg("权重必须为正。", "Weights must be positive.")
+                )
     sqrt_weights = [mp.sqrt(w) for w in weights] if weights else None
     for idx, (obs, target) in enumerate(zip(observations, targets)):
         for jdx, name in enumerate(free_params):
@@ -340,7 +345,12 @@ def _estimate_systematic_uncertainty(
     if data_sigmas is None:
         return {}, []
     if len(data_sigmas) != len(targets):
-        raise ValueError("数据不确定度列的长度必须与目标数据一致。/ Uncertainty column length must match targets.")
+        raise ValueError(
+            _dual_msg(
+                "数据不确定度列的长度必须与目标数据一致。",
+                "Uncertainty column length must match targets.",
+            )
+        )
     sigma_vec: list[mp.mpf] = []
     for sigma in data_sigmas:
         if sigma is None:
@@ -416,27 +426,57 @@ def fit_custom_model(
     data_sigmas: list[mp.mpf | None] | None = None,
 ) -> FitResult:
     if not variable_data:
-        raise ValueError("拟合需要至少一个自变量。/ At least one independent variable is required.")
+        raise ValueError(
+            _dual_msg(
+                "拟合需要至少一个自变量。",
+                "At least one independent variable is required.",
+            )
+        )
     n_points = len(next(iter(variable_data.values())))
     if n_points == 0:
-        raise ValueError("未找到任何可用于拟合的数据行。/ No data rows available for fitting.")
+        raise ValueError(
+            _dual_msg(
+                "未找到任何可用于拟合的数据行。",
+                "No data rows available for fitting.",
+            )
+        )
 
     for values in variable_data.values():
         if len(values) != n_points:
-            raise ValueError("所有自变量的点数必须一致。/ All independent variables must have the same length.")
+            raise ValueError(
+                _dual_msg(
+                    "所有自变量的点数必须一致。",
+                    "All independent variables must have the same length.",
+                )
+            )
 
     with precision_guard(precision):
         observations, targets = _prepare_points(variable_data, target_data)
         if len(targets) != len(observations):
-            raise ValueError("因变量的数据点数量必须与自变量一致。/ Dependent variable length must match independent variables.")
+            raise ValueError(
+                _dual_msg(
+                    "因变量的数据点数量必须与自变量一致。",
+                    "Dependent variable length must match independent variables.",
+                )
+            )
         applied_weights = None
         if weights:
             if len(weights) != len(targets):
-                raise ValueError("权重数量必须与数据点数量一致。/ Weight count must match number of data points.")
+                raise ValueError(
+                    _dual_msg(
+                        "权重数量必须与数据点数量一致。",
+                        "Weight count must match number of data points.",
+                    )
+                )
             applied_weights = [mp.mpf(w) for w in weights]
             for w in applied_weights:
                 if w <= 0 or mp.isnan(w):
-                    raise ValueError("权重必须为正且有限。/ Weights must be positive and finite.")
+                    raise ValueError(
+                        _dual_msg(
+                            "权重必须为正且有限。",
+                            "Weights must be positive and finite.",
+                        )
+                    )
 
         def _run_once(current_targets: Sequence[mp.mpf], seed_override: tuple[mp.mpf, ...] | None = None) -> _FitComputation:
             gradient_funcs = tuple(
@@ -449,13 +489,31 @@ def fit_custom_model(
             variants_tried = 0
 
             def _solve_seed(seed_variant: tuple[mp.mpf, ...]):
+                # Scale convergence to the requested precision: mpmath's
+                # default maxsteps=10 silently caps iterations regardless of
+                # mp.dps, so fitting at dps=100 would otherwise stop ~10
+                # digits shy of the user's configured precision. Tie the
+                # tolerance to mp.dps and give findroot enough budget to
+                # actually converge.
+                tol = mp.mpf(10) ** (-(mp.dps - 5))
+                maxsteps = max(50, mp.dps)
                 if len(gradient_funcs) == 1:
-                    root = mp.findroot(gradient_funcs[0], seed_variant[0])
+                    root = mp.findroot(
+                        gradient_funcs[0],
+                        seed_variant[0],
+                        tol=tol,
+                        maxsteps=maxsteps,
+                    )
                     return (mp.mpf(root),)
                 def system(*values):
                     return tuple(func(*values) for func in gradient_funcs)
 
-                candidate = mp.findroot(system, tuple(seed_variant))
+                candidate = mp.findroot(
+                    system,
+                    tuple(seed_variant),
+                    tol=tol,
+                    maxsteps=maxsteps,
+                )
                 if isinstance(candidate, mp.matrix):
                     candidate = tuple(candidate)
                 if not isinstance(candidate, (tuple, list)):
@@ -553,8 +611,18 @@ def fit_custom_model(
 
             if not candidates:
                 if last_exc:
-                    raise ValueError(f"非线性求解失败: {last_exc} / Nonlinear solve failed: {last_exc}") from last_exc
-                raise ValueError("非线性求解失败: 无法求解。/ Nonlinear solve failed: no solution found.")
+                    raise ValueError(
+                        _dual_msg(
+                            f"非线性求解失败: {last_exc}",
+                            f"Nonlinear solve failed: {last_exc}",
+                        )
+                    ) from last_exc
+                raise ValueError(
+                    _dual_msg(
+                        "非线性求解失败: 无法求解。",
+                        "Nonlinear solve failed: no solution found.",
+                    )
+                )
 
             def _score(candidate: _FitComputation):
                 return candidate.chi2 if not mp.isnan(candidate.chi2) else mp.inf

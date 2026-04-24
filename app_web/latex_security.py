@@ -41,6 +41,21 @@ LATEX_MAX_FILE_SIZE = int(os.environ.get('DATALAB_LATEX_MAX_FILE', '50')) * 1024
 LATEX_MAX_PROCESSES = int(os.environ.get('DATALAB_LATEX_MAX_PROC', '2048'))
 
 
+# Patterns for the ``validate_latex_content`` shell-escape pre-filter. Compiled
+# once at import time so the per-request cost is a list iteration over already-
+# compiled regexes. The TeX tokenizer accepts arbitrary whitespace between
+# control-sequence names and their arguments, so a literal substring match on
+# ``\write18`` would miss ``\write 18``, ``\write\n18``, ``\immediate \write 18``,
+# etc. Each entry is ``(label, compiled_pattern)`` where ``label`` is the
+# canonical short form used in warning messages.
+_DANGEROUS_LATEX_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    (r"\immediate\write18", re.compile(r"\\immediate\s*\\write\s*18\b")),
+    (r"\write18", re.compile(r"\\write\s*18\b")),
+    (r"\openout", re.compile(r"\\openout\b")),
+    (r"\input{|", re.compile(r"\\input\s*\{\s*\|")),
+)
+
+
 def _preexec_limit_resources():
     """
     Set resource limits for LaTeX subprocess (POSIX only).
@@ -107,6 +122,15 @@ def compile_latex_safe(
         en = msg if msg and not _contains_cjk(msg) else f"Unsupported LaTeX engine: {engine}."
         zh = msg if msg else f"不支持的 LaTeX 引擎: {engine}。"
         warnings.append(f"{zh} / {en}")
+        return None
+
+    # Pre-subprocess content filter (defense-in-depth alongside -no-shell-escape).
+    # Blocks \write18 and path-traversal \input before we ever spawn the LaTeX
+    # engine. If this returns not safe, we refuse to compile.
+    is_safe, content_warnings = validate_latex_content(tex_text)
+    if content_warnings:
+        warnings.extend(content_warnings)
+    if not is_safe:
         return None
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -219,24 +243,20 @@ def validate_latex_content(tex_text: str) -> tuple[bool, list[str]]:
     """
     warnings = []
 
-    # Check for shell escape attempts
-    dangerous_commands = [
-        r'\write18',
-        r'\input{|',
-        r'\openout',
-        '\\immediate\\write18',
-    ]
-
-    for cmd in dangerous_commands:
-        if cmd in tex_text:
+    for label, pattern in _DANGEROUS_LATEX_PATTERNS:
+        if pattern.search(tex_text):
             warnings.append(
-                f"检测到危险的 LaTeX 命令: {cmd}，已阻止。"
-                f" / Dangerous LaTeX command detected: {cmd}. Blocked."
+                f"检测到危险的 LaTeX 命令: {label}，已阻止。"
+                f" / Dangerous LaTeX command detected: {label}. Blocked."
             )
             return False, warnings
 
-    # Check for suspicious file operations (path traversal / absolute paths).
-    # Even without shell-escape, LaTeX can read files via \input/\include, so we treat unsafe paths as blocked.
+    # Check for suspicious file operations (path traversal / absolute paths /
+    # any path separator). Each document compiles in its own isolated temp
+    # directory, so legitimate TeX needs only same-directory includes —
+    # subdirectory references in web input are treated as unsafe to avoid
+    # sneaky traversal patterns (e.g. "foo/../../etc/passwd" that collapse
+    # after normalization). See compile_latex_safe() for the temp-dir setup.
     for raw in re.findall(r"\\(?:input|include)\s*\{([^}]*)\}", tex_text):
         candidate = (raw or "").strip()
         if not candidate:
@@ -245,12 +265,13 @@ def validate_latex_content(tex_text: str) -> tuple[bool, list[str]]:
             candidate.startswith(("/", "\\"))  # absolute paths
             or ":" in candidate  # Windows drive letters / URL-like
             or ".." in candidate  # parent traversal
-            or "/" in candidate  # any path separator
-            or "\\" in candidate  # any path separator
+            or "/" in candidate  # any path separator (subdir includes disallowed)
+            or "\\" in candidate  # any path separator (subdir includes disallowed)
         ):
             warnings.append(
-                "检测到不安全的文件包含路径，可能存在路径遍历风险。"
-                " / Unsafe file-include path detected; possible path traversal attempt."
+                "检测到不安全的文件包含路径（仅允许同目录下的纯文件名包含）。"
+                " / Unsafe file-include path detected "
+                "(only same-directory, bare-filename includes are permitted in the web sandbox)."
             )
             return False, warnings
 

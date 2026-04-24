@@ -7,11 +7,8 @@ from typing import Sequence
 
 from mpmath import mp
 
+from shared.bilingual import _dual_msg
 from shared.precision import precision_guard
-
-
-def _dual_msg(zh: str, en: str) -> str:
-    return f"{zh} / {en}"
 
 
 class SequenceAccelerationError(RuntimeError):
@@ -144,7 +141,10 @@ def _run_levin(mp_sequence, config):
             return variant
         # Keep default behavior predictable; surface the invalid variant clearly.
         raise SequenceAccelerationError(
-            f"Levin 变换类型无效: {raw!r} / Invalid Levin variant: {raw!r}"
+            _dual_msg(
+                f"Levin 变换类型无效: {raw!r}",
+                f"Invalid Levin variant: {raw!r}",
+            )
         )
 
     def _collapse_adjacent_equal(values: list[mp.mpf]) -> list[mp.mpf]:
@@ -201,7 +201,10 @@ def _run_levin(mp_sequence, config):
             return SequenceAcceleratorResult(value=approx, metadata=metadata)
 
         raise SequenceAccelerationError(
-            f"Levin 加速失败: {exc} / Levin acceleration failed: {exc}"
+            _dual_msg(
+                f"Levin 加速失败: {exc}",
+                f"Levin acceleration failed: {exc}",
+            )
         ) from exc
 
 

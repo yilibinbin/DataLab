@@ -116,7 +116,12 @@ def compute_statistics(
                 dropped += 1
                 continue
             if s < 0:
-                raise ValueError("检测到负的不确定度，数据无效。/ Negative uncertainty encountered; data invalid.")
+                raise ValueError(
+                    _dual_msg(
+                        "检测到负的不确定度，数据无效。",
+                        "Negative uncertainty encountered; data invalid.",
+                    )
+                )
             if mp.fabs(s) <= epsilon:
                 zero_sigma_values.append(mp.mpf(v))
                 continue
@@ -126,7 +131,12 @@ def compute_statistics(
             # 零不确定度视为无限权重；若多值不一致则报告错误
             unique = {mp.nstr(val, 30) for val in zero_sigma_values}
             if len(unique) > 1:
-                raise ValueError("存在 σ=0 但数值不一致的数据点，无法计算加权平均。/ Conflicting zero-uncertainty points.")
+                raise ValueError(
+                    _dual_msg(
+                        "存在 σ=0 但数值不一致的数据点，无法计算加权平均。",
+                        "Conflicting zero-uncertainty points.",
+                    )
+                )
             anchor = zero_sigma_values[0]
             mean = anchor
             std = mp.mpf("0")

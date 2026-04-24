@@ -8,6 +8,7 @@ Routes are split into blueprints. Heavy computation lives in `app_web.logic`.
 from __future__ import annotations
 
 import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -23,13 +24,39 @@ from app_web._security_shim import configure_app_security, get_csrf_token
 from app_web.logic import _generate_fitting_latex  # re-exported for tests/backward-compat
 
 
+def _resolve_secret_key() -> str:
+    """Resolve the Flask SECRET_KEY with no hardcoded fallback.
+
+    - If ``DATALAB_WEB_SECRET`` is set (production and dev alike), use it.
+    - Else, if ``DATALAB_DEBUG`` is truthy, generate a random per-process
+      secret so the dev workflow keeps working without a committed key.
+    - Otherwise, refuse to start: a missing SECRET_KEY in production is a
+      hard failure — a git-history-visible literal would be worse than a
+      crash.
+    """
+    explicit = os.environ.get("DATALAB_WEB_SECRET")
+    if explicit:
+        return explicit
+
+    debug_flag = os.environ.get("DATALAB_DEBUG", "").lower() in ("1", "true", "yes")
+    if debug_flag:
+        # Random per-process secret — sessions will not survive a restart,
+        # which is exactly what we want in development.
+        return secrets.token_hex(32)
+
+    raise RuntimeError(
+        "必须设置环境变量 DATALAB_WEB_SECRET 才能启动 DataLab Web。 / "
+        "DATALAB_WEB_SECRET must be set before starting DataLab Web."
+    )
+
+
 def create_app() -> Flask:
     app = Flask(
         __name__,
         template_folder="templates",
         static_folder="static",
     )
-    app.config["SECRET_KEY"] = os.environ.get("DATALAB_WEB_SECRET", "datalab-web-dev")
+    app.config["SECRET_KEY"] = _resolve_secret_key()
 
     configure_app_security(app)
 
@@ -59,7 +86,6 @@ if __name__ == "__main__":
     host = os.environ.get("DATALAB_HOST", "127.0.0.1")
     port = int(os.environ.get("DATALAB_PORT", os.environ.get("PORT", "8000")))
     debug = os.environ.get("DATALAB_DEBUG", "").lower() in ("1", "true", "yes")
-    secret_set = bool(os.environ.get("DATALAB_WEB_SECRET"))
 
     if debug:
         import warnings
@@ -67,15 +93,6 @@ if __name__ == "__main__":
         warnings.warn(
             "Running in DEBUG mode. NEVER use debug=True in production! "
             "Set DATALAB_DEBUG=0 for production.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-    elif not secret_set:
-        import warnings
-
-        warnings.warn(
-            "DATALAB_WEB_SECRET is not set; using a development SECRET_KEY. "
-            "Set DATALAB_WEB_SECRET before deploying to production.",
             RuntimeWarning,
             stacklevel=2,
         )

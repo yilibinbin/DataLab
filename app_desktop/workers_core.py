@@ -8,7 +8,7 @@ from typing import Any
 
 import mpmath as mp
 
-from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS
+from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 
 from data_extrapolation_latex_latest import (
     _dual_msg,
@@ -44,20 +44,27 @@ from fitting.hp_fitter import FitResult
 
 @contextmanager
 def _mp_precision_guard(dps: int | None):
-    """Temporarily set mp.mp.dps and restore it afterwards."""
-    old = mp.mp.dps
+    """Delegate to ``shared.precision.precision_guard`` with worker-side bounds.
+
+    Kept as a thin wrapper so existing worker call-sites do not need to be
+    refactored. ``mp.dps`` is process-global — concurrent workers must share
+    a single canonical guard to avoid precision corruption.
+
+    Applies the worker's [MIN_MPMATH_DPS, MAX_MPMATH_DPS] envelope to the
+    shared guard so programmatic callers (tests, batch runners, corrupted
+    configs) cannot push ``mp.dps`` outside the range the widget spinner
+    would normally enforce. Interactive callers are already clamped upstream
+    by the Qt spinner; this is the defense-in-depth layer.
+    """
     if dps is None:
-        yield old
+        yield mp.mp.dps
         return
-    try:
-        clamped = max(MIN_MPMATH_DPS, min(int(dps), MAX_MPMATH_DPS))
-    except Exception:
-        clamped = old
-    mp.mp.dps = clamped
-    try:
-        yield clamped
-    finally:
-        mp.mp.dps = old
+    with precision_guard(
+        dps,
+        clamp_min=MIN_MPMATH_DPS,
+        clamp_max=MAX_MPMATH_DPS,
+    ) as effective_dps:
+        yield effective_dps
 
 
 def _safe_resolve_path(text: str) -> Path:
@@ -938,7 +945,12 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
             expression = expr
             logs.append(f"{model_type} 拟合完成。")
         else:
-            raise ValueError(f"Unsupported fit model: {model_type}")
+            raise ValueError(
+                _dual_msg(
+                    f"不支持的拟合模型: {model_type}",
+                    f"Unsupported fit model: {model_type}",
+                )
+            )
         if job.verbose and fit_result is not None:
             try:
                 print(f"[fit] params={fit_result.params}")

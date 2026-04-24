@@ -8,6 +8,14 @@ from mpmath import mp
 import sympy as sp
 from sympy.parsing.sympy_parser import parse_expr
 
+# Canonical bilingual message helpers live in shared.bilingual so every
+# frontend/worker/scientific module resolves _dual_msg to the same function
+# object. Re-exported here for backward compatibility — data_extrapolation_
+# latex_latest auto-re-exports this module's public symbols, so existing
+# callers of `from data_extrapolation_latex_latest import _dual_msg` keep
+# working without change.
+from shared.bilingual import _dual_msg, _split_dual  # noqa: F401  (re-export)
+
 
 MAX_AST_DEPTH = 400
 MAX_AST_NODES = 50_000
@@ -23,19 +31,6 @@ def _mp(value: object) -> mp.mpf:
         return mp.mpf(value)
     except Exception:
         return mp.mpf(str(value))
-
-
-def _dual_msg(zh: str, en: str) -> str:
-    """Join zh/en messages so the GUI can localize with _localize_text."""
-    return f"{zh} / {en}"
-
-
-def _split_dual(text: str) -> tuple[str, str]:
-    """Return (zh, en) parts if dual, otherwise the same text for both."""
-    if " / " in text:
-        left, right = text.split(" / ", 1)
-        return left.strip(), right.strip()
-    return text, text
 
 
 _ALLOWED_CONSTANTS: dict[str, mp.mpf] = {
@@ -165,7 +160,12 @@ def safe_eval(expression: str, var_dict: dict[str, object]):
     expr = _normalize_expression(expression)
     try:
         tree = ast.parse(expr, mode="eval")
-    except SyntaxError as exc:
+    except (SyntaxError, RecursionError, MemoryError) as exc:
+        # RecursionError is raised by CPython's ast.parse when the expression
+        # tree exceeds the interpreter recursion limit (e.g. pathological
+        # 10k+ term sums); MemoryError can occur on extremely large inputs.
+        # Surface both as a clean bilingual ValueError rather than leaking
+        # an untrusted RecursionError up the stack.
         raise ValueError(
             _dual_msg(
                 f"无法解析表达式 '{expression}': {exc}",
