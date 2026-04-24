@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="eyebrow">DataLab Web</p>
+      <h1>{{ title }}</h1>
+      <p class="lede">{{ message }}</p>
+      <div class="hero-actions">
+        <a class="download" href="{{ back_url }}">{{ back_text }}</a>
+      </div>
+    </div>
+  </section>
+{% endblock %}
+

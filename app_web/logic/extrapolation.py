@@ -1,0 +1,204 @@
+from __future__ import annotations
+
+import re
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+import mpmath as mp
+
+from .._security_shim import (
+    compile_latex_safe,
+    mpmath_synchronized,
+    validate_latex_engine,
+)
+
+from data_extrapolation_latex_latest import ExtrapolationOptions, generate_latex_table, process_data_string
+from extrapolation_methods import PowerLawConfig
+
+from .common import (
+    _encode_b64,
+    _format_rows,
+    _generate_csv_from_rows,
+    _is_checked,
+    _parse_float,
+    _parse_int,
+)
+from .plots import _render_extrapolation_plot
+
+
+@dataclass
+class ExtrapolationResultBundle:
+    headers: list[str]
+    rows: list[tuple[mp.mpf, ...]]
+    results: list[object]
+    formatted_rows: list[dict[str, object]]
+    latex_text: str
+    pdf_b64: str | None
+    plot_b64_list: list[str | None] | None
+    csv_data: str | None
+    warnings: list[str]
+    method: str
+    caption: str | None
+    mp_precision: int | None
+
+
+def _render_latex(
+    headers: list[str],
+    rows: list[tuple[mp.mpf, ...]],
+    results: list,
+    *,
+    caption: str | None,
+    latex_precision: int | None,
+    latex_group_size: int,
+    use_dcolumn: bool,
+    result_digits: int | None,
+) -> str:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tex_path = Path(tmpdir) / "extrapolation.tex"
+        generate_latex_table(
+            headers,
+            rows,
+            results,
+            tex_path,
+            caption=caption,
+            precision=latex_precision,
+            verbose=False,
+            use_dcolumn=use_dcolumn,
+            table_segments=None,
+            result_uncertainty_digits=result_digits,
+            latex_group_size=latex_group_size,
+        )
+        return tex_path.read_text(encoding="utf-8")
+
+
+def _build_power_config(form, mp_precision: int | None) -> PowerLawConfig:
+    x1 = form.get("x1") or "1"
+    x2 = form.get("x2") or "2"
+    x3 = form.get("x3") or "3"
+    exponent_override = form.get("power_exponent") or None
+    initial_guess = form.get("power_seed") or None
+    seed_guesses_raw = (form.get("power_seed_guesses") or "").strip()
+    seed_guesses = None
+    if seed_guesses_raw:
+        seed_guesses = [token for token in re.split(r"[,\s]+", seed_guesses_raw) if token]
+    return PowerLawConfig(
+        x_values=[x1, x2, x3],
+        precision=mp_precision or 80,
+        exponent_override=exponent_override,
+        initial_guess=initial_guess or 1.0,
+        seed_guesses=seed_guesses,
+    )
+
+
+@mpmath_synchronized
+def _run_extrapolation(data_text: str, form, lang: str = "zh") -> ExtrapolationResultBundle:
+    method = (form.get("method") or "power_law").strip()
+    mp_precision = _parse_int(form.get("mp_precision"))
+    latex_precision = _parse_int(form.get("latex_precision"))
+    latex_group_size = _parse_int(form.get("latex_group_size"))
+    if latex_group_size is None:
+        latex_group_size = 3
+    result_digits = _parse_int(form.get("result_digits"))
+    if result_digits is None:
+        result_digits = 1
+    reference_mode = (form.get("reference_column_mode") or "").strip()
+    reference_column_raw = (form.get("reference_column") or "").strip()
+    reference_column = "auto_max_diff" if reference_mode.lower() == "auto_max_diff" else (reference_column_raw or None)
+    caption_text = (form.get("caption") or "").strip()
+    use_caption = _is_checked(form, "use_caption", default=False) if "use_caption" in form else bool(caption_text)
+    caption = (caption_text or None) if use_caption else None
+    use_dcolumn = _is_checked(form, "use_dcolumn", default=True)
+    compile_pdf = _is_checked(form, "compile_pdf", default=False)
+    latex_engine = (form.get("latex_engine") or "xelatex").strip() or "xelatex"
+    # Dynamic (ui_specs) fields may use shorter names; keep legacy names as fallback.
+    levin_variant = (form.get("variant") or form.get("levin_variant") or "u").strip() or "u"
+    richardson_p = _parse_float(form.get("p"))
+    if richardson_p is None:
+        richardson_p = 2.0
+    levin_order = _parse_int(form.get("order"))
+    if levin_order is None:
+        levin_order = 2
+    levin_weight = (form.get("weight") or "default").strip() or "default"
+    levin_beta = _parse_float(form.get("beta"))
+    if levin_beta is None:
+        levin_beta = 1.0
+    custom_formula = (form.get("custom_formula") or "").strip() or None
+
+    accelerators = {"richardson", "shanks", "levin_u", "wynn_epsilon"}
+    if mp_precision is None and (method in accelerators or method == "power_law"):
+        mp_precision = 80
+
+    power_config = _build_power_config(form, mp_precision) if method == "power_law" else None
+
+    options = ExtrapolationOptions(
+        method=method,
+        power_law_config=power_config,
+        uncertainty_column=reference_column,
+        mp_precision=mp_precision,
+        levin_variant=levin_variant,
+        custom_formula=custom_formula,
+        uncertainty_digits=result_digits,
+        richardson_p=richardson_p,
+        levin_order=levin_order,
+        levin_weight=levin_weight,
+        levin_beta=levin_beta,
+    )
+    headers, data_rows, raw_results = process_data_string(
+        data_text,
+        verbose=False,
+        options=options,
+    )
+    latex_text = _render_latex(
+        headers,
+        data_rows,
+        raw_results,
+        caption=caption,
+        latex_precision=latex_precision,
+        latex_group_size=latex_group_size,
+        use_dcolumn=use_dcolumn,
+        result_digits=result_digits,
+    )
+    formatted_rows = _format_rows(headers, data_rows, raw_results, digits=12, uncertainty_digits=result_digits, mp_precision=mp_precision)
+
+    # Generate plots if requested
+    generate_plots = _is_checked(form, "generate_plots", default=False)
+    plot_b64_list = None
+    if generate_plots and data_rows and raw_results:
+        plot_b64_list = []
+        for idx, (row, result) in enumerate(zip(data_rows, raw_results), 1):
+            try:
+                extrap_val = result.value if hasattr(result, "value") else result
+                extrap_sigma = result.uncertainty if hasattr(result, "uncertainty") else mp.mpf("0")
+                plot_bytes = _render_extrapolation_plot(row, extrap_val, extrap_sigma, idx, lang=lang)
+                if plot_bytes:
+                    plot_b64_list.append(_encode_b64(plot_bytes))
+                else:
+                    plot_b64_list.append(None)
+            except Exception:
+                plot_b64_list.append(None)
+
+    pdf_b64 = None
+    if compile_pdf:
+        validated_engine = validate_latex_engine(latex_engine)
+        pdf_bytes = compile_latex_safe(latex_text, validated_engine, options.warnings, "extrapolation")
+        if pdf_bytes:
+            pdf_b64 = _encode_b64(pdf_bytes)
+
+    csv_data = _generate_csv_from_rows(formatted_rows) if formatted_rows else None
+
+    return ExtrapolationResultBundle(
+        headers=headers,
+        rows=data_rows,
+        results=raw_results,
+        formatted_rows=formatted_rows,
+        latex_text=latex_text,
+        pdf_b64=pdf_b64,
+        plot_b64_list=plot_b64_list,
+        csv_data=csv_data,
+        warnings=options.warnings,
+        method=method,
+        caption=caption,
+        mp_precision=mp_precision,
+    )
+

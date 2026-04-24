@@ -1,0 +1,82 @@
+site_name: DataLab Web Documentation
+site_description: 高精度外推与误差分析工具 - 使用指南与技术文档
+site_author: DataLab Team
+docs_dir: docs/web
+
+# Repository
+# repo_url: https://github.com/your-org/datalab-web
+# repo_name: GitHub
+
+# Theme
+theme:
+  name: material
+  language: zh
+  palette:
+    # Dark mode
+    - scheme: slate
+      primary: cyan
+      accent: light blue
+      toggle:
+        icon: material/brightness-4
+        name: 切换到浅色模式
+    # Light mode
+    - scheme: default
+      primary: cyan
+      accent: light blue
+      toggle:
+        icon: material/brightness-7
+        name: 切换到深色模式
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+# Navigation
+nav:
+  - 首页: index.md
+  - 使用指南:
+    - 概览: guide.md
+    - 序列外推: extrapolation.md
+    - 误差传递: uncertainty.md
+    - 拟合功能: fitting.md
+    - 统计分析: statistics.md
+    - 导出与排版: export.md
+  - 部署与配置: deploy.md
+  - 常见问题: faq.md
+  - 开发路线图: roadmap.md
+
+# Extensions
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+# Plugins
+plugins:
+  - search:
+      lang:
+        - zh
+        - en
+
+# Extra
+extra:
+  version:
+    provider: mike
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com

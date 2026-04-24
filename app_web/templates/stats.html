@@ -1,0 +1,381 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow" data-i18n="stats.eyebrow">统计平均 / 误差权重</p>
+    <h1 data-i18n="stats.title">对单列数据（可带 σ）计算均值、标准误差，并生成 LaTeX 摘要表。</h1>
+    <p class="lede" data-i18n="stats.subtitle">支持加权/非加权、样本/总体，并生成可直接引用的 LaTeX 摘要表，适用于误差评估与平均值汇总。</p>
+    <div class="hero-actions">
+      <span class="chip" data-i18n="stats.chip1">σ 加权</span>
+      <span class="chip" data-i18n="stats.chip2">mpmath 精度</span>
+      <span class="chip" data-i18n="stats.chip3">LaTeX 表格</span>
+    </div>
+  </div>
+</section>
+
+<form class="panel" method="post" enctype="multipart/form-data" novalidate>
+  <!-- CSRF Protection -->
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <!-- 第一行：数据输入 -->
+  <div class="grid">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="label" data-i18n="stats.dataLabel">数据</div>
+          <div class="muted" data-i18n="stats.dataHint">首行表头，第一列为数值，第二列（可选）为 σ。</div>
+        </div>
+      </div>
+      <label class="checkbox">
+        <input type="checkbox" name="stats_use_file" value="1" id="stats_use_file" {% if use_file_checked %}checked{% endif %}>
+        <span data-i18n="checkbox.useFile">使用文件输入</span>
+      </label>
+      <div class="manual-only" id="stats_manual_block">
+        <label class="field-label" data-i18n="extrap.pasteLabel">粘贴数据文本</label>
+        <div id="stats_data_spreadsheet"></div>
+        <div class="hint" data-i18n="stats.dataExample">支持格式：单列括号不确定度 <code>1.23(4)</code> 或 两列 <code>value sigma</code>。支持粘贴 CSV 数据。</div>
+      </div>
+      <div class="file-only" id="stats_file_block">
+        <label class="field-label" for="stats_data_file" data-i18n="extrap.uploadLabel">上传 UTF-8 文本文件</label>
+        <input type="file" id="stats_data_file" name="stats_data_file" accept=".txt,.dat,.csv">
+      </div>
+    </div>
+  </div>
+
+  <!-- 第二行：左侧-统计模式选项，右侧-精度和LaTeX设置 -->
+  <div class="grid">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="label" data-i18n="stats.modeLabel">统计模式</div>
+          <div class="muted" data-i18n="stats.modeHint">选择统计方法与修正方式。</div>
+        </div>
+      </div>
+      <label class="field-label" for="stats_mode" data-i18n="stats.modeLabel">统计模式</label>
+      {% set mode = request.form.get('stats_mode', 'mean_sample') %}
+      <select id="stats_mode" name="stats_mode">
+        <option value="mean" {% if mode == 'mean' %}selected{% endif %} data-i18n="stats.modeMean">算术均值</option>
+        <option value="weighted" {% if mode == 'weighted' %}selected{% endif %} data-i18n="stats.modeWeighted">σ 加权均值</option>
+      </select>
+
+      <label class="checkbox">
+        <input type="checkbox" name="stats_use_sample" value="1" {% if stats_use_sample %}checked{% endif %}>
+        <span data-i18n="stats.useSample">使用样本统计 (n-1 校正)</span>
+      </label>
+      <div class="hint" data-i18n="stats.sampleHint">不勾选则使用总体统计 (n 除数)。样本统计用于估计总体参数，总体统计用于描述已知数据集。</div>
+
+      <div id="stats_weighted_options" style="{% if mode == 'weighted' %}display:block{% else %}display:none{% endif %}">
+        <label class="checkbox">
+          <input type="checkbox" name="stats_use_weighted_variance" value="1" {% if stats_use_weighted_variance %}checked{% endif %}>
+          <span data-i18n="stats.useWeightedVariance">使用加权方差计算</span>
+        </label>
+        <div class="hint" data-i18n="stats.weightedVarianceHint">勾选时使用加权平方和计算方差；不勾选时仅用有效点数计算非加权方差。</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="label" data-i18n="extrap.sectionPrecision">数值精度与 LaTeX 输出</div>
+          <div class="muted" data-i18n="extrap.precisionHint">精度控制和排版参数。</div>
+        </div>
+      </div>
+      <label class="field-label" for="stats_mp_precision" data-i18n="extrap.mpPrecisionLabel">多精度 mp.dps（可选）</label>
+      <input id="stats_mp_precision" name="stats_mp_precision" type="number" placeholder="16" value="{{ request.form.get('stats_mp_precision', '') }}">
+
+      <label class="field-label" for="stats_digits" data-i18n="extrap.latexPrecisionLabel">LaTeX 数值精度（有效位数）</label>
+      <input id="stats_digits" name="stats_digits" type="number" placeholder="12" value="{{ request.form.get('stats_digits', '') }}">
+
+      <label class="field-label" for="stats_uncertainty_digits" data-i18n="extrap.resultDigitsLabel">结果不确定度有效位数</label>
+      <input id="stats_uncertainty_digits" name="stats_uncertainty_digits" type="number" placeholder="1" value="{{ request.form.get('stats_uncertainty_digits', '') }}">
+
+      <div class="inline-row">
+        <label class="checkbox inline">
+          <input type="checkbox" name="stats_use_dcolumn" value="1" {% if use_dcolumn_checked %}checked{% endif %}>
+          <span data-i18n="checkbox.useDcolumn">使用 dcolumn 对齐数值</span>
+        </label>
+        <div class="inline-field">
+          <span class="inline-label" data-i18n="extrap.groupSizeLabel">分组位数</span>
+          <input
+            id="stats_latex_group_size"
+            name="stats_latex_group_size"
+            type="number"
+            class="inline-number"
+            min="0"
+            max="12"
+            step="1"
+            value="{{ request.form.get('stats_latex_group_size', '3') }}"
+          >
+        </div>
+      </div>
+
+      <div class="inline-row" data-caption-toggle>
+        <label class="checkbox inline">
+          <input type="checkbox" name="stats_use_caption" value="1" {% if use_caption_checked %}checked{% endif %} data-caption-checkbox>
+          <span data-i18n="checkbox.useCaption">使用标题</span>
+        </label>
+        <input
+          id="stats_caption"
+          name="stats_caption"
+          type="text"
+          class="inline-grow"
+          data-i18n-placeholder="placeholder.optionalCaption"
+          placeholder="可选标题"
+          value="{{ request.form.get('stats_caption', '') }}"
+          data-caption-input
+        >
+      </div>
+
+      <label class="checkbox">
+        <input type="checkbox" name="stats_generate_plots" value="1" {% if generate_plots_checked %}checked{% endif %}>
+        <span data-i18n="checkbox.generatePlots">生成图片</span>
+      </label>
+
+      <label class="field-label" for="stats_latex_engine" data-i18n="extrap.latexEngineLabel">LaTeX 引擎（可选）</label>
+      <input id="stats_latex_engine" name="stats_latex_engine" type="text" data-i18n-placeholder="placeholder.latexEngine" placeholder="pdflatex 或 xelatex 路径" value="{{ latex_engine_value }}">
+
+      <label class="checkbox">
+        <input type="checkbox" name="stats_compile_pdf" value="1" {% if compile_pdf_checked %}checked{% endif %}>
+        <span data-i18n="checkbox.compilePDF">尝试编译 PDF 并提供下载</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" type="submit" data-i18n="stats.btnSubmit">计算统计量并生成 LaTeX</button>
+    <span class="muted" data-i18n="stats.submitHint">如果提供 σ，将按所选模式进行权重/样本修正。</span>
+  </div>
+</form>
+
+{% if result %}
+<section class="results">
+  <div class="results-header">
+    <div>
+      <h2><span data-i18n="stats.resultsTitlePrefix">统计结果 · 模式：</span>{{ result.result.method_label }}</h2>
+      <p class="muted">
+        mp.dps: {% if result.mp_precision %}{{ result.mp_precision }}{% else %}<span data-i18n="label.default">默认</span>{% endif %}
+        · <span data-i18n="label.rows">行数</span>: {{ result.rows|length }}
+      </p>
+    </div>
+    <div class="controls-inline">
+      <label class="checkbox inline">
+        <input type="checkbox" id="stats-fmt-sci" value="1">
+        <span data-i18n="checkbox.useScientific">使用科学计数法显示结果</span>
+      </label>
+      <label class="field-label inline" for="stats-fmt-digits" data-i18n="extrap.formatDecimalPlacesLabel">小数位数</label>
+      <input id="stats-fmt-digits" type="number" min="0" max="50" value="10" style="width:90px;">
+    </div>
+    {% if warnings %}
+      <div class="pill warn"><span data-i18n="extrap.warningCount">提示</span> {{ warnings|length }}</div>
+    {% endif %}
+  </div>
+
+  {% if warnings %}
+    <ul class="warning-list">
+      {% for w in warnings %}
+        <li data-dual-text="{{ w }}">{{ w }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-header"><div class="label" data-i18n="stats.coreMetrics">核心统计量</div></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th data-i18n="stats.metricName">指标</th>
+              <th data-i18n="stats.metricValue">值</th>
+              <th data-i18n="stats.metricUncertainty">不确定度/备注</th>
+              <th data-i18n="label.latex">LaTeX</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td data-i18n="stats.metricMode">模式</td><td>{{ result.result.method_label }}</td><td></td><td></td></tr>
+            <tr><td data-i18n="stats.metricCount">数据点数</td><td class="fmt-number" data-raw="{{ result.rows|length }}">{{ result.rows|length }}</td><td></td><td></td></tr>
+            <tr><td data-i18n="stats.metricMean">均值</td><td class="fmt-number" data-raw="{{ result.result.mean }}">{{ result.result.mean }}</td><td class="fmt-number" data-raw="{{ result.result.std_mean }}">{{ result.result.std_mean }}</td><td class="strong">{{ result.result.mean_latex }}</td></tr>
+            <tr><td data-i18n="stats.metricStd">标准差</td><td class="fmt-number" data-raw="{{ result.result.std }}">{{ result.result.std }}</td><td></td><td></td></tr>
+            <tr><td data-i18n="stats.metricMin">最小值</td><td class="fmt-number" data-raw="{{ result.result.v_min }}">{{ result.result.v_min }}</td><td></td><td></td></tr>
+            <tr><td data-i18n="stats.metricMax">最大值</td><td class="fmt-number" data-raw="{{ result.result.v_max }}">{{ result.result.v_max }}</td><td></td><td></td></tr>
+            {% if result.result.effective_n %}
+              <tr><td data-i18n="stats.metricEffectiveN">有效点数 n_eff</td><td class="fmt-number" data-raw="{{ result.result.effective_n }}">{{ result.result.effective_n }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.dropped %}
+              <tr><td data-i18n="stats.metricDropped">忽略的数据点</td><td class="fmt-number" data-raw="{{ result.result.dropped }}">{{ result.result.dropped }}</td><td></td><td></td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+        {% if result.csv_data %}
+          <div style="margin-top: 1rem;">
+            <a class="download" href="#" id="stats-result-csv-btn" data-i18n="stats.exportResult">导出统计结果 CSV</a>
+            {% if result.raw_csv_data %}
+              <a class="download muted" href="#" id="stats-raw-csv-btn" style="margin-left: 0.75rem;" data-i18n="stats.exportRaw">导出原始数据 CSV</a>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if result.plot_b64 %}
+  <div class="card">
+    <div class="card-header"><div class="label" data-i18n="stats.plotLabel">统计图表</div></div>
+    <img src="data:image/png;base64,{{ result.plot_b64 }}" data-i18n-alt="stats.plotAlt" alt="统计图表" style="width: 100%; max-width: 600px; height: auto;">
+  </div>
+  {% endif %}
+
+  <div class="latex-block">
+    <div class="label" data-i18n="label.latexTable">LaTeX 表格</div>
+    <div class="md-output"><pre><button type="button" class="copy-btn" data-i18n="btn.copyCode" onclick="var btn=this;navigator.clipboard.writeText(btn.parentElement.querySelector('code').textContent).then(function(){var orig=btn.textContent;btn.textContent='✓';setTimeout(function(){btn.textContent=orig},1500)}).catch(function(e){console.warn('Clipboard failed:',e)})">复制</button><code class="lang-latex">{{ result.latex_text }}</code></pre></div>
+    {% if result.pdf_b64 %}
+      <a class="download" href="data:application/pdf;base64,{{ result.pdf_b64 }}" download="statistics.pdf" data-i18n="btn.downloadPDF">下载 PDF</a>
+      <div class="pdf-view" data-pdf="{{ result.pdf_b64 }}">
+        <iframe class="pdf-frame" width="100%" height="500" frameborder="0"></iframe>
+        <div class="pdf-fallback" data-i18n="label.pdfFallback">若未显示，请下载 PDF 查看。</div>
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/spreadsheet.js') }}"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const c = document.getElementById('stats_data_spreadsheet');
+    if (c) {
+      new DataLabSpreadsheet(c, {
+        textareaName: 'stats_data_text',
+        initialData: {{ (request.form.get('stats_data_text', sample_data) or '') | tojson }},
+        minRows: 5, minCols: 2,
+      });
+      if (window.i18nModule && window.i18nModule.applyI18n) window.i18nModule.applyI18n(c);
+    }
+    // PDF rendering
+    document.querySelectorAll('.pdf-view[data-pdf]').forEach(container => {
+      const b64 = container.dataset.pdf;
+      const frame = container.querySelector('.pdf-frame');
+      if (!b64 || !frame) return;
+      try {
+        const byteChars = atob(b64);
+        const byteNumbers = new Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) {
+          byteNumbers[i] = byteChars.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        frame.src = url + '#toolbar=0&navpanes=0';
+      } catch (e) { console.warn('PDF embed failed:', e); }
+    });
+
+    // Toggle weighted variance options based on stats mode
+    const statsModeSelect = document.getElementById('stats_mode');
+    const weightedOptions = document.getElementById('stats_weighted_options');
+    if (statsModeSelect && weightedOptions) {
+      statsModeSelect.addEventListener('change', (e) => {
+        weightedOptions.style.display = (e.target.value === 'weighted') ? 'block' : 'none';
+      });
+    }
+
+    // CSV download - statistics results
+    const statsCsvBtn = document.getElementById('stats-result-csv-btn');
+    function tableToCsv(table, sci, digits) {
+      const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim());
+      const lines = [headers.join(',')];
+      table.querySelectorAll('tbody tr').forEach(tr => {
+        const cells = Array.from(tr.querySelectorAll('td')).map(td => {
+          let val = td.textContent.trim();
+          if (td.classList.contains('fmt-number')) {
+            const raw = td.dataset.raw ?? val;
+            val = formatNumber(raw, digits, sci);
+          }
+          return `"${String(val).replace(/"/g, '""')}"`;
+        });
+        lines.push(cells.join(','));
+      });
+      return lines.join('\n');
+    }
+    if (statsCsvBtn) {
+      statsCsvBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const table = document.querySelector('.table-wrap table');
+        if (!table) return;
+        const sci = fmtSci && fmtSci.checked;
+        const digits = fmtDigits ? parseInt(fmtDigits.value || '10', 10) : 10;
+        const csvData = tableToCsv(table, sci, digits);
+        const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'statistics_results.csv';
+        link.click();
+        URL.revokeObjectURL(url);
+      });
+    }
+	    {% if result and result.raw_csv_data %}
+	    const statsRawCsvBtn = document.getElementById('stats-raw-csv-btn');
+	    if (statsRawCsvBtn) {
+	      statsRawCsvBtn.addEventListener('click', (e) => {
+	        e.preventDefault();
+	        const csvData = {{ result.raw_csv_data | tojson }};
+	        const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+	        const url = URL.createObjectURL(blob);
+	        const link = document.createElement('a');
+	        link.href = url;
+	        link.download = 'statistics_raw_data.csv';
+	        link.click();
+	        URL.revokeObjectURL(url);
+	      });
+	    }
+	    {% endif %}
+
+    function formatNumber(raw, digits, sci) {
+      const fn = window.DLNumberFormat && window.DLNumberFormat.formatNumber;
+      if (typeof fn === 'function') return fn(raw, digits, sci);
+      // Fallback (should not happen): keep previous behavior
+      if (raw === undefined || raw === null || raw === '') return raw;
+      const num = Number(raw);
+      if (!isFinite(num)) return raw;
+      const d = isNaN(digits) ? 10 : digits;
+      if (!sci) {
+        const places = Math.max(0, d | 0);
+        return num.toFixed(places);
+      }
+      const sig = Math.max(1, d | 0);
+      return num.toExponential(sig - 1);
+    }
+    const fmtSci = document.getElementById('stats-fmt-sci');
+    const fmtDigits = document.getElementById('stats-fmt-digits');
+    const fmtDigitsLabel = document.querySelector('label[for="stats-fmt-digits"]');
+
+    function updateDigitsLabel() {
+      if (!fmtDigitsLabel) return;
+      const sci = fmtSci && fmtSci.checked;
+      const key = sci ? 'extrap.formatSignificantDigitsLabel' : 'extrap.formatDecimalPlacesLabel';
+      fmtDigitsLabel.setAttribute('data-i18n', key);
+      if (window.i18nModule && typeof window.i18nModule.applyI18n === 'function') {
+        window.i18nModule.applyI18n(fmtDigitsLabel);
+      } else {
+        fmtDigitsLabel.textContent = sci ? '有效位数' : '小数位数';
+      }
+    }
+    function applyFormatting() {
+      updateDigitsLabel();
+      if (!document.querySelector('.fmt-number')) return;
+      const sci = fmtSci && fmtSci.checked;
+      const digits = fmtDigits ? parseInt(fmtDigits.value || '10', 10) : 10;
+      document.querySelectorAll('.fmt-number').forEach((el) => {
+        const raw = el.dataset.raw ?? el.textContent;
+        const formatted = formatNumber(raw, digits, sci);
+        if (formatted !== undefined) el.textContent = formatted;
+      });
+    }
+    if (fmtSci) fmtSci.addEventListener('change', applyFormatting);
+    if (fmtDigits) fmtDigits.addEventListener('input', applyFormatting);
+    applyFormatting();
+  });
+</script>
+{% endblock %}

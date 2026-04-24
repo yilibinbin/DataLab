@@ -1,0 +1,330 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\geometry{margin=2.2cm}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue
+}
+
+\title{A Brief Methodology Overview for High-Precision Data Processing\\(Extrapolation, Uncertainty Propagation, Fitting, and Statistics)}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Notation and Basic Assumptions}
+
+This document only provides a high-level theoretical overview of the methods. It does not describe any specific UI or software implementation details.
+
+\subsection{Data and uncertainty}
+
+Let the measured quantity be $x$ and its standard uncertainty be $\sigma_x$ (standard uncertainty). In uncertainty propagation and weighted fitting, we assume different inputs are independent (uncorrelated) by default. If correlations exist, a covariance-matrix formulation should be used (see below).
+
+\subsection{Sequences and limits}
+
+The typical object of extrapolation is a convergent sequence $\{s_n\}$ (e.g., an energy sequence as the basis size / truncation level increases). The goal is to estimate the limit $s_\infty=\lim_{n\to\infty}s_n$ and provide a credible uncertainty estimate.
+
+\section{Sequence Extrapolation Methods (Extrapolation)}
+
+\subsection{Three-point extrapolation (default three-point formula)}
+
+Given three values $A,B,C$ (often viewed as three progressively improved approximations), a commonly used three-point extrapolation is
+\begin{equation}
+V = \frac{(C-B)^2}{B-A} + C,
+\end{equation}
+where $V$ is the extrapolated value. Key properties:
+\begin{itemize}
+  \item Only three points are required; no extra model parameters.
+  \item Invariant under additive shifts of the data, but numerically unstable when $B\approx A$ (denominator near zero).
+  \item Useful as a fast and conservative three-point limit estimate, but not guaranteed to be valid for all sequence types.
+\end{itemize}
+
+A conservative uncertainty estimate can be taken as the maximum deviation from the input points:
+\begin{equation}
+U=\max\left(|V-A|,|V-B|,|V-C|\right).
+\end{equation}
+This $U$ is closer to a consistency-difference measure than a statistical standard deviation.
+
+\subsection{Power-law extrapolation}
+
+For many numerical approximations (especially sequences associated with truncation order / basis size), a common leading-error model is
+\begin{equation}
+E(x) = E_\infty + a\,x^{-p},
+\end{equation}
+where $x$ controls accuracy (e.g., basis level or truncation index), $E_\infty$ is the target limit, and $a,p$ are unknown constants. Given three points $(x_1,E_1),(x_2,E_2),(x_3,E_3)$, one can eliminate variables to solve for $p$ and obtain $E_\infty$:
+\begin{align}
+R &= \frac{E_1-E_2}{E_2-E_3},\\
+\frac{x_1^{-p}-x_2^{-p}}{x_2^{-p}-x_3^{-p}} &= R,\\
+a &= \frac{E_1-E_2}{x_1^{-p}-x_2^{-p}},\qquad
+E_\infty = E_1 - a\,x_1^{-p}.
+\end{align}
+Notes:
+\begin{itemize}
+  \item The model has a clear numerical/physical motivation (dominant error decays as a power law).
+  \item Three-point data can be sensitive: if $E_2\approx E_3$ or $x_2^{-p}\approx x_3^{-p}$, the solution may become unstable.
+  \item Robustness can be improved if $p$ is known or constrained; multi-point fitting generalizes this to an overdetermined problem.
+\end{itemize}
+
+A common conservative uncertainty estimate is the difference to a reference value (often the highest-level point $E_3$ or a user-selected reference column):
+\begin{equation}
+U = |E_\infty - E_{\mathrm{ref}}|.
+\end{equation}
+
+\subsection{Richardson extrapolation / sequence acceleration}
+
+The core idea of Richardson extrapolation: if an approximation $S(h)$ has an asymptotic expansion
+\begin{equation}
+S(h)=S + c\,h^p + \mathcal{O}(h^{p+1}),
+\end{equation}
+then combining results at different step sizes $h_1,h_2$ can eliminate the leading error term and increase the convergence order. When $p$ is known, for example,
+\begin{equation}
+S \approx \frac{h_2^p S(h_1) - h_1^p S(h_2)}{h_2^p - h_1^p}.
+\end{equation}
+With more points, an extrapolation table can be constructed to recursively eliminate higher-order terms. Notes:
+\begin{itemize}
+  \item Works well when the leading error follows a smooth asymptotic form with a clear order $p$.
+  \item Can be unstable for sequences without a smooth asymptotic expansion, or with oscillatory / non-analytic errors.
+  \item Requires some knowledge of the effective order $p$ (or an adaptive estimate).
+\end{itemize}
+
+In practice, when a reliable statistical error model is absent, a conservative estimate often uses a reference term $S_{\mathrm{ref}}$ (e.g., the last term or a specified approximation) and sets
+\begin{equation}
+U=|S-S_{\mathrm{ref}}|.
+\end{equation}
+This reflects the difference between the accelerated value and the reference term, and does not necessarily equal a statistical standard deviation; cross-checks via differences and multiple methods are recommended.
+
+\subsection{Shanks transform and Wynn $\varepsilon$ algorithm}
+
+The Shanks transform and Wynn $\varepsilon$ algorithm are nonlinear sequence transformations, often used to accelerate linearly convergent or logarithmically convergent sequences. Intuitively, they approximate the limit via rational approximants (closely related to Pad\'e ideas).
+
+The simplest accelerated form is related to Aitken's $\Delta^2$ process:
+\begin{equation}
+s'_n = s_n - \frac{(\Delta s_n)^2}{\Delta^2 s_n},\quad
+\Delta s_n=s_{n+1}-s_n,\quad
+\Delta^2 s_n=s_{n+2}-2s_{n+1}+s_n,
+\end{equation}
+which can significantly accelerate linear convergence when $\Delta^2 s_n$ is not near zero. Wynn's $\varepsilon$ algorithm provides a systematic recursive table construction; in practice one typically uses the recursion directly rather than writing formulas by hand.
+
+Notes:
+\begin{itemize}
+  \item Often effective for linearly convergent sequences and closely connected to Pad\'e approximants.
+  \item Can suffer from division-by-zero or numerical amplification when differences are small or the sequence is noisy.
+  \item For strongly oscillatory sequences it may be less robust than Levin-type methods.
+\end{itemize}
+
+\subsection{Levin transforms (with $u$-transform as a representative)}
+
+Levin-type transforms introduce a remainder estimate $\omega_n$ to construct a better estimate of the limit, and are commonly used for slowly convergent or alternating/oscillatory sequences. A general form is
+\begin{equation}
+S \approx \frac{\sum_{k=0}^{n} w_k\,\frac{s_k}{\omega_k}}{\sum_{k=0}^{n} w_k\,\frac{1}{\omega_k}},
+\end{equation}
+where the weights $w_k$ depend on the chosen variant ($u,t,v$, etc.), and $\omega_k$ is usually derived from differences (e.g., $s_{k+1}-s_k$) or a heuristic model.
+
+Notes:
+\begin{itemize}
+  \item Often outperforms Shanks/Wynn for alternating or slowly convergent sequences.
+  \item Depends on the quality of $\omega_k$: when the remainder estimate degenerates (e.g., identical consecutive terms leading to ``zero weights''), additional handling is required.
+  \item Still sensitive to noise; diagnostic quantities and cross-method comparisons are recommended.
+\end{itemize}
+
+\section{Uncertainty Propagation Methods (Uncertainty Propagation)}
+
+\subsection{First-order (linearized) propagation}
+
+Let the output be
+\begin{equation}
+y=f(x_1,\ldots,x_m),
+\end{equation}
+When input uncertainties are small and $f$ is smooth near the operating point, a first-order Taylor expansion yields an approximate standard uncertainty:
+\begin{equation}
+\sigma_y^2 \approx \sum_{i=1}^{m}\left(\frac{\partial f}{\partial x_i}\sigma_{x_i}\right)^2.
+\end{equation}
+If inputs are correlated, a covariance-matrix form is used:
+\begin{equation}
+\sigma_y^2 \approx \bm{g}^\mathsf{T}\,\bm{\Sigma}\,\bm{g},\qquad
+\bm{g}=\nabla f,\ \bm{\Sigma}_{ij}=\mathrm{Cov}(x_i,x_j).
+\end{equation}
+Typical notes:
+\begin{itemize}
+  \item Suitable as a local approximation for ``small uncertainty + smooth function''.
+  \item May underestimate uncertainty for strong nonlinearity, non-Gaussian inputs, or large uncertainties; higher-order or Monte Carlo methods are recommended.
+\end{itemize}
+
+\subsection{Obtaining partial derivatives: analytic/symbolic vs numerical differences}
+
+First-order propagation requires partial derivatives $\partial f/\partial x_i$. In principle:
+\begin{itemize}
+  \item Analytic derivatives: manual derivation or symbolic differentiation to obtain exact expressions.
+  \item Numerical derivatives: when analytic forms are hard, approximate with finite differences.
+\end{itemize}
+
+Central differences provide a common second-order approximation:
+\begin{equation}
+\frac{\partial f}{\partial x}\bigg|_{x=x_0}\approx \frac{f(x_0+h)-f(x_0-h)}{2h}.
+\end{equation}
+The step size $h$ must balance truncation error (decreases as $h$ decreases) and rounding error (increases as $h$ decreases). For second-order central differences, an empirical choice is
+\begin{equation}
+h \sim \varepsilon^{1/3}\,\max(1,|x_0|),
+\end{equation}
+where $\varepsilon$ is the relative machine precision. In multiprecision arithmetic, $\varepsilon$ depends on the working precision, so $h$ should adapt accordingly.
+
+\subsection{Second-order (Taylor) propagation: mean correction and second-order variance term}
+
+When nonlinearity of $f$ cannot be ignored and inputs can be approximated as \textbf{independent normal} random variables
+$X_i\sim\mathcal{N}(\mu_i,\sigma_i^2)$, a second-order expansion around $\bm{\mu}$ gives
+\begin{equation}
+f(\bm{X})\approx f(\bm{\mu})+\bm{g}^\mathsf{T}\Delta\bm{x}
+\;+\;\frac{1}{2}\Delta\bm{x}^\mathsf{T}H\,\Delta\bm{x},
+\qquad \Delta\bm{x}=\bm{X}-\bm{\mu}.
+\end{equation}
+Here $\bm{g}=\nabla f$ and $H$ is the Hessian ($H_{ij}=\partial^2 f/\partial x_i\partial x_j$).
+
+Under this approximation, the \textbf{mean} and \textbf{variance} can be written as
+\begin{align}
+\mathbb{E}[f(\bm{X})] &\approx f(\bm{\mu})+\frac{1}{2}\sum_{i=1}^{m} H_{ii}\,\sigma_i^2,\\
+\mathrm{Var}[f(\bm{X})] &\approx \bm{g}^\mathsf{T}\bm{\Sigma}\bm{g}
+\;+\;\frac{1}{2}\,\mathrm{tr}\!\left((H\bm{\Sigma})^2\right).
+\end{align}
+When $\bm{\Sigma}=\mathrm{diag}(\sigma_1^2,\ldots,\sigma_m^2)$ (independent inputs),
+\begin{equation}
+\mathrm{tr}\!\left((H\bm{\Sigma})^2\right)=\sum_{i=1}^{m}\sum_{j=1}^{m} H_{ij}^2\,\sigma_i^2\sigma_j^2.
+\end{equation}
+
+Notes:
+\begin{itemize}
+  \item Compared to first-order linearization, the second-order method can both correct mean shifts due to nonlinearity and include second-order Hessian contributions to the variance.
+  \item The formulas rely on assumptions such as normality, small uncertainties, and smoothness. For non-Gaussian inputs or domain/discontinuity issues, Monte Carlo is recommended.
+\end{itemize}
+
+\subsection{Monte Carlo propagation}
+
+Monte Carlo methods do not explicitly use derivatives; instead they sample from the input distributions:
+\begin{equation}
+X_i^{(k)}\sim \mathcal{N}(\mu_i,\sigma_i^2),\quad
+Y^{(k)} = f\!\left(X_1^{(k)},\ldots,X_m^{(k)}\right),\quad k=1,\ldots,N.
+\end{equation}
+The output expectation and uncertainty are estimated by the sample mean and sample standard deviation:
+\begin{equation}
+\bar{Y}=\frac{1}{N}\sum_{k=1}^{N}Y^{(k)},\qquad
+s_Y=\sqrt{\frac{1}{N-1}\sum_{k=1}^{N}\left(Y^{(k)}-\bar{Y}\right)^2}.
+\end{equation}
+
+Notes:
+\begin{itemize}
+  \item Naturally captures higher-order effects, nonlinearity, and distribution deformation due to truncation/domain constraints.
+  \item Cost scales with sample count $N$; in practice fixed random seeds can be used for reproducibility.
+  \item If samples hit invalid domains (e.g., $\sqrt{x}$ with $x<0$), the corresponding samples fail and must be discarded or modeled with a more appropriate input distribution.
+\end{itemize}
+
+\section{Fitting Methods (Fitting)}
+
+\subsection{Least squares and weighted $\chi^2$}
+
+Given data points $\{(x_i,y_i)\}_{i=1}^{n}$ and a model $y_{\mathrm{model}}(x;\bm{p})$, least squares fitting minimizes the residual sum of squares:
+\begin{equation}
+\mathrm{RSS}(\bm{p})=\sum_{i=1}^{n} r_i(\bm{p})^2,\qquad r_i=y_{\mathrm{model}}(x_i;\bm{p})-y_i.
+\end{equation}
+When each point has a standard uncertainty $\sigma_i$ and independent Gaussian noise is assumed, one often uses a weighted $\chi^2$:
+\begin{equation}
+\chi^2(\bm{p})=\sum_{i=1}^{n} w_i\,r_i(\bm{p})^2,\qquad w_i=\frac{1}{\sigma_i^2}.
+\end{equation}
+With degrees of freedom $\nu=n-k$ ($k$ free parameters), the reduced chi-square $\chi^2_\nu=\chi^2/\nu$ is often used to assess consistency of the noise model (ideally $\chi^2_\nu\approx 1$).
+
+\subsection{Linear models: analytic solution and covariance}
+
+When the model is linear in parameters:
+\begin{equation}
+y \approx \sum_{j=1}^{k} p_j\,\varphi_j(x),
+\end{equation}
+let the design matrix be $X_{ij}=\varphi_j(x_i)$. The weighted least-squares normal-equation solution is
+\begin{equation}
+\hat{\bm{p}}=(X^\mathsf{T}WX)^{-1}X^\mathsf{T}W\bm{y},
+\end{equation}
+where $W=\mathrm{diag}(w_1,\ldots,w_n)$. Under the classical approximation, the parameter covariance is
+\begin{equation}
+\mathrm{Cov}(\hat{\bm{p}})\approx \sigma^2 (X^\mathsf{T}WX)^{-1},\qquad
+\sigma^2\approx \frac{\chi^2}{\nu}.
+\end{equation}
+The standard uncertainty of parameter $p_j$ is $\sigma(p_j)=\sqrt{\mathrm{Cov}_{jj}}$, and off-diagonal elements reflect parameter correlations.
+
+\subsection{Nonlinear models: local linearization and Jacobian}
+
+For nonlinear models, residuals can be linearized near the optimum:
+\begin{equation}
+\bm{r}(\bm{p}+\Delta\bm{p})\approx \bm{r}(\bm{p}) + J\,\Delta\bm{p},\qquad
+J_{ij}=\frac{\partial r_i}{\partial p_j}.
+\end{equation}
+This leads to a Gauss--Newton covariance estimate:
+\begin{equation}
+\mathrm{Cov}(\hat{\bm{p}})\approx \sigma^2 (J^\mathsf{T}WJ)^{-1}.
+\end{equation}
+This is equivalent (up to a sign) to using the Jacobian of the model output $\partial y/\partial p$, and forms the basis of many uncertainty estimates in nonlinear fitting.
+
+\subsection{Model comparison metrics: AIC / BIC / $R^2$}
+
+To balance goodness-of-fit and complexity across models, information criteria are commonly used. Using $\mathrm{RSS}$ (or unweighted residual sum of squares) as a simplified noise scale:
+\begin{align}
+\mathrm{AIC} &\approx 2k + n\ln(\mathrm{RSS}/n),\\
+\mathrm{BIC} &\approx k\ln n + n\ln(\mathrm{RSS}/n).
+\end{align}
+The coefficient of determination $R^2$ is often used to measure explained variance:
+\begin{equation}
+R^2 = 1-\frac{\sum_i r_i^2}{\sum_i (y_i-\bar{y})^2},
+\end{equation}
+but should be interpreted with care for nonlinear, no-intercept, or weighted cases.
+
+\section{Statistical Averaging Methods (Statistics)}
+
+\subsection{Arithmetic mean and standard error}
+
+Arithmetic mean:
+\begin{equation}
+\bar{x}=\frac{1}{n}\sum_{i=1}^{n}x_i.
+\end{equation}
+Sample variance (unbiased estimate):
+\begin{equation}
+s^2=\frac{1}{n-1}\sum_{i=1}^{n}(x_i-\bar{x})^2,\qquad (n>1)
+\end{equation}
+Standard error of the mean:
+\begin{equation}
+\sigma_{\bar{x}}=\frac{s}{\sqrt{n}}.
+\end{equation}
+
+\subsection{Weighted mean (weights $w_i=1/\sigma_i^2$)}
+
+When each point has a known standard uncertainty $\sigma_i$ (independent), the weighted mean is
+\begin{equation}
+\bar{x}_w=\frac{\sum_i w_i x_i}{\sum_i w_i},\qquad w_i=\frac{1}{\sigma_i^2}.
+\end{equation}
+Its standard uncertainty is
+\begin{equation}
+\sigma_{\bar{x}_w}=\sqrt{\frac{1}{\sum_i w_i}}.
+\end{equation}
+A commonly used effective sample size measures the concentration of weights:
+\begin{equation}
+n_{\mathrm{eff}}=\frac{\left(\sum_i w_i\right)^2}{\sum_i w_i^2},
+\end{equation}
+which may be much smaller than $n$ when weights vary strongly.
+
+If one wants to estimate the scatter of the data under the same weights, a common unbiased weighted sample variance is
+\begin{equation}
+s_w^2=\frac{\sum_i w_i(x_i-\bar{x}_w)^2}{\sum_i w_i-\frac{\sum_i w_i^2}{\sum_i w_i}},
+\end{equation}
+which reduces to the ordinary sample variance $s^2$ when all weights are equal. The denominator can also be written as $W(1-1/n_{\mathrm{eff}})$ where $W=\sum_i w_i$.
+
+\section{Practical Tips (method-agnostic)}
+\begin{itemize}
+  \item Extrapolation/acceleration results should be cross-validated against the original sequence trend, differences, and multiple methods.
+  \item If significant correlations exist in uncertainty propagation, provide a covariance matrix or use Monte Carlo.
+  \item Fitting uncertainties depend on model correctness and noise assumptions; for strongly correlated parameters, inspect covariance/correlation coefficients.
+  \item Weighted statistics require credible $\sigma_i$; avoid treating systematic errors as purely statistical uncertainties.
+\end{itemize}
+
+\end{document}

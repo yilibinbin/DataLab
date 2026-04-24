@@ -1,0 +1,443 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow" data-i18n="extrap.eyebrow">序列外推 · 高精度后处理</p>
+    <h1 data-i18n="extrap.title">在浏览器中完成外推、误差传递、拟合与 LaTeX 生成。</h1>
+    <p class="lede" data-i18n="extrap.subtitle">贴上多列数据，选择算法，即时得到外推结果与可复制的 LaTeX 表格/公式，适用于高精度数值外推、误差分析与理论计算后处理。</p>
+    <div class="hero-actions">
+      <span class="chip" data-i18n="extrap.chip1">幂律 / 序列加速 / 自定义公式</span>
+      <span class="chip" data-i18n="extrap.chip2">误差传递 & 统计</span>
+      <span class="chip" data-i18n="extrap.chip3">一键 LaTeX 导出</span>
+    </div>
+  </div>
+</section>
+
+<form class="panel" method="post" enctype="multipart/form-data" novalidate>
+  <!-- CSRF Protection -->
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <!-- Data input -->
+  <div class="grid">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="label" data-i18n="extrap.sectionData">数据输入</div>
+          <div class="muted" data-i18n="extrap.dataHint">首行作为表头，后续每行一组数据。</div>
+        </div>
+      </div>
+      <label class="checkbox">
+        <input type="checkbox" name="use_file" value="1" id="use_file" {% if use_file_checked %}checked{% endif %}>
+        <span data-i18n="checkbox.useFile">使用文件输入</span>
+      </label>
+      <div class="manual-only" id="manual_block">
+        <label class="field-label" data-i18n="extrap.pasteLabel">粘贴数据文本</label>
+        <div id="data_spreadsheet"></div>
+        <div class="hint" data-i18n="extrap.dataExample">示例格式：<code>A B C</code> 作为表头；数值可用空格、制表符或逗号分隔。支持粘贴 CSV 数据。</div>
+      </div>
+      <div class="file-only" id="file_block">
+        <label class="field-label" for="data_file" data-i18n="extrap.uploadLabel">上传 UTF-8 文本文件</label>
+        <input type="file" id="data_file" name="data_file" accept=".txt,.dat,.csv">
+      </div>
+    </div>
+  </div>
+
+  <!-- Methods and parameters -->
+  <div class="grid">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="label" data-i18n="extrap.sectionMethod">外推方法与参数</div>
+          <div class="muted" data-i18n="extrap.methodHint">选择外推算法及其专用参数。</div>
+        </div>
+      </div>
+      <label class="field-label" for="method" data-i18n="extrap.methodLabel">外推方法</label>
+      <select id="method" name="method">
+        <option value="power_law" {% if selected_method == 'power_law' %}selected{% endif %} data-i18n="extrap.methodPowerLaw">幂律外推（三点）</option>
+        <option value="richardson" {% if selected_method == 'richardson' %}selected{% endif %} data-i18n="extrap.methodRichardson">Richardson 序列加速</option>
+        <option value="shanks" {% if selected_method == 'shanks' %}selected{% endif %} data-i18n="extrap.methodShanks">Shanks 变换 / Wynn ε</option>
+        <option value="levin_u" {% if selected_method == 'levin_u' %}selected{% endif %} data-i18n="extrap.methodLevinU">Levin u-transform</option>
+        <option value="custom" {% if selected_method == 'custom' %}selected{% endif %} data-i18n="extrap.methodCustom">自定义公式 (A,B,C)</option>
+        <option value="quadratic" {% if selected_method == 'quadratic' %}selected{% endif %} data-i18n="extrap.methodQuadratic">默认三点公式</option>
+      </select>
+
+      {% set ref_input = (request.form.get('reference_column', '') or '') | trim %}
+      {% set ref_mode = (request.form.get('reference_column_mode', '') or '') | trim %}
+      {% set ref_is_auto = (ref_mode == 'auto_max_diff') or (ref_input == 'auto_max_diff') %}
+      <label class="field-label" for="reference_column" data-i18n="extrap.refColumnLabel">参考列（用于 σ）</label>
+      <div class="split" style="grid-template-columns: minmax(180px, 220px) 1fr;">
+        <div>
+          <select id="reference_column_mode" name="reference_column_mode" data-i18n-aria="extrap.refColumnModeAria" aria-label="参考列模式">
+            <option value="manual" {% if not ref_is_auto %}selected{% endif %} data-i18n="extrap.refColumnModeManual">手动输入</option>
+            <option value="auto_max_diff" {% if ref_is_auto %}selected{% endif %} data-i18n="extrap.refColumnAutoMaxDiff">最大差异列</option>
+          </select>
+        </div>
+        <div>
+          <input id="reference_column" name="reference_column" type="text" data-i18n-placeholder="extrap.refColumnPlaceholder" placeholder="默认第 3 列" value="{% if ref_is_auto %}auto_max_diff{% else %}{{ request.form.get('reference_column', '') }}{% endif %}" {% if ref_is_auto %}readonly{% endif %}>
+        </div>
+      </div>
+      <div class="hint" data-i18n="extrap.refColumnHint">可填表头名或列序号（1 开始），用于计算 |E∞-参考值|。</div>
+
+      <div class="method-block" data-methods="custom" style="{% if selected_method == 'custom' %}display:block{% endif %}">
+        <label class="field-label" for="custom_formula" data-i18n="extrap.customFormulaLabel">自定义公式</label>
+        <input id="custom_formula" name="custom_formula" type="text" data-i18n-placeholder="extrap.customFormulaPlaceholder" placeholder="如 (C - B)^2/(B - A) + C 或 Exp[-x1]*Sin[x2]" value="{{ request.form.get('custom_formula', '') }}">
+        <button type="button" class="help-btn" onclick="window.uiSpecsModule && window.uiSpecsModule.showFunctionHelp()" data-i18n-title="extrap.functionHelpBtn" data-i18n-aria="extrap.functionHelpBtn" title="函数提示" aria-label="函数提示" style="margin-left: 8px;">?</button>
+        <div class="hint" data-i18n="extrap.customFormulaHint">使用与误差传递一致的公式解析：支持 Sin[x], Cos[x], Log[x], Exp[x], Sqrt[x]，可用 A/B/C、表头名或 x1/x2 别名。</div>
+      </div>
+
+      <div class="method-block" data-methods="power_law" style="{% if selected_method == 'power_law' %}display:block{% endif %}">
+        <div class="card-header">
+          <div>
+            <div class="label" data-i18n="extrap.powerLawParamsLabel">幂律外推参数</div>
+          </div>
+        </div>
+        <div class="split">
+          <div>
+            <label class="field-label" for="x1">x1</label>
+            <input id="x1" name="x1" type="text" value="{{ request.form.get('x1', '1') }}">
+          </div>
+          <div>
+            <label class="field-label" for="x2">x2</label>
+            <input id="x2" name="x2" type="text" value="{{ request.form.get('x2', '2') }}">
+          </div>
+          <div>
+            <label class="field-label" for="x3">x3</label>
+            <input id="x3" name="x3" type="text" value="{{ request.form.get('x3', '3') }}">
+          </div>
+        </div>
+        <div class="split">
+          <div>
+            <label class="field-label" for="power_exponent" data-i18n="extrap.powerExponentLabel">固定幂指数 p（可空）</label>
+            <input id="power_exponent" name="power_exponent" type="text" data-i18n-placeholder="extrap.powerExponentPlaceholder" placeholder="自动求解 p" value="{{ request.form.get('power_exponent', '') }}">
+          </div>
+          <div>
+            <label class="field-label" for="power_seed" data-i18n="extrap.powerSeedLabel">p 初值</label>
+            <input id="power_seed" name="power_seed" type="text" data-i18n-placeholder="extrap.powerSeedPlaceholder" placeholder="1.0" value="{{ request.form.get('power_seed', '') }}">
+          </div>
+          <div>
+            <label class="field-label" for="power_seed_guesses" data-i18n="extrap.powerSeedGuessesLabel">p 种子列表（可选）</label>
+            <input id="power_seed_guesses" name="power_seed_guesses" type="text" data-i18n-placeholder="extrap.powerSeedGuessesPlaceholder" placeholder="如 0.5, 1, 2, -1" value="{{ request.form.get('power_seed_guesses', '') }}">
+            <div class="hint" data-i18n="extrap.powerSeedGuessesHint">逗号或空格分隔；留空使用默认种子。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="label" data-i18n="extrap.sectionPrecision">数值精度与 LaTeX 输出</div>
+          <div class="muted" data-i18n="extrap.precisionHint">精度控制和排版参数。</div>
+        </div>
+      </div>
+      <label class="field-label" for="mp_precision" data-i18n="extrap.mpPrecisionLabel">多精度 mp.dps（可选）</label>
+      <input id="mp_precision" name="mp_precision" type="number" placeholder="16" value="{{ request.form.get('mp_precision', '') }}">
+      <div class="hint" data-i18n="extrap.mpPrecisionHint">幂律/序列加速方法依赖高精度；留空使用默认值。</div>
+
+      <label class="field-label" for="result_digits" data-i18n="extrap.resultDigitsLabel">结果不确定度有效位数</label>
+      <input id="result_digits" name="result_digits" type="number" placeholder="1" value="{{ request.form.get('result_digits', '1') }}">
+
+      <label class="field-label" for="latex_precision" data-i18n="extrap.latexPrecisionLabel">LaTeX 数值精度（有效位数）</label>
+      <input id="latex_precision" name="latex_precision" type="number" placeholder="20" value="{{ request.form.get('latex_precision', '') }}">
+
+      <div class="inline-row">
+        <label class="checkbox inline">
+          <input type="checkbox" name="use_dcolumn" value="1" {% if use_dcolumn_checked %}checked{% endif %}>
+          <span data-i18n="checkbox.useDcolumn">使用 dcolumn 对齐数值</span>
+        </label>
+        <div class="inline-field">
+          <span class="inline-label" data-i18n="extrap.groupSizeLabel">分组位数</span>
+          <input
+            id="latex_group_size"
+            name="latex_group_size"
+            type="number"
+            class="inline-number"
+            min="0"
+            max="12"
+            step="1"
+            value="{{ request.form.get('latex_group_size', '3') }}"
+          >
+        </div>
+      </div>
+
+      <div class="inline-row" data-caption-toggle>
+        <label class="checkbox inline">
+          <input type="checkbox" name="use_caption" value="1" {% if use_caption_checked %}checked{% endif %} data-caption-checkbox>
+          <span data-i18n="checkbox.useCaption">使用标题</span>
+        </label>
+        <input
+          id="caption"
+          name="caption"
+          type="text"
+          class="inline-grow"
+          data-i18n-placeholder="placeholder.optionalCaption"
+          placeholder="可选标题"
+          value="{{ request.form.get('caption', '') }}"
+          data-caption-input
+        >
+      </div>
+
+      <label class="checkbox">
+        <input type="checkbox" name="generate_plots" value="1" {% if generate_plots_checked %}checked{% endif %}>
+        <span data-i18n="checkbox.generatePlots">生成图片</span>
+      </label>
+
+      <label class="field-label" for="latex_engine" data-i18n="extrap.latexEngineLabel">LaTeX 引擎（可选）</label>
+      <input id="latex_engine" name="latex_engine" type="text" data-i18n-placeholder="placeholder.latexEngine" placeholder="pdflatex 或 xelatex 路径" value="{{ latex_engine_value }}">
+
+      <label class="checkbox">
+        <input type="checkbox" name="compile_pdf" value="1" {% if compile_pdf_checked %}checked{% endif %}>
+        <span data-i18n="checkbox.compilePDF">尝试编译 PDF 并提供下载</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" type="submit" data-i18n="extrap.btnSubmit">运行外推并生成 LaTeX</button>
+    <span class="muted" data-i18n="extrap.submitHint">所有方法均沿用同一套高精度计算内核。</span>
+  </div>
+</form>
+
+{% if result %}
+<section class="results">
+  <div class="results-header">
+    <div>
+      <h2 data-i18n="extrap.resultsTitle">计算结果</h2>
+      <p class="muted">
+        <span data-i18n="label.method">方法</span>: {{ result.method }}
+        · mp.dps: {% if result.mp_precision %}{{ result.mp_precision }}{% else %}<span data-i18n="label.default">默认</span>{% endif %}
+        · <span data-i18n="label.rows">行数</span>: {{ result.formatted_rows|length }}
+      </p>
+    </div>
+    <div class="controls-inline">
+      <label class="checkbox inline">
+        <input type="checkbox" id="fmt-sci" value="1">
+        <span data-i18n="checkbox.useScientific">使用科学计数法显示结果</span>
+      </label>
+      <label class="field-label inline" for="fmt-digits" data-i18n="extrap.formatDecimalPlacesLabel">小数位数</label>
+      <input id="fmt-digits" type="number" min="0" max="50" value="10" style="width:90px;">
+    </div>
+    {% if warnings %}
+      <div class="pill warn"><span data-i18n="extrap.warningCount">提示</span> {{ warnings|length }}</div>
+    {% endif %}
+  </div>
+
+  {% if warnings %}
+    <ul class="warning-list">
+      {% for w in warnings %}
+        <li data-dual-text="{{ w }}">{{ w }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th data-i18n="extrap.tableHeaderIndex">#</th>
+          <th data-i18n="extrap.tableHeaderValue">外推值</th>
+          <th data-i18n="extrap.tableHeaderUncertainty">不确定度</th>
+          <th data-i18n="extrap.tableHeaderLatex">LaTeX格式</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in result.formatted_rows %}
+          <tr>
+            <td class="fmt-number" data-raw="{{ row.index }}">{{ row.index }}</td>
+            <td class="fmt-number" data-raw="{{ row.value }}">{{ row.value }}</td>
+            <td class="fmt-number" data-raw="{{ row.uncertainty }}">{{ row.uncertainty }}</td>
+            <td class="strong">{{ row.latex }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if result.csv_data %}
+      <div style="margin-top: 1rem;">
+        <a class="download" href="#" id="csv-download-btn" data-i18n="btn.downloadCSV">下载 CSV</a>
+      </div>
+    {% endif %}
+  </div>
+
+  {% if result.plot_b64_list %}
+    {% for plot_b64 in result.plot_b64_list %}
+      {% if plot_b64 %}
+        <div class="card">
+          <div class="card-header"><div class="label" data-i18n="extrap.plotsTitle" data-i18n-params='{"index":"{{ loop.index }}"}'>外推图表 - 第{{ loop.index }}行</div></div>
+          <img src="data:image/png;base64,{{ plot_b64 }}" data-i18n-alt="extrap.plotsAlt" data-i18n-params='{"index":"{{ loop.index }}"}' alt="外推趋势图 - 第{{ loop.index }}行" style="width: 100%; max-width: 600px; height: auto;">
+        </div>
+      {% endif %}
+    {% endfor %}
+  {% endif %}
+
+  <div class="latex-block md-output">
+    <div class="label" data-i18n="label.latexTable">LaTeX 表格</div>
+    <div class="muted" data-i18n="extrap.latexCopyHint">可直接复制到 .tex。</div>
+    <pre><button type="button" class="copy-btn" data-i18n="btn.copyCode" onclick="var btn=this;navigator.clipboard.writeText(btn.parentElement.querySelector('code').textContent).then(function(){var orig=btn.textContent;btn.textContent='✓';setTimeout(function(){btn.textContent=orig},1500)}).catch(function(e){console.warn('Clipboard write failed:',e)})">复制</button><code>{{ result.latex_text }}</code></pre>
+    {% if result.pdf_b64 %}
+      <a class="download" href="data:application/pdf;base64,{{ result.pdf_b64 }}" download="extrapolation.pdf" data-i18n="btn.downloadPDF">下载 PDF</a>
+      <div class="pdf-view" data-pdf="{{ result.pdf_b64 }}">
+        <iframe class="pdf-frame" width="100%" height="500" frameborder="0"></iframe>
+        <div class="pdf-fallback" data-i18n="label.pdfFallback">若浏览器未内嵌显示，请点击上方“下载 PDF”在系统查看。</div>
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<!-- Spreadsheet editor -->
+<script src="{{ url_for('static', filename='js/spreadsheet.js') }}"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const container = document.getElementById('data_spreadsheet');
+    if (container) {
+      new DataLabSpreadsheet(container, {
+        textareaName: 'data_text',
+        initialData: {{ (request.form.get('data_text', sample_data) or '') | tojson }},
+        minRows: 5,
+        minCols: 3,
+      });
+      // Apply i18n to the dynamically created elements
+      if (window.i18nModule && window.i18nModule.applyI18n) {
+        window.i18nModule.applyI18n(container);
+      }
+    }
+    // PDF embed using Blob (better Safari support)
+    document.querySelectorAll('.pdf-view[data-pdf]').forEach(container => {
+      const b64 = container.dataset.pdf;
+      const frame = container.querySelector('.pdf-frame');
+      if (!b64 || !frame) return;
+      try {
+        const byteChars = atob(b64);
+        const byteNumbers = new Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) {
+          byteNumbers[i] = byteChars.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        frame.src = url + '#toolbar=0&navpanes=0';
+      } catch (e) {
+        console.warn('PDF embed failed, falling back to download link:', e);
+      }
+    });
+
+    // CSV download
+    const csvBtn = document.getElementById('csv-download-btn');
+    function tableToCsv(table, sci, digits) {
+      const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim());
+      const lines = [headers.join(',')];
+      table.querySelectorAll('tbody tr').forEach(tr => {
+        const cells = Array.from(tr.querySelectorAll('td')).map(td => {
+          let val = td.textContent.trim();
+          if (td.classList.contains('fmt-number')) {
+            const raw = td.dataset.raw ?? val;
+            val = formatNumber(raw, digits, sci);
+          }
+          return `"${String(val).replace(/"/g, '""')}"`;
+        });
+        lines.push(cells.join(','));
+      });
+      return lines.join('\n');
+    }
+    if (csvBtn) {
+      csvBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const table = document.querySelector('.table-wrap table');
+        if (!table) return;
+        const sci = fmtSci && fmtSci.checked;
+        const digits = fmtDigits ? parseInt(fmtDigits.value || '10', 10) : 10;
+        const csvData = tableToCsv(table, sci, digits);
+        const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'extrapolation_results.csv';
+        link.click();
+        URL.revokeObjectURL(url);
+      });
+    }
+
+    function formatNumber(raw, digits, sci) {
+      const fn = window.DLNumberFormat && window.DLNumberFormat.formatNumber;
+      if (typeof fn === 'function') return fn(raw, digits, sci);
+      // Fallback (should not happen): keep previous behavior
+      if (raw === undefined || raw === null || raw === '') return raw;
+      const num = Number(raw);
+      if (!isFinite(num)) return raw;
+      const d = isNaN(digits) ? 10 : digits;
+      if (!sci) {
+        const places = Math.max(0, d | 0);
+        return num.toFixed(places);
+      }
+      const sig = Math.max(1, d | 0);
+      return num.toExponential(sig - 1);
+    }
+    const fmtSci = document.getElementById('fmt-sci');
+    const fmtDigits = document.getElementById('fmt-digits');
+    const fmtDigitsLabel = document.querySelector('label[for="fmt-digits"]');
+
+    function updateDigitsLabel() {
+      if (!fmtDigitsLabel) return;
+      const sci = fmtSci && fmtSci.checked;
+      const key = sci ? 'extrap.formatSignificantDigitsLabel' : 'extrap.formatDecimalPlacesLabel';
+      fmtDigitsLabel.setAttribute('data-i18n', key);
+      if (window.i18nModule && typeof window.i18nModule.applyI18n === 'function') {
+        window.i18nModule.applyI18n(fmtDigitsLabel);
+      } else {
+        fmtDigitsLabel.textContent = sci ? '有效位数' : '小数位数';
+      }
+    }
+    function applyFormatting() {
+      updateDigitsLabel();
+      const sci = fmtSci && fmtSci.checked;
+      const digits = fmtDigits ? parseInt(fmtDigits.value || '10', 10) : 10;
+      document.querySelectorAll('.fmt-number').forEach((el) => {
+        const raw = el.dataset.raw ?? el.textContent;
+        const formatted = formatNumber(raw, digits, sci);
+        if (formatted !== undefined) el.textContent = formatted;
+      });
+    }
+    if (fmtSci) fmtSci.addEventListener('change', applyFormatting);
+    if (fmtDigits) fmtDigits.addEventListener('input', applyFormatting);
+    applyFormatting();
+
+    // Reference column: allow selecting auto modes while keeping manual input.
+    const refMode = document.getElementById('reference_column_mode');
+    const refInput = document.getElementById('reference_column');
+    if (refMode && refInput) {
+      const autoKey = 'auto_max_diff';
+      let lastManual = '';
+      const initial = (refInput.value || '').trim();
+      if (initial && initial !== autoKey) lastManual = initial;
+
+      const applyRefMode = () => {
+        const mode = refMode.value;
+        if (mode === autoKey) {
+          const current = (refInput.value || '').trim();
+          if (current && current !== autoKey) lastManual = current;
+          refInput.value = autoKey;
+          refInput.readOnly = true;
+          refInput.classList.add('is-auto');
+        } else {
+          refInput.readOnly = false;
+          refInput.classList.remove('is-auto');
+          const current = (refInput.value || '').trim();
+          if (current === autoKey) refInput.value = lastManual || '';
+        }
+      };
+
+      // Initialize from server-rendered value
+      if ((refInput.value || '').trim() === autoKey) {
+        refMode.value = autoKey;
+      } else {
+        refMode.value = 'manual';
+      }
+      applyRefMode();
+
+      refMode.addEventListener('change', applyRefMode);
+    }
+  });
+</script>
+{% endblock %}

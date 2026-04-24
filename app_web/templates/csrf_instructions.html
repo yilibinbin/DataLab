@@ -1,0 +1,49 @@
+<!--
+CSRF Protection Template Instructions
+======================================
+
+All forms that use POST/PUT/DELETE methods MUST include a CSRF token.
+
+Add this hidden input to EVERY <form> tag:
+-->
+
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+<!--
+EXAMPLE USAGE:
+
+BEFORE (vulnerable):
+<form method="POST" action="/">
+  <input name="data_text" type="textarea">
+  <button type="submit">提交</button>
+</form>
+
+AFTER (protected):
+<form method="POST" action="/">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input name="data_text" type="textarea">
+  <button type="submit">提交</button>
+</form>
+
+FILES TO MODIFY:
+1. templates/index.html - extrapolation form
+2. templates/error.html - error propagation form
+3. templates/fit.html - fitting form
+4. templates/stats.html - statistics form
+
+SEARCH FOR: <form
+ADD TOKEN: Right after <form> tag
+
+VERIFICATION:
+After adding tokens, test with curl:
+  # Without token (should fail):
+  curl -X POST http://localhost:8000/ -d "data_text=test"
+  # Expected: 400 "CSRF验证失败"
+
+  # With valid token (should work):
+  # Get token from browser session first, then:
+  curl -X POST http://localhost:8000/ \
+    -b "session=..." \
+    -d "csrf_token=..." \
+    -d "data_text=test"
+-->

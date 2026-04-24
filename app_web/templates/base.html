@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DataLab Web</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='ui_specs.css') }}">
+  <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/number_format.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/latex-highlight.js') }}"></script>
+  <!-- KaTeX for formula preview -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script defer src="{{ url_for('static', filename='js/formula-preview.js') }}"></script>
+</head>
+<body class="theme-dark" id="body-root">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">DL</span>
+      <div>
+        <div class="brand-title">DataLab Web</div>
+        <div class="brand-subtitle" data-i18n="brand.subtitle">高精度外推与误差分析工具</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="{{ url_for('pages.index') }}" class="{% if active_page == 'extrapolation' %}active{% endif %}" data-i18n="nav.extrapolation">序列外推</a>
+      <a href="{{ url_for('pages.error') }}" class="{% if active_page == 'error' %}active{% endif %}" data-i18n="nav.uncertainty">误差传递</a>
+      <a href="{{ url_for('pages.fit') }}" class="{% if active_page == 'fit' %}active{% endif %}" data-i18n="nav.fitting">拟合</a>
+      <a href="{{ url_for('pages.stats') }}" class="{% if active_page == 'stats' %}active{% endif %}" data-i18n="nav.statistics">统计</a>
+      <a href="{{ url_for('docs.docs_index') }}" data-docs-entry="1" class="{% if active_page == 'docs' %}active{% endif %} muted" data-i18n-title="nav.docsTitle" title="查看文档" data-i18n="nav.docs">文档</a>
+    </nav>
+    <div class="top-actions">
+      <select id="lang-toggle" class="lang-select" data-i18n-aria="aria.langToggle" aria-label="语言切换">
+        <option value="zh">中文</option>
+        <option value="en">English</option>
+      </select>
+      <button class="theme-toggle" id="theme-toggle" type="button" data-i18n-aria="aria.themeToggle" aria-label="切换主题">🌙</button>
+    </div>
+  </header>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-area">
+        {% for category, message in messages %}
+          {% if message and message[:5] == 'i18n:' %}
+            <div class="flash {{ category }}" data-i18n="{{ message[5:] }}">{{ message[5:] }}</div>
+          {% else %}
+            <div class="flash {{ category }}">{{ message }}</div>
+          {% endif %}
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <div data-i18n="footer.version">DataLab Web - 版本 1.0</div>
+    <div class="footer-hint">
+      <span data-i18n="footer.deployHint">生产环境部署请参考</span>
+      <a href="{{ url_for('docs.docs_index') }}" data-docs-entry="1" data-i18n="footer.docsLink">使用与技术文档</a>
+      <span data-i18n="footer.deployHintSuffix">。</span>
+    </div>
+  </footer>
+
+  <script>
+    // Server-rendered form values (POST back) for restoring dynamic UI fields.
+    // Note: request.form is empty on GET renders.
+    window.DATALAB_PAGE_PATH = {{ (request.path or '/') | tojson }};
+    window.DATALAB_FORM_VALUES = {{ (form_values or {}) | tojson }};
+  </script>
+
+  <script>
+    (function() {
+      const key = 'datalab-theme';
+      const body = document.getElementById('body-root');
+      const btn = document.getElementById('theme-toggle');
+      const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const saved = localStorage.getItem(key);
+      function applyTheme(theme) {
+        body.classList.toggle('theme-dark', theme === 'dark');
+        body.classList.toggle('theme-light', theme === 'light');
+        if (btn) btn.textContent = theme === 'dark' ? '🌙' : '☀️';
+      }
+      const initial = saved || (prefersDark ? 'dark' : 'light');
+      applyTheme(initial);
+      if (btn) {
+        btn.addEventListener('click', () => {
+          const next = body.classList.contains('theme-dark') ? 'light' : 'dark';
+          localStorage.setItem(key, next);
+          applyTheme(next);
+        });
+      }
+
+      // Language toggle
+      function applyDualText(root) {
+        const scope = root || document;
+        const lang = (window.i18nModule && window.i18nModule.getLang && window.i18nModule.getLang()) || (localStorage.getItem('datalab_lang') || 'zh');
+        scope.querySelectorAll && scope.querySelectorAll('[data-dual-text]').forEach(el => {
+          const raw = el.getAttribute('data-dual-text') || el.textContent || '';
+          const parts = raw.split(' / ');
+          if (parts.length >= 2) {
+            el.textContent = (lang === 'zh' ? parts[0] : parts[1]).trim();
+          } else {
+            el.textContent = raw;
+          }
+        });
+      }
+      window.applyDualText = applyDualText;
+
+      function setLangCookie(lang) {
+        try {
+          const maxAge = 60 * 60 * 24 * 365; // 1 year
+          document.cookie = `datalab_lang=${encodeURIComponent(lang)}; path=/; max-age=${maxAge}; samesite=lax`;
+        } catch (e) {}
+      }
+
+      function updateDocsLinks(lang) {
+        try {
+          document.querySelectorAll('a[data-docs-entry=\"1\"]').forEach(a => {
+            a.setAttribute('href', `/docs/?lang=${encodeURIComponent(lang)}`);
+          });
+        } catch (e) {}
+      }
+
+      const langToggle = document.getElementById('lang-toggle');
+      if (langToggle) {
+        const saved = localStorage.getItem('datalab_lang') || 'zh';
+        langToggle.value = saved;
+        setLangCookie(saved);
+        updateDocsLinks(saved);
+        langToggle.addEventListener('change', () => {
+          const lang = langToggle.value;
+          // Single source of truth: i18nModule manages localStorage + html lang.
+          if (window.i18nModule) {
+            window.i18nModule.setLang(lang);
+            window.i18nModule.applyI18n(document.body);
+          } else {
+            localStorage.setItem('datalab_lang', lang);
+          }
+          applyDualText(document.body);
+          setLangCookie(lang);
+          updateDocsLinks(lang);
+          // Update ui_specs module (method dropdowns, help content)
+          if (window.uiSpecsModule && window.uiSpecsModule.onLanguageChange) {
+            window.uiSpecsModule.onLanguageChange(lang);
+          }
+
+          // Docs content is server-rendered; reload with ?lang=...
+          const path = window.location.pathname || '';
+          if (path === '/docs' || path === '/docs/' || path.startsWith('/docs/')) {
+            try {
+              const url = new URL(window.location.href);
+              url.searchParams.set('lang', lang);
+              window.location.href = url.pathname + '?' + url.searchParams.toString() + url.hash;
+            } catch (e) {
+              window.location.href = `/docs/?lang=${encodeURIComponent(lang)}`;
+            }
+          }
+        });
+      }
+    })();
+
+    // Toggle manual/file inputs
+    document.addEventListener('DOMContentLoaded', () => {
+      if (window.applyDualText) window.applyDualText(document.body);
+      const pairs = [
+        { checkboxId: 'use_file', manualId: 'manual_block', fileId: 'file_block' },
+        { checkboxId: 'error_use_file', manualId: 'error_manual_block', fileId: 'error_file_block' },
+        { checkboxId: 'stats_use_file', manualId: 'stats_manual_block', fileId: 'stats_file_block' },
+        { checkboxId: 'constants_use_file', manualId: 'constants_manual_block', fileId: 'constants_file_block' },
+        { checkboxId: 'fit_use_file', manualId: 'fit_manual_block', fileId: 'fit_file_block' },
+      ];
+      pairs.forEach(({ checkboxId, manualId, fileId }) => {
+        const checkbox = document.getElementById(checkboxId);
+        const manual = document.getElementById(manualId);
+        const file = document.getElementById(fileId);
+        const sync = () => {
+          const useFile = checkbox && checkbox.checked;
+          if (manual) manual.style.display = useFile ? 'none' : 'block';
+          if (file) file.style.display = useFile ? 'block' : 'none';
+        };
+        if (checkbox) {
+          checkbox.addEventListener('change', sync);
+          sync();
+        }
+      });
+
+      const toggleSections = [
+        { checkboxId: 'constants_enabled', sectionId: 'constants_section' },
+      ];
+      toggleSections.forEach(({ checkboxId, sectionId }) => {
+        const checkbox = document.getElementById(checkboxId);
+        const section = document.getElementById(sectionId);
+        const sync = () => {
+          const enabled = checkbox && checkbox.checked;
+          if (section) section.style.display = enabled ? 'block' : 'none';
+        };
+        if (checkbox) {
+          checkbox.addEventListener('change', sync);
+          sync();
+        }
+      });
+
+      // LaTeX syntax highlighting
+      if (window.latexHighlight) window.latexHighlight.highlightAll();
+
+      // Toggle caption input visibility when "use caption" is unchecked
+      document.querySelectorAll('[data-caption-toggle]').forEach(container => {
+        const checkbox = container.querySelector('[data-caption-checkbox]');
+        const input = container.querySelector('[data-caption-input]');
+        const sync = () => {
+          const enabled = checkbox && checkbox.checked;
+          if (input) {
+            input.style.display = enabled ? '' : 'none';
+            input.disabled = !enabled;
+          }
+        };
+        if (checkbox) {
+          checkbox.addEventListener('change', sync);
+          sync();
+        }
+      });
+    });
+  </script>
+  {% block extra_scripts %}{% endblock %}
+</body>
+</html>

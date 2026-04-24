@@ -1,0 +1,470 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow" data-i18n="fit.eyebrow">自动模型选择 / 拟合</p>
+    <h1 data-i18n="fit.title">用现有高精度拟合核心在浏览器里选模型、输出参数和残差图。</h1>
+    <p class="lede" data-i18n="fit.subtitle">粘贴 x,y,(σ) 数据即可运行自动模型库（多项式/指数/对数/序列加速等），展示最优模型参数、AIC/BIC/R²、残差与拟合曲线。</p>
+    <div class="hero-actions">
+      <span class="chip" data-i18n="fit.chip1">AUTO_MODELS</span>
+      <span class="chip" data-i18n="fit.chip2">mpmath 精度控制</span>
+      <span class="chip" data-i18n="fit.chip3">残差/直方图可视化</span>
+    </div>
+  </div>
+</section>
+
+<form class="panel" method="post" enctype="multipart/form-data" novalidate>
+  <!-- CSRF Protection -->
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <!-- 第一行：数据输入 -->
+  <div class="grid">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="label" data-i18n="fit.dataLabel">拟合数据</div>
+          <div class="muted" data-i18n="fit.dataHint">首行表头，至少包含 x 和 y，第三列（可选）为 σ。</div>
+        </div>
+      </div>
+      <label class="checkbox">
+        <input type="checkbox" name="fit_use_file" value="1" id="fit_use_file" {% if use_file_checked %}checked{% endif %}>
+        <span data-i18n="checkbox.useFile">使用文件输入</span>
+      </label>
+      <div class="manual-only" id="fit_manual_block">
+        <label class="field-label" data-i18n="extrap.pasteLabel">粘贴数据文本</label>
+        <div id="fit_data_spreadsheet"></div>
+        <div class="hint" data-i18n="fit.dataExample">支持括号不确定度格式: <code>2.1(5)</code> 或 单独sigma列: <code>x y sigma</code>。支持粘贴 CSV 数据。</div>
+      </div>
+      <div class="file-only" id="fit_file_block">
+        <label class="field-label" for="fit_data_file" data-i18n="extrap.uploadLabel">上传 UTF-8 文本文件</label>
+        <input type="file" id="fit_data_file" name="fit_data_file" accept=".txt,.dat,.csv">
+      </div>
+    </div>
+  </div>
+
+  <!-- 第二行：左侧-拟合设置，右侧-精度和LaTeX设置 -->
+  <div class="grid">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="label" data-i18n="fit.sectionMethod">拟合模式与参数</div>
+          <div class="muted" data-i18n="fit.sectionMethodHint">选择拟合模式及其专用参数。</div>
+        </div>
+      </div>
+      <label class="field-label" for="fit_x_column" data-i18n="fit.xColumnLabel">x 列名</label>
+      <input id="fit_x_column" name="fit_x_column" type="text" data-i18n-placeholder="fit.xColumnPlaceholder" placeholder="默认第一列" value="{{ request.form.get('fit_x_column', '') }}">
+
+      <label class="field-label" for="fit_target_column" data-i18n="fit.targetColumnLabel">目标列 (y)</label>
+      <input id="fit_target_column" name="fit_target_column" type="text" data-i18n-placeholder="fit.targetColumnPlaceholder" placeholder="默认第二列" value="{{ request.form.get('fit_target_column', '') }}">
+
+      <label class="field-label" for="fit_sigma_column" data-i18n="fit.sigmaColumnLabel">σ 列名（可选，留空则使用 y 括号不确定度）</label>
+      <input id="fit_sigma_column" name="fit_sigma_column" type="text" value="{{ request.form.get('fit_sigma_column', '') }}">
+
+      <div class="weight-row">
+        <label class="field-label inline" data-i18n="fit.weightLabel">统计/系统：</label>
+        <label class="checkbox inline">
+          <input type="checkbox" name="fit_weighted" value="1" {% if fit_weighted %}checked{% endif %}>
+          <span data-i18n="fit.weightCheckbox">统计误差加权 (sigma)</span>
+        </label>
+      </div>
+      <label class="field-label" for="fit_mode" data-i18n="fit.modeLabel">拟合模式</label>
+      {% set mode = fit_mode or 'auto' %}
+      <select id="fit_mode" name="fit_mode">
+        <option value="auto" {% if mode == 'auto' %}selected{% endif %} data-i18n="fit.modeAuto">自动模型选择</option>
+        <option value="preset" {% if mode == 'preset' %}selected{% endif %} data-i18n="fit.modePreset">预设模型 (Preset)</option>
+        <option value="custom" {% if mode == 'custom' %}selected{% endif %} data-i18n="fit.modeCustom">自定义模型表达式</option>
+        <option value="poly" {% if mode == 'poly' %}selected{% endif %} data-i18n="fit.modePoly">多项式拟合</option>
+        <option value="inverse" {% if mode == 'inverse' %}selected{% endif %} data-i18n="fit.modeInverse">1/x^p 展开</option>
+        <option value="pade" {% if mode == 'pade' %}selected{% endif %} data-i18n="fit.modePade">Padé 拟合</option>
+        <option value="power_limit" {% if mode == 'power_limit' %}selected{% endif %} data-i18n="fit.modePowerLimit">幂律极限拟合</option>
+        <option value="log_poly" {% if mode == 'log_poly' %}selected{% endif %} data-i18n="fit.modeLogPoly">对数多项式</option>
+        <option value="exp_combo" {% if mode == 'exp_combo' %}selected{% endif %} data-i18n="fit.modeExpCombo">通用指数基</option>
+      </select>
+
+      <div class="method-block" data-fit-mode="preset" style="{% if mode == 'preset' %}display:block{% endif %}">
+        <label class="field-label" for="fit_model_id" data-i18n="fit.presetModelLabel">选择预设模型</label>
+        <select id="fit_model_id" name="fit_model_id">
+          {% for model in auto_models %}
+            <option value="{{ model.identifier }}" {% if request.form.get('fit_model_id') == model.identifier %}selected{% endif %} data-dual-text="{{ model.label }}">
+              {{ model.label }}
+            </option>
+          {% endfor %}
+        </select>
+        <div class="hint" data-i18n="fit.presetModelHint">预设模型库包含线性、多项式、对数、指数、1/x系列等常用模型。</div>
+      </div>
+
+      <div class="method-block" data-fit-mode="custom" style="{% if mode == 'custom' %}display:block{% endif %}">
+        <label class="field-label" for="fit_custom_expr" data-i18n="fit.customExprLabel">自定义模型表达式</label>
+        <input id="fit_custom_expr" name="fit_custom_expr" type="text" data-i18n-placeholder="fit.customExprPlaceholder" placeholder="如 A*x**(-p) + C" value="{{ request.form.get('fit_custom_expr', '') }}">
+        <button type="button" class="help-btn" onclick="window.uiSpecsModule && window.uiSpecsModule.showFunctionHelp()" data-i18n-title="extrap.functionHelpBtn" data-i18n-aria="extrap.functionHelpBtn" title="函数提示" aria-label="函数提示" style="margin-left: 8px;">?</button>
+        <label class="field-label" for="fit_custom_params" data-i18n="fit.customParamsLabel">参数配置 (JSON)</label>
+        <textarea id="fit_custom_params" name="fit_custom_params" rows="6" spellcheck="false">{{ request.form.get('fit_custom_params', '{\n  \"A\": {\"initial\": 1.0},\n  \"p\": {\"initial\": 1.0},\n  \"C\": {\"initial\": 0.0}\n}') }}</textarea>
+        <label class="field-label" for="fit_var_mapping" data-i18n="fit.varMappingLabel">变量映射 (var: 列名，每行一对，留空默认 x)</label>
+        <textarea id="fit_var_mapping" name="fit_var_mapping" rows="4" spellcheck="false">{{ request.form.get('fit_var_mapping', '') }}</textarea>
+      </div>
+
+      <div class="method-block" data-fit-mode="poly" style="{% if mode == 'poly' %}display:block{% endif %}">
+        <label class="field-label" for="fit_poly_degree" data-i18n="fit.polyDegreeLabel">多项式最高阶</label>
+        <input id="fit_poly_degree" name="fit_poly_degree" type="number" min="1" max="18" value="{{ request.form.get('fit_poly_degree', '3') }}">
+      </div>
+
+      <div class="method-block" data-fit-mode="inverse" style="{% if mode == 'inverse' %}display:block{% endif %}">
+        <div class="split">
+          <div>
+            <label class="field-label" for="fit_inverse_min">min p</label>
+            <input id="fit_inverse_min" name="fit_inverse_min" type="number" min="0" max="12" value="{{ request.form.get('fit_inverse_min', '1') }}">
+          </div>
+          <div>
+            <label class="field-label" for="fit_inverse_max">max p</label>
+            <input id="fit_inverse_max" name="fit_inverse_max" type="number" min="0" max="18" value="{{ request.form.get('fit_inverse_max', '3') }}">
+          </div>
+        </div>
+      </div>
+
+      <div class="method-block" data-fit-mode="pade" style="{% if mode == 'pade' %}display:block{% endif %}">
+        <div class="split">
+          <div>
+            <label class="field-label" for="fit_pade_m">Padé m</label>
+            <input id="fit_pade_m" name="fit_pade_m" type="number" min="0" max="6" value="{{ request.form.get('fit_pade_m', '1') }}">
+          </div>
+          <div>
+            <label class="field-label" for="fit_pade_n">n</label>
+            <input id="fit_pade_n" name="fit_pade_n" type="number" min="0" max="6" value="{{ request.form.get('fit_pade_n', '1') }}">
+          </div>
+        </div>
+      </div>
+
+      <div class="method-block" data-fit-mode="power_limit" style="{% if mode == 'power_limit' %}display:block{% endif %}">
+        <div class="hint" data-i18n="fit.powerLimitHint">使用模板 A*x**(-p)+C，p≥0.1，参数初值沿用内置默认值。</div>
+      </div>
+
+      <div class="method-block" data-fit-mode="log_poly" style="{% if mode == 'log_poly' %}display:block{% endif %}">
+        <div class="hint" data-i18n="fit.logPolyHint">对数多项式模型（要求 x>0），结构与自动模型库保持一致。</div>
+      </div>
+
+      <div class="method-block" data-fit-mode="exp_combo" style="{% if mode == 'exp_combo' %}display:block{% endif %}">
+        <div class="hint" data-i18n="fit.expComboHint">通用指数基模型，沿用内置参数基础。</div>
+      </div>
+
+      <label class="field-label" for="fit_log_scale" data-i18n="fit.logScaleLabel">坐标轴对数刻度</label>
+      <input id="fit_log_scale" name="fit_log_scale" type="text" data-i18n-placeholder="fit.logScalePlaceholder" placeholder="x / y / xy，留空为线性" value="{{ request.form.get('fit_log_scale', '') }}">
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="label" data-i18n="extrap.sectionPrecision">数值精度与 LaTeX 输出</div>
+          <div class="muted" data-i18n="extrap.precisionHint">精度控制和排版参数。</div>
+        </div>
+      </div>
+      <label class="field-label" for="fit_mp_precision" data-i18n="extrap.mpPrecisionLabel">多精度 mp.dps（可选）</label>
+      <input id="fit_mp_precision" name="fit_mp_precision" type="number" placeholder="16" value="{{ request.form.get('fit_mp_precision', '') }}">
+
+      <label class="field-label" for="fit_latex_precision" data-i18n="extrap.latexPrecisionLabel">LaTeX 数值精度（有效位数）</label>
+      <input id="fit_latex_precision" name="fit_latex_precision" type="number" placeholder="20" value="{{ request.form.get('fit_latex_precision', '') }}">
+
+      <label class="field-label" for="fit_result_digits" data-i18n="extrap.resultDigitsLabel">结果不确定度有效位数</label>
+      <input id="fit_result_digits" name="fit_result_digits" type="number" placeholder="1" value="{{ request.form.get('fit_result_digits', '') }}">
+
+      <div class="inline-row">
+        <label class="checkbox inline">
+          <input type="checkbox" name="fit_use_dcolumn" value="1" {% if use_dcolumn_checked %}checked{% endif %}>
+          <span data-i18n="checkbox.useDcolumn">使用 dcolumn 对齐数值</span>
+        </label>
+        <div class="inline-field">
+          <span class="inline-label" data-i18n="extrap.groupSizeLabel">分组位数</span>
+          <input
+            id="fit_latex_group_size"
+            name="fit_latex_group_size"
+            type="number"
+            class="inline-number"
+            min="0"
+            max="12"
+            step="1"
+            value="{{ request.form.get('fit_latex_group_size', '3') }}"
+          >
+        </div>
+      </div>
+
+      <div class="inline-row" data-caption-toggle>
+        <label class="checkbox inline">
+          <input type="checkbox" name="fit_use_caption" value="1" {% if use_caption_checked %}checked{% endif %} data-caption-checkbox>
+          <span data-i18n="checkbox.useCaption">使用标题</span>
+        </label>
+        <input
+          id="fit_caption"
+          name="fit_caption"
+          type="text"
+          class="inline-grow"
+          data-i18n-placeholder="placeholder.optionalCaption"
+          placeholder="可选标题"
+          value="{{ request.form.get('fit_caption', '') }}"
+          data-caption-input
+        >
+      </div>
+
+      <label class="checkbox">
+        <input type="checkbox" name="fit_generate_plots" value="1" {% if fit_generate_plots_checked %}checked{% endif %}>
+        <span data-i18n="checkbox.generatePlots">生成拟合图像</span>
+      </label>
+
+      <label class="field-label" for="fit_latex_engine" data-i18n="extrap.latexEngineLabel">LaTeX 引擎（可选）</label>
+      <input id="fit_latex_engine" name="fit_latex_engine" type="text" data-i18n-placeholder="placeholder.latexEngine" placeholder="pdflatex 或 xelatex 路径" value="{{ latex_engine_value }}">
+
+      <label class="checkbox">
+        <input type="checkbox" name="fit_compile_pdf" value="1" {% if compile_pdf_checked %}checked{% endif %}>
+        <span data-i18n="checkbox.compilePDF">尝试编译 PDF 并提供下载</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" type="submit" data-i18n="fit.btnSubmit">运行拟合并生成 LaTeX</button>
+    <span class="muted" data-i18n="fit.submitHint">支持自动模型选择、指定内置模型或自定义表达式。</span>
+  </div>
+</form>
+
+{% if result %}
+<section class="results">
+  <div class="results-header">
+    <div>
+      <h2><span data-i18n="fit.resultsTitlePrefix">拟合结果 · 模型：</span><span data-dual-text="{{ result.best_label }}">{{ result.best_label }}</span></h2>
+      <p class="muted">
+        mp.dps: {% if result.mp_precision %}{{ result.mp_precision }}{% else %}<span data-i18n="label.default">默认</span>{% endif %}
+        · <span data-i18n="label.points">点数</span>: {{ result.x|length }}
+      </p>
+    </div>
+    <div class="controls-inline">
+      <label class="checkbox inline">
+        <input type="checkbox" id="fit-fmt-sci" value="1">
+        <span data-i18n="checkbox.useScientific">使用科学计数法显示结果</span>
+      </label>
+      <label class="field-label inline" for="fit-fmt-digits" data-i18n="extrap.formatDecimalPlacesLabel">小数位数</label>
+      <input id="fit-fmt-digits" type="number" min="0" max="50" value="10" style="width:90px;">
+    </div>
+    {% if warnings %}
+      <div class="pill warn"><span data-i18n="extrap.warningCount">提示</span> {{ warnings|length }}</div>
+    {% endif %}
+  </div>
+
+  {% if warnings %}
+    <ul class="warning-list">
+      {% for w in warnings %}
+        <li data-dual-text="{{ w }}">{{ w }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-header">
+        <div class="label" data-i18n="fit.paramsLabel">参数</div>
+        <div class="muted" data-i18n="fit.paramsHint">含 ± 总不确定度。</div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th data-i18n="fit.paramTable">参数</th>
+              <th data-i18n="label.value">值</th>
+              <th data-i18n="label.uncertainty">不确定度</th>
+              <th data-i18n="label.latex">LaTeX</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in result.params %}
+              <tr>
+                <td>{{ p.name }}</td>
+                <td class="fmt-number" data-raw="{{ p.value }}">{{ p.value }}</td>
+                <td class="fmt-number" data-raw="{{ p.uncertainty }}">{{ p.uncertainty }}</td>
+                <td class="strong">{{ p.latex }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if result.csv_data %}
+        <div style="margin-top: 1rem;">
+          <a class="download" href="#" id="fit-csv-download-btn" data-i18n="fit.exportParams">导出拟合结果 CSV</a>
+        </div>
+      {% endif %}
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="label" data-i18n="fit.metricsLabel">指标</div>
+        <div class="muted" data-i18n="fit.metricsHint">AIC 选型优先。</div>
+      </div>
+      <ul class="simple-list">
+        <li>χ²: <span class="fmt-number" data-raw="{{ result.metrics.chi2 }}">{{ result.metrics.chi2 }}</span></li>
+        <li>Reduced χ²: <span class="fmt-number" data-raw="{{ result.metrics.reduced_chi2 }}">{{ result.metrics.reduced_chi2 }}</span></li>
+        <li>AIC: <span class="fmt-number" data-raw="{{ result.metrics.aic }}">{{ result.metrics.aic }}</span></li>
+        <li>BIC: <span class="fmt-number" data-raw="{{ result.metrics.bic }}">{{ result.metrics.bic }}</span></li>
+        <li>R²: <span class="fmt-number" data-raw="{{ result.metrics.r2 }}">{{ result.metrics.r2 }}</span></li>
+        <li>RMSE: <span class="fmt-number" data-raw="{{ result.metrics.rmse }}">{{ result.metrics.rmse }}</span></li>
+      </ul>
+    </div>
+  </div>
+
+  {% if result.plot_b64 %}
+    <div class="card">
+      <div class="card-header">
+        <div class="label" data-i18n="fit.plotLabel">拟合与残差图</div>
+        <div class="muted" data-i18n="fit.plotHint">使用 Matplotlib 渲染拟合与残差曲线。</div>
+      </div>
+      <img class="plot" src="data:image/png;base64,{{ result.plot_b64 }}" alt="Fit plot">
+    </div>
+  {% endif %}
+
+  <div class="card">
+    <div class="card-header">
+      <div class="label" data-i18n="fit.summaryLabel">模型尝试摘要</div>
+      <div class="muted" data-i18n="fit.summaryHint">包含失败/成功模型与 AIC/χ²。</div>
+    </div>
+    <pre class="mono-block">{{ result.summary_text }}</pre>
+  </div>
+
+  {# LaTeX and PDF output - same structure as extrapolation mode #}
+  <div class="latex-block">
+    <div class="label" data-i18n="label.latexTable">LaTeX 表格</div>
+    <div class="muted" data-i18n="fit.latexCopyHint">可直接复制到 .tex。</div>
+    <div class="md-output"><pre><button type="button" class="copy-btn" data-i18n="btn.copyCode" onclick="var btn=this;navigator.clipboard.writeText(btn.parentElement.querySelector('code').textContent).then(function(){var orig=btn.textContent;btn.textContent='✓';setTimeout(function(){btn.textContent=orig},1500)}).catch(function(e){console.warn('Clipboard failed:',e)})">复制</button><code class="lang-latex">{{ result.latex_text }}</code></pre></div>
+    {% if result.pdf_b64 %}
+      <a class="download" href="data:application/pdf;base64,{{ result.pdf_b64 }}" download="fitting_results.pdf" data-i18n="btn.downloadPDF">下载 PDF</a>
+      <div class="pdf-view" data-pdf="{{ result.pdf_b64 }}">
+        <iframe class="pdf-frame" width="100%" height="500" frameborder="0"></iframe>
+        <div class="pdf-fallback" data-i18n="label.pdfFallback">若浏览器未内嵌显示，请点击上方"下载 PDF"在系统查看。</div>
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/spreadsheet.js') }}"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const c = document.getElementById('fit_data_spreadsheet');
+    if (c) {
+      new DataLabSpreadsheet(c, {
+        textareaName: 'fit_data_text',
+        initialData: {{ (request.form.get('fit_data_text', sample_data) or '') | tojson }},
+        minRows: 5, minCols: 3,
+      });
+      if (window.i18nModule && window.i18nModule.applyI18n) window.i18nModule.applyI18n(c);
+    }
+    // PDF embed using Blob (better Safari support)
+    document.querySelectorAll('.pdf-view[data-pdf]').forEach(container => {
+      const b64 = container.dataset.pdf;
+      const frame = container.querySelector('.pdf-frame');
+      if (!b64 || !frame) return;
+      try {
+        const byteChars = atob(b64);
+        const byteNumbers = new Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) {
+          byteNumbers[i] = byteChars.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        frame.src = url + '#toolbar=0&navpanes=0';
+      } catch (e) {
+        console.warn('PDF embed failed:', e);
+      }
+    });
+
+    function toggleFitBlocks(mode) {
+      document.querySelectorAll('.method-block[data-fit-mode]').forEach(block => {
+        const m = block.dataset.fitMode;
+        block.style.display = (m === mode) ? 'block' : 'none';
+      });
+    }
+    const fitModeSelect = document.getElementById('fit_mode');
+    if (fitModeSelect) {
+      fitModeSelect.addEventListener('change', (e) => toggleFitBlocks(e.target.value));
+      toggleFitBlocks(fitModeSelect.value || '{{ fit_mode or "auto" }}');
+    }
+
+    const fitCsvBtn = document.getElementById('fit-csv-download-btn');
+    function tableToCsv(table, sci, digits) {
+      const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim());
+      const lines = [headers.join(',')];
+      table.querySelectorAll('tbody tr').forEach(tr => {
+        const cells = Array.from(tr.querySelectorAll('td')).map(td => {
+          let val = td.textContent.trim();
+          if (td.classList.contains('fmt-number')) {
+            const raw = td.dataset.raw ?? val;
+            val = formatNumber(raw, digits, sci);
+          }
+          return `"${String(val).replace(/"/g, '""')}"`;
+        });
+        lines.push(cells.join(','));
+      });
+      return lines.join('\n');
+    }
+
+    if (fitCsvBtn) {
+      fitCsvBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const table = document.querySelector('.table-wrap table');
+        if (!table) return;
+        const sci = fmtSci && fmtSci.checked;
+        const digits = fmtDigits ? parseInt(fmtDigits.value || '10', 10) : 10;
+        const csvData = tableToCsv(table, sci, digits);
+        const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'fit_results.csv';
+        link.click();
+        URL.revokeObjectURL(url);
+      });
+    }
+
+    function formatNumber(raw, digits, sci) {
+      const fn = window.DLNumberFormat && window.DLNumberFormat.formatNumber;
+      if (typeof fn === 'function') return fn(raw, digits, sci);
+      // Fallback (should not happen): keep previous behavior
+      if (raw === undefined || raw === null || raw === '') return raw;
+      const num = Number(raw);
+      if (!isFinite(num)) return raw;
+      const d = isNaN(digits) ? 10 : digits;
+      if (!sci) {
+        const places = Math.max(0, d | 0);
+        return num.toFixed(places);
+      }
+      const sig = Math.max(1, d | 0);
+      return num.toExponential(sig - 1);
+    }
+    const fmtSci = document.getElementById('fit-fmt-sci');
+    const fmtDigits = document.getElementById('fit-fmt-digits');
+    const fmtDigitsLabel = document.querySelector('label[for="fit-fmt-digits"]');
+
+    function updateDigitsLabel() {
+      if (!fmtDigitsLabel) return;
+      const sci = fmtSci && fmtSci.checked;
+      const key = sci ? 'extrap.formatSignificantDigitsLabel' : 'extrap.formatDecimalPlacesLabel';
+      fmtDigitsLabel.setAttribute('data-i18n', key);
+      if (window.i18nModule && typeof window.i18nModule.applyI18n === 'function') {
+        window.i18nModule.applyI18n(fmtDigitsLabel);
+      } else {
+        fmtDigitsLabel.textContent = sci ? '有效位数' : '小数位数';
+      }
+    }
+    function applyFormatting() {
+      updateDigitsLabel();
+      if (!document.querySelector('.fmt-number')) return;
+      const sci = fmtSci && fmtSci.checked;
+      const digits = fmtDigits ? parseInt(fmtDigits.value || '10', 10) : 10;
+      document.querySelectorAll('.fmt-number').forEach((el) => {
+        const raw = el.dataset.raw ?? el.textContent;
+        const formatted = formatNumber(raw, digits, sci);
+        if (formatted !== undefined) el.textContent = formatted;
+      });
+    }
+    if (fmtSci) fmtSci.addEventListener('change', applyFormatting);
+    if (fmtDigits) fmtDigits.addEventListener('input', applyFormatting);
+    applyFormatting();
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,356 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="docs-page">
+  <div class="docs-header">
+    <div>
+      <h1 data-i18n="docs.title">文档</h1>
+      <p class="muted" data-i18n="docs.subtitle">DataLab Web 使用指南与技术文档</p>
+    </div>
+    <div class="docs-actions">
+      <a href="{{ url_for('pages.index') }}" class="btn-secondary" data-i18n="docs.backToHome">返回主页</a>
+    </div>
+  </div>
+
+  {% if toc %}
+  <nav class="docs-toc">
+    <div class="label" data-i18n="docs.tableOfContents">目录</div>
+    <ul>
+      {% for item in toc %}
+      <li>
+        <a href="#{{ item.id }}">{{ item.text }}</a>
+        {% if item.children %}
+        <ul>
+          {% for child in item.children %}
+          <li><a href="#{{ child.id }}">{{ child.text }}</a></li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </nav>
+  {% endif %}
+
+  <div class="docs-content markdown-body">
+    {{ content|safe }}
+  </div>
+
+  <footer class="docs-footer">
+    <div class="docs-nav-links">
+      <div>
+        {% if prev_page %}
+        <a href="{{ url_for('docs.docs_page', page=prev_page.slug, lang=lang) }}" class="nav-link prev">
+          <span class="arrow">&larr;</span>
+          <span>
+            <div class="label" data-i18n="docs.previous">上一页</div>
+            <div class="title">{{ prev_page.title }}</div>
+          </span>
+        </a>
+        {% endif %}
+      </div>
+      <div>
+        {% if next_page %}
+        <a href="{{ url_for('docs.docs_page', page=next_page.slug, lang=lang) }}" class="nav-link next">
+          <span>
+            <div class="label" data-i18n="docs.next">下一页</div>
+            <div class="title">{{ next_page.title }}</div>
+          </span>
+          <span class="arrow">&rarr;</span>
+        </a>
+        {% endif %}
+      </div>
+    </div>
+  </footer>
+</section>
+
+<style>
+.docs-page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+.docs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 2rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.docs-header h1 {
+  margin: 0 0 0.5rem 0;
+  font-size: 2.5rem;
+}
+
+.docs-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.btn-secondary, .btn-primary {
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.btn-secondary {
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+  background: var(--bg-3);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: white;
+  border: none;
+}
+
+.btn-primary:hover {
+  opacity: 0.9;
+}
+
+.docs-toc {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.docs-toc .label {
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.docs-toc ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.docs-toc li {
+  margin: 0.5rem 0;
+}
+
+.docs-toc a {
+  color: var(--text);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.docs-toc a:hover {
+  color: var(--accent);
+}
+
+.docs-toc ul ul {
+  margin-left: 1.25rem;
+  margin-top: 0.25rem;
+}
+
+.docs-content {
+  line-height: 1.7;
+}
+
+/* Markdown styling */
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  font-weight: 600;
+}
+
+.markdown-body h1 {
+  font-size: 2rem;
+  border-bottom: 2px solid var(--border);
+  padding-bottom: 0.5rem;
+}
+
+.markdown-body h2 {
+  font-size: 1.5rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.3rem;
+}
+
+.markdown-body h3 {
+  font-size: 1.25rem;
+}
+
+.markdown-body p {
+  margin: 1rem 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 1rem 0;
+  padding-left: 2rem;
+}
+
+.markdown-body li {
+  margin: 0.5rem 0;
+}
+
+.markdown-body code {
+  background: var(--bg-2);
+  padding: 0.2rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.9em;
+  font-family: 'Monaco', 'Courier New', monospace;
+}
+
+.markdown-body pre {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+}
+
+.markdown-body blockquote {
+  border-left: 4px solid var(--accent);
+  padding-left: 1rem;
+  margin: 1rem 0;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 1rem;
+  text-align: left;
+}
+
+.markdown-body th {
+  background: var(--bg-2);
+  font-weight: 600;
+}
+
+.markdown-body a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2rem 0;
+}
+
+.docs-footer {
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--border);
+}
+
+.docs-nav-links {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text);
+  transition: all 0.2s;
+}
+
+.nav-link:hover {
+  background: var(--bg-3);
+  border-color: var(--accent);
+}
+
+.nav-link.prev {
+  justify-content: flex-start;
+}
+
+.nav-link.next {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.nav-link .arrow {
+  font-size: 1.5rem;
+  color: var(--accent);
+}
+
+.nav-link .label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.nav-link .title {
+  font-weight: 500;
+}
+
+@media (max-width: 768px) {
+  .docs-header {
+    flex-direction: column;
+  }
+
+  .docs-actions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .docs-nav-links {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  // Apply i18n to docs page
+  if (window.i18nModule) {
+    window.i18nModule.applyI18n();
+  }
+});
+</script>
+{% endblock %}
