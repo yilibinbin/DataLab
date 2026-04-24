@@ -65,6 +65,27 @@ def create_app() -> Flask:
     )
     app.config["SECRET_KEY"] = _resolve_secret_key()
 
+    # Reverse-proxy opt-in: when DATALAB_TRUST_PROXY_HEADERS=1 is set,
+    # wrap the app with werkzeug's ProxyFix so ``request.remote_addr``
+    # returns the real client IP (rewritten from X-Forwarded-For)
+    # instead of the proxy's IP. Default-off: a Flask instance exposed
+    # directly to the internet must NOT trust X-Forwarded-For, because
+    # clients can set that header to any value to spoof their apparent
+    # IP and bypass the per-IP rate limiter.
+    if os.environ.get("DATALAB_TRUST_PROXY_HEADERS", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    ):
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        app.wsgi_app = ProxyFix(
+            app.wsgi_app,
+            x_for=1,
+            x_proto=1,
+            x_host=1,
+            x_port=1,
+            x_prefix=1,
+        )
+
     configure_app_security(app)
 
     @app.context_processor

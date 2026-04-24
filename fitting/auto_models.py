@@ -126,13 +126,33 @@ AUTO_MODELS = [
 # so a user typing ``model=linear`` sees the same behaviour in both
 # entry points. Extending this dict automatically updates both call
 # sites — don't re-declare it elsewhere.
+#
+# Coverage: every identifier in ``AUTO_MODELS`` must have at least
+# one friendly alias here so a user who doesn't memorise ``M1``..
+# ``M8`` can still address every built-in model. The
+# ``test_model_id_aliases_cover_all_models`` regression test pins
+# this invariant.
 MODEL_ID_ALIASES: dict[str, str] = {
+    # Core polynomials
     "linear": "M1",
     "quadratic": "M2",
     "cubic": "M3",
+    # Log family
     "log": "M4",
+    "log_poly": "M4B",
+    "log-poly": "M4B",
+    # Inverse family
     "inverse": "M5",
+    "decay": "M6",
+    "high_order_decay": "M6",
+    # Exponential family
     "exponential": "M7",
+    "exp_combo": "M7",
+    "exp_basis": "M7B",
+    "exponential_basis": "M7B",
+    # Spline / high-power inverse
+    "spline_decay": "M8",
+    "inverse_spline": "M8",
 }
 
 

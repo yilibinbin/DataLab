@@ -162,34 +162,22 @@ def _check_rate_limit(client_ip: str) -> bool:
 
 
 def _client_ip() -> str:
-    """Best-effort client IP, opt-in XFF trust.
+    """Resolve the rate-limit key for the current request.
 
-    ``X-Forwarded-For`` is trusted ONLY when the env var
-    ``DATALAB_TRUST_PROXY_HEADERS=1`` is set — i.e., an operator has
-    explicitly stated "we're behind a reverse proxy that controls
-    that header". Default-off, so an attacker on the Flask port who
-    sends ``X-Forwarded-For: 1.2.3.4`` cannot spoof their rate-limit
-    key — the real ``request.remote_addr`` is used instead.
+    Simply returns ``request.remote_addr`` — the safe default. When
+    the deployment is behind a reverse proxy, the operator sets
+    ``DATALAB_TRUST_PROXY_HEADERS=1`` and ``create_app`` wraps the
+    WSGI app with ``werkzeug.middleware.proxy_fix.ProxyFix``, which
+    rewrites ``remote_addr`` from ``X-Forwarded-For``. No manual
+    header parsing is needed here — ProxyFix is the canonical fix
+    and correctly refuses to trust XFF from non-proxy hops.
 
-    Production deploys behind nginx / Cloudflare should either
-    - set ``DATALAB_TRUST_PROXY_HEADERS=1`` AND bind Flask to the
-      loopback so only the proxy can reach it, OR
-    - use ``werkzeug.middleware.proxy_fix.ProxyFix`` which
-      substitutes ``request.remote_addr`` with the real client IP
-      (preferred; doesn't need the env var).
+    A deployment that exposes Flask directly to the internet MUST
+    NOT set the env var; in that case ``remote_addr`` is the
+    connecting socket's IP (which the client cannot forge without
+    IP spoofing, which is a separate problem outside the Flask
+    layer).
     """
-    import os as _os
-
-    trust_proxy = _os.environ.get(
-        "DATALAB_TRUST_PROXY_HEADERS", ""
-    ).strip().lower() in ("1", "true", "yes", "on")
-    if trust_proxy:
-        xff = request.headers.get("X-Forwarded-For", "")
-        if xff:
-            # Take the left-most entry — the originating client.
-            return xff.split(",")[0].strip() or (
-                request.remote_addr or "unknown"
-            )
     return request.remote_addr or "unknown"
 
 
