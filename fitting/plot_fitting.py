@@ -7,31 +7,19 @@ import logging
 from functools import lru_cache
 from typing import Any, Callable, Hashable, Iterable, NamedTuple, Sequence
 
-import matplotlib
-
-matplotlib.use("Agg")
-from matplotlib import rcParams  # noqa: E402
-import matplotlib.pyplot as plt  # noqa: E402
+# Centralised matplotlib init — backend=Agg, CJK font fallback, and
+# axes.unicode_minus=False are all configured at import time via
+# shared.plotting. Per Phase 4 #20 we do NOT call matplotlib.use
+# locally: if a future maintainer adds a local use() call the
+# shared.plotting module's backend would already be locked, which
+# correctly makes the local call a no-op with a warning.
+from shared.plotting import plt, rcParams  # noqa: F401
 from mpmath import mp
 
 from shared.caching import sample_with_cache
 from shared.precision import precision_guard
 
 _logger = logging.getLogger(__name__)
-
-rcParams["font.family"] = "sans-serif"
-rcParams["font.sans-serif"] = [
-    "Arial Unicode MS",
-    "Microsoft YaHei",
-    "PingFang SC",
-    "Hiragino Sans GB",
-    "Heiti TC",
-    "SimHei",
-    "Noto Sans CJK SC",
-    "WenQuanYi Micro Hei",
-    "DejaVu Sans",
-]
-rcParams["axes.unicode_minus"] = False
 
 
 def sample_mp_function(

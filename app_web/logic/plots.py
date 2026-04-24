@@ -21,10 +21,7 @@ def _render_extrapolation_plot(
         return None
 
     try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+        from shared.plotting import plt  # centralised backend = Agg
     except Exception:
         return None
 
@@ -99,10 +96,7 @@ def _render_contribution_plot(
         return None
 
     try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+        from shared.plotting import plt  # centralised backend = Agg
     except Exception:
         return None
 
@@ -145,10 +139,7 @@ def _render_statistics_plot(
     if not values:
         return None
     try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+        from shared.plotting import plt  # centralised backend = Agg
     except Exception:
         return None
 
