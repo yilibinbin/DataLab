@@ -1296,6 +1296,12 @@ class WindowFittingMixin:
             extra_models=extra_models,
             verbose=verbose,
             render_plots=self.generate_plots_checkbox.isChecked() if hasattr(self, "generate_plots_checkbox") else True,
+            refine_with_mcmc=(
+                self.fit_mcmc_refine.isChecked()
+                if hasattr(self, "fit_mcmc_refine")
+                and self.fit_mcmc_refine.isEnabled()
+                else False
+            ),
         )
 
     def _prepare_fit_job(self, dataset, generate_latex: bool, output_path: str, verbose: bool, render_plots: bool = True) -> FitJob:

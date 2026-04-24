@@ -69,18 +69,15 @@ def _run_fit(job) -> dict:
     (e.g., ``"M1"`` for linear, ``"M2"`` for quadratic) or the
     friendly alias ``"linear"`` / ``"quadratic"`` / ``"cubic"``.
     """
-    from fitting.auto_models import AUTO_MODELS, fit_linear_model
+    from fitting.auto_models import (
+        AUTO_MODELS,
+        MODEL_ID_ALIASES,
+        fit_linear_model,
+        resolve_model_identifier,
+    )
     from shared.precision import precision_guard
 
-    alias_map = {
-        "linear": "M1",
-        "quadratic": "M2",
-        "cubic": "M3",
-        "log": "M4",
-        "inverse": "M5",
-        "exponential": "M7",
-    }
-    requested = alias_map.get(job.model.lower(), job.model)
+    requested = resolve_model_identifier(job.model)
     by_id = {d.identifier: d for d in AUTO_MODELS}
     definition = by_id.get(requested)
     if definition is None:
@@ -88,7 +85,7 @@ def _run_fit(job) -> dict:
         raise ValueError(
             f"Job {job.name!r}: unknown model {job.model!r}. "
             f"Available identifiers: {available} (aliases: "
-            f"{', '.join(sorted(alias_map))})"
+            f"{', '.join(sorted(MODEL_ID_ALIASES))})"
         )
 
     xs, ys = _read_xy_csv(job.data_path)

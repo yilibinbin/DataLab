@@ -200,23 +200,54 @@ def _flatten_chain(chain: Any) -> Any:
     """Reshape ``(walkers, steps, params)`` → ``(walkers * steps, params)``.
 
     Accepts either a numpy ndarray or a nested Python list; the list
-    path exists so the regression tests don't require numpy.
+    path exists so the regression tests don't require numpy. Handles
+    both 2-D ("already flat") and 3-D inputs — a 2-D list of
+    ``[[p1, p2, ...], ...]`` passes through unchanged.
     """
+    if chain is None:
+        raise ValueError("chain is None — cannot flatten")
     if _np is not None:
         try:
             arr = _np.asarray(chain, dtype=float)
+            if arr.ndim == 0:
+                raise ValueError(
+                    "chain produced a 0-D array — invalid shape"
+                )
             if arr.ndim == 3:
                 return arr.reshape(-1, arr.shape[-1])
-            return arr
+            if arr.ndim == 2:
+                # Already flat — (samples, params) shape.
+                return arr
+            raise ValueError(
+                f"chain has unexpected ndim={arr.ndim}; "
+                "expected 2 or 3"
+            )
+        except ValueError:
+            raise
         except Exception:  # noqa: BLE001
             pass
-    # Fallback: python-list flatten (walkers × steps → flat list of
-    # param-vectors).
-    flat: list[list[float]] = []
-    for walker in chain:
-        for step_vector in walker:
-            flat.append([float(v) for v in step_vector])
-    return flat
+    # Fallback: python-list flatten. Detect whether the input is
+    # already flat (list of param-vectors) vs 3-D (walkers of steps
+    # of param-vectors). The test is: is the first element a flat
+    # list of floats, or a list of lists?
+    if not chain:
+        return []
+    first = chain[0]
+    if not isinstance(first, (list, tuple)):
+        raise ValueError(
+            "chain is a 1-D list — expected 2-D (samples, params) "
+            "or 3-D (walkers, steps, params)"
+        )
+    # First element is a list/tuple. If ITS first element is also a
+    # list/tuple, we're in the 3-D case. Otherwise we're already flat.
+    if first and isinstance(first[0], (list, tuple)):
+        flat: list[list[float]] = []
+        for walker in chain:
+            for step_vector in walker:
+                flat.append([float(v) for v in step_vector])
+        return flat
+    # 2-D list: each element is [p1, p2, ...]
+    return [[float(v) for v in row] for row in chain]
 
 
 def _render_fallback_corner(
@@ -266,6 +297,26 @@ def _render_fallback_corner(
     return buf.getvalue()
 
 
+def _error_png(message: str) -> bytes:
+    """Render a 1-line error message to PNG. Used as a last-resort
+    failure sentinel so ``render_corner_plot`` can honour its
+    "never raises" contract."""
+    import io
+
+    from shared.plotting import plt
+
+    fig = plt.figure(figsize=(5, 3), dpi=120)
+    fig.text(
+        0.5, 0.5, message,
+        ha="center", va="center", wrap=True,
+        fontsize=10,
+    )
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120)
+    plt.close(fig)
+    return buf.getvalue()
+
+
 def render_corner_plot(result: Any) -> bytes:
     """Render an MCMC posterior as PNG bytes.
 
@@ -273,34 +324,35 @@ def render_corner_plot(result: Any) -> bytes:
     ``.param_names``. Uses ``corner.corner`` when available,
     otherwise a per-parameter histogram fallback.
 
-    Never raises. Worst case (every backend unavailable) returns
-    a minimal matplotlib PNG with an error message drawn on it.
+    **Never raises.** Every failure mode (None chain, invalid shape,
+    corner.corner crash, fallback crash) returns a minimal error-
+    message PNG instead of propagating the exception. Callers
+    embedding the PNG in a UI don't have to try/except.
     """
     import io
 
     from shared.plotting import plt
 
     param_names = list(getattr(result, "param_names", []) or [])
+    if not param_names:
+        return _error_png("no parameters to plot")
 
     try:
-        flat = _flatten_chain(result.chain)
+        flat = _flatten_chain(getattr(result, "chain", None))
     except Exception as exc:  # noqa: BLE001
         _logger.warning("render_corner_plot: chain flatten failed: %s", exc)
-        fig = plt.figure(figsize=(4, 3), dpi=150)
-        fig.text(
-            0.5, 0.5,
-            f"corner plot failed: {exc}",
-            ha="center", va="center", wrap=True,
-        )
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=150)
-        plt.close(fig)
-        return buf.getvalue()
+        return _error_png(f"corner plot failed: {exc}")
 
     if HAS_CORNER and _np is not None:
+        fig = None
         try:
             # Prefer the proper corner plot when both deps are present.
             arr = _np.asarray(flat, dtype=float)
+            if arr.ndim != 2 or arr.shape[1] != len(param_names):
+                raise ValueError(
+                    f"flat chain shape {arr.shape} incompatible with "
+                    f"{len(param_names)} parameter names"
+                )
             fig = _corner.corner(arr, labels=param_names, show_titles=True)
             buf = io.BytesIO()
             fig.savefig(buf, format="png", dpi=150)
@@ -311,4 +363,17 @@ def render_corner_plot(result: Any) -> bytes:
                 "render_corner_plot: corner.corner raised (%s); "
                 "falling back to matplotlib histograms", exc,
             )
-    return _render_fallback_corner(flat, param_names)
+            # Belt-and-braces: close the figure if one was partially
+            # constructed before the exception.
+            if fig is not None:
+                try:
+                    plt.close(fig)
+                except Exception:  # noqa: BLE001
+                    pass
+    try:
+        return _render_fallback_corner(flat, param_names)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "render_corner_plot: fallback renderer raised (%s)", exc
+        )
+        return _error_png(f"corner plot unavailable: {exc}")

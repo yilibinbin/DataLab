@@ -937,7 +937,19 @@ def build_left_panel(self):
     self.fit_mcmc_refine.setChecked(False)
     try:
         from fitting.mcmc_fitter import HAS_EMCEE as _mcmc_has_emcee
-
+    except ImportError:
+        # Only ImportError is caught — any other error (SyntaxError,
+        # NameError from a bad refactor, etc.) should propagate so
+        # the maintainer sees the real bug instead of a mysteriously
+        # disabled checkbox.
+        self.fit_mcmc_refine.setEnabled(False)
+        self.fit_mcmc_refine.setToolTip(self._tr(
+            "MCMC 精炼不可用（fitting.mcmc_fitter 未安装）。"
+            "pip install emcee numpy corner",
+            "MCMC refinement unavailable — fitting.mcmc_fitter "
+            "is not importable. pip install emcee numpy corner",
+        ))
+    else:
         if not _mcmc_has_emcee:
             self.fit_mcmc_refine.setEnabled(False)
             self.fit_mcmc_refine.setToolTip(self._tr(
@@ -953,15 +965,6 @@ def build_left_panel(self):
                 "Run emcee MCMC on the best-AIC model to produce "
                 "robust credible intervals (may take 10–60 s).",
             ))
-    except Exception:
-        # Defensive: a broken mcmc_fitter import must not crash
-        # panel construction.
-        self.fit_mcmc_refine.setEnabled(False)
-        self.fit_mcmc_refine.setToolTip(self._tr(
-            "MCMC 精炼不可用（fitting.mcmc_fitter 加载失败）。",
-            "MCMC refinement unavailable "
-            "(fitting.mcmc_fitter failed to load).",
-        ))
     fit_layout.addWidget(self.fit_mcmc_refine)
 
     self.fit_model_hint = QLabel("")
