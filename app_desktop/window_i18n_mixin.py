@@ -104,7 +104,10 @@ class WindowI18nMixin:
             self.formula_edit.setPlaceholderText(self._tr("公式（使用列名或 x1, x2 …）", "Formula (use column names or x1, x2 …)"))
         if hasattr(self, "manual_constants_edit") and self.manual_constants_edit is not None:
             self.manual_constants_edit.setPlaceholderText(
-                self._tr("手动常数示例：\nALPHA 7.2973525693(11)[-3]", "Manual constant example:\nALPHA 7.2973525693(11)[-3]")
+                self._tr(
+                    "# 每行一个常数：名称 值\n# 允许空行与以 # 开头的注释\nALPHA 7.2973525693(11)[-3]",
+                    "# One constant per line: name value\n# Blank lines and lines starting with # are allowed\nALPHA 7.2973525693(11)[-3]",
+                )
             )
         if hasattr(self, "custom_formula_edit"):
             self.custom_formula_edit.setPlaceholderText(

@@ -746,7 +746,10 @@ def build_left_panel(self):
     const_wrapper_layout.addWidget(const_toolbar_w)
 
     # Stacked widget: table view (0) / text view (1) — mirrors
-    # self._data_stack for the main data-input area.
+    # self._data_stack for the main data-input area. The text view
+    # accepts the free-form format parsed by ``_process_constants_lines``:
+    # one ``name value`` entry per line; ``#`` comments and blank lines
+    # are preserved in the edit buffer but stripped by the downstream parser.
     self._constants_stack = QStackedWidget()
 
     self.constants_table = QTableWidget(4, 2)
@@ -761,10 +764,11 @@ def build_left_panel(self):
     # "paste 20 constants from a spreadsheet" work without having to
     # click through each row individually.
     self.manual_constants_edit = QPlainTextEdit()
+    self.manual_constants_edit.setMinimumHeight(160)
     self.manual_constants_edit.setPlaceholderText(
         self._tr(
-            "每行一个常数，如 ALPHA 7.2973525693(11)[-3]",
-            "One constant per line, e.g. ALPHA 7.2973525693(11)[-3]",
+            "# 每行一个常数：名称 值\n# 允许空行与以 # 开头的注释\nALPHA 7.2973525693(11)[-3]",
+            "# One constant per line: name value\n# Blank lines and lines starting with # are allowed\nALPHA 7.2973525693(11)[-3]",
         )
     )
     self._constants_stack.addWidget(self.manual_constants_edit)
@@ -1701,7 +1705,18 @@ def _clear_constants_table(self):
 
 
 def _serialize_constants_table(self) -> str:
-    """Serialize the constants QTableWidget to tab-separated text (Name\\tValue per line)."""
+    """Return the constants input as text digestible by ``_process_constants_lines``.
+
+    If the text-view page is active, the edit buffer is returned verbatim so
+    that comments and blank lines the user typed survive into the downstream
+    parser (which ignores them). Otherwise, the QTableWidget is serialized
+    into one ``Name\\tValue`` line per populated row.
+    """
+    stack = getattr(self, "_constants_stack", None)
+    edit = getattr(self, "manual_constants_edit", None)
+    if stack is not None and edit is not None and stack.currentIndex() == 1:
+        return edit.toPlainText()
+
     table = self.constants_table
     lines = []
     for r in range(table.rowCount()):
@@ -1714,63 +1729,84 @@ def _serialize_constants_table(self) -> str:
     return "\n".join(lines)
 
 
-def _load_text_into_constants_table(self, text: str) -> None:
-    """Parse ``NAME VALUE``-per-line text and populate the constants
-    QTableWidget.
+def _serialize_constants_table_as_text(self) -> str:
+    """Render the constants table as the free-form text format.
 
-    Accepts any whitespace (tab, space, multiple spaces) between the
-    name and the value; everything after the first whitespace run on
-    each line becomes the Value field so multi-part values like
-    ``7.2973525693(11)[-3]`` survive intact.
+    Produces ``name value`` pairs separated by a single space, one per line.
+    Used when switching from table view to text view to seed the edit buffer
+    from whatever the user has entered in the table.
     """
     table = self.constants_table
-    text = (text or "").strip()
-    lines = [ln for ln in text.split("\n") if ln.strip()]
-
-    # Keep at least 4 rows so the blank table always looks intentional.
-    table.setRowCount(max(len(lines), 4))
-    # Clear any prior contents before refilling so a smaller text
-    # doesn't leave stale rows behind.
+    lines = []
     for r in range(table.rowCount()):
-        for c in range(table.columnCount()):
-            table.setItem(r, c, QTableWidgetItem(""))
+        name_item = table.item(r, 0)
+        val_item = table.item(r, 1)
+        name = (name_item.text().strip() if name_item else "")
+        val = (val_item.text().strip() if val_item else "")
+        if name or val:
+            lines.append(f"{name} {val}".strip())
+    return "\n".join(lines)
 
-    for r, raw_line in enumerate(lines):
-        parts = raw_line.strip().split(None, 1)
-        if not parts:
+
+def _load_text_into_constants_table(self, text: str) -> None:
+    """Parse the free-form text buffer and populate the constants QTableWidget.
+
+    Format mirrors ``_process_constants_lines`` in
+    ``datalab_latex/latex_tables_error_propagation.py``:
+
+    - blank lines are skipped
+    - lines starting with ``#`` are treated as comments and skipped
+    - every other line is split on whitespace (first token = name, remainder
+      = value)
+
+    Lines that cannot be split into two tokens are silently dropped at this
+    layer; downstream parsing will still produce a warning when ``verbose``
+    is set.
+    """
+    table = self.constants_table
+    raw = (text or "").strip()
+    pairs: list[tuple[str, str]] = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
-        name = parts[0]
-        value = parts[1] if len(parts) > 1 else ""
+        parts = stripped.split(None, 1)
+        if len(parts) == 2:
+            pairs.append((parts[0], parts[1]))
+
+    table.setRowCount(max(len(pairs), 4))
+    table.clearContents()
+    for r, (name, val) in enumerate(pairs):
         table.setItem(r, 0, QTableWidgetItem(name))
-        table.setItem(r, 1, QTableWidgetItem(value))
+        table.setItem(r, 1, QTableWidgetItem(val))
 
 
 def _toggle_constants_view(self) -> None:
-    """Flip the constants input between QTableWidget (cell-by-cell
-    edit) and QPlainTextEdit (bulk paste). Round-trips cleanly:
-    - table → text: serialise current rows via ``_serialize_constants_table``
-    - text → table: parse with ``_load_text_into_constants_table``
+    """Switch the constants input between table view and text view.
 
-    Mirrors the behaviour of ``_toggle_data_view`` so users see a
-    consistent interaction model in both input areas.
+    Mirrors ``_toggle_data_view`` for the main data-input area so users
+    get a consistent interaction model. Table → Text seeds the edit
+    buffer from the table only when the buffer is empty (preserves any
+    comments / freeform text the user has typed). Text → Table parses
+    the buffer through ``_load_text_into_constants_table``.
     """
     stack = self._constants_stack
     if stack.currentIndex() == 0:
-        # Leaving the table — serialise into the text widget.
-        self.manual_constants_edit.setPlainText(_serialize_constants_table(self))
+        # Table → Text: seed the edit buffer with the current table contents
+        # only when the buffer is empty. Guarding BEFORE serialization avoids
+        # the unnecessary table walk when the user has already typed into
+        # the text view — and guarantees their comments are never clobbered.
+        if not self.manual_constants_edit.toPlainText().strip():
+            self.manual_constants_edit.setPlainText(
+                _serialize_constants_table_as_text(self)
+            )
         stack.setCurrentIndex(1)
-        self._constants_view_toggle.setText(
-            self._tr("表格视图", "Table View")
-        )
+        self._constants_view_toggle.setText(self._tr("表格视图", "Table View"))
     else:
-        # Leaving text — parse back into the table.
-        _load_text_into_constants_table(
-            self, self.manual_constants_edit.toPlainText()
-        )
+        # Text → Table: parse the buffer into table rows.
+        _load_text_into_constants_table(self, self.manual_constants_edit.toPlainText())
         stack.setCurrentIndex(0)
-        self._constants_view_toggle.setText(
-            self._tr("文本视图", "Text View")
-        )
+        self._constants_view_toggle.setText(self._tr("文本视图", "Text View"))
 
 
 class _TablePasteFilter(QObject):
