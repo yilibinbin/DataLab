@@ -51,6 +51,13 @@ def _resolve_secret_key() -> str:
 
 
 def create_app() -> Flask:
+    """Build the Flask app with every blueprint registered.
+
+    For deployments that also want real-time collaboration sessions,
+    call :func:`create_app_with_socketio` instead — it constructs a
+    ``SocketIO`` instance, attaches it at ``app.extensions["socketio"]``,
+    and wires the ``/collab`` blueprint against it.
+    """
     app = Flask(
         __name__,
         template_folder="templates",
@@ -85,9 +92,55 @@ def create_app() -> Flask:
     return app
 
 
-if __name__ == "__main__":
-    app = create_app()
+def create_app_with_socketio(
+    cors_allowed_origins: str | list[str] | None = None,
+):
+    """Build the Flask app plus a SocketIO instance for collaboration.
 
+    Returns ``(app, socketio)``. Raises ``ModuleNotFoundError`` if
+    ``flask_socketio`` isn't installed — the caller should fall back
+    to plain ``create_app()`` in that case.
+
+    Parameters
+    ----------
+    cors_allowed_origins:
+        CORS policy passed through to ``SocketIO``. Defaults to
+        ``None`` (same-origin only, the secure default). Callers
+        running behind a CDN or cross-origin proxy can pass the
+        allowlist explicitly. DO NOT pass ``"*"`` in production —
+        it lets any page open a session and read collaboration
+        state.
+    """
+    try:
+        from flask_socketio import SocketIO
+    except ImportError as exc:
+        raise ModuleNotFoundError(
+            "flask-socketio is not installed. Add 'flask-socketio' to "
+            "web_requirements.txt or pip install it manually."
+        ) from exc
+    from app_web.blueprints.collaborate import create_collab_blueprint
+
+    app = create_app()
+    # async_mode="threading" keeps everything in-process (no eventlet/
+    # gevent monkey-patching) — matches the WSGI server choice for
+    # Windows deploys (Waitress is thread-per-request). For higher
+    # concurrency move to eventlet or gunicorn with gevent workers.
+    socketio = SocketIO(
+        app,
+        async_mode="threading",
+        cors_allowed_origins=cors_allowed_origins,
+        logger=False,
+        engineio_logger=False,
+    )
+    collab_bp = create_collab_blueprint(socketio)
+    app.register_blueprint(collab_bp, url_prefix="/collab")
+
+    # Store on app.extensions for retrieval by tests and health checks.
+    app.extensions["socketio"] = socketio
+    return app, socketio
+
+
+if __name__ == "__main__":
     host = os.environ.get("DATALAB_HOST", "127.0.0.1")
     port = int(os.environ.get("DATALAB_PORT", os.environ.get("PORT", "8000")))
     debug = os.environ.get("DATALAB_DEBUG", "").lower() in ("1", "true", "yes")
@@ -102,4 +155,19 @@ if __name__ == "__main__":
             stacklevel=2,
         )
 
-    app.run(host=host, port=port, debug=debug, threaded=False)
+    # Try SocketIO first (real-time collab enabled); fall back to
+    # plain Flask when flask-socketio isn't installed. The fallback
+    # keeps the existing single-frontend deploy path working even
+    # when optional deps aren't present.
+    try:
+        app, socketio = create_app_with_socketio()
+        socketio.run(
+            app,
+            host=host,
+            port=port,
+            debug=debug,
+            allow_unsafe_werkzeug=debug,
+        )
+    except ModuleNotFoundError:
+        app = create_app()
+        app.run(host=host, port=port, debug=debug, threaded=False)

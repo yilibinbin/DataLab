@@ -22,10 +22,18 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def _client():
+    """Provide a Flask test_client with TESTING=True so the SSE
+    rate limiter is bypassed during normal test runs."""
     from app_web import server as srv
+    from app_web.blueprints import sse as sse_mod
 
     app = srv.create_app()
     app.config["TESTING"] = True
+    # Defensive: clear the sliding window so a prior test (e.g. the
+    # production-behaviour rate-limiter test) doesn't leak its
+    # counters into the next run.
+    with sse_mod._RATE_LOCK:
+        sse_mod._RATE_HISTORY.clear()
     return app.test_client()
 
 
@@ -144,3 +152,52 @@ def test_fit_stream_error_event_has_json_payload(_client):
         err = errors[0]["data"]
         assert isinstance(err, dict)
         assert "error" in err
+
+
+def test_fit_stream_rejects_oversized_input():
+    """Even with TESTING=True (rate limiter off), the MAX_SSE_INPUT_POINTS
+    cap is unconditional and must still fire."""
+    from app_web.blueprints.sse import MAX_SSE_INPUT_POINTS
+    from app_web import server as srv
+
+    app = srv.create_app()
+    app.config["TESTING"] = True
+    client = app.test_client()
+    oversized = ",".join(str(i) for i in range(MAX_SSE_INPUT_POINTS + 10))
+    resp = client.get(f"/api/fit/stream?x={oversized}&y={oversized}&model=M1")
+    events = _parse_sse_stream(resp.data)
+    errors = [e for e in events if e["event"] == "error"]
+    assert errors, "oversized input must produce an error event"
+    assert "BadRequest" in [e["data"]["error"] for e in errors]
+
+
+def test_rate_limiter_fires_when_testing_flag_off(monkeypatch):
+    """When TESTING is False and the bypass env var is unset, the
+    per-IP rate limiter must engage. Pins the production behaviour —
+    the TESTING bypass must NOT silently disable the limiter in
+    deployment."""
+    from app_web import server as srv
+    from app_web.blueprints import sse as sse_mod
+
+    monkeypatch.delenv("DATALAB_SSE_DISABLE_RATE_LIMIT", raising=False)
+    with sse_mod._RATE_LOCK:
+        sse_mod._RATE_HISTORY.clear()
+
+    app = srv.create_app()
+    app.config["TESTING"] = False  # simulate production
+    client = app.test_client()
+    rate_limited_seen = False
+    for _ in range(sse_mod.RATE_MAX_REQUESTS + 3):
+        resp = client.get("/api/fit/stream?x=1,2,3&y=2,4,6&model=M1")
+        evs = _parse_sse_stream(resp.data)
+        if any(
+            e["event"] == "error"
+            and isinstance(e["data"], dict)
+            and e["data"].get("error") == "RateLimited"
+            for e in evs
+        ):
+            rate_limited_seen = True
+            break
+    assert rate_limited_seen, (
+        "expected a RateLimited SSE error after exceeding the budget"
+    )

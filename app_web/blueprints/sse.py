@@ -95,7 +95,25 @@ def _check_rate_limit(client_ip: str) -> bool:
 
     Evicts expired entries before checking, so a client that was
     previously throttled but has since cooled down unblocks itself.
+
+    The limiter is a no-op when ``app.config["TESTING"]`` is True or
+    the ``DATALAB_SSE_DISABLE_RATE_LIMIT`` env var is set — both are
+    production-never-true flags used by the test suite to exercise
+    the full SSE surface without being artificially rate-limited
+    between tests. Real deployments leave both unset.
     """
+    try:
+        from flask import current_app
+
+        if current_app.config.get("TESTING"):
+            return True
+    except Exception:  # noqa: BLE001 - may run outside an app context
+        pass
+    import os as _os
+
+    if _os.environ.get("DATALAB_SSE_DISABLE_RATE_LIMIT"):
+        return True
+
     now = time.monotonic()
     cutoff = now - RATE_WINDOW_SECONDS
     with _RATE_LOCK:
