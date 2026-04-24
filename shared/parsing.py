@@ -44,6 +44,34 @@ __all__ = [
 # needs more, the raw CSV import path is a better fit than copy-paste.
 MAX_CLIPBOARD_CHARS = 2_000_000
 
+# Hard caps on the output grid. A whitespace-delimited 2 MB paste could
+# produce ~1 M columns; Qt would block for seconds setting that many
+# header items. 4 096 columns × 100 000 rows keeps the UI responsive
+# even for the pathological clipboard contents a user might accidentally
+# paste (e.g., dumping a memoized array repr).
+MAX_ROWS = 100_000
+MAX_COLS = 4_096
+
+# Bidi / zero-width format characters that could visually spoof a header
+# ("ABC" displayed as "CBA" via U+202E) without affecting numeric parsing.
+# Stripped on every cell. Kept as a module-level compiled pattern so the
+# per-cell loop doesn't pay per-call compilation cost.
+_BIDI_CONTROL_RE = re.compile(
+    r"[\u200b-\u200f\u202a-\u202e\u2066-\u2069\u061c\ufeff]"
+)
+
+# Pre-compiled locale-sniffing regexes. Compiling at import keeps the
+# 2 MB full-text scan from paying re-compilation overhead every paste.
+_RE_EU_THOUSANDS_DECIMAL = re.compile(r"\d\.\d{3},\d")
+_RE_COMMA_DIGIT = re.compile(r"\d,\d")
+_RE_DOT_DECIMAL = re.compile(r"\d\.\d")
+_RE_BARE_COMMA_DECIMAL = re.compile(r"\d,\d(?:\d)?(?!\d)")
+_RE_THOUSANDS_COMMA = re.compile(r"\d,\d{3}(?:[.,]|\D|$)")
+_RE_SCIENTIFIC = re.compile(r"^([+-]?[\d.,]+)([eE][+-]?\d+)$")
+_RE_DOT_TRIPLES_ONLY = re.compile(r"[+-]?\d{1,3}(?:\.\d{3})+")
+_RE_COMMA_DECIMAL_1_2 = re.compile(r",\d{1,2}(?:$|[^\d])")
+_RE_COMMA_TRIPLES = re.compile(r",\d{3}(?:[.,]|$|[^\d])")
+
 
 class LocaleHint(enum.Enum):
     """Which number-format convention to apply.
@@ -81,8 +109,17 @@ _NUMERIC_RE = re.compile(
 
 
 def _strip_whitespace(cell: str) -> str:
-    """Collapse all unicode/ASCII whitespace from cell edges."""
-    return cell.strip().strip(_UNICODE_SPACES).strip()
+    """Collapse all unicode/ASCII whitespace from cell edges AND remove
+    bidi / zero-width format chars from anywhere in the cell.
+
+    The bidi strip defends against visually-deceptive header spoofing
+    (``&#x202E;ABC`` would render as ``CBA`` in the Qt header without
+    distinguishing the hijacked-order column from a legitimate one).
+    Numeric cells with embedded zero-width chars would already fail
+    ``_NUMERIC_RE``, so the strip here also protects header display
+    fidelity."""
+    without_bidi = _BIDI_CONTROL_RE.sub("", cell)
+    return without_bidi.strip().strip(_UNICODE_SPACES).strip()
 
 
 def _normalise_line_endings(text: str) -> str:
@@ -113,56 +150,126 @@ def _looks_like_eu_decimal(text: str) -> bool:
     if "." in text:
         # Mixed — decide elsewhere with _sniff_locale.
         return False
-    return bool(re.search(r"\d,\d", text))
+    return bool(_RE_COMMA_DIGIT.search(text))
 
 
 def _sniff_locale(text: str) -> LocaleHint:
     """Pick US vs EU based on the overall paste content.
 
-    Rules (in priority order):
-    - If semicolon delimiter is present and commas appear between
-      digits, it's EU (classic German CSV).
-    - If any ``1.234,56``-style pattern is present, it's EU.
-    - Default: US.
+    EU signals (first matching rule wins):
+    - ``1.234,56``-style dot-triples-then-comma-decimal (unambiguous
+      German CSV).
+    - Semicolon delimiter + bare comma-decimal pattern anywhere and no
+      dot-between-digits. Semicolon is the canonical EU CSV delimiter
+      so its presence resolves the ``1,234`` ambiguity (3 digits after
+      comma) toward the EU reading.
+    - Bare ``1,X`` with 1 or 2 digits after the comma, no US
+      thousands-comma pattern (``1,234`` with exactly 3 digits) and
+      no dot-between-digits. 1-2 digit suffix locks in "this is a
+      decimal", not thousands.
+
+    Default: US. A file with mixed scientific notation (``1.5e-3``)
+    and EU decimals cannot be unambiguously classified — the caller
+    should pass an explicit ``locale`` argument in that case.
     """
-    if ";" in text and re.search(r"\d,\d", text):
+    # Sniffing cost is bounded: we sample at most 50k chars. Locale is
+    # consistent across a file, so a prefix is representative.
+    sample = text[:50_000]
+    # "1.234,56" — dot-triples followed by comma-decimal is unambiguous
+    if _RE_EU_THOUSANDS_DECIMAL.search(sample):
         return LocaleHint.EU
-    # "1.234,56" — dot followed by 3 digits followed by comma followed by decimals
-    if re.search(r"\d\.\d{3},\d", text):
+
+    has_comma_digits = _RE_COMMA_DIGIT.search(sample) is not None
+    has_dot_decimal = _RE_DOT_DECIMAL.search(sample) is not None
+
+    # Semicolon + any comma-decimal digit run → EU. The semicolon
+    # delimiter is the tiebreaker for the 1,234 ambiguity.
+    if ";" in sample and has_comma_digits and not has_dot_decimal:
         return LocaleHint.EU
-    # Bare "1,5" with no dots anywhere in any digit run
-    if re.search(r"\d,\d", text) and not re.search(r"\d\.\d", text):
+
+    # Bare "1,5" (1-2 digits after comma) without thousands-comma or
+    # dot-decimal elsewhere.
+    has_bare_decimal = _RE_BARE_COMMA_DECIMAL.search(sample) is not None
+    has_thousands = _RE_THOUSANDS_COMMA.search(sample) is not None
+    if has_bare_decimal and not has_thousands and not has_dot_decimal:
         return LocaleHint.EU
     return LocaleHint.US
 
 
 def _parse_numeric(cell: str, locale: LocaleHint) -> Optional[float]:
-    """Convert one cell to a float or return None on failure."""
+    """Convert one cell to a float or return None on failure.
+
+    Scientific notation (``1.5e-3``, ``2.5E+4``) is detected and
+    protected before locale transformation — otherwise EU-mode's
+    "remove dots" pass would corrupt ``1.5e-3`` into ``15e-3`` (a
+    factor-of-100 silent data-corruption bug, HIGH finding from
+    code-reviewer).
+
+    Under EU rules, a cell with ONE dot is treated per the dot-triples
+    heuristic: if the text looks like ``1.234`` (dot followed by
+    exactly 3 digits with no comma), it's a thousands separator
+    (strip dot). Otherwise the dot is a US-bleed-through decimal and
+    we keep it — this preserves ``1.5e-3`` as scientific notation
+    even under EU mode.
+    """
     s = _strip_whitespace(cell)
     if not s:
         return None
 
+    # Split off the exponent if present. Mantissa gets locale
+    # transformation; exponent is always ASCII digits + optional sign.
+    m = _RE_SCIENTIFIC.match(s)
+    if m:
+        mantissa, exponent = m.group(1), m.group(2)
+    else:
+        mantissa, exponent = s, ""
+
     if locale == LocaleHint.EU:
-        # Remove dot thousands separators, swap comma for decimal.
-        # "1.234,56" → "1234.56"; "1,5" → "1.5"; "1.234" → "1234".
-        # Careful: a lone "." in EU is a thousands mark so "1.234" → 1234.
-        # But "1.5" (US bleed-through) — we treat it as "15" under EU
-        # rules, which is wrong but deterministic. Callers who paste
-        # a mixed file should pass locale=LocaleHint.US or AUTO.
-        candidate = s.replace(".", "").replace(",", ".")
+        if "," in mantissa:
+            # EU decimal comma present: strip dot-thousands then swap
+            # comma for decimal. "1.234,56" → "1234.56".
+            candidate = mantissa.replace(".", "").replace(",", ".") + exponent
+        elif _RE_DOT_TRIPLES_ONLY.fullmatch(mantissa):
+            # Dot-triples-only "1.234.567" is a thousands-separated
+            # integer: strip dots. "1.234" → "1234".
+            candidate = mantissa.replace(".", "") + exponent
+        else:
+            # Lone dot looks like a US-bleed-through decimal
+            # ("1.5", "1.5e-3" mantissa). Keep as-is so EU mode
+            # doesn't corrupt scientific notation.
+            candidate = mantissa + exponent
     else:  # US or AUTO falling back to US
-        # Remove comma thousands separators.
-        # "1,234.56" → "1234.56". "1,5" → "15" (wrong but US).
-        candidate = s.replace(",", "")
+        # Remove comma thousands separators only if they look like
+        # thousands (comma followed by exactly 3 digits). A lone
+        # comma-decimal ("1,5") is EU bleed-through under US mode —
+        # documented tradeoff: callers with EU-formatted data should
+        # pass locale=LocaleHint.EU.
+        if _RE_COMMA_DECIMAL_1_2.search(mantissa) and not _RE_COMMA_TRIPLES.search(
+            mantissa
+        ):
+            # Looks like decimal-comma, not thousands — keep.
+            candidate = mantissa + exponent
+        else:
+            candidate = mantissa.replace(",", "") + exponent
 
     if not _NUMERIC_RE.match(candidate.replace(" ", "")):
         # Pre-reject non-numeric patterns so exponent-like typos don't
-        # produce inf or spurious conversions.
+        # produce inf or spurious conversions. Also rejects ``Infinity``,
+        # ``inf``, ``NaN``, ``#NUM!``, ``#DIV/0!`` etc. — a scientific
+        # user pasting Excel error cells gets ``None`` back, not a
+        # numeric sentinel.
         return None
     try:
-        return float(candidate)
+        value = float(candidate)
     except (TypeError, ValueError):
         return None
+    # Defense-in-depth: ``float("1e999")`` returns inf; the regex
+    # shouldn't allow that but be explicit.
+    import math
+
+    if math.isinf(value) or math.isnan(value):
+        return None
+    return value
 
 
 def _split_row(row_text: str, delimiter: str) -> list[str]:
@@ -210,6 +317,7 @@ def _synthetic_headers(n: int) -> list[str]:
 def parse_clipboard_tabular(
     text: str,
     locale: LocaleHint = LocaleHint.AUTO,
+    has_headers: Optional[bool] = None,
 ) -> ParseResult:
     """Parse a chunk of clipboard text into a headers + rows result.
 
@@ -224,6 +332,13 @@ def parse_clipboard_tabular(
     locale:
         ``LocaleHint.AUTO`` sniffs from the data; ``US``/``EU`` force
         a specific convention.
+    has_headers:
+        ``None`` (default) uses the first-row-non-numeric heuristic.
+        Pass ``True`` / ``False`` when the caller knows the shape —
+        e.g., when data has a first-column label like ``"controlA"``
+        followed by numeric columns, the heuristic would mis-detect
+        row 0 as headers. Callers with authoritative knowledge (a
+        toolbar toggle, a file format hint) should pass the override.
     """
     if not text:
         return ParseResult()
@@ -233,10 +348,21 @@ def parse_clipboard_tabular(
     if len(text) > MAX_CLIPBOARD_CHARS:
         text = text[:MAX_CLIPBOARD_CHARS]
 
+    # Strip UTF-8 BOM emitted by Excel / LibreOffice Calc — otherwise
+    # the first header cell becomes ``"\ufeffx"`` which fails string
+    # comparison against ``"x"`` in downstream consumers (e.g., the
+    # expression engine matching column names to formula variables).
+    if text and text[0] == "\ufeff":
+        text = text.lstrip("\ufeff")
+
     text = _normalise_line_endings(text)
     lines = [ln for ln in text.split("\n") if ln.strip()]
     if not lines:
         return ParseResult()
+    # Hard cap on line count — prevents a million-row paste from
+    # bottoming out Qt's row allocation path.
+    if len(lines) > MAX_ROWS:
+        lines = lines[:MAX_ROWS]
 
     # Resolve locale up front — individual row parsers must agree.
     effective_locale = locale if locale != LocaleHint.AUTO else _sniff_locale(text)
@@ -248,14 +374,23 @@ def parse_clipboard_tabular(
 
     # Pad ragged rows to the max column count so downstream consumers
     # (the manual-input table) see a rectangular grid — missing cells
-    # become ``None``.
+    # become ``None``. Cap at MAX_COLS so a pathological paste
+    # (a 2 MB blob of space-separated numbers on one line) can't
+    # create a million-column Qt grid that locks the UI for seconds.
     max_cols = max(len(r) for r in rows_raw)
+    if max_cols > MAX_COLS:
+        rows_raw = [r[:MAX_COLS] for r in rows_raw]
+        max_cols = MAX_COLS
     rows_padded = [r + [""] * (max_cols - len(r)) for r in rows_raw]
 
     # Header detection: first row is a header unless every cell parses
     # as a number (in which case it's all-data with synthetic headers).
-    first_is_numeric = _row_is_all_numeric(rows_padded[0], effective_locale)
-    if first_is_numeric:
+    # The caller can override via ``has_headers`` to force the right
+    # behaviour for ambiguous layouts (e.g., row-label data with a
+    # string first column and no header row).
+    if has_headers is None:
+        has_headers = not _row_is_all_numeric(rows_padded[0], effective_locale)
+    if not has_headers:
         headers = _synthetic_headers(max_cols)
         data_rows_raw = rows_padded
     else:

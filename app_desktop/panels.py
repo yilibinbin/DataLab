@@ -1513,7 +1513,7 @@ def _load_text_into_table(self, text: str):
     ``None`` for non-numeric / empty cells — the table renders the
     float via ``str(v)`` and shows empty string for ``None``.
     """
-    from shared.parsing import parse_clipboard_tabular
+    from shared.parsing import _synthetic_headers, parse_clipboard_tabular
 
     table = self.manual_table
     result = parse_clipboard_tabular(text or "")
@@ -1528,22 +1528,29 @@ def _load_text_into_table(self, text: str):
         return
 
     table.setColumnCount(max_cols)
-    # Pad / synthesize headers so every column has a label.
-    headers = list(result.headers) + [
-        chr(65 + i) for i in range(len(result.headers), max_cols)
+    # Pad / synthesize headers so every column has a label. Reuse
+    # ``_synthetic_headers`` (Excel-style A/B/.../Z/AA/AB) so > 26
+    # columns don't get ASCII-punctuation labels like ``[`` from a
+    # naive ``chr(65 + i)`` rollover bug.
+    synth = _synthetic_headers(max_cols)
+    headers = [
+        result.headers[i] if i < len(result.headers) else synth[i]
+        for i in range(max_cols)
     ]
-    table.setHorizontalHeaderLabels(headers[:max_cols])
+    table.setHorizontalHeaderLabels(headers)
 
     table.setRowCount(max(len(result.rows), 5))
     for r, row in enumerate(result.rows):
         for c, val in enumerate(row):
             if val is None:
                 cell_text = ""
-            elif val.is_integer() and abs(val) < 1e15:
+            elif val.is_integer() and abs(val) <= 1e15:
                 # Prefer "1" over "1.0" for Excel-style integers;
                 # preserves the user's input fidelity for whole numbers
                 # without eating scientific notation for genuinely
-                # float-typed values.
+                # float-typed values. Boundary is inclusive so 1e15
+                # renders as "1000000000000000" (not "1e+15" or
+                # "1000000000000000.0").
                 cell_text = str(int(val))
             else:
                 cell_text = repr(val)  # round-trip safe float repr

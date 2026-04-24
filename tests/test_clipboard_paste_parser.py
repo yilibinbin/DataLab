@@ -190,6 +190,131 @@ def test_dos_line_endings_handled():
     assert result.rows == [[1.0, 2.0], [3.0, 4.0]]
 
 
+def test_eu_locale_preserves_scientific_notation():
+    """HIGH regression: EU mode must NOT corrupt "1.5e-3" by stripping
+    the dot. Scientific notation is exponent-delimited and the mantissa
+    must be transformed independently."""
+    text = "k;val\n1,5;1.5e-3\n2,5;2.5e-4"
+    result = parse_clipboard_tabular(text, locale=LocaleHint.EU)
+    # First column: EU-style 1,5 → 1.5. Second: scientific 1.5e-3
+    # must be preserved, not corrupted to 15e-3 (=0.015).
+    assert result.rows == [[1.5, 1.5e-3], [2.5, 2.5e-4]]
+
+
+def test_has_headers_override_for_row_labels():
+    """HIGH regression: when data has a string first column (row
+    labels) and no header row, the first-row-non-numeric heuristic
+    misfires. Caller override ``has_headers=False`` forces the
+    correct parse."""
+    text = "controlA\t1.5\t2.3\ncontrolB\t3.5\t4.3"
+    result = parse_clipboard_tabular(text, has_headers=False)
+    assert result.rows == [
+        [None, 1.5, 2.3],   # "controlA" is non-numeric → None
+        [None, 3.5, 4.3],
+    ]
+    # Default behaviour (no override) still treats row 0 as headers —
+    # that's the documented heuristic and callers with row-labels must
+    # opt out explicitly.
+    default = parse_clipboard_tabular(text)
+    assert len(default.rows) == 1  # only row 1 as data
+
+
+def test_has_headers_true_forces_header_row():
+    """Symmetric override — numeric first row treated as headers."""
+    text = "1\t2\n3\t4\n5\t6"
+    result = parse_clipboard_tabular(text, has_headers=True)
+    assert result.headers == ["1", "2"]
+    assert result.rows == [[3.0, 4.0], [5.0, 6.0]]
+
+
+def test_infinity_nan_excel_errors_return_none():
+    """Excel error cells and Python-style float specials must return
+    None — the parser must never emit math.inf or math.nan into the
+    downstream float pipeline."""
+    import math
+
+    text = "x\nInfinity\ninf\n-inf\nNaN\n#NUM!\n#DIV/0!"
+    result = parse_clipboard_tabular(text)
+    for row in result.rows:
+        assert row[0] is None, f"got {row[0]} for disallowed sentinel"
+
+
+def test_sniff_locale_ambiguous_us_semicolon_needs_explicit_locale():
+    """Documented limitation: semicolon-delimited data with 3-digit
+    fractional parts (``1,234``) is genuinely ambiguous — could be EU
+    decimal (1.234) or US thousands (1234). The sniffer prefers EU
+    because ``;`` is the canonical EU CSV delimiter. Callers with
+    US-format data must pass ``locale=LocaleHint.US`` explicitly.
+    This test pins the ambiguity resolution so a future sniffer
+    change is visible."""
+    text = "val;count\n1234;1,234\n5678;5,678"
+    result_auto = parse_clipboard_tabular(text)
+    # AUTO → EU interpretation
+    assert result_auto.rows[0][1] == 1.234, (
+        "Documented semicolon-wins behaviour: "
+        f"expected EU 1.234, got {result_auto.rows[0][1]}"
+    )
+    # US override gives the alternative reading
+    result_us = parse_clipboard_tabular(text, locale=LocaleHint.US)
+    assert result_us.rows[0][1] == 1234.0
+
+
+def test_synthetic_headers_rolls_over_past_26_cols():
+    """HIGH regression: panels.py's old ``chr(65 + i)`` would produce
+    ``[`` as column 27's name. Confirm the shared parser uses proper
+    Excel-style AA rollover."""
+    from shared.parsing import _synthetic_headers
+
+    names = _synthetic_headers(30)
+    assert names[0] == "A"
+    assert names[25] == "Z"
+    assert names[26] == "AA"
+    assert names[27] == "AB"
+    assert names[29] == "AD"
+    # None of them should be ASCII punctuation
+    assert all(n.isalpha() for n in names)
+
+
+def test_bom_stripped_from_first_cell():
+    """UTF-8 BOM from Excel exports must not survive into header cells."""
+    text = "\ufeffx\ty\n1\t2"
+    result = parse_clipboard_tabular(text)
+    assert result.headers == ["x", "y"]
+    assert "\ufeff" not in result.headers[0]
+
+
+def test_bidi_control_chars_stripped_from_cells():
+    """A header like '\u202ESTUFF' visually reads as 'FFUTS' — strip
+    the bidi override so spoofed headers don't deceive the user."""
+    text = "\u202esalt\tpeppa\n1\t2"
+    result = parse_clipboard_tabular(text)
+    assert "\u202e" not in result.headers[0]
+    assert result.headers[0] == "salt"
+
+
+def test_max_rows_cap():
+    """A paste with a million rows must be truncated at MAX_ROWS."""
+    from shared.parsing import MAX_ROWS
+
+    lines = ["1\t2"] * (MAX_ROWS + 1000)
+    text = "\n".join(lines)
+    result = parse_clipboard_tabular(text)
+    assert len(result.rows) <= MAX_ROWS
+
+
+def test_max_cols_cap():
+    """A single-row paste of millions of whitespace-separated values
+    must not create a million-column grid."""
+    from shared.parsing import MAX_COLS
+
+    text = " ".join(["1"] * (MAX_COLS + 500))
+    result = parse_clipboard_tabular(text)
+    # First row is treated as headers (all numeric → synthetic);
+    # the test only needs to assert the column count doesn't exceed
+    # the cap.
+    assert len(result.headers) <= MAX_COLS
+
+
 def test_very_large_input_size_capped():
     """An enormous paste (> ~10 MB) should be truncated rather than
     allocate unbounded memory. Pin the contract — a production user
