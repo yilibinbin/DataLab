@@ -1504,44 +1504,50 @@ def _serialize_table(self) -> str:
 
 
 def _load_text_into_table(self, text: str):
-    """Parse whitespace/CSV text and populate manual_table."""
-    import csv as _csv
-    import io as _io
+    """Parse whitespace/CSV text and populate manual_table.
+
+    Delegates to ``shared.parsing.parse_clipboard_tabular`` which
+    handles US/EU locale sniffing, thousand separators, scientific
+    notation, quoted CSV cells, unicode whitespace, DOS line endings,
+    and ragged rows. The resulting rows contain either floats or
+    ``None`` for non-numeric / empty cells — the table renders the
+    float via ``str(v)`` and shows empty string for ``None``.
+    """
+    from shared.parsing import parse_clipboard_tabular
 
     table = self.manual_table
-    text = (text or "").strip()
-    if not text:
+    result = parse_clipboard_tabular(text or "")
+    if not result.rows and not result.headers:
         return
 
-    raw_lines = [l for l in text.split("\n") if l.strip()]
-    if not raw_lines:
+    max_cols = max(
+        len(result.headers),
+        max((len(row) for row in result.rows), default=0),
+    )
+    if max_cols == 0:
         return
-
-    # Detect delimiter
-    first = raw_lines[0]
-    if "\t" in first:
-        rows = [l.split("\t") for l in raw_lines]
-    elif "," in first:
-        rows = list(_csv.reader(_io.StringIO(text)))
-        rows = [r for r in rows if any(c.strip() for c in r)]
-    else:
-        rows = [l.split() for l in raw_lines]
-
-    if not rows:
-        return
-
-    max_cols = max(len(r) for r in rows)
-    headers = rows[0]
 
     table.setColumnCount(max_cols)
-    table.setHorizontalHeaderLabels(
-        [headers[i] if i < len(headers) else chr(65 + i) for i in range(max_cols)]
-    )
-    data_rows = rows[1:]
-    table.setRowCount(max(len(data_rows), 5))
-    for r, row_data in enumerate(data_rows):
-        for c, val in enumerate(row_data):
-            table.setItem(r, c, QTableWidgetItem(val.strip()))
+    # Pad / synthesize headers so every column has a label.
+    headers = list(result.headers) + [
+        chr(65 + i) for i in range(len(result.headers), max_cols)
+    ]
+    table.setHorizontalHeaderLabels(headers[:max_cols])
+
+    table.setRowCount(max(len(result.rows), 5))
+    for r, row in enumerate(result.rows):
+        for c, val in enumerate(row):
+            if val is None:
+                cell_text = ""
+            elif val.is_integer() and abs(val) < 1e15:
+                # Prefer "1" over "1.0" for Excel-style integers;
+                # preserves the user's input fidelity for whole numbers
+                # without eating scientific notation for genuinely
+                # float-typed values.
+                cell_text = str(int(val))
+            else:
+                cell_text = repr(val)  # round-trip safe float repr
+            table.setItem(r, c, QTableWidgetItem(cell_text))
 
 
 def _toggle_data_collapse(self):
