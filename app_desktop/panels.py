@@ -250,6 +250,10 @@ def build_ui(self):
     splitter = QSplitter(Qt.Horizontal, self)
     splitter.setHandleWidth(8)
     splitter.setChildrenCollapsible(False)
+    # Expose as an instance attribute so the close handler and the
+    # QSettings restore path in ``main.py`` can reach it. Previously the
+    # splitter was purely local and its geometry was lost on every close.
+    self._main_splitter = splitter
     layout.addWidget(splitter)
 
     left_scroll = QScrollArea()
@@ -280,6 +284,26 @@ def build_ui(self):
     self._update_manual_placeholder(self.mode_combo.currentData())
     # 根据当前模式刷新可见性
     self._on_mode_change()
+
+    # Restore persisted splitter geometry so the user's last-chosen
+    # left/right proportions survive a restart. See
+    # ``shared.settings_store`` for the key naming and on-failure
+    # fallback policy (defaults to the [520, 820] setSizes above).
+    try:
+        from shared.settings_store import (
+            KEY_MAIN_SPLITTER_STATE,
+            SettingsStore,
+        )
+
+        blob = SettingsStore().load_bytes(KEY_MAIN_SPLITTER_STATE)
+        if blob is not None:
+            if not splitter.restoreState(blob):
+                # Stale blob from a layout change in a prior version —
+                # drop it so we don't try again next start.
+                SettingsStore().save_bytes(KEY_MAIN_SPLITTER_STATE, None)
+    except Exception:
+        # Persistence is a convenience; never block startup.
+        pass
 
 def build_left_panel(self):
     # Mode selection

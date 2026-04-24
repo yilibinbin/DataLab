@@ -1272,6 +1272,27 @@ class ExtrapolationWindow(
 
     def closeEvent(self, event):
         """Handle window close event - stop any running workers before closing."""
+        # Persist UI state before anything else. Do this BEFORE the
+        # running-worker confirmation dialog so even a "cancel exit"
+        # user action has already captured the latest splitter size —
+        # Qt tears down the widget hierarchy deterministically on
+        # accept, and restoreState can't recover a splitter that was
+        # already disposed.
+        try:
+            from shared.settings_store import (
+                KEY_MAIN_SPLITTER_STATE,
+                SettingsStore,
+            )
+
+            splitter = getattr(self, "_main_splitter", None)
+            if splitter is not None:
+                SettingsStore().save_bytes(
+                    KEY_MAIN_SPLITTER_STATE, splitter.saveState()
+                )
+        except Exception:
+            # Never block exit on a settings write failure.
+            pass
+
         if self._has_running_worker():
             reply = QMessageBox.question(
                 self,
