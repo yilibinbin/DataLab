@@ -9,6 +9,9 @@
   <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
   <script src="{{ url_for('static', filename='js/number_format.js') }}"></script>
   <script src="{{ url_for('static', filename='js/latex-highlight.js') }}"></script>
+  <!-- theme.js must load BEFORE body render so the initial class is
+       set synchronously, avoiding a flash of the wrong theme. -->
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
   <!-- KaTeX for formula preview -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
@@ -74,27 +77,10 @@
   </script>
 
   <script>
+    // Theme toggle moved to /static/js/theme.js (loaded in <head>).
+    // The language-toggle IIFE below is kept inline because it touches
+    // other module state (i18nModule, uiSpecsModule) that loads later.
     (function() {
-      const key = 'datalab-theme';
-      const body = document.getElementById('body-root');
-      const btn = document.getElementById('theme-toggle');
-      const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-      const saved = localStorage.getItem(key);
-      function applyTheme(theme) {
-        body.classList.toggle('theme-dark', theme === 'dark');
-        body.classList.toggle('theme-light', theme === 'light');
-        if (btn) btn.textContent = theme === 'dark' ? '🌙' : '☀️';
-      }
-      const initial = saved || (prefersDark ? 'dark' : 'light');
-      applyTheme(initial);
-      if (btn) {
-        btn.addEventListener('click', () => {
-          const next = body.classList.contains('theme-dark') ? 'light' : 'dark';
-          localStorage.setItem(key, next);
-          applyTheme(next);
-        });
-      }
-
       // Language toggle
       function applyDualText(root) {
         const scope = root || document;

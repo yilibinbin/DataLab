@@ -121,6 +121,32 @@ AUTO_MODELS = [
 ]
 
 
+# Single source of truth for friendly-name → identifier aliases. Used
+# by the CLI (``cli.main``) and the SSE blueprint (``app_web.blueprints.sse``)
+# so a user typing ``model=linear`` sees the same behaviour in both
+# entry points. Extending this dict automatically updates both call
+# sites — don't re-declare it elsewhere.
+MODEL_ID_ALIASES: dict[str, str] = {
+    "linear": "M1",
+    "quadratic": "M2",
+    "cubic": "M3",
+    "log": "M4",
+    "inverse": "M5",
+    "exponential": "M7",
+}
+
+
+def resolve_model_identifier(raw: str) -> str:
+    """Map a user-supplied string to the canonical AUTO_MODELS identifier.
+
+    Accepts either the identifier itself (e.g., ``"M1"``) or a friendly
+    alias (``"linear"``). Case-insensitive match on aliases; identifier
+    match is case-sensitive.
+    """
+    normalised = (raw or "").strip()
+    return MODEL_ID_ALIASES.get(normalised.lower(), normalised)
+
+
 def _expression_text(definition: AutoModelDefinition) -> str:
     terms = [f"{name}*({text})" for name, text in zip(definition.parameter_names, definition.basis_texts)]
     joined = " + ".join(terms)

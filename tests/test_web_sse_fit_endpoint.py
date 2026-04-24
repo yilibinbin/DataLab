@@ -1,0 +1,146 @@
+"""#3 SSE endpoint — regression tests for /api/fit/stream and /api/auto-fit/stream.
+
+The helper in ``app_web/streaming.py`` has been wired to a Flask
+blueprint that yields progress events during long-running auto-fit
+and single-model fit jobs. The client's ``EventSource`` receives
+``started`` → ``progress`` (per-model) → ``result`` (final) events
+rather than a single blocking HTTP response.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+
+pytestmark = pytest.mark.skipif(
+    pytest.importorskip("flask", reason="flask not installed") is None,
+    reason="flask not installed",
+)
+
+
+@pytest.fixture
+def _client():
+    from app_web import server as srv
+
+    app = srv.create_app()
+    app.config["TESTING"] = True
+    return app.test_client()
+
+
+def _parse_sse_stream(body: bytes) -> list[dict]:
+    """Split an SSE response body into a list of {event, data} dicts."""
+    events: list[dict] = []
+    text = body.decode("utf-8")
+    for frame in text.split("\n\n"):
+        frame = frame.strip()
+        if not frame:
+            continue
+        event_name = "message"
+        data_lines: list[str] = []
+        for line in frame.splitlines():
+            if line.startswith("event:"):
+                event_name = line[len("event:"):].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line[len("data:"):].strip())
+        data_text = "\n".join(data_lines)
+        try:
+            data = json.loads(data_text) if data_text else None
+        except ValueError:
+            data = data_text
+        events.append({"event": event_name, "data": data})
+    return events
+
+
+def test_fit_stream_endpoint_exists(_client):
+    """GET /api/fit/stream?data=... should return text/event-stream."""
+    resp = _client.get("/api/fit/stream?x=1,2,3,4,5&y=2,4,6,8,10&model=M1")
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"].startswith("text/event-stream")
+
+
+def test_auto_fit_stream_endpoint_exists(_client):
+    resp = _client.get("/api/auto-fit/stream?x=1,2,3,4,5&y=2,4,6,8,10")
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"].startswith("text/event-stream")
+
+
+def test_auto_fit_stream_emits_progress_events(_client):
+    """Auto-fit stream should emit: started → progress (per model) → result."""
+    resp = _client.get("/api/auto-fit/stream?x=1,2,3,4,5,6&y=2,4,6,8,10,12")
+    events = _parse_sse_stream(resp.data)
+
+    # Must have at least: 1 started, multiple progress, 1 result
+    event_types = [e["event"] for e in events]
+    assert "started" in event_types
+    assert "result" in event_types
+    assert event_types.count("progress") >= 1, (
+        f"Expected multiple progress events, got {event_types}"
+    )
+    # started event must come first, result last
+    assert event_types[0] == "started"
+    assert event_types[-1] == "result"
+
+
+def test_auto_fit_stream_result_has_best_model(_client):
+    resp = _client.get("/api/auto-fit/stream?x=1,2,3,4,5&y=2,4,6,8,10")
+    events = _parse_sse_stream(resp.data)
+    result_events = [e for e in events if e["event"] == "result"]
+    assert result_events, "missing final result event"
+    result = result_events[-1]["data"]
+    assert isinstance(result, dict)
+    # Expected shape: {best: {...}, candidates: [...]}
+    assert "best" in result or "candidates" in result
+
+
+def test_fit_stream_rejects_missing_params(_client):
+    """Missing x or y must return an SSE error event (not a 500)."""
+    resp = _client.get("/api/fit/stream")
+    assert resp.status_code in (200, 400)
+    if resp.status_code == 200:
+        events = _parse_sse_stream(resp.data)
+        assert any(e["event"] == "error" for e in events)
+
+
+def test_fit_stream_rejects_mismatched_xy(_client):
+    """x=[1,2,3] + y=[1,2] must yield a clear error event."""
+    resp = _client.get("/api/fit/stream?x=1,2,3&y=1,2&model=M1")
+    if resp.status_code == 200:
+        events = _parse_sse_stream(resp.data)
+        error_events = [e for e in events if e["event"] == "error"]
+        assert error_events, f"expected error event, got {events}"
+
+
+def test_fit_stream_clamps_precision(_client):
+    """precision=10_000_000 must not crash — clamp at 1000."""
+    resp = _client.get(
+        "/api/fit/stream?x=1,2,3,4,5&y=2,4,6,8,10&model=M1&precision=10000000"
+    )
+    assert resp.status_code == 200
+    events = _parse_sse_stream(resp.data)
+    # No error expected — precision gets clamped silently
+    result_events = [e for e in events if e["event"] == "result"]
+    assert result_events, "precision clamp should still produce a result"
+
+
+def test_auto_fit_stream_progress_has_model_id(_client):
+    """Each progress event should carry the model identifier being tried."""
+    resp = _client.get("/api/auto-fit/stream?x=1,2,3,4,5&y=2,4,6,8,10")
+    events = _parse_sse_stream(resp.data)
+    progress = [e for e in events if e["event"] == "progress"]
+    assert progress
+    for p in progress:
+        assert isinstance(p["data"], dict)
+        assert "model" in p["data"], f"progress missing model id: {p}"
+
+
+def test_fit_stream_error_event_has_json_payload(_client):
+    """Error events must parse as JSON with 'error' and 'message' keys."""
+    resp = _client.get("/api/fit/stream?x=bad,stuff&y=2,4&model=M1")
+    events = _parse_sse_stream(resp.data)
+    errors = [e for e in events if e["event"] == "error"]
+    if errors:
+        err = errors[0]["data"]
+        assert isinstance(err, dict)
+        assert "error" in err

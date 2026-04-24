@@ -72,10 +72,15 @@ def create_app() -> Flask:
     from app_web.blueprints.pages import bp as pages_bp
     from app_web.blueprints.api import bp as api_bp
     from app_web.blueprints.docs import bp as docs_bp
+    from app_web.blueprints.sse import bp as sse_bp
 
     app.register_blueprint(pages_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(docs_bp)
+    # SSE streaming endpoints (/api/fit/stream, /api/auto-fit/stream) —
+    # registered after the regular API blueprint so the POST-form
+    # alternatives continue to work; SSE callers use GET.
+    app.register_blueprint(sse_bp)
 
     return app
 

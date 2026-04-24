@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import io
+import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import mpmath as mp
+
+logger = logging.getLogger(__name__)
 
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 
@@ -179,11 +182,16 @@ class AutoFitJob:
     extra_models: list[AutoModelDefinition]
     verbose: bool = False
     render_plots: bool = True
+    # Phase 3 #12 — when True, run MCMC posterior refinement on the
+    # best-AIC candidate after least-squares completes. Opt-in because
+    # emcee typically takes 10–60 s on modest problems. Silently
+    # skipped if emcee isn't installed (mcmc_fitter.HAS_EMCEE=False).
+    refine_with_mcmc: bool = False
 
 
 def _execute_auto_fit_job(job: AutoFitJob):
     with _mp_precision_guard(job.precision):
-        return auto_fit_dataset(
+        summary = auto_fit_dataset(
             job.x_series,
             job.y_series,
             precision=job.precision,
@@ -192,6 +200,138 @@ def _execute_auto_fit_job(job: AutoFitJob):
             weights=job.weights,
             data_sigmas=job.sigma_series,
         )
+        # Phase 3 #12 — MCMC refinement pass on the best-AIC candidate
+        # when the user ticked "Refine with MCMC". Attaches a
+        # ``mcmc_result`` dict to ``summary.best_result.fit_result.details``
+        # so the renderer can display credible intervals + corner plot
+        # alongside the least-squares output. Silently skipped when
+        # emcee is missing or the MCMC stage raises — LSQ results
+        # remain valid either way.
+        if getattr(job, "refine_with_mcmc", False):
+            try:
+                _attach_mcmc_refinement(summary, job)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "MCMC refinement failed (%s); "
+                    "falling back to LSQ-only result",
+                    exc,
+                )
+        return summary
+
+
+def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
+    """Run emcee on the best-AIC candidate and attach results.
+
+    Degrades gracefully:
+    - emcee absent → log + skip (checkbox should already be disabled)
+    - best candidate None → skip
+    - log_probability raises in a worker → skip, keep LSQ result
+    """
+    from fitting.mcmc_fitter import HAS_EMCEE, render_corner_plot, run_mcmc
+
+    if not HAS_EMCEE:
+        logger.info(
+            "refine_with_mcmc=True but emcee not installed; skipping"
+        )
+        return
+    best = getattr(summary, "best_result", None)
+    if best is None or best.fit_result is None:
+        logger.info(
+            "refine_with_mcmc=True but no best candidate; skipping"
+        )
+        return
+
+    best_fit = best.fit_result
+    param_names = list(best_fit.params.keys()) if best_fit.params else []
+    if not param_names:
+        logger.info("best candidate has no parameters; skipping MCMC")
+        return
+    initial_guess = [float(best_fit.params[name]) for name in param_names]
+    rmse = _estimate_rmse(job.y_series, best_fit)
+
+    def _log_probability(theta):
+        # Gaussian likelihood around the LSQ model. emcee calls this
+        # many thousands of times — keep it numerically simple.
+        if not param_names or rmse <= 0:
+            return float("-inf")
+        # Build substituted parameters dict, evaluate the model,
+        # compare to y. We reuse the same evaluator the fit produced.
+        import math as _math
+
+        evaluator = best_fit.details.get("evaluator") if best_fit.details else None
+        if evaluator is None:
+            return float("-inf")
+        new_params = dict(zip(param_names, (float(v) for v in theta)))
+        try:
+            residuals_sq = 0.0
+            for x_val, y_val in zip(job.x_series, job.y_series):
+                pred = float(evaluator(new_params, float(x_val)))
+                residuals_sq += (float(y_val) - pred) ** 2
+            if not _math.isfinite(residuals_sq):
+                return float("-inf")
+            return -0.5 * residuals_sq / (rmse ** 2)
+        except Exception:  # noqa: BLE001
+            return float("-inf")
+
+    try:
+        mcmc_result = run_mcmc(
+            _log_probability,
+            initial_guess,
+            param_names,
+            n_walkers=max(32, 2 * len(param_names) + 2),
+            n_steps=800,
+            n_burn_in=200,
+            proposal_scale=max(1e-4, rmse * 1e-2),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("MCMC run failed: %s", exc)
+        return
+
+    corner_png = b""
+    try:
+        corner_png = render_corner_plot(mcmc_result)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("corner plot render failed: %s", exc)
+
+    if best_fit.details is None:
+        best_fit.details = {}
+    best_fit.details["mcmc_refinement"] = {
+        "medians": mcmc_result.medians,
+        "lo_ci": mcmc_result.lo_ci,
+        "hi_ci": mcmc_result.hi_ci,
+        "acceptance_fraction": mcmc_result.acceptance_fraction,
+    }
+    if corner_png:
+        best_fit.details["mcmc_corner_png"] = corner_png
+
+
+def _estimate_rmse(y_series, best_fit) -> float:
+    """Rough RMSE estimator used to scale the MCMC proposal step.
+
+    Reuses the LSQ best-fit residuals when available; falls back to
+    the y-series standard deviation otherwise. Always returns a
+    strictly-positive number so downstream step-size calculations
+    don't divide by zero.
+    """
+    residuals = (
+        best_fit.details.get("residuals") if best_fit.details else None
+    )
+    if residuals:
+        try:
+            n = len(residuals)
+            ss = sum(float(r) ** 2 for r in residuals)
+            return max(1e-8, (ss / max(1, n)) ** 0.5)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        ys = [float(y) for y in y_series]
+        if len(ys) < 2:
+            return 1.0
+        mean = sum(ys) / len(ys)
+        var = sum((v - mean) ** 2 for v in ys) / len(ys)
+        return max(1e-8, var ** 0.5)
+    except Exception:  # noqa: BLE001
+        return 1.0
 
 
 @dataclass

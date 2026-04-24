@@ -1272,6 +1272,40 @@ class ExtrapolationWindow(
 
     def closeEvent(self, event):
         """Handle window close event - stop any running workers before closing."""
+        # Persist UI state unconditionally here. If the user later
+        # clicks "No" on the running-worker dialog, the save is still
+        # valid — the user's last splitter position should be
+        # remembered whether or not the exit completes. On the next
+        # real close, the then-current sizes overwrite this save.
+        try:
+            from shared.settings_store import (
+                KEY_MAIN_SPLITTER_STATE,
+                SettingsStore,
+            )
+
+            splitter = getattr(self, "_main_splitter", None)
+            if splitter is not None:
+                # Reuse the instance cached by build_ui so the load
+                # path and the save path hit the same QSettings object.
+                settings = getattr(self, "_settings_store", None)
+                if settings is None:
+                    settings = SettingsStore()
+                    self._settings_store = settings
+                settings.save_bytes(
+                    KEY_MAIN_SPLITTER_STATE, splitter.saveState()
+                )
+        except Exception:
+            # Never block exit on a settings write failure. Log at
+            # debug level so an unexpected failure (including ImportError
+            # from a broken settings_store install) is discoverable in
+            # DATALAB_DEBUG=1 runs without noise in production logs.
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "Splitter state save skipped during close",
+                exc_info=True,
+            )
+
         if self._has_running_worker():
             reply = QMessageBox.question(
                 self,

@@ -250,6 +250,10 @@ def build_ui(self):
     splitter = QSplitter(Qt.Horizontal, self)
     splitter.setHandleWidth(8)
     splitter.setChildrenCollapsible(False)
+    # Expose as an instance attribute so the close handler and the
+    # QSettings restore path in ``main.py`` can reach it. Previously the
+    # splitter was purely local and its geometry was lost on every close.
+    self._main_splitter = splitter
     layout.addWidget(splitter)
 
     left_scroll = QScrollArea()
@@ -280,6 +284,71 @@ def build_ui(self):
     self._update_manual_placeholder(self.mode_combo.currentData())
     # 根据当前模式刷新可见性
     self._on_mode_change()
+
+    # Restore persisted splitter geometry so the user's last-chosen
+    # left/right proportions survive a restart. See
+    # ``shared.settings_store`` for the key naming and on-failure
+    # fallback policy (defaults to the [520, 820] setSizes above).
+    # A single SettingsStore instance is cached on ``self`` and reused
+    # by closeEvent's save path — avoids double-construction race on
+    # Windows registry access and lets tests inject a fake via a
+    # single monkeypatch point.
+    try:
+        from shared.settings_store import (
+            KEY_MAIN_SPLITTER_STATE,
+            SettingsStore,
+            extract_splitter_pane_count,
+        )
+
+        settings = getattr(self, "_settings_store", None)
+        if settings is None:
+            settings = SettingsStore()
+            self._settings_store = settings
+
+        blob = settings.load_bytes(KEY_MAIN_SPLITTER_STATE)
+        if blob is not None:
+            # Snapshot pre-restore sizes so we can roll back if the
+            # restore succeeds syntactically (returns True) but applies
+            # semantically nonsensical sizes — e.g. a blob from an
+            # older app version whose layout had 3 panes instead of 2,
+            # which Qt will happily accept and silently truncate.
+            pre_restore_sizes = splitter.sizes()
+            pre_restore_count = splitter.count()
+            # The blob header stores the pane count. Pre-check it
+            # matches our splitter's count before letting Qt apply a
+            # blob from a different layout.
+            expected_count = pre_restore_count
+            blob_count = extract_splitter_pane_count(bytes(blob))
+            if blob_count is not None and blob_count != expected_count:
+                # Stale blob from a layout change — drop it immediately.
+                settings.save_bytes(KEY_MAIN_SPLITTER_STATE, None)
+            else:
+                restored_ok = splitter.restoreState(blob)
+                sizes_after = splitter.sizes()
+                # Accept the restore only if the pane count, minimum,
+                # and total-width invariants still hold. Any failure
+                # means the blob was from an incompatible layout.
+                if (
+                    restored_ok
+                    and len(sizes_after) == splitter.count()
+                    and all(s >= 0 for s in sizes_after)
+                    and sum(sizes_after) > 0
+                ):
+                    # Good restore — leave it in place.
+                    pass
+                else:
+                    # Bad restore — revert to pre-restore sizes and
+                    # drop the stale blob.
+                    splitter.setSizes(pre_restore_sizes)
+                    settings.save_bytes(KEY_MAIN_SPLITTER_STATE, None)
+    except Exception:
+        # Persistence is a convenience; never block startup. Log at
+        # debug so developers still see it in DATALAB_DEBUG=1 runs.
+        import logging
+
+        logging.getLogger(__name__).debug(
+            "Splitter state restore skipped", exc_info=True
+        )
 
 def build_left_panel(self):
     # Mode selection
@@ -652,7 +721,10 @@ def build_left_panel(self):
     self.constants_file_row.setVisible(False)
     const_wrapper_layout.addWidget(self.constants_file_row)
 
-    # Constants table (Name | Value) — same style as data table
+    # Constants table (Name | Value) — same style as data table.
+    # Also supports a text-view toggle so users can paste a whole
+    # block of "NAME VALUE" lines at once (matches the data area's
+    # existing "文本视图" button).
     const_table_toolbar = QHBoxLayout()
     const_add_row_btn = QPushButton(self._tr("+ 行", "+ Row"))
     self._register_text(const_add_row_btn, "+ 行", "+ Row")
@@ -660,21 +732,45 @@ def build_left_panel(self):
     const_clear_btn = QPushButton(self._tr("清除", "Clear"))
     self._register_text(const_clear_btn, "清除", "Clear")
     const_clear_btn.clicked.connect(lambda: _clear_constants_table(self))
+    self._constants_view_toggle = QPushButton(self._tr("文本视图", "Text View"))
+    self._register_text(self._constants_view_toggle, "文本视图", "Text View")
+    self._constants_view_toggle.clicked.connect(
+        lambda: _toggle_constants_view(self)
+    )
     const_table_toolbar.addWidget(const_add_row_btn)
     const_table_toolbar.addWidget(const_clear_btn)
+    const_table_toolbar.addWidget(self._constants_view_toggle)
     const_table_toolbar.addStretch()
     const_toolbar_w = QWidget()
     const_toolbar_w.setLayout(const_table_toolbar)
     const_wrapper_layout.addWidget(const_toolbar_w)
+
+    # Stacked widget: table view (0) / text view (1) — mirrors
+    # self._data_stack for the main data-input area.
+    self._constants_stack = QStackedWidget()
 
     self.constants_table = QTableWidget(4, 2)
     self.constants_table.setHorizontalHeaderLabels(["Name", "Value"])
     self.constants_table.horizontalHeader().setStretchLastSection(True)
     self.constants_table.setMinimumHeight(160)
     self.constants_table.setStyleSheet(_get_table_style())
-    const_wrapper_layout.addWidget(self.constants_table)
-    # Keep a legacy attribute for backward compat
-    self.manual_constants_edit = None
+    self._constants_stack.addWidget(self.constants_table)
+
+    # Plain-text editor for bulk paste. Previously set to ``None`` in
+    # baseline; now a real QPlainTextEdit so paste workflows like
+    # "paste 20 constants from a spreadsheet" work without having to
+    # click through each row individually.
+    self.manual_constants_edit = QPlainTextEdit()
+    self.manual_constants_edit.setPlaceholderText(
+        self._tr(
+            "每行一个常数，如 ALPHA 7.2973525693(11)[-3]",
+            "One constant per line, e.g. ALPHA 7.2973525693(11)[-3]",
+        )
+    )
+    self._constants_stack.addWidget(self.manual_constants_edit)
+
+    self._constants_stack.setCurrentIndex(0)  # table view by default
+    const_wrapper_layout.addWidget(self._constants_stack)
     error_layout.addWidget(self.constants_widget)
 
     # Error propagation method (Taylor vs Monte Carlo)
@@ -824,6 +920,53 @@ def build_left_panel(self):
     self.fit_model_combo.currentIndexChanged.connect(self._on_model_type_changed)
     model_row.addWidget(self.fit_model_combo)
     fit_layout.addLayout(model_row)
+
+    # MCMC refinement opt-in (Phase 3 #12). Placed in the fit panel
+    # so users discover it when selecting a model — not buried in
+    # a menu. Disabled with an explanatory tooltip when emcee is
+    # missing, so the feature is discoverable but un-breakable.
+    self.fit_mcmc_refine = QCheckBox(self._tr(
+        "MCMC 精炼（拟合后运行）",
+        "Refine with MCMC (after fit)",
+    ))
+    self._register_text(
+        self.fit_mcmc_refine,
+        "MCMC 精炼（拟合后运行）",
+        "Refine with MCMC (after fit)",
+    )
+    self.fit_mcmc_refine.setChecked(False)
+    try:
+        from fitting.mcmc_fitter import HAS_EMCEE as _mcmc_has_emcee
+    except ImportError:
+        # Only ImportError is caught — any other error (SyntaxError,
+        # NameError from a bad refactor, etc.) should propagate so
+        # the maintainer sees the real bug instead of a mysteriously
+        # disabled checkbox.
+        self.fit_mcmc_refine.setEnabled(False)
+        self.fit_mcmc_refine.setToolTip(self._tr(
+            "MCMC 精炼不可用（fitting.mcmc_fitter 未安装）。"
+            "pip install emcee numpy corner",
+            "MCMC refinement unavailable — fitting.mcmc_fitter "
+            "is not importable. pip install emcee numpy corner",
+        ))
+    else:
+        if not _mcmc_has_emcee:
+            self.fit_mcmc_refine.setEnabled(False)
+            self.fit_mcmc_refine.setToolTip(self._tr(
+                "需要安装 emcee 包才能启用 MCMC 精炼。"
+                "pip install emcee numpy corner",
+                "Install the 'emcee' package to enable MCMC "
+                "refinement. pip install emcee numpy corner",
+            ))
+        else:
+            self.fit_mcmc_refine.setToolTip(self._tr(
+                "对最佳 AIC 模型的参数后验分布做 MCMC 采样，"
+                "给出更可靠的置信区间（可能耗时 10–60 秒）。",
+                "Run emcee MCMC on the best-AIC model to produce "
+                "robust credible intervals (may take 10–60 s).",
+            ))
+    fit_layout.addWidget(self.fit_mcmc_refine)
+
     self.fit_model_hint = QLabel("")
     self.fit_model_hint.setStyleSheet("color:#aa5500;")
     self.fit_model_hint.setWordWrap(True)
@@ -1435,44 +1578,57 @@ def _serialize_table(self) -> str:
 
 
 def _load_text_into_table(self, text: str):
-    """Parse whitespace/CSV text and populate manual_table."""
-    import csv as _csv
-    import io as _io
+    """Parse whitespace/CSV text and populate manual_table.
+
+    Delegates to ``shared.parsing.parse_clipboard_tabular`` which
+    handles US/EU locale sniffing, thousand separators, scientific
+    notation, quoted CSV cells, unicode whitespace, DOS line endings,
+    and ragged rows. The resulting rows contain either floats or
+    ``None`` for non-numeric / empty cells — the table renders the
+    float via ``str(v)`` and shows empty string for ``None``.
+    """
+    from shared.parsing import _synthetic_headers, parse_clipboard_tabular
 
     table = self.manual_table
-    text = (text or "").strip()
-    if not text:
+    result = parse_clipboard_tabular(text or "")
+    if not result.rows and not result.headers:
         return
 
-    raw_lines = [l for l in text.split("\n") if l.strip()]
-    if not raw_lines:
+    max_cols = max(
+        len(result.headers),
+        max((len(row) for row in result.rows), default=0),
+    )
+    if max_cols == 0:
         return
-
-    # Detect delimiter
-    first = raw_lines[0]
-    if "\t" in first:
-        rows = [l.split("\t") for l in raw_lines]
-    elif "," in first:
-        rows = list(_csv.reader(_io.StringIO(text)))
-        rows = [r for r in rows if any(c.strip() for c in r)]
-    else:
-        rows = [l.split() for l in raw_lines]
-
-    if not rows:
-        return
-
-    max_cols = max(len(r) for r in rows)
-    headers = rows[0]
 
     table.setColumnCount(max_cols)
-    table.setHorizontalHeaderLabels(
-        [headers[i] if i < len(headers) else chr(65 + i) for i in range(max_cols)]
-    )
-    data_rows = rows[1:]
-    table.setRowCount(max(len(data_rows), 5))
-    for r, row_data in enumerate(data_rows):
-        for c, val in enumerate(row_data):
-            table.setItem(r, c, QTableWidgetItem(val.strip()))
+    # Pad / synthesize headers so every column has a label. Reuse
+    # ``_synthetic_headers`` (Excel-style A/B/.../Z/AA/AB) so > 26
+    # columns don't get ASCII-punctuation labels like ``[`` from a
+    # naive ``chr(65 + i)`` rollover bug.
+    synth = _synthetic_headers(max_cols)
+    headers = [
+        result.headers[i] if i < len(result.headers) else synth[i]
+        for i in range(max_cols)
+    ]
+    table.setHorizontalHeaderLabels(headers)
+
+    table.setRowCount(max(len(result.rows), 5))
+    for r, row in enumerate(result.rows):
+        for c, val in enumerate(row):
+            if val is None:
+                cell_text = ""
+            elif val.is_integer() and abs(val) <= 1e15:
+                # Prefer "1" over "1.0" for Excel-style integers;
+                # preserves the user's input fidelity for whole numbers
+                # without eating scientific notation for genuinely
+                # float-typed values. Boundary is inclusive so 1e15
+                # renders as "1000000000000000" (not "1e+15" or
+                # "1000000000000000.0").
+                cell_text = str(int(val))
+            else:
+                cell_text = repr(val)  # round-trip safe float repr
+            table.setItem(r, c, QTableWidgetItem(cell_text))
 
 
 def _toggle_data_collapse(self):
@@ -1556,6 +1712,65 @@ def _serialize_constants_table(self) -> str:
         if name or val:
             lines.append(f"{name}\t{val}")
     return "\n".join(lines)
+
+
+def _load_text_into_constants_table(self, text: str) -> None:
+    """Parse ``NAME VALUE``-per-line text and populate the constants
+    QTableWidget.
+
+    Accepts any whitespace (tab, space, multiple spaces) between the
+    name and the value; everything after the first whitespace run on
+    each line becomes the Value field so multi-part values like
+    ``7.2973525693(11)[-3]`` survive intact.
+    """
+    table = self.constants_table
+    text = (text or "").strip()
+    lines = [ln for ln in text.split("\n") if ln.strip()]
+
+    # Keep at least 4 rows so the blank table always looks intentional.
+    table.setRowCount(max(len(lines), 4))
+    # Clear any prior contents before refilling so a smaller text
+    # doesn't leave stale rows behind.
+    for r in range(table.rowCount()):
+        for c in range(table.columnCount()):
+            table.setItem(r, c, QTableWidgetItem(""))
+
+    for r, raw_line in enumerate(lines):
+        parts = raw_line.strip().split(None, 1)
+        if not parts:
+            continue
+        name = parts[0]
+        value = parts[1] if len(parts) > 1 else ""
+        table.setItem(r, 0, QTableWidgetItem(name))
+        table.setItem(r, 1, QTableWidgetItem(value))
+
+
+def _toggle_constants_view(self) -> None:
+    """Flip the constants input between QTableWidget (cell-by-cell
+    edit) and QPlainTextEdit (bulk paste). Round-trips cleanly:
+    - table → text: serialise current rows via ``_serialize_constants_table``
+    - text → table: parse with ``_load_text_into_constants_table``
+
+    Mirrors the behaviour of ``_toggle_data_view`` so users see a
+    consistent interaction model in both input areas.
+    """
+    stack = self._constants_stack
+    if stack.currentIndex() == 0:
+        # Leaving the table — serialise into the text widget.
+        self.manual_constants_edit.setPlainText(_serialize_constants_table(self))
+        stack.setCurrentIndex(1)
+        self._constants_view_toggle.setText(
+            self._tr("表格视图", "Table View")
+        )
+    else:
+        # Leaving text — parse back into the table.
+        _load_text_into_constants_table(
+            self, self.manual_constants_edit.toPlainText()
+        )
+        stack.setCurrentIndex(0)
+        self._constants_view_toggle.setText(
+            self._tr("文本视图", "Text View")
+        )
 
 
 class _TablePasteFilter(QObject):
