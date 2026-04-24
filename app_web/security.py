@@ -25,6 +25,9 @@ from shared.bilingual import _dual_msg
 CSRF_TOKEN_LENGTH = 32
 CSRF_HEADER_NAME = 'X-CSRF-Token'
 CSRF_FORM_NAME = 'csrf_token'
+# Historical ``datalab_csrf`` cookie name retained purely so legacy tests and
+# docstrings can reference what was removed. Not written to responses and not
+# read during validation; see add_security_headers() and validate_csrf_token().
 CSRF_COOKIE_NAME = 'datalab_csrf'
 
 
@@ -36,11 +39,11 @@ def generate_csrf_token() -> str:
 def get_csrf_token() -> str:
     """Get or create the CSRF token bound to the current server-side session.
 
-    The token is generated and stored in ``session['csrf_token']``. The
-    ``datalab_csrf`` cookie is set in ``add_security_headers`` as a
-    client-readable mirror for frontend convenience, but we NEVER seed the
-    session from the cookie: doing so would let an attacker who can plant a
-    cookie (subdomain takeover, MITM on HTTP, etc.) forge the token.
+    The token is generated and stored in ``session['csrf_token']`` only.
+    There is deliberately no ``datalab_csrf`` cookie mirror: seeding or
+    validating from a cookie would let an attacker who can plant a cookie
+    (subdomain takeover, MITM on HTTP, etc.) forge the token. Frontend code
+    should read the token from the rendered page (e.g. a meta tag) instead.
     """
     if 'csrf_token' not in session:
         session['csrf_token'] = generate_csrf_token()
@@ -313,24 +316,12 @@ def configure_app_security(app):
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['X-XSS-Protection'] = '1; mode=block'
 
-        # CSRF cookie (double-submit) for robustness in environments where session cookies
-        # may not persist (e.g. Secure cookie on http). This keeps form CSRF working.
-        try:
-            csrf_token = session.get('csrf_token')
-            if csrf_token:
-                forwarded_proto = (request.headers.get('X-Forwarded-Proto') or '').split(',')[0].strip().lower()
-                is_secure = bool(request.is_secure or forwarded_proto == 'https')
-                response.set_cookie(
-                    CSRF_COOKIE_NAME,
-                    csrf_token,
-                    secure=is_secure,
-                    httponly=True,
-                    samesite='Lax',
-                    path='/',
-                )
-        except Exception:
-            # Never block a response due to cookie-setting issues.
-            pass
+        # CSRF is session-scoped by design (see get_csrf_token()); no separate
+        # CSRF cookie is emitted. Earlier revisions set a httponly=True
+        # ``datalab_csrf`` cookie for a "double-submit" fallback, but since
+        # H2 removed cookie-based validation from validate_csrf_token the
+        # cookie was unreadable to JS and unused by the server — dead weight
+        # that could only confuse operators debugging CSRF failures.
         return response
 
     # Error handlers to prevent info leakage

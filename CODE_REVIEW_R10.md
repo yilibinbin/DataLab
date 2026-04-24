@@ -25,7 +25,10 @@
 
 **R9 regression status**: One R9 CRITICAL was **not fixed** and remains live (`validate_latex_content` dead). Three R9 CRITICAL fixes verified. See §R9 audit below.
 
-**Scope of this PR**: Fix all 5 CRITICAL + all 10 HIGH with regression tests. MEDIUM/LOW deferred to `findings.md` backlog.
+**Scope of this PR**: Fix all 5 CRITICAL + 8 of the 10 HIGH (H1–H7, H10) with
+regression tests. **H8 and H9 are deferred** to `findings.md` as MEDIUM items
+(M12, M13) — see "Deferred from HIGH" below for the rationale. All other
+MEDIUM/LOW findings remain in the `findings.md` backlog.
 
 ---
 
@@ -117,13 +120,13 @@
 - **Fix**: Delete `_mp_precision_guard`; `from shared.precision import precision_guard` and use it directly.
 - **Test**: Implicit in existing precision tests; add a check that `_mp_precision_guard` name is gone.
 
-### H8 — Fitting path never tries `_get_symbolic_partials`
+### H8 — Fitting path never tries `_get_symbolic_partials` (DEFERRED → M12)
 - **File**: `fitting/model_parser.py:105-124`
 - The error-propagation code path prefers symbolic SymPy derivatives (cached); the fitting path goes straight to `numerical_partial_derivative`, which is weaker for ill-conditioned models and much slower at high `dps`.
 - **Fix**: Mirror the error-propagation path — try `_get_symbolic_partials`, fall back to numerical on failure.
 - **Test**: `tests/test_fitting_symbolic_gradient.py` — for `a*exp(-b*x)`, assert the built gradient callable matches `diff(...) → lambdify(...)` output to `eps·100`.
 
-### H9 — `constraints.py` uses second parser with smaller whitelist
+### H9 — `constraints.py` uses second parser with smaller whitelist (DEFERRED → M13)
 - **File**: `fitting/constraints.py:38-50, 205-217`
 - `_SAFE_MATH_FUNCS` has 8 functions; `expression_engine._ALLOWED_FUNCTIONS` has ~30. Users cannot write `Erf(a)` in a constraint even though it is allowed in a fit expression.
 - **Fix**: Either extend `_SAFE_MATH_FUNCS` to match the canonical list (both casings) or delegate constraint parsing through `safe_eval` + mpmath→sympy conversion.
@@ -150,6 +153,14 @@ M8 · No rate limiting on `/`, `/error`, `/fit`, `/stats`.
 M9 · `combine_error_components` substitutes 0 for missing keys (should be NaN).
 M10 · Boundary-hit NaN does not propagate to dependent parameters.
 M11 · AIC/BIC noise-floor clamp breaks ranking invariance across `dps`.
+M12 · **(formerly H8)** Fitting path never tries `_get_symbolic_partials`
+(`fitting/model_parser.py:105-124`). Deferred from HIGH because the change
+benefits accuracy/perf for a narrow subset of models and needs its own
+benchmark; no security or concurrency impact.
+M13 · **(formerly H9)** `constraints.py` uses a second parser with a
+smaller whitelist than `expression_engine._ALLOWED_FUNCTIONS`. Deferred from
+HIGH because it is a usability parity gap, not a security or correctness
+bug (H4's `__builtins__` strip handles the security dimension).
 
 ## LOW findings (deferred)
 
@@ -177,10 +188,28 @@ L5 · `_sequence_model` heuristic error in `param_errors_stat["limit"]` field (a
 
 This R10 PR will:
 1. Add `CODE_REVIEW_R10.md` (this file).
-2. Write RED regression tests for C1–C5 and H1–H5 first (TDD discipline).
+2. Write RED regression tests for C1–C5 and H1–H7, H10 first (TDD discipline).
 3. Implement minimum-diff GREEN fixes for C1–C5.
-4. Implement minimum-diff GREEN fixes for H1–H10.
-5. Re-run full pytest + coverage; assert no regressions vs. baseline 162 tests.
-6. Each commit references the finding ID (`C1`, `H2`, etc.) in the commit body.
+4. Implement minimum-diff GREEN fixes for H1–H7 and H10 (8 fixes).
+5. Defer H8 (symbolic-partials parity) and H9 (constraint-parser whitelist
+   parity) to the MEDIUM backlog — both are correctness/parity improvements
+   rather than security or concurrency hazards, and both touch the fitting
+   hot path in ways that warrant their own focused PR with numerical
+   regression coverage. See §"Deferred from HIGH" below.
+6. Re-run full pytest + coverage; assert no regressions vs. baseline 162 tests.
+7. Each commit references the finding ID (`C1`, `H2`, etc.) in the commit body.
 
 MEDIUM/LOW findings become a backlog in `findings.md` for a future PR.
+
+### Deferred from HIGH
+
+- **H8** (symbolic partial derivatives in the fitting path) — the
+  error-propagation path caches SymPy derivatives; mirroring that in the
+  fitter requires fitting-side benchmarks to confirm no accuracy
+  regression and a targeted numerical test beyond what this PR carries.
+  Tracked as **M12** in `findings.md`.
+- **H9** (parity between `_SAFE_MATH_FUNCS` in `constraints.py` and the
+  ~30-function `expression_engine._ALLOWED_FUNCTIONS` whitelist) — a
+  usability gap, not an attack surface: the smaller list only rejects
+  legitimate constraints, and `H4`'s `__builtins__` strip here closes the
+  security dimension. Tracked as **M13** in `findings.md`.

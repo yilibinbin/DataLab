@@ -228,19 +228,23 @@ def validate_latex_content(tex_text: str) -> tuple[bool, list[str]]:
     """
     warnings = []
 
-    # Check for shell escape attempts
-    dangerous_commands = [
-        r'\write18',
-        r'\input{|',
-        r'\openout',
-        '\\immediate\\write18',
+    # Check for shell escape attempts. The TeX tokenizer accepts arbitrary
+    # whitespace between control-sequence names and their arguments, so a
+    # literal substring match on "\write18" would miss "\write 18",
+    # "\write\n18", "\immediate \write 18", etc. Use regex with optional
+    # whitespace and word boundaries to match what the engine actually sees.
+    dangerous_patterns: list[tuple[str, re.Pattern[str]]] = [
+        (r"\immediate\write18", re.compile(r"\\immediate\s*\\write\s*18\b")),
+        (r"\write18", re.compile(r"\\write\s*18\b")),
+        (r"\openout", re.compile(r"\\openout\b")),
+        (r"\input{|", re.compile(r"\\input\s*\{\s*\|")),
     ]
 
-    for cmd in dangerous_commands:
-        if cmd in tex_text:
+    for label, pattern in dangerous_patterns:
+        if pattern.search(tex_text):
             warnings.append(
-                f"检测到危险的 LaTeX 命令: {cmd}，已阻止。"
-                f" / Dangerous LaTeX command detected: {cmd}. Blocked."
+                f"检测到危险的 LaTeX 命令: {label}，已阻止。"
+                f" / Dangerous LaTeX command detected: {label}. Blocked."
             )
             return False, warnings
 

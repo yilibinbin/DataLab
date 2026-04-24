@@ -7,6 +7,7 @@ from typing import Callable
 
 from mpmath import mp
 
+from shared.bilingual import _dual_msg
 from shared.numerics import noise_floor
 from shared.precision import precision_guard
 
@@ -135,7 +136,12 @@ def _substituted_expression(definition: AutoModelDefinition, coeffs: list[mp.mpf
 
 def build_polynomial_definition(degree: int) -> AutoModelDefinition:
     if degree < 1:
-        raise ValueError("多项式阶数至少为 1。/ Polynomial degree must be at least 1.")
+        raise ValueError(
+            _dual_msg(
+                "多项式阶数至少为 1。",
+                "Polynomial degree must be at least 1.",
+            )
+        )
     basis, texts = _power_series_basis(degree)
     params = [f"b{i}" for i in range(degree + 1)]
     label = "线性 / Linear" if degree == 1 else f"{degree}阶多项式 / degree-{degree} polynomial"
@@ -145,7 +151,12 @@ def build_polynomial_definition(degree: int) -> AutoModelDefinition:
 
 def build_inverse_series_definition(min_power: int, max_power: int) -> AutoModelDefinition:
     if min_power < 0 or max_power < 0:
-        raise ValueError("1/x^p 展开至少需要 p ≥ 0。/ 1/x^p expansion requires p ≥ 0.")
+        raise ValueError(
+            _dual_msg(
+                "1/x^p 展开至少需要 p ≥ 0。",
+                "1/x^p expansion requires p ≥ 0.",
+            )
+        )
     if min_power > max_power:
         min_power, max_power = max_power, min_power
     basis = []
@@ -170,26 +181,56 @@ def fit_linear_model(
 ) -> FitResult:
     with precision_guard(precision):
         if len(x_data) != len(y_data):
-            raise ValueError("x 与 y 数据点数量必须一致。/ x and y lengths must match.")
+            raise ValueError(
+                _dual_msg(
+                    "x 与 y 数据点数量必须一致。",
+                    "x and y lengths must match.",
+                )
+            )
         if not x_data:
-            raise ValueError("拟合需要至少一个数据点。/ At least one data point is required.")
+            raise ValueError(
+                _dual_msg(
+                    "拟合需要至少一个数据点。",
+                    "At least one data point is required.",
+                )
+            )
         x_series = [mp.mpf(x) for x in x_data]
         y_series = [mp.mpf(y) for y in y_data]
         if definition.requires_positive_x and any(value <= 0 for value in x_series):
-            raise ValueError("该模型需要所有 x 为正数。 / This model requires all x > 0.")
+            raise ValueError(
+                _dual_msg(
+                    "该模型需要所有 x 为正数。",
+                    "This model requires all x > 0.",
+                )
+            )
         rows = len(x_series)
         cols = len(definition.basis_functions)
         weight_vec = None
         if weights:
             if len(weights) != rows:
-                raise ValueError("权重数量必须与数据点数量一致。/ Weight count must match number of data points.")
+                raise ValueError(
+                    _dual_msg(
+                        "权重数量必须与数据点数量一致。",
+                        "Weight count must match number of data points.",
+                    )
+                )
             weight_vec = [mp.mpf(w) for w in weights]
             if any(w <= 0 for w in weight_vec):
-                raise ValueError("权重必须为正数。/ Weights must be positive.")
+                raise ValueError(
+                    _dual_msg(
+                        "权重必须为正数。",
+                        "Weights must be positive.",
+                    )
+                )
 
         def _solve(y_targets: list[mp.mpf]) -> _LinearFitComputation:
             if len(y_targets) != rows:
-                raise ValueError("目标数据长度必须匹配。/ Target length must match.")
+                raise ValueError(
+                    _dual_msg(
+                        "目标数据长度必须匹配。",
+                        "Target length must match.",
+                    )
+                )
             design = mp.matrix(rows, cols)
             target = mp.matrix(rows, 1)
             for i, x in enumerate(x_series):
@@ -198,18 +239,33 @@ def fit_linear_model(
                     design[i, j] = value * (mp.sqrt(weight_vec[i]) if weight_vec else mp.mpf("1"))
                 target[i] = mp.mpf(y_targets[i]) * (mp.sqrt(weight_vec[i]) if weight_vec else mp.mpf("1"))
             if rows < cols:
-                raise ValueError("数据点数量不足以拟合该模型。/ Not enough data points for this model.")
+                raise ValueError(
+                    _dual_msg(
+                        "数据点数量不足以拟合该模型。",
+                        "Not enough data points for this model.",
+                    )
+                )
             try:
                 Q, R = mp.qr(design)
             except ZeroDivisionError as exc:
-                raise ValueError("QR 分解失败，无法拟合。/ QR decomposition failed, cannot fit.") from exc
+                raise ValueError(
+                    _dual_msg(
+                        "QR 分解失败，无法拟合。",
+                        "QR decomposition failed, cannot fit.",
+                    )
+                ) from exc
             Qt_y = Q.T * target
             R_top = R[:cols, :cols]
             rhs = Qt_y[:cols, :]
             try:
                 coeff_matrix = mp.lu_solve(R_top, rhs)
             except ZeroDivisionError as exc:
-                raise ValueError("设计矩阵奇异，无法拟合。/ Design matrix is singular, cannot fit.") from exc
+                raise ValueError(
+                    _dual_msg(
+                        "设计矩阵奇异，无法拟合。",
+                        "Design matrix is singular, cannot fit.",
+                    )
+                ) from exc
             coeffs_mp = [coeff_matrix[i, 0] for i in range(cols)]
             params = {name: coeff for name, coeff in zip(definition.parameter_names, coeffs_mp)}
             evaluator = build_linear_evaluator(definition, params)
@@ -300,7 +356,12 @@ def fit_linear_model(
         system_sigmas = None if weight_vec else data_sigmas
         if system_sigmas is not None:
             if len(data_sigmas) != len(y_series):
-                raise ValueError("不确定度列长度必须与 y 数据一致。/ Uncertainty column length must match y values.")
+                raise ValueError(
+                    _dual_msg(
+                        "不确定度列长度必须与 y 数据一致。",
+                        "Uncertainty column length must match y values.",
+                    )
+                )
             sigma_vec = [mp.fabs(mp.mpf(sig)) if sig is not None else mp.mpf("0") for sig in system_sigmas]
             if any(sig > 0 for sig in sigma_vec):
                 plus_targets = [y + sig for y, sig in zip(y_series, sigma_vec)]

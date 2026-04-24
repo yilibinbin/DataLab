@@ -8,7 +8,7 @@ from typing import Any
 
 import mpmath as mp
 
-from shared.precision import precision_guard
+from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 
 from data_extrapolation_latex_latest import (
     _dual_msg,
@@ -44,16 +44,26 @@ from fitting.hp_fitter import FitResult
 
 @contextmanager
 def _mp_precision_guard(dps: int | None):
-    """Delegate to ``shared.precision.precision_guard``.
+    """Delegate to ``shared.precision.precision_guard`` with worker-side bounds.
 
     Kept as a thin wrapper so existing worker call-sites do not need to be
     refactored. ``mp.dps`` is process-global — concurrent workers must share
     a single canonical guard to avoid precision corruption.
+
+    Applies the worker's [MIN_MPMATH_DPS, MAX_MPMATH_DPS] envelope to the
+    shared guard so programmatic callers (tests, batch runners, corrupted
+    configs) cannot push ``mp.dps`` outside the range the widget spinner
+    would normally enforce. Interactive callers are already clamped upstream
+    by the Qt spinner; this is the defense-in-depth layer.
     """
     if dps is None:
         yield mp.mp.dps
         return
-    with precision_guard(dps) as effective_dps:
+    with precision_guard(
+        dps,
+        clamp_min=MIN_MPMATH_DPS,
+        clamp_max=MAX_MPMATH_DPS,
+    ) as effective_dps:
         yield effective_dps
 
 

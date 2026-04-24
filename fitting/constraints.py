@@ -10,6 +10,8 @@ import sympy as sp
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, convert_xor
 from mpmath import mp
 
+from shared.bilingual import _dual_msg
+
 _logger = logging.getLogger(__name__)
 
 _MIN_SYMPY_VERSION = (1, 13, 0)
@@ -145,7 +147,12 @@ def build_parameter_state(config: Mapping[str, Mapping[str, object]], parameter_
         )
 
     if not free_params:
-        raise ValueError("至少需要一个自由参数以执行拟合。/ Need at least one free parameter to fit.")
+        raise ValueError(
+            _dual_msg(
+                "至少需要一个自由参数以执行拟合。",
+                "Need at least one free parameter to fit.",
+            )
+        )
 
     return ParameterState(
         free_params=free_params,
@@ -187,7 +194,12 @@ def _lambdify_expression(
         if exclude and symbol_name == exclude:
             continue
         if symbol_name not in available_symbols:
-            raise ValueError(f"参数表达式引用了未知参数 {symbol_name}。/ Unknown parameter referenced: {symbol_name}.")
+            raise ValueError(
+                _dual_msg(
+                    f"参数表达式引用了未知参数 {symbol_name}。",
+                    f"Unknown parameter referenced: {symbol_name}.",
+                )
+            )
         dependencies.append(symbol_name)
     dependencies = sorted(set(dependencies), key=lambda item: order_index.get(item, 0))
     lambda_symbols = [available_symbols[dep] for dep in dependencies]

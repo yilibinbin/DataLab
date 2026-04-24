@@ -858,7 +858,10 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                 params_cfg = json.loads(custom_params_text) if str(custom_params_text).strip() else {}
                 if not isinstance(params_cfg, dict):
                     raise ValueError(
-                        "参数配置必须为 JSON 对象（key 为参数名）。/ Parameter config must be a JSON object."
+                        _dual_msg(
+                            "参数配置必须为 JSON 对象（key 为参数名）。",
+                            "Parameter config must be a JSON object.",
+                        )
                     )
                 normalized_cfg: dict[str, dict[str, object]] = {}
                 for name, conf in params_cfg.items():
