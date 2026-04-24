@@ -132,12 +132,19 @@ def extrapolate_power_law(
                     if key not in seen:
                         seeds.append(seed)
                         seen.add(key)
+                # Scale findroot tolerance with the active precision so
+                # high-dps runs are not silently capped at mpmath's default
+                # maxsteps=10 / tol=1e-15 (mirrors R10 C4 fix in hp_fitter).
+                tol = mp.mpf(10) ** (-(mp.dps - 5))
+                maxsteps = max(50, mp.dps)
                 best_p: mp.mpf | None = None
                 best_resid: mp.mpf | None = None
                 last_error: Exception | None = None
                 for seed in seeds:
                     try:
-                        candidate = mp.findroot(residual, seed)
+                        candidate = mp.findroot(
+                            residual, seed, tol=tol, maxsteps=maxsteps
+                        )
                         r_val = mp.fabs(residual(candidate))
                         if best_resid is None or r_val < best_resid:
                             best_resid = r_val

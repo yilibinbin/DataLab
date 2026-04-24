@@ -82,7 +82,7 @@ Action: re-run `/codex:adversarial-review --background` once an OpenAI API key i
 - **File:** `fitting/hp_fitter.py:451-463`
 - **Issue:** Despite the name and docs, the fitter calls `mp.findroot` on the **gradient** of χ². There is no Marquardt damping `λ`, no trust region, no χ²-decrease-on-step gate. The only resilience is multi-seed retry. On rank-deficient or near-singular Hessians, `mp.findroot` raises and the user gets `cov_warning="singular"` plus possibly converged-to-wrong-minimum parameter values.
 - **Fix:** Either rename and document honestly ("Newton on the score function") **or** implement true LM:
-  ```
+  ```text
   Build (J^T W J + λ·diag(J^T W J)) Δp = J^T W r
   Accept Δp iff χ² decreases; else λ ×= 10
   Stop on |Δχ²|/χ² < tol AND ||g||∞ < tol

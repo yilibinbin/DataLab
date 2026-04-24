@@ -10,7 +10,7 @@ here rather than redefining the helpers locally.
 
 from __future__ import annotations
 
-__all__ = ["dual_msg", "_dual_msg", "split_dual", "_split_dual"]
+__all__ = ["_dual_msg", "_split_dual", "dual_msg", "split_dual"]
 
 
 def dual_msg(zh: str, en: str) -> str:

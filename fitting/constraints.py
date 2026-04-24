@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Callable, Mapping
 
 import sympy as sp
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, convert_xor
 from mpmath import mp
+
+_logger = logging.getLogger(__name__)
 
 _MIN_SYMPY_VERSION = (1, 13, 0)
 
@@ -202,7 +205,13 @@ def _lambdify_expression(
     except Exception:
         # Some exotic callables may not expose __globals__ as a writable dict;
         # in that case the parser-level whitelist remains the primary defense.
-        pass
+        # Log at DEBUG so this is discoverable if it ever trips in the wild
+        # without changing behavior for callers.
+        _logger.debug(
+            "Could not strip __builtins__ from lambdify callable; "
+            "parser-level whitelist remains primary defense.",
+            exc_info=True,
+        )
 
     def _evaluate(params, deps=tuple(dependencies), expr_lambda=expr_lambda):
         missing = [dep for dep in deps if dep not in params]

@@ -58,7 +58,13 @@ def test_high_precision_linear_fit_converges_to_many_digits():
     # Use the linear model M1 (handled by fit_linear_model, which does QR — not
     # findroot — but still wraps in precision_guard. This is a downstream
     # sanity check that the overall fitting pipeline respects precision.)
-    m1 = AUTO_MODELS[0]
+    # Look up by identifier instead of positional index so the test stays
+    # robust to reorderings of AUTO_MODELS.
+    m1 = next(
+        (model for model in AUTO_MODELS if model.identifier == "M1"),
+        None,
+    )
+    assert m1 is not None, "AUTO_MODELS must define the M1 linear model"
     xs = [mp.mpf(1), mp.mpf(2), mp.mpf(3), mp.mpf(4), mp.mpf(5)]
     ys = [mp.mpf(2) * x for x in xs]
     result = fit_linear_model(

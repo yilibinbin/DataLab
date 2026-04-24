@@ -132,7 +132,8 @@ def test_h4_constraint_lambda_has_no_import_in_globals():
     expr = a + b
     available = {"a": a, "b": b}
     order = {"a": 0, "b": 1}
-    deps, evaluator = constraints._lambdify_expression(expr, available, order)
+    # deps is intentionally unused — we only assert on expr_lambda globals.
+    _deps, evaluator = constraints._lambdify_expression(expr, available, order)
     # Pull expr_lambda out of the evaluator's default args (it's keyword-defaulted
     # in the _evaluate signature: `expr_lambda=expr_lambda`).
     import inspect as _inspect

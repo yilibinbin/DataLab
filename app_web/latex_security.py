@@ -244,8 +244,12 @@ def validate_latex_content(tex_text: str) -> tuple[bool, list[str]]:
             )
             return False, warnings
 
-    # Check for suspicious file operations (path traversal / absolute paths).
-    # Even without shell-escape, LaTeX can read files via \input/\include, so we treat unsafe paths as blocked.
+    # Check for suspicious file operations (path traversal / absolute paths /
+    # any path separator). Each document compiles in its own isolated temp
+    # directory, so legitimate TeX needs only same-directory includes —
+    # subdirectory references in web input are treated as unsafe to avoid
+    # sneaky traversal patterns (e.g. "foo/../../etc/passwd" that collapse
+    # after normalization). See compile_latex_safe() for the temp-dir setup.
     for raw in re.findall(r"\\(?:input|include)\s*\{([^}]*)\}", tex_text):
         candidate = (raw or "").strip()
         if not candidate:
@@ -254,12 +258,13 @@ def validate_latex_content(tex_text: str) -> tuple[bool, list[str]]:
             candidate.startswith(("/", "\\"))  # absolute paths
             or ":" in candidate  # Windows drive letters / URL-like
             or ".." in candidate  # parent traversal
-            or "/" in candidate  # any path separator
-            or "\\" in candidate  # any path separator
+            or "/" in candidate  # any path separator (subdir includes disallowed)
+            or "\\" in candidate  # any path separator (subdir includes disallowed)
         ):
             warnings.append(
-                "检测到不安全的文件包含路径，可能存在路径遍历风险。"
-                " / Unsafe file-include path detected; possible path traversal attempt."
+                "检测到不安全的文件包含路径（仅允许同目录下的纯文件名包含）。"
+                " / Unsafe file-include path detected "
+                "(only same-directory, bare-filename includes are permitted in the web sandbox)."
             )
             return False, warnings
 

@@ -16,6 +16,8 @@ import logging
 from functools import wraps
 from flask import request, session, abort, current_app, has_app_context, has_request_context, render_template
 
+from shared.bilingual import _dual_msg
+
 # ============================================================
 # CSRF Protection
 # ============================================================
@@ -121,8 +123,10 @@ def validate_latex_engine(engine: str) -> str:
         logger.error("Blocked dangerous LaTeX engine: %s from %s", engine, remote_addr)
         allowed = ", ".join(sorted(ALLOWED_LATEX_ENGINES))
         raise ValueError(
-            f"不支持的 LaTeX 引擎: {engine}。允许的引擎: {allowed}。"
-            f" / Unsupported LaTeX engine: {engine}. Allowed engines: {allowed}."
+            _dual_msg(
+                f"不支持的 LaTeX 引擎: {engine}。允许的引擎: {allowed}。",
+                f"Unsupported LaTeX engine: {engine}. Allowed engines: {allowed}.",
+            )
         )
 
     return engine
@@ -156,20 +160,23 @@ def validate_text_size(text: str, field_name: str = "输入") -> str:
 
     if len(text) > MAX_TEXT_INPUT_LENGTH:
         raise ValueError(
-            f"{field_name}过大。最大允许 {MAX_TEXT_INPUT_LENGTH:,} 字符，"
-            f"实际 {len(text):,} 字符。"
-            f" / {field_name} is too large. "
-            f"Maximum allowed is {MAX_TEXT_INPUT_LENGTH:,} characters, "
-            f"got {len(text):,} characters."
+            _dual_msg(
+                f"{field_name}过大。最大允许 {MAX_TEXT_INPUT_LENGTH:,} 字符，"
+                f"实际 {len(text):,} 字符。",
+                f"{field_name} is too large. Maximum allowed is "
+                f"{MAX_TEXT_INPUT_LENGTH:,} characters, got {len(text):,} characters.",
+            )
         )
 
     lines = text.count('\n') + 1
     if lines > MAX_TEXT_LINES:
         raise ValueError(
-            f"{field_name}行数过多。最大允许 {MAX_TEXT_LINES:,} 行，"
-            f"实际 {lines:,} 行。"
-            f" / {field_name} has too many lines. "
-            f"Maximum allowed is {MAX_TEXT_LINES:,} lines, got {lines:,} lines."
+            _dual_msg(
+                f"{field_name}行数过多。最大允许 {MAX_TEXT_LINES:,} 行，"
+                f"实际 {lines:,} 行。",
+                f"{field_name} has too many lines. Maximum allowed is "
+                f"{MAX_TEXT_LINES:,} lines, got {lines:,} lines.",
+            )
         )
 
     return text

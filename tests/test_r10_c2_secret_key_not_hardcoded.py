@@ -12,6 +12,7 @@ Two invariants are asserted:
 from __future__ import annotations
 
 import os
+import secrets
 from unittest.mock import patch
 
 import pytest
@@ -57,9 +58,13 @@ def test_development_fallback_is_random_not_hardcoded():
 
 def test_explicit_env_secret_is_honored():
     """Regression guard: explicit DATALAB_WEB_SECRET is still used."""
+    # Generate the test secret at runtime so no literal ever appears in the
+    # repo (keeps bandit S105 / ruff S105 clean and matches real deployment
+    # hygiene — the env value is still opaque to the server).
+    expected_secret = secrets.token_hex(16)
     env = dict(os.environ)
-    env["DATALAB_WEB_SECRET"] = "test-explicit-secret-value-32chars"
+    env["DATALAB_WEB_SECRET"] = expected_secret
     with patch.dict(os.environ, env, clear=True):
         server = _reload_server()
         app = server.create_app()
-        assert app.config["SECRET_KEY"] == "test-explicit-secret-value-32chars"
+        assert app.config["SECRET_KEY"] == expected_secret
