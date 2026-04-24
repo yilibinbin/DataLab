@@ -101,20 +101,25 @@ def _resolve_max_pages(max_pages: Optional[int]) -> int:
 
 
 class _PdfRasterCacheInfo(NamedTuple):
-    """Hit/miss counters plus current LRU occupancy. Mirrors the shape of
-    ``functools._CacheInfo`` so callers can share diagnostic code with
-    the other LRU layers in DataLab."""
+    """Hit/miss counters plus current LRU occupancy.
+
+    Field order matches ``functools._CacheInfo``
+    (``hits, misses, maxsize, currsize``) so a caller unpacking
+    positionally against either flavour gets the same values. Do **not**
+    reorder — the compat contract is part of the shared diagnostic
+    surface with the mpmath sampling cache and the render cache.
+    """
 
     hits: int
     misses: int
-    currsize: int
     maxsize: int
+    currsize: int
 
 
 def _pdf_cache_key(
     pdf_path: Path,
     dpi: int,
-    max_pages: Optional[int],
+    max_pages: int,
     tool_name: str,
 ) -> tuple:
     """Build a cache key that invalidates when the file changes.
@@ -154,13 +159,17 @@ def clear_pdf_raster_cache() -> None:
 
 
 def pdf_raster_cache_info() -> _PdfRasterCacheInfo:
-    """Snapshot of the raster LRU state."""
+    """Snapshot of the raster LRU state.
+
+    Constructed with keyword args so the ``functools._CacheInfo``-matching
+    field order stays locked — don't rely on argument position here.
+    """
     with _pdf_raster_cache_lock:
         return _PdfRasterCacheInfo(
             hits=_pdf_raster_cache_stats["hits"],
             misses=_pdf_raster_cache_stats["misses"],
-            currsize=len(_pdf_raster_cache),
             maxsize=_PDF_RASTER_CACHE_MAXSIZE,
+            currsize=len(_pdf_raster_cache),
         )
 
 
@@ -322,22 +331,28 @@ def _convert_pdftoppm(
     pdf_path: Path,
     tmpdir: Path,
     dpi: int,
-    max_pages: Optional[int],
+    max_pages: int,
     pdftoppm_path: str,
 ) -> List[Image.Image]:
-    """Convert using pdftoppm (preferred)."""
+    """Convert using pdftoppm (preferred).
+
+    ``max_pages`` is a resolved positive integer (see
+    ``_resolve_max_pages`` — callers that passed ``None`` have already
+    been mapped to ``_ABSOLUTE_MAX_PAGES``). The ``-l`` flag is emitted
+    unconditionally to make the page cap explicit at the subprocess
+    boundary — this is the load-bearing defence against PDF-bomb inputs
+    and must NOT be made conditional even if the resolver changes.
+    """
     output_prefix = str(tmpdir / "page")
 
     cmd = [
         pdftoppm_path,
         "-png",
         "-r", str(dpi),
+        "-l", str(max_pages),
         str(pdf_path),
         output_prefix,
     ]
-
-    if max_pages:
-        cmd.extend(["-l", str(max_pages)])
 
     try:
         result = subprocess.run(
@@ -385,10 +400,16 @@ def _convert_ghostscript(
     pdf_path: Path,
     tmpdir: Path,
     dpi: int,
-    max_pages: Optional[int],
+    max_pages: int,
     gs_path: str,
 ) -> List[Image.Image]:
-    """Convert using ghostscript (fallback)."""
+    """Convert using ghostscript (fallback).
+
+    ``max_pages`` is a resolved positive integer (see
+    ``_resolve_max_pages``). The ``-dLastPage`` flag is emitted
+    unconditionally as the load-bearing PDF-bomb defence — do NOT
+    make it conditional.
+    """
     output_pattern = str(tmpdir / "page-%d.png")
 
     cmd = [
@@ -397,15 +418,13 @@ def _convert_ghostscript(
         "-dNOPAUSE",
         "-dBATCH",
         "-dSAFER",
+        f"-dLastPage={max_pages}",
         "-sDEVICE=png16m",
         f"-r{dpi}x{dpi}",
         "-dGraphicsAlphaBits=4",
         f"-sOutputFile={output_pattern}",
         str(pdf_path),
     ]
-
-    if max_pages:
-        cmd.insert(4, f"-dLastPage={max_pages}")
 
     try:
         result = subprocess.run(

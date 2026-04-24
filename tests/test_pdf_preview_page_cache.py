@@ -240,6 +240,42 @@ def test_max_pages_clamped_to_absolute_ceiling(_minimal_pdf: Path):
     assert len(result) >= 1
 
 
+def test_concurrent_miss_returns_valid_images(_minimal_pdf: Path):
+    """Two threads racing on the same cache miss must both get valid
+    images. Documents that we deliberately don't hold the lock across
+    the subprocess — duplicate work is idempotent and bounded, while
+    holding the lock for up to 800 ms would stall all other cache ops."""
+    import threading
+
+    from shared import pdf_preview_raster as raster
+
+    raster.clear_pdf_raster_cache()
+    results: list[list[Image.Image]] = []
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(2)
+
+    def worker() -> None:
+        try:
+            barrier.wait(timeout=5)
+            imgs = raster.convert_pdf_to_images(_minimal_pdf, dpi=72)
+            results.append(imgs)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    t1 = threading.Thread(target=worker)
+    t2 = threading.Thread(target=worker)
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    assert not errors, f"worker raised: {errors}"
+    assert len(results) == 2, "both workers must complete"
+    for imgs in results:
+        assert imgs and all(isinstance(img, Image.Image) for img in imgs)
+        assert imgs[0].mode == "RGBA"
+
+
 def test_resolve_canonicalises_symlink(_minimal_pdf: Path, tmp_path: Path):
     """A symlink to a PDF must hit the same cache entry as the target —
     the key uses ``Path.resolve()``."""
