@@ -41,6 +41,21 @@ LATEX_MAX_FILE_SIZE = int(os.environ.get('DATALAB_LATEX_MAX_FILE', '50')) * 1024
 LATEX_MAX_PROCESSES = int(os.environ.get('DATALAB_LATEX_MAX_PROC', '2048'))
 
 
+# Patterns for the ``validate_latex_content`` shell-escape pre-filter. Compiled
+# once at import time so the per-request cost is a list iteration over already-
+# compiled regexes. The TeX tokenizer accepts arbitrary whitespace between
+# control-sequence names and their arguments, so a literal substring match on
+# ``\write18`` would miss ``\write 18``, ``\write\n18``, ``\immediate \write 18``,
+# etc. Each entry is ``(label, compiled_pattern)`` where ``label`` is the
+# canonical short form used in warning messages.
+_DANGEROUS_LATEX_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    (r"\immediate\write18", re.compile(r"\\immediate\s*\\write\s*18\b")),
+    (r"\write18", re.compile(r"\\write\s*18\b")),
+    (r"\openout", re.compile(r"\\openout\b")),
+    (r"\input{|", re.compile(r"\\input\s*\{\s*\|")),
+)
+
+
 def _preexec_limit_resources():
     """
     Set resource limits for LaTeX subprocess (POSIX only).
@@ -228,19 +243,7 @@ def validate_latex_content(tex_text: str) -> tuple[bool, list[str]]:
     """
     warnings = []
 
-    # Check for shell escape attempts. The TeX tokenizer accepts arbitrary
-    # whitespace between control-sequence names and their arguments, so a
-    # literal substring match on "\write18" would miss "\write 18",
-    # "\write\n18", "\immediate \write 18", etc. Use regex with optional
-    # whitespace and word boundaries to match what the engine actually sees.
-    dangerous_patterns: list[tuple[str, re.Pattern[str]]] = [
-        (r"\immediate\write18", re.compile(r"\\immediate\s*\\write\s*18\b")),
-        (r"\write18", re.compile(r"\\write\s*18\b")),
-        (r"\openout", re.compile(r"\\openout\b")),
-        (r"\input{|", re.compile(r"\\input\s*\{\s*\|")),
-    ]
-
-    for label, pattern in dangerous_patterns:
+    for label, pattern in _DANGEROUS_LATEX_PATTERNS:
         if pattern.search(tex_text):
             warnings.append(
                 f"检测到危险的 LaTeX 命令: {label}，已阻止。"

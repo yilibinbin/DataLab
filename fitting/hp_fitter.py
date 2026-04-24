@@ -178,7 +178,9 @@ def _compute_statistics(
         residuals.append(value - target)
     if weights:
         if any(w <= 0 for w in weights):
-            raise ValueError(_dual_msg("权重必须为正。", "Weights must be positive."))
+            raise ValueError(
+                _dual_msg("权重必须为正。", "Weights must be positive.")
+            )
         chi2 = sum(weight * (r * r) for weight, r in zip(weights, residuals))
         total_weight = sum(weights)
         if total_weight > 0:
@@ -221,7 +223,9 @@ def _compute_covariance(
     if weights:
         for w in weights:
             if w <= 0:
-                raise ValueError(_dual_msg("权重必须为正。", "Weights must be positive."))
+                raise ValueError(
+                    _dual_msg("权重必须为正。", "Weights must be positive.")
+                )
     sqrt_weights = [mp.sqrt(w) for w in weights] if weights else None
     for idx, (obs, target) in enumerate(zip(observations, targets)):
         for jdx, name in enumerate(free_params):

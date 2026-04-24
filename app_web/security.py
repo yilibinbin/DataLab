@@ -25,10 +25,6 @@ from shared.bilingual import _dual_msg
 CSRF_TOKEN_LENGTH = 32
 CSRF_HEADER_NAME = 'X-CSRF-Token'
 CSRF_FORM_NAME = 'csrf_token'
-# Historical ``datalab_csrf`` cookie name retained purely so legacy tests and
-# docstrings can reference what was removed. Not written to responses and not
-# read during validation; see add_security_headers() and validate_csrf_token().
-CSRF_COOKIE_NAME = 'datalab_csrf'
 
 
 def generate_csrf_token() -> str:
@@ -315,13 +311,8 @@ def configure_app_security(app):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['X-XSS-Protection'] = '1; mode=block'
-
-        # CSRF is session-scoped by design (see get_csrf_token()); no separate
-        # CSRF cookie is emitted. Earlier revisions set a httponly=True
-        # ``datalab_csrf`` cookie for a "double-submit" fallback, but since
-        # H2 removed cookie-based validation from validate_csrf_token the
-        # cookie was unreadable to JS and unused by the server — dead weight
-        # that could only confuse operators debugging CSRF failures.
+        # CSRF is session-scoped by design (see get_csrf_token()); no CSRF
+        # cookie is emitted here.
         return response
 
     # Error handlers to prevent info leakage

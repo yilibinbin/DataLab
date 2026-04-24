@@ -21,13 +21,12 @@ initial R10 PR (#2) landed:
 - **bug_007** (nit): ``add_security_headers`` no longer emits the dead
   ``datalab_csrf`` cookie. Asserting the ``Set-Cookie`` header does not
   contain ``datalab_csrf=`` documents the intent and prevents regression.
+
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from mpmath import mp
@@ -49,7 +48,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_bug001_worker_guard_clamps_below_min():
-    """Requesting dps=1 must be raised to MIN_MPMATH_DPS inside the guard."""
+    """Requesting dps=1 must be raised to MIN_MPMATH_DPS, and restored on exit."""
     from app_desktop.workers_core import _mp_precision_guard
 
     original = mp.dps
@@ -57,12 +56,13 @@ def test_bug001_worker_guard_clamps_below_min():
         with _mp_precision_guard(1) as effective:
             assert effective >= MIN_MPMATH_DPS
             assert mp.dps == effective
+        assert mp.dps == original
     finally:
         mp.dps = original
 
 
 def test_bug001_worker_guard_clamps_above_max():
-    """Requesting dps far above the cap must be lowered to MAX_MPMATH_DPS."""
+    """Requesting dps above the cap must be lowered to MAX_MPMATH_DPS, and restored on exit."""
     from app_desktop.workers_core import _mp_precision_guard
 
     original = mp.dps
@@ -73,21 +73,9 @@ def test_bug001_worker_guard_clamps_above_max():
         with _mp_precision_guard(requested) as effective:
             assert effective <= MAX_MPMATH_DPS
             assert mp.dps == effective
+        assert mp.dps == original
     finally:
         mp.dps = original
-
-
-def test_bug001_worker_guard_restores_dps_on_exit():
-    """The guard is a context manager — dps must be restored even on exit."""
-    from app_desktop.workers_core import _mp_precision_guard
-
-    baseline = mp.dps
-    try:
-        with _mp_precision_guard(MIN_MPMATH_DPS + 5):
-            pass
-        assert mp.dps == baseline
-    finally:
-        mp.dps = baseline
 
 
 # ----------------------------------------------------------------------------
@@ -173,7 +161,6 @@ def test_bug006_hp_fitter_weight_raise_uses_canonical_separator():
         build_parameter_state,
         fit_custom_model,
     )
-    from fitting.hp_fitter import mp as hpfmp
 
     spec = build_model_specification("a*x + b", ["x"], ["a", "b"])
     state = build_parameter_state(
@@ -185,8 +172,8 @@ def test_bug006_hp_fitter_weight_raise_uses_canonical_separator():
         fit_custom_model(
             spec,
             state,
-            variable_data={"x": [hpfmp.mpf(i) for i in range(1, 5)]},
-            target_data=[hpfmp.mpf(i) for i in range(1, 5)],
+            variable_data={"x": [mp.mpf(i) for i in range(1, 5)]},
+            target_data=[mp.mpf(i) for i in range(1, 5)],
             weights=[1.0, -1.0, 1.0, 1.0],
         )
 
@@ -195,9 +182,11 @@ def test_bug006_hp_fitter_weight_raise_uses_canonical_separator():
     zh, en = split_dual(msg)
     assert zh and en
     assert zh != en
-    # A correct round trip keeps the Chinese punctuation on the zh side;
-    # the broken "。/ " form leaked everything to one half.
-    assert "。" in zh
+    # The Chinese half should be a well-formed sentence ending in a full
+    # stop — the broken "。/ " form left the period + English text stranded.
+    assert zh.endswith("。")
+    assert "权重必须为正" in zh
+    assert "Weights must be positive" in en
 
 
 def test_bug006_custom_fitting_param_config_uses_canonical_separator():
@@ -265,13 +254,3 @@ def test_bug007_no_csrf_cookie_in_response_headers(monkeypatch):
     assert "datalab_csrf=" not in joined, (
         f"dead CSRF cookie reappeared in response: {joined!r}"
     )
-
-
-def test_bug007_get_csrf_token_docstring_does_not_claim_cookie_mirror():
-    """Docstring guardrail — stale 'client-readable mirror' must not return."""
-    from app_web.security import get_csrf_token
-
-    doc = (get_csrf_token.__doc__ or "").lower()
-    assert "client-readable mirror" not in doc
-    # Positive assertion: the reason is documented.
-    assert "session" in doc

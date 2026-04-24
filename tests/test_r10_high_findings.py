@@ -34,10 +34,10 @@ def test_h1_security_shim_fallback_has_no_shell_escape():
 def test_h2_get_csrf_token_does_not_read_cookie_when_session_empty():
     """get_csrf_token must NOT copy the datalab_csrf cookie into session."""
     # Inspect source of app_web/security.py:get_csrf_token — assert that it
-    # does not call request.cookies.get(CSRF_COOKIE_NAME) as a seeding path.
+    # does not seed session['csrf_token'] from request.cookies as a fallback.
     from app_web import security as sec
     src = inspect.getsource(sec.get_csrf_token)
-    # Before fix: "cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
+    # Before fix: "cookie_token = request.cookies.get(...)
     #              if cookie_token: session['csrf_token'] = cookie_token"
     # After fix: that pattern must be gone.
     assert not (
@@ -56,7 +56,7 @@ def test_h2_validate_csrf_token_does_not_fall_back_to_cookie_only():
     sole proof of authenticity."""
     from app_web import security as sec
     src = inspect.getsource(sec.validate_csrf_token)
-    # Before fix: "cookie_token = request.cookies.get(CSRF_COOKIE_NAME);
+    # Before fix: "cookie_token = request.cookies.get(...);
     #              if not cookie_token: return False; return hmac.compare_digest(cookie_token, token)"
     # Presence of both `request.cookies.get(` and `compare_digest(cookie_token` marks the fallback.
     has_cookie_read = "request.cookies.get" in src
