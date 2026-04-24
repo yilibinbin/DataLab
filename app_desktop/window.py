@@ -1277,7 +1277,8 @@ class ExtrapolationWindow(
         # user action has already captured the latest splitter size —
         # Qt tears down the widget hierarchy deterministically on
         # accept, and restoreState can't recover a splitter that was
-        # already disposed.
+        # already disposed. (If the user cancels exit and resizes the
+        # splitter further, the next closeEvent overrides this save.)
         try:
             from shared.settings_store import (
                 KEY_MAIN_SPLITTER_STATE,
@@ -1286,7 +1287,13 @@ class ExtrapolationWindow(
 
             splitter = getattr(self, "_main_splitter", None)
             if splitter is not None:
-                SettingsStore().save_bytes(
+                # Reuse the instance cached by build_ui so the load
+                # path and the save path hit the same QSettings object.
+                settings = getattr(self, "_settings_store", None)
+                if settings is None:
+                    settings = SettingsStore()
+                    self._settings_store = settings
+                settings.save_bytes(
                     KEY_MAIN_SPLITTER_STATE, splitter.saveState()
                 )
         except Exception:

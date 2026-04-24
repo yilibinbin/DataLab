@@ -103,34 +103,87 @@ def test_load_bytes_ignores_wrong_type(_store):
 
 def test_save_and_load_int_roundtrip(_store):
     store, _ = _store
-    store.save_int("fit/last_dpi", 350)
-    assert store.load_int("fit/last_dpi") == 350
+    store.save_int("Fitting/last_dpi", 350)
+    assert store.load_int("Fitting/last_dpi") == 350
 
 
 def test_load_int_returns_default_for_missing(_store):
     store, _ = _store
-    assert store.load_int("nonexistent", default=42) == 42
+    assert store.load_int("Fitting/nonexistent", default=42) == 42
 
 
 def test_load_int_returns_default_for_garbage(_store):
     store, fake = _store
-    fake._data["fit/last_dpi"] = "not-an-int"
-    assert store.load_int("fit/last_dpi", default=200) == 200
+    fake._data["Fitting/last_dpi"] = "not-an-int"
+    assert store.load_int("Fitting/last_dpi", default=200) == 200
+
+
+def test_load_int_range_clamp_enforces_bounds(_store):
+    """Defends against hand-edited or attacker-replaced plist values —
+    a stored ``last_dpi=2147483647`` must clamp down to the supplied
+    ceiling rather than reach the renderer unchanged."""
+    store, fake = _store
+    fake._data["Fitting/last_dpi"] = 2_147_483_647
+    assert (
+        store.load_int("Fitting/last_dpi", default=150, min_val=50, max_val=600)
+        == 600
+    )
+    fake._data["Fitting/last_dpi"] = -999
+    assert (
+        store.load_int("Fitting/last_dpi", default=150, min_val=50, max_val=600)
+        == 50
+    )
 
 
 def test_remove_deletes_key(_store):
     store, fake = _store
-    store.save_int("fit/dpi", 350)
-    store.remove("fit/dpi")
-    assert "fit/dpi" not in fake._data
+    store.save_int("Fitting/dpi", 350)
+    store.remove("Fitting/dpi")
+    assert "Fitting/dpi" not in fake._data
 
 
 def test_clear_all_wipes_everything(_store):
     store, fake = _store
-    store.save_int("a", 1)
-    store.save_bytes("b", b"x")
+    store.save_int("Fitting/a", 1)
+    store.save_bytes("MainWindow/b", b"x")
     store.clear_all()
     assert not fake._data
+
+
+def test_save_bytes_rejects_key_outside_allowlist(_store):
+    """The 'no secrets' policy in the docstring is enforced at runtime —
+    a future caller trying to land a token in the plist fails loudly."""
+    store, _ = _store
+    with pytest.raises(ValueError, match="allowed namespace"):
+        store.save_bytes("api/token", b"secret")
+
+
+def test_save_int_rejects_key_outside_allowlist(_store):
+    store, _ = _store
+    with pytest.raises(ValueError, match="allowed namespace"):
+        store.save_int("users/uid", 1001)
+
+
+def test_save_bytes_rejects_oversized_blob(_store):
+    """A buggy caller or attacker-supplied value cannot bloat the
+    prefs store beyond MAX_BLOB_BYTES."""
+    from shared.settings_store import MAX_BLOB_BYTES
+
+    store, fake = _store
+    oversized = QByteArray(b"x" * (MAX_BLOB_BYTES + 1))
+    store.save_bytes("MainWindow/state", oversized)
+    # Not persisted — the warning-logged rejection leaves the key absent.
+    assert "MainWindow/state" not in fake._data
+
+
+def test_load_bytes_rejects_oversized_blob(_store):
+    """An attacker who replaces the plist with a giant blob cannot
+    feed it into Qt's restoreState parsers."""
+    from shared.settings_store import MAX_BLOB_BYTES
+
+    store, fake = _store
+    fake._data["MainWindow/state"] = QByteArray(b"x" * (MAX_BLOB_BYTES + 1))
+    assert store.load_bytes("MainWindow/state") is None
 
 
 def test_save_bytes_swallows_errors_does_not_raise(monkeypatch):

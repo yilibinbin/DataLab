@@ -289,18 +289,27 @@ def build_ui(self):
     # left/right proportions survive a restart. See
     # ``shared.settings_store`` for the key naming and on-failure
     # fallback policy (defaults to the [520, 820] setSizes above).
+    # A single SettingsStore instance is cached on ``self`` and reused
+    # by closeEvent's save path — avoids double-construction race on
+    # Windows registry access and lets tests inject a fake via a
+    # single monkeypatch point.
     try:
         from shared.settings_store import (
             KEY_MAIN_SPLITTER_STATE,
             SettingsStore,
         )
 
-        blob = SettingsStore().load_bytes(KEY_MAIN_SPLITTER_STATE)
+        settings = getattr(self, "_settings_store", None)
+        if settings is None:
+            settings = SettingsStore()
+            self._settings_store = settings
+
+        blob = settings.load_bytes(KEY_MAIN_SPLITTER_STATE)
         if blob is not None:
             if not splitter.restoreState(blob):
                 # Stale blob from a layout change in a prior version —
                 # drop it so we don't try again next start.
-                SettingsStore().save_bytes(KEY_MAIN_SPLITTER_STATE, None)
+                settings.save_bytes(KEY_MAIN_SPLITTER_STATE, None)
     except Exception:
         # Persistence is a convenience; never block startup.
         pass
