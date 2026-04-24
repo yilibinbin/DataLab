@@ -26,6 +26,7 @@ initial R10 PR (#2) landed:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +34,13 @@ from mpmath import mp
 
 from shared.bilingual import split_dual
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS
+
+# Repo root derived from this file's location so the tests work on CI,
+# contributors' machines, and any verifier host. Matches the hermetic-path
+# convention already used in ``tests/conftest.py``. Hardcoding an absolute
+# path (``/Users/...``) would silently defeat the repo-wide "。/" guard on
+# every non-author machine, reducing this suite's CI value to zero.
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 # ----------------------------------------------------------------------------
@@ -197,11 +205,9 @@ def test_bug006_custom_fitting_param_config_uses_canonical_separator():
     # Verify by source inspection because the module wires up many heavy
     # dependencies. The separator itself is what matters: " / " with space
     # on both sides, never "。/".
-    from pathlib import Path
-
-    fitting_src = Path(
-        "/Users/fanghao/Documents/Code/data_extrapolation_gui/DataLab-review/app_web/logic/fitting.py"
-    ).read_text(encoding="utf-8")
+    fitting_src = (REPO_ROOT / "app_web" / "logic" / "fitting.py").read_text(
+        encoding="utf-8"
+    )
     assert "参数配置必须为 JSON 对象（key 为参数名）。/ Parameter" not in fitting_src
     # The _dual_msg path is what should be present:
     assert "_dual_msg(" in fitting_src
@@ -212,11 +218,12 @@ def test_bug006_no_broken_chinese_period_slash_anywhere():
     """Repository-wide: no raise or string literal contains \"。/\" (missing space)."""
     import subprocess
 
-    repo_root = "/Users/fanghao/Documents/Code/data_extrapolation_gui/DataLab-review"
-    # Use git grep to walk tracked files (fast and avoids venv scans).
+    # Use git grep to walk tracked files (fast and avoids venv scans). The
+    # cwd must resolve on every host — hardcoding an absolute author path
+    # would make the guard silently no-op on CI and contributors' machines.
     result = subprocess.run(
         ["git", "grep", "-n", "--", "。/"],
-        cwd=repo_root,
+        cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
         check=False,
