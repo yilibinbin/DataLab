@@ -26,7 +26,12 @@ from shared.settings_store import (
 
 class _FakeQSettings:
     """Minimal stand-in for ``QSettings``. Implements only the methods
-    ``SettingsStore`` uses so test isolation is trivially verifiable."""
+    ``SettingsStore`` uses so test isolation is trivially verifiable.
+
+    ``status()`` returns ``NoError`` by default; the
+    ``_StatusFailingFake`` subclass below exercises the error path
+    that the real QSettings backends expose via ``status()`` rather
+    than via exceptions."""
 
     def __init__(self) -> None:
         self._data: Dict[str, Any] = {}
@@ -46,6 +51,11 @@ class _FakeQSettings:
 
     def clear(self) -> None:
         self._data.clear()
+
+    def status(self):
+        from PySide6.QtCore import QSettings
+
+        return QSettings.Status.NoError
 
 
 @pytest.fixture
@@ -204,6 +214,33 @@ def test_load_bytes_swallows_errors_returns_none(monkeypatch):
 
     store = SettingsStore(store=_RaisingFake())
     assert store.load_bytes("any") is None
+
+
+def test_status_non_no_error_logged_at_warning(_store, caplog):
+    """Real QSettings backends don't raise on write failure — they set
+    status() to AccessError / FormatError. The wrapper surfaces that
+    as a WARNING-level log so read-only prefs / disk-full conditions
+    are observable."""
+    import logging
+
+    from PySide6.QtCore import QSettings
+
+    class _AccessErrorFake(_FakeQSettings):
+        def status(self):
+            return QSettings.Status.AccessError
+
+    store = SettingsStore(store=_AccessErrorFake())
+    with caplog.at_level(logging.WARNING, logger="shared.settings_store"):
+        store.save_bytes(KEY_MAIN_SPLITTER_STATE, QByteArray(b"x"))
+    assert any("status=" in rec.message for rec in caplog.records)
+
+
+def test_load_int_rejects_non_int_default(_store):
+    """Documented invariant: default must be int. Protects the return
+    type promise against a call like ``load_int(key, default=None)``."""
+    store, _ = _store
+    with pytest.raises(TypeError, match="default must be int"):
+        store.load_int("Fitting/any", default=None)  # type: ignore[arg-type]
 
 
 def test_ensure_qt_application_identity_is_idempotent():

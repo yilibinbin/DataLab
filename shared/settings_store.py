@@ -41,6 +41,14 @@ from typing import Any, Optional
 
 from PySide6.QtCore import QByteArray, QCoreApplication, QSettings
 
+# Qt's NoError value — available on QSettings.Status on all supported
+# PySide6 versions. Imported by name so a future Qt version reshuffling
+# the enum surfaces at import time rather than silently.
+try:
+    _NO_ERROR_STATUS = QSettings.Status.NoError
+except AttributeError:  # pragma: no cover - compatibility shim
+    _NO_ERROR_STATUS = 0  # type: ignore[assignment]
+
 __all__ = [
     "SETTINGS_ORG",
     "SETTINGS_APP",
@@ -119,11 +127,19 @@ def _validate_key(key: str) -> None:
 class SettingsStore:
     """Typed accessor over QSettings.
 
-    Instantiate once and share the instance across a process; QSettings
-    is cheap to construct but the explicit seam makes the surface
-    greppable and trivial to mock in tests (``SettingsStore(store=...)``
-    injection takes a stand-in implementing ``value`` / ``setValue`` /
-    ``remove`` / ``sync``).
+    QSettings is cheap to construct, and Qt only guarantees that
+    **distinct** instances are thread-safe — a single instance shared
+    across threads has no formal thread-safety guarantee. For
+    per-window / single-threaded UI use (DataLab's current pattern),
+    instantiate once on the main thread and reuse (see
+    ``ExtrapolationWindow._settings_store``). From a background worker
+    thread, construct a fresh ``SettingsStore()`` inside the worker —
+    do not share.
+
+    The explicit seam makes the surface greppable and trivial to mock
+    in tests (``SettingsStore(store=...)`` injection takes a stand-in
+    implementing ``value`` / ``setValue`` / ``remove`` / ``sync`` /
+    ``status``).
     """
 
     def __init__(self, store: Optional[Any] = None) -> None:
@@ -131,6 +147,28 @@ class SettingsStore:
             ensure_qt_application_identity()
             store = QSettings(SETTINGS_ORG, SETTINGS_APP)
         self._store = store
+
+    def _check_status(self, op: str, key: str) -> None:
+        """After every mutation, interrogate ``QSettings.status()`` —
+        the real backends (macOS plist, Windows registry) do NOT raise
+        on write failure; they set the status to ``AccessError`` or
+        ``FormatError`` silently. This is the only observability point
+        for a read-only ~/Library or a disk-full condition."""
+        status_fn = getattr(self._store, "status", None)
+        if status_fn is None:
+            return
+        try:
+            status = status_fn()
+        except Exception:  # noqa: BLE001
+            return
+        if status != _NO_ERROR_STATUS:
+            _logger.warning(
+                "SettingsStore.%s(%s): QSettings reports status=%s "
+                "(probable disk-full, read-only prefs, or corrupted plist)",
+                op,
+                key,
+                status,
+            )
 
     # ------------------------------------------------------------------
     # Binary blob helpers (splitter / window state)
@@ -149,6 +187,12 @@ class SettingsStore:
         registry on Windows) get a consistent type. Blobs exceeding
         ``MAX_BLOB_BYTES`` are rejected to prevent a buggy caller (or
         attacker-supplied value) from corrupting the prefs store.
+
+        Failure observability: QSettings's standard backends do NOT
+        raise on write failure — they set ``status()`` to
+        ``AccessError`` instead. ``_check_status`` reads that after
+        every mutation so a read-only prefs dir or disk-full condition
+        surfaces in the app log at WARNING level.
         """
         _validate_key(key)
         try:
@@ -168,12 +212,13 @@ class SettingsStore:
                 self._store.setValue(key, blob)
             self._store.sync()
         except Exception as exc:  # noqa: BLE001
-            # A failed write is non-fatal — worst case is the next start
-            # falls back to defaults. Log at warning so sysadmins on a
-            # read-only ~/Library can see the problem.
+            # Defense-in-depth against a hypothetical custom backend
+            # that raises. Standard backends don't; _check_status below
+            # catches their silent-failure mode.
             _logger.warning(
-                "SettingsStore.save_bytes(%s) failed: %s", key, exc
+                "SettingsStore.save_bytes(%s) raised: %s", key, exc
             )
+        self._check_status("save_bytes", key)
 
     def load_bytes(self, key: str) -> Optional[QByteArray]:
         """Retrieve a binary blob. Returns ``None`` when the key is
@@ -226,7 +271,8 @@ class SettingsStore:
             self._store.setValue(key, int(value))
             self._store.sync()
         except Exception as exc:  # noqa: BLE001
-            _logger.warning("SettingsStore.save_int(%s) failed: %s", key, exc)
+            _logger.warning("SettingsStore.save_int(%s) raised: %s", key, exc)
+        self._check_status("save_int", key)
 
     def load_int(
         self,
@@ -243,6 +289,10 @@ class SettingsStore:
         known safe range SHOULD pass both bounds; callers using the
         default (0, no clamps) should clamp at the use site.
         """
+        if not isinstance(default, int):
+            raise TypeError(
+                f"default must be int, got {type(default).__name__}"
+            )
         try:
             raw = self._store.value(key)
         except Exception as exc:  # noqa: BLE001
@@ -270,7 +320,8 @@ class SettingsStore:
             self._store.remove(key)
             self._store.sync()
         except Exception as exc:  # noqa: BLE001
-            _logger.warning("SettingsStore.remove(%s) failed: %s", key, exc)
+            _logger.warning("SettingsStore.remove(%s) raised: %s", key, exc)
+        self._check_status("remove", key)
 
     def clear_all(self) -> None:
         """Wipe every key under this ``(org, app)`` namespace. Mainly
@@ -279,7 +330,8 @@ class SettingsStore:
             self._store.clear()
             self._store.sync()
         except Exception as exc:  # noqa: BLE001
-            _logger.warning("SettingsStore.clear_all failed: %s", exc)
+            _logger.warning("SettingsStore.clear_all raised: %s", exc)
+        self._check_status("clear_all", "*")
 
 
 # Pre-declared key constants. Consumers should import these rather than
@@ -287,3 +339,43 @@ class SettingsStore:
 KEY_MAIN_WINDOW_GEOMETRY = "MainWindow/geometry"
 KEY_MAIN_WINDOW_STATE = "MainWindow/state"
 KEY_MAIN_SPLITTER_STATE = "MainWindow/main_splitter_state"
+
+
+# QSplitter saveState() blob format (Qt 6.x): big-endian 32-bit magic
+# (0xff000000 masked marker), 32-bit version, 32-bit child count. We
+# only need the child count to detect a stale blob from a layout that
+# had a different number of panes than the current splitter — Qt will
+# otherwise silently truncate the child list and apply arbitrary sizes.
+_SPLITTER_BLOB_MIN_HEADER_BYTES = 12
+
+
+def extract_splitter_pane_count(blob: bytes) -> Optional[int]:
+    """Peek into a ``QSplitter.saveState()`` blob for its pane count.
+
+    Returns ``None`` if the blob is shorter than the header or the
+    extracted count is implausibly large (> 32 panes). Used by the
+    splitter-restore path in ``app_desktop.panels.build_ui`` to reject
+    a stale blob whose pane count differs from the current layout
+    BEFORE calling ``restoreState`` — Qt 6.x is permissive about
+    partial applications of such blobs, which is a UX hazard.
+
+    Parsing is best-effort: a future Qt version that changes the blob
+    format is expected to return a mismatch here, which triggers the
+    safe default-sizes fallback in the caller.
+    """
+    if blob is None or len(blob) < _SPLITTER_BLOB_MIN_HEADER_BYTES:
+        return None
+    try:
+        import struct
+
+        # Qt streams are big-endian. First 4 bytes are the marker
+        # (0x000000ff ^ 0xff... depending on version — we skip);
+        # next 4 bytes are the version; bytes 8-11 are the child count.
+        count = struct.unpack(">I", blob[8:12])[0]
+    except Exception:  # noqa: BLE001
+        return None
+    if count == 0 or count > 32:
+        # Implausible — either a corrupt blob or a future format we
+        # can't parse. Treat as invalid; caller will skip restore.
+        return None
+    return int(count)

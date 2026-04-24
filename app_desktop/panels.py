@@ -297,6 +297,7 @@ def build_ui(self):
         from shared.settings_store import (
             KEY_MAIN_SPLITTER_STATE,
             SettingsStore,
+            extract_splitter_pane_count,
         )
 
         settings = getattr(self, "_settings_store", None)
@@ -306,13 +307,48 @@ def build_ui(self):
 
         blob = settings.load_bytes(KEY_MAIN_SPLITTER_STATE)
         if blob is not None:
-            if not splitter.restoreState(blob):
-                # Stale blob from a layout change in a prior version —
-                # drop it so we don't try again next start.
+            # Snapshot pre-restore sizes so we can roll back if the
+            # restore succeeds syntactically (returns True) but applies
+            # semantically nonsensical sizes — e.g. a blob from an
+            # older app version whose layout had 3 panes instead of 2,
+            # which Qt will happily accept and silently truncate.
+            pre_restore_sizes = splitter.sizes()
+            pre_restore_count = splitter.count()
+            # The blob header stores the pane count. Pre-check it
+            # matches our splitter's count before letting Qt apply a
+            # blob from a different layout.
+            expected_count = pre_restore_count
+            blob_count = extract_splitter_pane_count(bytes(blob))
+            if blob_count is not None and blob_count != expected_count:
+                # Stale blob from a layout change — drop it immediately.
                 settings.save_bytes(KEY_MAIN_SPLITTER_STATE, None)
+            else:
+                restored_ok = splitter.restoreState(blob)
+                sizes_after = splitter.sizes()
+                # Accept the restore only if the pane count, minimum,
+                # and total-width invariants still hold. Any failure
+                # means the blob was from an incompatible layout.
+                if (
+                    restored_ok
+                    and len(sizes_after) == splitter.count()
+                    and all(s >= 0 for s in sizes_after)
+                    and sum(sizes_after) > 0
+                ):
+                    # Good restore — leave it in place.
+                    pass
+                else:
+                    # Bad restore — revert to pre-restore sizes and
+                    # drop the stale blob.
+                    splitter.setSizes(pre_restore_sizes)
+                    settings.save_bytes(KEY_MAIN_SPLITTER_STATE, None)
     except Exception:
-        # Persistence is a convenience; never block startup.
-        pass
+        # Persistence is a convenience; never block startup. Log at
+        # debug so developers still see it in DATALAB_DEBUG=1 runs.
+        import logging
+
+        logging.getLogger(__name__).debug(
+            "Splitter state restore skipped", exc_info=True
+        )
 
 def build_left_panel(self):
     # Mode selection

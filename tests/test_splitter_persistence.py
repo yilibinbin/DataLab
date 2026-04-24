@@ -61,6 +61,11 @@ def _fake_settings(monkeypatch):
         def clear(self) -> None:
             _shared_storage.clear()
 
+        def status(self):
+            from PySide6.QtCore import QSettings
+
+            return QSettings.Status.NoError
+
     _shared_storage: Dict[str, Any] = {}
     monkeypatch.setattr(
         "shared.settings_store.QSettings", _FakeQSettings
@@ -122,5 +127,42 @@ def test_corrupted_splitter_state_blob_is_discarded(qtbot, _fake_settings):
     assert getattr(win, "_main_splitter", None) is not None
     # The restore failed silently — our build_ui wrapper clears the
     # bad blob. Confirm it was removed so we don't keep retrying.
+    assert _fake_settings.get(KEY_MAIN_SPLITTER_STATE) is None
+    win.close()
+
+
+def test_valid_looking_stale_blob_with_wrong_pane_count_reverts(
+    qtbot, _fake_settings
+):
+    """A blob from a hypothetical 3-pane layout in an older version
+    may ``restoreState() -> True`` but apply sizes for the wrong
+    number of panes. Post-restore semantic validation must revert and
+    drop the blob."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QLabel, QSplitter
+
+    from app_desktop.window import ExtrapolationWindow
+
+    app = QApplication.instance() or QApplication([])  # noqa: F841
+
+    # Construct a 3-pane splitter state, save it, then open a real
+    # window (which has a 2-pane splitter) and confirm rollback.
+    fake_splitter = QSplitter(Qt.Horizontal)
+    for _ in range(3):
+        fake_splitter.addWidget(QLabel("pane"))
+    fake_splitter.setSizes([100, 200, 300])
+    _fake_settings[KEY_MAIN_SPLITTER_STATE] = QByteArray(
+        fake_splitter.saveState()
+    )
+
+    win = ExtrapolationWindow()
+    qtbot.addWidget(win)
+    splitter = win._main_splitter
+    # The validator saw a pane-count mismatch and reverted to the
+    # pre-restore defaults. Either way, sizes must match pane count.
+    assert len(splitter.sizes()) == splitter.count(), (
+        "post-restore invariant: sizes() length must match count()"
+    )
+    # And the stale blob was cleared so we don't retry next launch.
     assert _fake_settings.get(KEY_MAIN_SPLITTER_STATE) is None
     win.close()
