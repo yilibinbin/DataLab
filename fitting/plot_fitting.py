@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import io
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Hashable, Iterable, Sequence
 
 import matplotlib
 
@@ -12,6 +12,7 @@ from matplotlib import rcParams  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 from mpmath import mp
 
+from shared.caching import sample_with_cache
 from shared.precision import precision_guard
 
 rcParams["font.family"] = "sans-serif"
@@ -33,31 +34,55 @@ def sample_mp_function(
     func: Callable[[mp.mpf], mp.mpf],
     x_values: Sequence[mp.mpf],
     precision: int | None = None,
+    *,
+    cache_token: Hashable = None,
 ) -> list[mp.mpf]:
     """Evaluate an mp function across a sequence while preserving precision.
 
     Uses ``shared.precision.precision_guard`` so ``mp.dps`` mutations are
     routed through the single canonical context manager (thread-safe for
     concurrent worker jobs — ``mp.dps`` is process-global in mpmath).
-    When ``precision`` is ``None``, ``mp.dps`` is not touched.
+    When ``precision`` is ``None``, ``mp.dps`` is not touched **and the
+    cache is bypassed** (callers passing ``None`` are assumed to be inside
+    an outer ``precision_guard`` whose dps we must not observe as a
+    cache-key input).
+
+    When ``precision`` is an int, delegates to
+    :func:`shared.caching.sample_with_cache`. The outer
+    ``precision_guard`` on this path is load-bearing for the R10 C3
+    regression test
+    (``tests/test_r10_c3_plot_fitting_precision_guard.py``), which
+    patches ``plot_fitting.precision_guard`` with a spy — removing it
+    would silently pass the test via the inner guard in
+    ``shared.caching`` but fail the intent of the regression.
+    ``precision_guard`` is re-entrant, so the nesting is correctness-
+    neutral at runtime.
+
+    ``cache_token`` is forwarded unchanged to ``sample_with_cache`` and
+    lets callers whose ``func`` closes over mutable state (changing
+    between renders) force cache invalidation by bumping the token. For
+    DataLab's built-in evaluators (``build_linear_evaluator`` et al.)
+    each fit produces a fresh closure with frozen parameters, so the
+    default token ``None`` is appropriate.
     """
 
-    samples: list[mp.mpf] = []
-
-    def _evaluate() -> None:
+    if precision is None:
+        # Bypass the cache entirely. The caller is presumed to be inside
+        # an outer precision_guard, so we must not observe mp.dps as a
+        # cache-key input.
+        samples: list[mp.mpf] = []
         for value in x_values:
             mp_x = mp.mpf(value)
             try:
                 samples.append(mp.mpf(func(mp_x)))
             except Exception:
                 samples.append(mp.nan)
+        return samples
 
-    if precision is None:
-        _evaluate()
-    else:
-        with precision_guard(precision):
-            _evaluate()
-    return samples
+    with precision_guard(precision):
+        return sample_with_cache(
+            func, x_values, precision, cache_token=cache_token
+        )
 
 
 def render_fitting_overview(
