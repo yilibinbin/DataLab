@@ -318,6 +318,100 @@ def render_fitting_overview(
     return buf.getvalue()
 
 
+def render_residual_diff(
+    x_values: Sequence[float],
+    series: Sequence[tuple[str, Sequence[float]]],
+    log_scale: str | None = None,
+    dpi: int = 220,
+) -> bytes:
+    """Overlay multiple models' residual curves on a single axis.
+
+    Used by the Phase 2 residual-comparison view: after auto-fit, the
+    user sees a single plot comparing each candidate model's residuals
+    on the same x-axis. Distinct colours cycle via matplotlib's default
+    tab10 palette (10 colours); beyond 10 series the cycle repeats.
+
+    Parameters
+    ----------
+    x_values:
+        x-axis values. ``mp.mpf`` values are cast via ``float()``.
+    series:
+        List of ``(label, residuals)`` tuples. Every ``residuals`` list
+        must have the same length as ``x_values`` — mismatch raises
+        ``ValueError`` so a broken caller doesn't silently produce a
+        misaligned plot.
+    log_scale:
+        ``None`` / ``"x"`` / ``"y"`` / ``"xy"``.
+    dpi:
+        Matplotlib dpi, clamped to ``[_DPI_MIN, _DPI_MAX]`` via
+        ``_clamp_dpi`` — same DoS defence as ``render_fitting_overview``.
+
+    Returns
+    -------
+    bytes
+        PNG-encoded figure. Byte-deterministic for identical inputs
+        (so the caller can layer an LRU cache like the one for
+        ``render_fitting_overview_cached``).
+    """
+    dpi = _clamp_dpi(dpi)
+    x_plot = [float(v) for v in x_values]
+    n = len(x_plot)
+    if series and n == 0:
+        raise ValueError(
+            "render_residual_diff: series provided but x_values is empty"
+        )
+    for label, resids in series:
+        if len(resids) != n:
+            raise ValueError(
+                f"render_residual_diff: series '{label}' has "
+                f"{len(resids)} residuals; expected {n} to match x_values"
+            )
+
+    fig = plt.figure(figsize=(9, 5), dpi=dpi)
+    ax = fig.add_subplot(1, 1, 1)
+
+    # tab10 palette via matplotlib's default prop_cycle.
+    colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", [])
+    if not colors:
+        # Fallback hard-coded palette so headless test env without a
+        # configured cycle still produces deterministic colours.
+        colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
+
+    for i, (label, resids) in enumerate(series):
+        color = colors[i % len(colors)]
+        ax.plot(
+            x_plot,
+            [float(r) for r in resids],
+            marker="o",
+            markersize=4,
+            linewidth=1.4,
+            label=str(label),
+            color=color,
+            alpha=0.85,
+        )
+
+    ax.axhline(0, color="black", linewidth=0.6, linestyle="--", zorder=0)
+    if log_scale:
+        normalized = _normalize_log_scale(log_scale)
+        if normalized and "x" in normalized:
+            ax.set_xscale("log")
+        if normalized and "y" in normalized:
+            ax.set_yscale("log")
+
+    ax.set_xlabel("x")
+    ax.set_ylabel("Residual")
+    ax.set_title("Residual comparison across models")
+    ax.grid(True, alpha=0.3)
+    if series:
+        ax.legend(loc="best", frameon=False, fontsize="small")
+
+    buf = io.BytesIO()
+    fig.tight_layout()
+    fig.savefig(buf, format="png", dpi=dpi)
+    plt.close(fig)
+    return buf.getvalue()
+
+
 # ----------------------------------------------------------------------------
 # PNG-bytes LRU cache for render_fitting_overview (#4 pivot)
 # ----------------------------------------------------------------------------

@@ -181,23 +181,46 @@ def _sniff_locale(text: str) -> LocaleHint:
 
     has_comma_digits = _RE_COMMA_DIGIT.search(sample) is not None
     has_dot_decimal = _RE_DOT_DECIMAL.search(sample) is not None
+    # A dot-triples pattern (``1.234``) could be EU thousands OR a
+    # US decimal with 3 fractional digits. It resolves to EU only when
+    # accompanied by bare-comma evidence. We use the ``\d\.\d{3}(?!\d)``
+    # form so ``1.2345`` (4+ fractional digits — clearly a US decimal)
+    # doesn't count.
+    has_dot_triples = re.search(r"\d\.\d{3}(?!\d)", sample) is not None
+
+    # Bare comma-decimal 1-2 digits after comma. Distinguishes from
+    # thousands commas (exactly 3 digits after).
+    has_bare_decimal = _RE_BARE_COMMA_DECIMAL.search(sample) is not None
+    has_thousands_comma = _RE_THOUSANDS_COMMA.search(sample) is not None
 
     # Semicolon + any comma-decimal digit run → EU. The semicolon
     # delimiter is the tiebreaker for the 1,234 ambiguity.
     if ";" in sample and has_comma_digits and not has_dot_decimal:
         return LocaleHint.EU
 
+    # Mixed EU evidence: bare-comma-decimal AND dot-triples-pattern
+    # (i.e., "1,5\t1.234" style) — treat as EU thousands + EU decimal.
+    # The bare-comma constraint (1-2 digits, not 3) rules out the
+    # US-looking "1,234" thousands pattern.
+    if has_bare_decimal and not has_thousands_comma and has_dot_triples:
+        return LocaleHint.EU
+
     # Bare "1,5" (1-2 digits after comma) without thousands-comma or
     # dot-decimal elsewhere.
-    has_bare_decimal = _RE_BARE_COMMA_DECIMAL.search(sample) is not None
-    has_thousands = _RE_THOUSANDS_COMMA.search(sample) is not None
-    if has_bare_decimal and not has_thousands and not has_dot_decimal:
+    if has_bare_decimal and not has_thousands_comma and not has_dot_decimal:
         return LocaleHint.EU
     return LocaleHint.US
 
 
 def _parse_numeric(cell: str, locale: LocaleHint) -> Optional[float]:
     """Convert one cell to a float or return None on failure.
+
+    ``locale`` must be resolved before calling — ``LocaleHint.AUTO``
+    is treated as ``US`` (the ``AUTO`` branch exists at the public
+    ``parse_clipboard_tabular`` boundary only). Passing ``AUTO`` to
+    this private helper is a programming error that the ``US``
+    fallback masks; callers outside this module should route through
+    ``parse_clipboard_tabular``.
 
     Scientific notation (``1.5e-3``, ``2.5E+4``) is detected and
     protected before locale transformation — otherwise EU-mode's
@@ -345,8 +368,14 @@ def parse_clipboard_tabular(
 
     # Truncate before any further work so a pathological paste can't
     # hang the UI or allocate gigabytes of intermediate strings.
+    # Cut at the last full newline so we don't leave a half-parsed
+    # trailing row (Codex-found HIGH: truncation mid-cell could turn
+    # "3\t456\t7" into "3\t45" → [3.0, 45.0], silently wrong-valued).
     if len(text) > MAX_CLIPBOARD_CHARS:
         text = text[:MAX_CLIPBOARD_CHARS]
+        last_newline = text.rfind("\n")
+        if last_newline > 0:
+            text = text[:last_newline]
 
     # Strip UTF-8 BOM emitted by Excel / LibreOffice Calc — otherwise
     # the first header cell becomes ``"\ufeffx"`` which fails string

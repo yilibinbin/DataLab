@@ -315,6 +315,51 @@ def test_max_cols_cap():
     assert len(result.headers) <= MAX_COLS
 
 
+def test_mixed_eu_bare_comma_plus_dot_triples_sniffs_eu():
+    """Codex HIGH regression: '1,5\\t1.234' (bare comma-decimal + a
+    dot-triples pattern) must sniff EU — otherwise the dot-triples
+    disqualifies the bare-comma rule and US-fallback corrupts '1,5'
+    into 15.0."""
+    text = "1,5\t1.234\n2,5\t2.345"
+    result = parse_clipboard_tabular(text)
+    # EU parse: 1,5 → 1.5; 1.234 (dot-triples) → 1234.0
+    assert result.rows == [[1.5, 1234.0], [2.5, 2345.0]], (
+        f"Mixed EU data must sniff EU. Got: {result.rows}"
+    )
+
+
+def test_mid_row_truncation_drops_incomplete_tail():
+    """Codex HIGH regression: cutting at MAX_CLIPBOARD_CHARS mid-cell
+    must not leave a numerically-valid-but-wrong trailing row. The
+    parser truncates to the last full newline after the cut."""
+    from shared.parsing import MAX_CLIPBOARD_CHARS
+
+    # Build a payload that forces the cap to cut inside a row. The
+    # header + full good rows fill MAX_CLIPBOARD_CHARS exactly, then
+    # we append a row whose first cell is plausibly-numeric but whose
+    # second cell would get truncated mid-digits.
+    good_row = "1\t2\n"  # 4 bytes
+    header = "a\tb\n"    # 4 bytes
+    n_good = (MAX_CLIPBOARD_CHARS - len(header)) // len(good_row) + 10
+    base = header + good_row * n_good
+    # Trailing "3\t456789" is incomplete (no \n). Its mid-cell cut
+    # would give e.g. "3\t45" which parses as [3.0, 45.0] — wrong.
+    broken_tail = "3\t456789"
+    text = base + broken_tail
+    assert len(text) > MAX_CLIPBOARD_CHARS, (
+        f"Test setup error: text {len(text)} must exceed cap "
+        f"{MAX_CLIPBOARD_CHARS}"
+    )
+    result = parse_clipboard_tabular(text)
+    # Every remaining row must match the good-row template. A mid-row
+    # truncation would produce a [3.0, 45.0] (or similar) row.
+    for row in result.rows:
+        assert row == [1.0, 2.0], (
+            f"Truncated paste produced unexpected row {row}; "
+            "mid-cell truncation must be dropped, not silently parsed."
+        )
+
+
 def test_very_large_input_size_capped():
     """An enormous paste (> ~10 MB) should be truncated rather than
     allocate unbounded memory. Pin the contract — a production user
