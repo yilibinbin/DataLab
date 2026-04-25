@@ -151,9 +151,22 @@ def sse_stream(
                 emit(frame)
             yield frame
     except Exception as exc:  # noqa: BLE001
-        _logger.warning("sse_stream: generator raised %s", exc)
+        # Log the full exception server-side for diagnosis, but emit
+        # ONLY the class name to the client. ``str(exc)`` can embed
+        # filesystem paths (mpmath internals, user file paths in
+        # FileNotFoundError, etc.) — a production deployment should
+        # never expose those to arbitrary SSE subscribers.
+        _logger.warning(
+            "sse_stream: generator raised %s", exc, exc_info=True
+        )
         err_frame = format_sse_event(
-            {"error": type(exc).__name__, "message": str(exc)},
+            {
+                "error": type(exc).__name__,
+                "message": (
+                    f"{type(exc).__name__}: stream aborted. "
+                    "See server logs for details."
+                ),
+            },
             event_name="error",
         )
         if emit is not None:

@@ -5,3 +5,9 @@ sympy>=1.13.0
 matplotlib>=3.10.0
 mistune>=2.0.0
 waitress>=3.0.0
+# Phase 3 #17 — real-time collaboration sessions. Pure-Python
+# implementation; no Redis / Celery dependency required for
+# single-process deployments.
+flask-socketio>=5.3
+# Phase 3 #14 — CLI batch YAML loader (shared with desktop).
+pyyaml>=6.0

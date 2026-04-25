@@ -114,19 +114,45 @@ def _run_fit(job) -> dict:
 def _run_auto_fit(job) -> dict:
     """Execute an auto-fit via ``fitting.model_selector.auto_fit_dataset``.
 
-    Returns the top 5 models ranked by the dataset's selector (AIC /
-    BIC / R² composite — matches the GUI's auto-fit result).
+    Returns the top 5 models ranked by AIC (ascending; lower is
+    better). Reads ``AutoModelResult.fit_result`` — the real
+    dataclass field — NOT ``entry.fit`` which doesn't exist and
+    would crash 100 % of calls (the prior bug).
+
+    Routes ``auto_fit_dataset`` inside a ``precision_guard`` so
+    concurrent CLI jobs don't race on ``mp.dps`` (which is
+    process-global in mpmath).
     """
     from fitting.model_selector import auto_fit_dataset
+    from shared.precision import precision_guard
 
     xs, ys = _read_xy_csv(job.data_path)
-    summary = auto_fit_dataset(xs, ys, precision=job.precision)
+    with precision_guard(job.precision):
+        summary = auto_fit_dataset(xs, ys, precision=job.precision)
 
-    ranked = [r for r in summary.results if r.success and r.fit is not None]
-    # Sort by AIC ascending; fit_result.details may or may not have
-    # explicit AIC — fall back to sum of squared residuals.
+    ranked = [
+        r for r in summary.results
+        if r.success and r.fit_result is not None
+    ]
+
     def _aic(entry) -> float:
-        details = entry.fit.details or {}
+        """Extract the AIC score from a successful AutoModelResult.
+
+        FitResult exposes ``aic`` as a first-class mpmath field; fall
+        back to ``details['aic']`` then to +inf so failed/NaN models
+        rank last without crashing the sort.
+        """
+        fit = entry.fit_result
+        # FitResult.aic is mpmath.mpf; mp.nan is falsy-weird so guard
+        # isnan before float-cast.
+        try:
+            from mpmath import mp as _mp
+
+            if fit.aic is not None and not _mp.isnan(fit.aic):
+                return float(fit.aic)
+        except (TypeError, ValueError, AttributeError):
+            pass
+        details = fit.details or {}
         for key in ("aic", "AIC", "information_criterion_aic"):
             if key in details:
                 try:
@@ -139,7 +165,7 @@ def _run_auto_fit(job) -> dict:
     top = []
     for entry in ranked[:5]:
         params = {
-            k: float(v) for k, v in (entry.fit.params or {}).items()
+            k: float(v) for k, v in (entry.fit_result.params or {}).items()
         }
         top.append({
             "model": entry.identifier,
