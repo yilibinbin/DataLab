@@ -5,7 +5,7 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import mpmath as mp
 
@@ -187,9 +187,61 @@ class AutoFitJob:
     # emcee typically takes 10–60 s on modest problems. Silently
     # skipped if emcee isn't installed (mcmc_fitter.HAS_EMCEE=False).
     refine_with_mcmc: bool = False
+    # Per-model wall-clock cap (seconds). When set, any model whose
+    # fit exceeds this budget is recorded as a failure ("model timed
+    # out") and the loop continues. Defends against ill-conditioned
+    # datasets (e.g. weighted χ² with σ ≈ 1e-19) where a single
+    # non-linear LM fit can exceed a minute and freeze the GUI.
+    #
+    # ``None`` (set by the GUI builder when the job's dps is unknown)
+    # delegates the cap calculation to ``_resolve_timeout_seconds``,
+    # which scales it linearly with ``precision``: 15 s at dps=80 is
+    # the empirical baseline; users running at dps=200 get 37.5 s,
+    # at dps=500 get 93 s. This keeps the cap proportional to
+    # legitimate fit time while still stopping runaway dps-80 fits.
+    # CLI / batch callers can pass a numeric value to override.
+    per_model_timeout_seconds: float | None = None
 
 
-def _execute_auto_fit_job(job: AutoFitJob):
+def _resolve_timeout_seconds(
+    explicit: float | None, precision: int,
+) -> float | None:
+    """Pick the per-model timeout: explicit value if set, else a
+    dps-scaled default.
+
+    The scaling factor (15 s per 80 dps = 0.1875 s per dps) was
+    derived empirically: well-conditioned non-linear LM fits at
+    dps=80 complete in ≤5 s, ill-conditioned ones in ≥30 s. 15 s is
+    the line where "patient user" turns into "is this thing frozen?"
+    A user pumping precision up to dps=200 expects longer fits, so
+    the cap rises to 37.5 s.
+
+    Returning ``None`` (only when ``explicit is None`` AND precision
+    is non-positive) keeps the historical unbounded behaviour as a
+    safety valve.
+    """
+    if explicit is not None:
+        return explicit if explicit > 0 else None
+    if precision <= 0:
+        return None
+    return max(5.0, precision * 0.1875)
+
+
+def _execute_auto_fit_job(
+    job: AutoFitJob,
+    should_cancel: Callable[[], bool] | None = None,
+):
+    """Run the auto-fit pipeline for ``job``.
+
+    ``should_cancel`` is polled between models so the GUI's Stop
+    button takes effect without waiting for the current model to
+    finish. mpmath holds the GIL through long arithmetic, so we
+    cannot interrupt mid-fit; the cancellation point at the model
+    boundary is the best the runtime offers.
+    """
+    timeout_seconds = _resolve_timeout_seconds(
+        job.per_model_timeout_seconds, job.precision,
+    )
     with _mp_precision_guard(job.precision):
         summary = auto_fit_dataset(
             job.x_series,
@@ -199,6 +251,8 @@ def _execute_auto_fit_job(job: AutoFitJob):
             extra_models=job.extra_models,
             weights=job.weights,
             data_sigmas=job.sigma_series,
+            should_cancel=should_cancel,
+            per_model_timeout_seconds=timeout_seconds,
         )
         # Phase 3 #12 — MCMC refinement pass on the best-AIC candidate
         # when the user ticked "Refine with MCMC". Attaches a

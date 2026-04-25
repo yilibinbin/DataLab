@@ -26,6 +26,8 @@ from data_extrapolation_latex_latest import (
 )
 from statistics_utils import compute_statistics, generate_statistics_latex_batches
 
+from fitting.model_selector import AutoFitCancelled
+
 from .workers_core import (
     AutoFitJob,
     CalcJob,
@@ -119,7 +121,16 @@ class AutoFitWorker(QThread):
 
         try:
             with stdout_cm, stderr_cm:
-                summary = _execute_auto_fit_job(self.job)
+                # Pass ``should_cancel`` so ``auto_fit_dataset`` polls
+                # the stop flag between models. Without it, the worker
+                # ignores Stop until ``_execute_auto_fit_job`` returns,
+                # which on ill-conditioned datasets (e.g. σ ≈ 1e-19
+                # weighted χ²) can be several minutes — the GUI looks
+                # frozen even though the work is technically progressing.
+                summary = _execute_auto_fit_job(
+                    self.job,
+                    should_cancel=lambda: self._stop_requested,
+                )
 
             if self._stop_requested:
                 if verbose:
@@ -141,6 +152,18 @@ class AutoFitWorker(QThread):
                 if captured:
                     self.log_ready.emit(captured)
             self.result_ready.emit((summary, self.job, captured))
+        except AutoFitCancelled:
+            # Raised from inside ``auto_fit_dataset`` when
+            # ``should_cancel`` returns True. Convert to the same
+            # ``cancelled`` signal as a pre-start cancel so the UI
+            # path is uniform (no error dialog).
+            if verbose:
+                try:
+                    self.log_ready.emit("[auto-fit] cancelled mid-run")
+                except Exception:
+                    pass
+            self.cancelled.emit()
+            return
         except Exception as exc:  # noqa: BLE001
             if self._stop_requested:
                 if verbose:
