@@ -55,6 +55,11 @@ MYPY_CLEAN_MODULES: tuple[str, ...] = (
     "fitting/model_selector.py",
     "fitting/mcmc_fitter.py",
     "extrapolation_methods/power_law.py",
+    "fitting/symbolic_export.py",
+    "datalab_latex/notebook_export.py",
+    "shared/pdf_preview_raster.py",
+    "shared/pdf_preview.py",
+    "shared/pdf_preview_integration.py",
 )
 
 

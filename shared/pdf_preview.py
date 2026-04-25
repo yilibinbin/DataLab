@@ -20,7 +20,7 @@ import os
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, TYPE_CHECKING
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
@@ -34,6 +34,16 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, QSize, Signal, QObject, QThread, QUrl
 from PySide6.QtGui import QIcon, QPixmap, QImage, QCursor
 from PIL import Image, ImageOps
+
+if TYPE_CHECKING:
+    # WebEngine / QtPdf imports live inside the backend ``__init__`` so a
+    # PySide6 install without those wheels still imports this module.
+    # Mirror them here under TYPE_CHECKING so the optional attributes
+    # carry concrete types (rather than ``Any``), restoring the narrowing
+    # mypy --strict can do across ``is None`` guards.
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+    from PySide6.QtPdfWidgets import QPdfView
+    from PySide6.QtPdf import QPdfDocument
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +79,9 @@ class PdfRasterRenderThread(QThread):
         zoom: float,
         dpi: int,
         dark_mode: bool,
-        conversion_tool=None,
+        conversion_tool: Optional[tuple[str, str]] = None,
         parent: QObject | None = None,
-    ):
+    ) -> None:
         super().__init__(parent)
         self.job_id = int(job_id)
         self.pdf_path = pdf_path
@@ -94,7 +104,7 @@ class PdfRasterRenderThread(QThread):
             image.width,
             image.height,
             image.width * 4,
-            QImage.Format_RGBA8888,
+            QImage.Format.Format_RGBA8888,
         )
         # Detach from the Python buffer so the QImage is safe to pass across threads.
         return qimage.copy()
@@ -169,15 +179,15 @@ class PdfBackend(ABC):
 class WebEngineBackend(PdfBackend):
     """GPU-accelerated WebEngine backend (Chromium PDFium)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.pdf_path: Optional[Path] = None
         self.zoom_factor = 1.0
         self.dark_mode = False
-        self.web_view = None
+        self.web_view: Optional["QWebEngineView"] = None
         self._setup_webengine()
 
-    def _setup_webengine(self):
+    def _setup_webengine(self) -> None:
         """Initialize WebEngine with GPU optimization flags."""
         try:
             from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -201,12 +211,16 @@ class WebEngineBackend(PdfBackend):
                 logger.info(f"[pdf] WebEngine GPU flags: {flags}")
 
             self.web_view = QWebEngineView()
-            self.web_view.setFocusPolicy(Qt.ClickFocus)
+            self.web_view.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
 
             # Enable PDF viewing
             settings = self.web_view.settings()
-            settings.setAttribute(QWebEngineSettings.PluginsEnabled, True)
-            settings.setAttribute(QWebEngineSettings.PdfViewerEnabled, True)
+            settings.setAttribute(
+                QWebEngineSettings.WebAttribute.PluginsEnabled, True
+            )
+            settings.setAttribute(
+                QWebEngineSettings.WebAttribute.PdfViewerEnabled, True
+            )
 
             logger.info("[pdf] WebEngine backend initialized")
         except ImportError:
@@ -280,15 +294,16 @@ class WebEngineBackend(PdfBackend):
 class QtPdfBackend(PdfBackend):
     """QtPdf backend (CPU-optimized, stable)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.pdf_path: Optional[Path] = None
         self.zoom_factor = 1.0
         self.dark_mode = False
-        self.pdf_view = None
+        self.pdf_view: Optional["QPdfView"] = None
+        self.pdf_document: Optional["QPdfDocument"] = None
         self._setup_qtpdf()
 
-    def _setup_qtpdf(self):
+    def _setup_qtpdf(self) -> None:
         """Initialize QtPdf view."""
         try:
             from PySide6.QtPdfWidgets import QPdfView
@@ -315,14 +330,14 @@ class QtPdfBackend(PdfBackend):
         try:
             self.pdf_path = pdf_path
             self.pdf_document.load(str(pdf_path))
-            status = self.pdf_document.status()
+            status: Any = self.pdf_document.status()
             try:
                 from PySide6.QtPdf import QPdfDocument
 
-                null_status = QPdfDocument.Status.Null
-                loading_status = QPdfDocument.Status.Loading
-                ready_status = QPdfDocument.Status.Ready
-                error_status = QPdfDocument.Status.Error
+                null_status: Any = QPdfDocument.Status.Null
+                loading_status: Any = QPdfDocument.Status.Loading
+                ready_status: Any = QPdfDocument.Status.Ready
+                error_status: Any = QPdfDocument.Status.Error
             except Exception:
                 null_status, loading_status, ready_status, error_status = 0, 1, 2, 3
 
@@ -398,7 +413,7 @@ class _RasterUiBridge(QObject):
 class RasterBackend(PdfBackend):
     """Raster fallback (PIL/pdftoppm → PNG → QPixmap) with caching."""
 
-    def __init__(self, dpi_base: int = 220):
+    def __init__(self, dpi_base: int = 220) -> None:
         super().__init__()
         self.pdf_path: Optional[Path] = None
         self.zoom_factor = 1.0
@@ -409,12 +424,12 @@ class RasterBackend(PdfBackend):
         self.render_thread: Optional[PdfRasterRenderThread] = None
         self._render_job_id = 0
         self._active_job_id: int | None = None
-        self._render_cache: Dict[tuple, QPixmap] = OrderedDict()
+        self._render_cache: Dict[tuple[Any, ...], QPixmap] = OrderedDict()
         self._cache_max_size = 32
         self._cache_lock = Lock()
         self.scroll_area = self._create_scroll_area()
         self._ui_bridge = _RasterUiBridge(self, parent=self.scroll_area)
-        self.conversion_tool = None
+        self.conversion_tool: Optional[tuple[str, str]] = None
 
     def _create_scroll_area(self) -> QScrollArea:
         """Create scroll area for page display."""
@@ -501,7 +516,7 @@ class RasterBackend(PdfBackend):
             self.render_thread = None
         logger.info("[pdf] Raster render cancelled")
 
-    def _on_render_finished(self, pixmaps: list):
+    def _on_render_finished(self, pixmaps: list[QPixmap]) -> None:
         """Handle render completion."""
         self._clear_pages()
         self.current_pixmaps = pixmaps
@@ -513,12 +528,12 @@ class RasterBackend(PdfBackend):
                 i - 1,
                 self._create_page_widget(i, label),
                 0,
-                Qt.AlignHCenter | Qt.AlignTop
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
             )
         self._ensure_trailing_stretch()
         logger.info(f"[pdf] Raster render finished: {len(pixmaps)} pages")
 
-    def _on_render_error(self, error_msg: str):
+    def _on_render_error(self, error_msg: str) -> None:
         """Handle render error."""
         self._clear_pages()
         self.current_pixmaps = []
@@ -538,12 +553,15 @@ class RasterBackend(PdfBackend):
         layout.addWidget(image_label)
         return widget
 
-    def _clear_pages(self):
+    def _clear_pages(self) -> None:
         """Clear all page widgets."""
         while self.container_layout.count() > 0:
             item = self.container_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
         self._ensure_trailing_stretch()
 
     def _ensure_trailing_stretch(self) -> None:
@@ -558,7 +576,7 @@ class RasterBackend(PdfBackend):
     def _show_status_message(self, message: str) -> None:
         """Display a transient status label without reusing deleted widgets."""
         label = QLabel(message)
-        label.setAlignment(Qt.AlignCenter)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.container_layout.insertWidget(0, label)
         self._ensure_trailing_stretch()
 
@@ -617,7 +635,7 @@ class PdfPreviewController(QObject):
     backend_changed = Signal(str)  # backend type name
     render_mode_changed = Signal(str)  # PdfRenderMode
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.parent_widget = parent
         self.current_pdf_path: Optional[Path] = None
@@ -626,16 +644,16 @@ class PdfPreviewController(QObject):
         self.render_mode = PdfRenderMode.AUTO
 
         # Initialize backends
-        self.webengine_backend = WebEngineBackend()
-        self.qtpdf_backend = QtPdfBackend()
-        self.raster_backend = RasterBackend()
+        self.webengine_backend: WebEngineBackend = WebEngineBackend()
+        self.qtpdf_backend: QtPdfBackend = QtPdfBackend()
+        self.raster_backend: RasterBackend = RasterBackend()
 
         self.current_backend: Optional[PdfBackend] = None
         self.current_backend_name = "none"
 
         self._select_best_backend()
 
-    def _select_best_backend(self):
+    def _select_best_backend(self) -> None:
         """Select best available backend based on mode and availability."""
         if self.render_mode == PdfRenderMode.GPU_WEBENGINE:
             # Force WebEngine
@@ -670,7 +688,7 @@ class PdfPreviewController(QObject):
 
         self.backend_changed.emit(self.current_backend_name)
 
-    def set_render_mode(self, mode: PdfRenderMode):
+    def set_render_mode(self, mode: PdfRenderMode) -> None:
         """Change render mode and reselect backend."""
         if self.render_mode != mode:
             self.render_mode = mode
@@ -705,7 +723,7 @@ class PdfPreviewController(QObject):
 
     def _fallback_load_pdf(self, pdf_path: Path) -> bool:
         """Try fallback backends."""
-        backends_to_try = []
+        backends_to_try: list[PdfBackend] = []
 
         if self.current_backend_name != "webengine":
             backends_to_try.append(self.webengine_backend)
@@ -744,13 +762,13 @@ class PdfPreviewController(QObject):
         if hasattr(backend, "dark_mode"):
             setattr(backend, "dark_mode", self.dark_mode)
 
-    def set_zoom(self, zoom_factor: float):
+    def set_zoom(self, zoom_factor: float) -> None:
         """Set zoom factor on current backend."""
         self.zoom_factor = zoom_factor
         if self.current_backend:
             self.current_backend.set_zoom(zoom_factor)
 
-    def set_dark_mode(self, enabled: bool):
+    def set_dark_mode(self, enabled: bool) -> None:
         """Toggle dark mode on current backend."""
         self.dark_mode = enabled
         if self.current_backend:
@@ -770,7 +788,7 @@ class PdfPreviewController(QObject):
             return self.current_backend.capabilities()
         return PdfCapabilities(False, "none", False, 0)
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """Clean up all resources."""
         try:
             self.webengine_backend.cleanup()
@@ -793,7 +811,7 @@ def create_pdf_toolbar(controller: PdfPreviewController, parent: QWidget) -> QHB
     mode_combo.addItem("Compatible (Raster)", PdfRenderMode.COMPATIBLE)
     mode_combo.setCurrentIndex(0)
 
-    def on_mode_changed(index):
+    def on_mode_changed(index: int) -> None:
         mode = mode_combo.itemData(index)
         controller.set_render_mode(mode)
 
@@ -805,7 +823,7 @@ def create_pdf_toolbar(controller: PdfPreviewController, parent: QWidget) -> QHB
 
     # Backend info label
     backend_label = QLabel("Backend: Loading...")
-    def on_backend_changed(backend_name):
+    def on_backend_changed(backend_name: str) -> None:
         backend_label.setText(f"Backend: {backend_name.upper()}")
     controller.backend_changed.connect(on_backend_changed)
     toolbar.addWidget(backend_label)

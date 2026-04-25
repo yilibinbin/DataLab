@@ -127,7 +127,7 @@ class PdfPreviewIntegration:
         self.controller.set_render_mode(pdf_mode)
         logger.info(f"[pdf] Render mode set to: {mode}")
 
-    def _sync_preview_widget(self, *_args) -> None:
+    def _sync_preview_widget(self, *_args: object) -> None:
         """Keep the mounted preview widget in sync with controller backend switches."""
         new_widget = self.controller.get_widget()
         if new_widget is self.preview_widget:
@@ -162,7 +162,7 @@ class PdfPreviewIntegration:
         """Get the current zoom factor."""
         return self.pdf_zoom
 
-    def get_backend_info(self) -> dict:
+    def get_backend_info(self) -> dict[str, object]:
         """Get information about the current backend."""
         cap = self.controller.capabilities()
         return {
@@ -204,7 +204,7 @@ def create_pdf_controls_panel(integration: PdfPreviewIntegration) -> QWidget:
     layout.addStretch()
 
     # Update zoom label when changed
-    def update_zoom_label():
+    def update_zoom_label() -> None:
         zoom_label.setText(f"Zoom: {integration.get_current_zoom() * 100:.0f}%")
 
     integration.controller.pdf_loaded.connect(update_zoom_label)

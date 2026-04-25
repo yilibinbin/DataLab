@@ -124,7 +124,7 @@ def _ensure_allowed_names(tree: ast.AST) -> None:
                 )
 
 
-def _transform_for_sympy(node: ast.AST) -> ast.AST:
+def _transform_for_sympy(node: ast.AST) -> None:
     """Rename function calls and constants in-place for SymPy output."""
     for child in ast.walk(node):
         if isinstance(child, ast.Call):
@@ -134,10 +134,9 @@ def _transform_for_sympy(node: ast.AST) -> ast.AST:
         elif isinstance(child, ast.Name):
             if child.id in _SYMPY_CONSTANT_MAP:
                 child.id = _SYMPY_CONSTANT_MAP[child.id]
-    return node
 
 
-def _transform_for_mathematica(node: ast.AST) -> ast.AST:
+def _transform_for_mathematica(node: ast.AST) -> None:
     """Mathematica output leaves known names as-is (input IS Mathematica).
     Just verify they're known."""
     for child in ast.walk(node):
@@ -149,7 +148,6 @@ def _transform_for_mathematica(node: ast.AST) -> ast.AST:
                 raise ValueError(
                     f"Unknown function in expression: {func.id!r}"
                 )
-    return node
 
 
 def _render(node: ast.AST, style: str) -> str:
@@ -179,29 +177,29 @@ def _render(node: ast.AST, style: str) -> str:
     if isinstance(node, ast.BinOp):
         left = _render(node.left, style)
         right = _render(node.right, style)
-        op_type = type(node.op)
-        if op_type is ast.Add:
+        bin_op_type = type(node.op)
+        if bin_op_type is ast.Add:
             return f"{left} + {right}"
-        if op_type is ast.Sub:
+        if bin_op_type is ast.Sub:
             return f"{left} - {right}"
-        if op_type is ast.Mult:
+        if bin_op_type is ast.Mult:
             return f"{left}*{right}"
-        if op_type is ast.Div:
+        if bin_op_type is ast.Div:
             return f"{left}/{right}"
-        if op_type is ast.Pow:
+        if bin_op_type is ast.Pow:
             pow_op = "**" if style == "sympy" else "^"
             return f"{left}{pow_op}{right}"
-        if op_type is ast.Mod:
+        if bin_op_type is ast.Mod:
             return f"{left} % {right}" if style == "sympy" else f"Mod[{left},{right}]"
-        raise ValueError(f"Unsupported operator: {op_type.__name__}")
+        raise ValueError(f"Unsupported operator: {bin_op_type.__name__}")
     if isinstance(node, ast.UnaryOp):
         operand = _render(node.operand, style)
-        op_type = type(node.op)
-        if op_type is ast.UAdd:
+        un_op_type = type(node.op)
+        if un_op_type is ast.UAdd:
             return f"+{operand}"
-        if op_type is ast.USub:
+        if un_op_type is ast.USub:
             return f"-{operand}"
-        raise ValueError(f"Unsupported unary op: {op_type.__name__}")
+        raise ValueError(f"Unsupported unary op: {un_op_type.__name__}")
     if isinstance(node, ast.Call):
         func = node.func
         if not isinstance(func, ast.Name):
@@ -213,10 +211,15 @@ def _render(node: ast.AST, style: str) -> str:
     raise ValueError(f"Unsupported AST node: {type(node).__name__}")
 
 
-def _parse_expr(expr: str) -> ast.Module:
+def _parse_expr(expr: str) -> ast.Expression:
     """Parse a DataLab expression into an AST with the same safety
     caps the engine uses. Raises ValueError on syntax errors or
-    excessive AST size."""
+    excessive AST size.
+
+    ``ast.parse(source, mode="eval")`` returns an ``ast.Expression``
+    per the typeshed ``Literal["eval"]`` overload, so the
+    ``.body`` attribute on the call sites below is statically known.
+    """
     normalised = _normalize_for_parse(expr)
     try:
         tree = ast.parse(normalised, mode="eval")
@@ -237,12 +240,12 @@ def _parse_expr(expr: str) -> ast.Module:
 def to_sympy(expr: str) -> str:
     """Emit a SymPy-parseable string from a DataLab expression."""
     tree = _parse_expr(expr)
-    transformed = _transform_for_sympy(tree)
-    return _render(transformed.body, style="sympy")
+    _transform_for_sympy(tree)  # mutates in place
+    return _render(tree.body, style="sympy")
 
 
 def to_mathematica(expr: str) -> str:
     """Emit a Mathematica-canonical string from a DataLab expression."""
     tree = _parse_expr(expr)
-    transformed = _transform_for_mathematica(tree)
-    return _render(transformed.body, style="mathematica")
+    _transform_for_mathematica(tree)  # mutates in place
+    return _render(tree.body, style="mathematica")
