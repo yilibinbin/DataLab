@@ -132,14 +132,18 @@ def test_h4_constraint_lambda_has_no_import_in_globals():
     expr = a + b
     available = {"a": a, "b": b}
     order = {"a": 0, "b": 1}
-    # deps is intentionally unused — we only assert on expr_lambda globals.
+    # deps is intentionally unused — we only assert on the lambdify
+    # callable's __globals__.
     _deps, evaluator = constraints._lambdify_expression(expr, available, order)
-    # Pull expr_lambda out of the evaluator's default args (it's keyword-defaulted
-    # in the _evaluate signature: `expr_lambda=expr_lambda`).
+    # Pull the lambdified callable out of the evaluator's default
+    # args. ``_fn`` matches the parameter name in
+    # ``constraints._evaluate`` — if a future refactor renames the
+    # parameter, update the lookup below. The goal is to retrieve
+    # the callable, not to pin a particular keyword.
     import inspect as _inspect
     sig = _inspect.signature(evaluator)
-    expr_lambda = sig.parameters["expr_lambda"].default
-    assert callable(expr_lambda), "could not locate expr_lambda"
+    expr_lambda = sig.parameters["_fn"].default
+    assert callable(expr_lambda), "could not locate the lambdified callable"
     g = getattr(expr_lambda, "__globals__", {})
     builtins = g.get("__builtins__", {})
     if isinstance(builtins, dict):

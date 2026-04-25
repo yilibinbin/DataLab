@@ -36,6 +36,9 @@ MYPY_CLEAN_MODULES: tuple[str, ...] = (
     "shared/crash_reporter.py",
     "shared/ui_keyguards.py",
     "fitting/__init__.py",
+    "extrapolation_methods/accelerators.py",
+    "datalab_latex/derivatives.py",
+    "fitting/constraints.py",
 )
 
 

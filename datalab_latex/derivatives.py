@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from mpmath import mp
-from typing import Callable
+from typing import Any, Callable
 
 import sympy as sp
 from sympy.parsing.sympy_parser import parse_expr
@@ -46,7 +46,7 @@ def _build_sympy_local_dict(variables: list[str]) -> tuple[list[sp.Symbol], dict
     if "E" not in local_dict:
         local_dict["E"] = sp.E
 
-    def _maybe_add(name: str, obj: object):
+    def _maybe_add(name: str, obj: object) -> None:
         if name not in local_dict:
             local_dict[name] = obj
 
@@ -66,7 +66,7 @@ def _build_sympy_local_dict(variables: list[str]) -> tuple[list[sp.Symbol], dict
     _maybe_add("Log", sp.log)
     _maybe_add("Ln", sp.log)
 
-    def _log10(x):
+    def _log10(x: Any) -> Any:  # sympy.Expr — no stubs, so Any (see pyproject mypy overrides).
         return sp.log(x, 10)
 
     _maybe_add("Log10", _log10)
@@ -81,13 +81,13 @@ def _build_sympy_local_dict(variables: list[str]) -> tuple[list[sp.Symbol], dict
     _maybe_add("BesselY", sp.bessely)
     _maybe_add("Airy", sp.airyai)
 
-    def _hyp0f1(b, z):
+    def _hyp0f1(b: Any, z: Any) -> Any:  # sympy.Expr — no stubs, so Any (see pyproject mypy overrides).
         return sp.hyper([], [b], z)
 
-    def _hyp1f1(a, b, z):
+    def _hyp1f1(a: Any, b: Any, z: Any) -> Any:
         return sp.hyper([a], [b], z)
 
-    def _hyp2f1(a, b, c, z):
+    def _hyp2f1(a: Any, b: Any, c: Any, z: Any) -> Any:
         return sp.hyper([a, b], [c], z)
 
     _maybe_add("Hyp0f1", _hyp0f1)

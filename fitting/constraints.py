@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Callable, Mapping
+from typing import Any, Callable, Mapping
 
 import sympy as sp
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, convert_xor
@@ -102,7 +102,28 @@ class ParameterState:
         return params
 
 
-def _to_mpf(value, default: mp.mpf = mp.mpf("0")) -> mp.mpf:
+def _to_mpf(
+    value: float | int | str | mp.mpf | None,
+    default: mp.mpf = mp.mpf("0"),
+) -> mp.mpf:
+    """Coerce a numeric-looking value to ``mp.mpf``.
+
+    The narrowed parameter type matches what ``mp.mpf(...)`` actually
+    accepts at runtime (``int | float | str | mp.mpf``). ``None`` is
+    handled explicitly and falls back to ``default``. Passing any
+    other object type would raise ``TypeError`` from ``mp.mpf`` —
+    keep this signature narrow so callers don't accidentally pass
+    non-numeric configuration values and get an unhelpful error
+    deep in mpmath internals.
+
+    Note: enforcement is nominal while ``mpmath`` has no type stubs
+    (see the third-party-without-stubs override in ``pyproject.toml``).
+    Under the current config ``mp.mpf`` resolves to ``Any`` at type-
+    check time, which means callers passing arbitrary objects would
+    be accepted by mypy. The narrow union still serves as inline
+    documentation for human readers and will become enforced as
+    soon as mpmath stubs land.
+    """
     if value is None:
         return default
     return mp.mpf(value)
@@ -165,7 +186,7 @@ def build_parameter_state(config: Mapping[str, Mapping[str, object]], parameter_
 
 def _build_dependent_definition(
     target_name: str,
-    expr,
+    expr: Any,  # sympy.Expr — no stubs, so Any (see pyproject mypy overrides).
     available_symbols: dict[str, sp.Symbol],
     order_index: dict[str, int],
 ) -> DependentDefinition:
@@ -183,7 +204,7 @@ def _build_dependent_definition(
 
 
 def _lambdify_expression(
-    expr,
+    expr: Any,  # sympy.Expr — no stubs, so Any (see pyproject mypy overrides).
     available_symbols: dict[str, sp.Symbol],
     order_index: dict[str, int],
     exclude: str | None = None,
@@ -225,20 +246,32 @@ def _lambdify_expression(
             exc_info=True,
         )
 
-    def _evaluate(params, deps=tuple(dependencies), expr_lambda=expr_lambda):
+    def _evaluate(
+        params: dict[str, mp.mpf],
+        deps: tuple[str, ...] = tuple(dependencies),
+        # Bind ``expr_lambda`` at definition time — closure-cell freeze idiom.
+        _fn: Callable[..., object] = expr_lambda,
+    ) -> mp.mpf:
         missing = [dep for dep in deps if dep not in params]
         if missing:
             raise KeyError(missing[0])
         if deps:
             values = [params[dep] for dep in deps]
-            return mp.mpf(expr_lambda(*values))
-        return mp.mpf(expr_lambda())
+            return mp.mpf(_fn(*values))
+        return mp.mpf(_fn())
 
     return tuple(dependencies), _evaluate
 
 
-def _parse_expr_safe(expr_text: str, available_symbols: dict[str, sp.Symbol]):
-    """Safely parse user expressions using a restricted Sympy environment."""
+def _parse_expr_safe(
+    expr_text: str, available_symbols: dict[str, sp.Symbol]
+) -> Any:
+    """Safely parse user expressions using a restricted Sympy environment.
+
+    Returns a sympy Expr; typed ``Any`` because sympy has no public
+    type stubs (and the runtime expression-tree API is too dynamic to
+    annotate usefully).
+    """
     local_dict: dict[str, object] = {**available_symbols, **_SAFE_MATH_FUNCS}
     try:
         return parse_expr(
