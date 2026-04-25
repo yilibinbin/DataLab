@@ -431,8 +431,14 @@ class ExtrapolationWindow(
     def _on_constants_source_toggle(self, checked: bool):
         if hasattr(self, "constants_file_row"):
             self.constants_file_row.setVisible(checked)
-        if hasattr(self, "constants_table"):
+        # Hide the whole stack (table + text-view pages) when the file
+        # source is selected, and the per-view toggle button with it.
+        if hasattr(self, "_constants_stack"):
+            self._constants_stack.setVisible(not checked)
+        elif hasattr(self, "constants_table"):
             self.constants_table.setVisible(not checked)
+        if hasattr(self, "_constants_view_toggle"):
+            self._constants_view_toggle.setVisible(not checked)
         if hasattr(self, "constants_hint_btn"):
             hint_text = self._tr(
                 "常数文件示例：ALPHA 7.2973525693(11)[-3]",
