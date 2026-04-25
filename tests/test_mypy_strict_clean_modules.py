@@ -57,6 +57,7 @@ MYPY_CLEAN_MODULES: tuple[str, ...] = (
     "extrapolation_methods/power_law.py",
     "fitting/symbolic_export.py",
     "datalab_latex/notebook_export.py",
+    "shared/pdf_preview_raster.py",
 )
 
 

@@ -11,8 +11,21 @@ import shutil
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, NamedTuple, Optional, Tuple, List
+from typing import Any, NamedTuple, Optional, Tuple, List, TYPE_CHECKING, TypeAlias
 from PIL import Image, ImageOps
+
+if TYPE_CHECKING:
+    # ``QPixmap`` is referenced as a forward annotation on the
+    # ``pil_to_qpixmap`` return type. The PySide6 import lives inside
+    # the function body so unit tests don't need a Qt event loop, so
+    # the type-checker needs an explicit TYPE_CHECKING import.
+    from PySide6.QtGui import QPixmap
+
+# Cache-key tuple shape:
+# ``(resolved_abs_path: str, mtime_ns: int, size: int, dpi: int,
+#    max_pages: int, tool_name: str)``.
+# All six elements are hashable, so the tuple is a valid dict key.
+_PdfCacheKey: TypeAlias = tuple[str, int, int, int, int, str]
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +60,7 @@ logger = logging.getLogger(__name__)
 # today (grep across app_web/ confirms no blueprint calls it). Any web
 # exposure must add an explicit allow-list + rate limit.
 _PDF_RASTER_CACHE_MAXSIZE = 16
-_pdf_raster_cache: "OrderedDict[tuple, List[Image.Image]]" = OrderedDict()
+_pdf_raster_cache: "OrderedDict[_PdfCacheKey, List[Image.Image]]" = OrderedDict()
 _pdf_raster_cache_lock = threading.Lock()
 _pdf_raster_cache_stats = {"hits": 0, "misses": 0}
 
@@ -121,7 +134,7 @@ def _pdf_cache_key(
     dpi: int,
     max_pages: int,
     tool_name: str,
-) -> tuple:
+) -> _PdfCacheKey:
     """Build a cache key that invalidates when the file changes.
 
     Uses ``(resolved_abs_path, mtime_ns, size, dpi, max_pages, tool_name)``.
@@ -173,7 +186,7 @@ def pdf_raster_cache_info() -> _PdfRasterCacheInfo:
         )
 
 
-def _cache_get(key: tuple) -> Optional[List[Image.Image]]:
+def _cache_get(key: _PdfCacheKey) -> Optional[List[Image.Image]]:
     """LRU-aware fetch: moves the entry to the end on hit. Returns a
     copy of the image list (so a caller mutating the list — e.g., zoom
     in place — doesn't poison the cache for the next caller)."""
@@ -189,7 +202,7 @@ def _cache_get(key: tuple) -> Optional[List[Image.Image]]:
         return list(entry)
 
 
-def _cache_put(key: tuple, value: List[Image.Image]) -> None:
+def _cache_put(key: _PdfCacheKey, value: List[Image.Image]) -> None:
     """Store and evict to ``_PDF_RASTER_CACHE_MAXSIZE`` LRU entries."""
     with _pdf_raster_cache_lock:
         _pdf_raster_cache[key] = list(value)
@@ -513,5 +526,7 @@ def pil_to_qpixmap(image: Image.Image) -> 'QPixmap':
         image = image.convert("RGBA")
 
     data = image.tobytes("raw", "RGBA")
-    qimage = QImage(data, image.width, image.height, QImage.Format_RGBA8888)
+    qimage = QImage(
+        data, image.width, image.height, QImage.Format.Format_RGBA8888
+    )
     return QPixmap.fromImage(qimage)
