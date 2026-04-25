@@ -187,18 +187,24 @@ ignore_missing_imports = true
 # would be the right long-term fix.
 [[tool.mypy.overrides]]
 module = [
+    # Third-party libraries actually imported by the project that
+    # ship without type stubs (or whose stubs are incomplete on
+    # the strict perimeter). Adding a library here suppresses the
+    # ``[import-untyped]`` errors that ``ignore_missing_imports``
+    # alone doesn't catch under ``--strict``. Keep this list in
+    # sync with ``gui_requirements.txt`` / ``web_requirements.txt``
+    # — adding a library here without a corresponding requirement
+    # masks real "module not installed" failures.
     "mpmath",
     "mpmath.*",
     "emcee",
     "emcee.*",
     "corner",
     "corner.*",
-    "scipy",
-    "scipy.*",
     "matplotlib",
     "matplotlib.*",
-    "pandas",
-    "pandas.*",
+    "sympy",
+    "sympy.*",
 ]
 ignore_missing_imports = true
 follow_imports = "silent"
