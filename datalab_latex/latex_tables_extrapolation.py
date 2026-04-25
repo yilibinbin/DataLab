@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TypeAlias
 
 from mpmath import mp
+
+# Anything ``_mp()`` (defined in datalab_latex.expression_engine) is documented
+# to accept: a real ``mp.mpf`` (returned as-is), Python int / float, or any
+# value whose ``str()`` produces a number string. We name the union so the
+# public surface stops looking like a typing escape hatch (``object``) and
+# instead matches what the body actually requires.
+_MpInput: TypeAlias = "mp.mpf | int | float | str"
 
 from shared.precision import precision_guard as _precision_guard
 
@@ -16,7 +23,9 @@ from extrapolation_methods import (
     extrapolate_power_law,
 )
 
-from .expression_engine import _dual_msg, _mp, _normalize_expression, _split_dual, safe_eval
+from shared.bilingual import _dual_msg, _split_dual
+
+from .expression_engine import _mp, _normalize_expression, safe_eval
 from .latex_formatting import (
     _format_value_for_latex_file,
     _siunitx_column_spec,
@@ -67,7 +76,9 @@ class ExtrapolationOptions:
     levin_beta: float = 1.0  # Levin beta parameter for reciprocal_beta weight
 
 
-def compute_extrapolation(A, B, C):
+def compute_extrapolation(
+    A: float, B: float, C: float
+) -> tuple[float, float]:
     """
     Compute extrapolated value V and uncertainty U using three data points.
 
@@ -89,23 +100,27 @@ def compute_extrapolation(A, B, C):
 DEFAULT_THREE_POINT_FORMULA = "((C - B)**2) / (B - A) + C"
 
 
-def compute_extrapolation_decimal(A, B, C):
+def compute_extrapolation_decimal(
+    A: _MpInput, B: _MpInput, C: _MpInput
+) -> tuple[mp.mpf, mp.mpf]:
     """High-precision extrapolation mirroring the MATLAB formula using mpmath."""
-    A = _mp(A)
-    B = _mp(B)
-    C = _mp(C)
-    if mp.fabs(B - A) < mp.mpf("1e-50"):
-        V = C
-        U = max(mp.fabs(V - A), mp.fabs(V - B), mp.fabs(V - C))
+    a_mp = _mp(A)
+    b_mp = _mp(B)
+    c_mp = _mp(C)
+    if mp.fabs(b_mp - a_mp) < mp.mpf("1e-50"):
+        V = c_mp
+        U = max(mp.fabs(V - a_mp), mp.fabs(V - b_mp), mp.fabs(V - c_mp))
         return V, U
-    diff_CB = C - B
-    diff_BA = B - A
-    V = (diff_CB * diff_CB) / diff_BA + C
-    U = max(mp.fabs(V - A), mp.fabs(V - B), mp.fabs(V - C))
+    diff_CB = c_mp - b_mp
+    diff_BA = b_mp - a_mp
+    V = (diff_CB * diff_CB) / diff_BA + c_mp
+    U = max(mp.fabs(V - a_mp), mp.fabs(V - b_mp), mp.fabs(V - c_mp))
     return V, U
 
 
-def format_extrapolation_result_with_num(value, uncertainty, uncertainty_digits: int | None = None):
+def format_extrapolation_result_with_num(
+    value: _MpInput, uncertainty: _MpInput, uncertainty_digits: int | None = None
+) -> str:
     """Format an extrapolation result for LaTeX using \\num{} to allow siunitx parsing."""
     formatted_result = format_result_with_uncertainty_latex(value, uncertainty, uncertainty_digits)
 
@@ -125,7 +140,7 @@ DEFAULT_REFERENCE_INDEX = 2
 AUTO_REFERENCE_MAX_DIFF_KEY = "auto_max_diff"
 
 
-def _normalize_method_name(name):
+def _normalize_method_name(name: str | None) -> str:
     method = (name or "quadratic").strip().lower()
     known = {"quadratic", "power_law", "richardson", "shanks", "wynn_epsilon", "levin_u", "custom"}
     return method if method in known else "quadratic"
@@ -150,7 +165,9 @@ _METHOD_DISPLAY_NAMES_EN = {
 }
 
 
-def _resolve_reference_index(headers, desired):
+def _resolve_reference_index(
+    headers: list[str], desired: str | None
+) -> int:
     if not headers:
         return 0
     fallback = min(DEFAULT_REFERENCE_INDEX, len(headers) - 1)
@@ -203,7 +220,7 @@ def _auto_reference_index_max_diff(row_tuple: tuple[mp.mpf, ...], extrapolated_v
     return best_idx
 
 
-def _reference_label(headers, index):
+def _reference_label(headers: list[str], index: int) -> str:
     if headers and 0 <= index < len(headers):
         return headers[index]
     return f"列{index + 1}"
@@ -216,7 +233,9 @@ def _method_display_name(method: str, lang: str = "zh") -> str:
     return _METHOD_DISPLAY_NAMES_ZH.get(method, method)
 
 
-def _append_option_warning(options: ExtrapolationOptions, message: str, verbose: bool):
+def _append_option_warning(
+    options: ExtrapolationOptions, message: str, verbose: bool
+) -> None:
     if not message:
         return
     if message not in options.warnings:
@@ -225,7 +244,12 @@ def _append_option_warning(options: ExtrapolationOptions, message: str, verbose:
             print(f"Warning: {message}")
 
 
-def _maybe_warn_three_point_limit(options: ExtrapolationOptions, headers: list[str], method: str, verbose: bool):
+def _maybe_warn_three_point_limit(
+    options: ExtrapolationOptions,
+    headers: list[str],
+    method: str,
+    verbose: bool,
+) -> None:
     if method not in THREE_POINT_METHODS:
         return
     if len(headers) <= 3:
@@ -239,13 +263,20 @@ def _maybe_warn_three_point_limit(options: ExtrapolationOptions, headers: list[s
     _append_option_warning(options, message, verbose)
 
 
-def _result_components(entry):
+def _result_components(
+    entry: ExtrapolationResult | tuple[mp.mpf, mp.mpf],
+) -> tuple[mp.mpf, mp.mpf]:
     if isinstance(entry, ExtrapolationResult):
         return entry.value, entry.uncertainty
     return entry
 
 
-def _evaluate_custom_formula(formula: str, headers: list[str], row_values: tuple, warnings: list[str] | None = None):
+def _evaluate_custom_formula(
+    formula: str,
+    headers: list[str],
+    row_values: tuple[mp.mpf, ...],
+    warnings: list[str] | None = None,
+) -> mp.mpf:
     """Evaluate the custom extrapolation formula using the same parser as error propagation."""
     normalized_formula = _normalize_expression(formula)
     if not normalized_formula.strip():
@@ -287,13 +318,23 @@ def _evaluate_custom_formula(formula: str, headers: list[str], row_values: tuple
         ) from exc
 
 
-def _ensure_options(options):
+def _ensure_options(
+    options: ExtrapolationOptions | None,
+) -> ExtrapolationOptions:
     if isinstance(options, ExtrapolationOptions):
         return options
     return ExtrapolationOptions()
 
 
-def _process_data_lines(lines, verbose: bool = False, options=None):
+def _process_data_lines(
+    lines: list[str],
+    verbose: bool = False,
+    options: ExtrapolationOptions | None = None,
+) -> tuple[
+    list[str],
+    list[tuple[mp.mpf, ...]],
+    list[ExtrapolationResult | tuple[mp.mpf, mp.mpf]],
+]:
     opts = _ensure_options(options)
     method = _normalize_method_name(opts.method)
     with _precision_guard(opts.mp_precision):
@@ -325,8 +366,10 @@ def _process_data_lines(lines, verbose: bool = False, options=None):
             print("Found headers: {0}".format(headers))
             print("Processing {0} data rows...".format(len(lines) - 1))
 
-        data_rows = []
-        extrapolated_results = []
+        data_rows: list[tuple[mp.mpf, ...]] = []
+        extrapolated_results: list[
+            ExtrapolationResult | tuple[mp.mpf, mp.mpf]
+        ] = []
 
         for line_num, line in enumerate(lines[1:], 2):
             line = line.strip()
@@ -514,14 +557,30 @@ def _process_data_lines(lines, verbose: bool = False, options=None):
         return headers, data_rows, extrapolated_results
 
 
-def process_data_file(filename, verbose: bool = False, options=None):
+def process_data_file(
+    filename: str,
+    verbose: bool = False,
+    options: ExtrapolationOptions | None = None,
+) -> tuple[
+    list[str],
+    list[tuple[mp.mpf, ...]],
+    list[ExtrapolationResult | tuple[mp.mpf, mp.mpf]],
+]:
     """Process a data file and perform extrapolation on each row."""
     with open(filename, "r") as f:
         lines = f.readlines()
     return _process_data_lines(lines, verbose, options=options)
 
 
-def process_data_string(content: str, verbose: bool = False, options=None):
+def process_data_string(
+    content: str,
+    verbose: bool = False,
+    options: ExtrapolationOptions | None = None,
+) -> tuple[
+    list[str],
+    list[tuple[mp.mpf, ...]],
+    list[ExtrapolationResult | tuple[mp.mpf, mp.mpf]],
+]:
     """Process an in-memory string and perform extrapolation on each row."""
     if not content or not content.strip():
         raise ValueError("输入数据为空，无法解析。")
@@ -529,20 +588,20 @@ def process_data_string(content: str, verbose: bool = False, options=None):
 
 
 def _append_extrapolation_table_block(
-    latex_content,
-    headers,
-    column_count,
-    formatted_data_columns,
-    formatted_result_strings,
-    data_format_block,
-    result_format,
-    caption,
-    header_row,
-    block_index,
-    total_blocks,
-    start_row,
-    end_row,
-):
+    latex_content: list[str],
+    headers: list[str],
+    column_count: int,
+    formatted_data_columns: list[list[str]],
+    formatted_result_strings: list[str],
+    data_format_block: str,
+    result_format: str,
+    caption: str | None,
+    header_row: str,
+    block_index: int,
+    total_blocks: int,
+    start_row: int,
+    end_row: int,
+) -> None:
     latex_content.append("\\begin{table}[!ht]")
     base_caption = caption if caption else "Extrapolation results table"
     caption_text = f"{base_caption} (Part {block_index})" if total_blocks > 1 else base_caption
@@ -579,24 +638,24 @@ def _append_extrapolation_table_block(
 
 
 def generate_latex_table(
-    headers,
-    data_rows,
-    extrapolated_results,
-    output_filename,
-    caption=None,
-    precision=None,
+    headers: list[str],
+    data_rows: list[tuple[mp.mpf, ...]],
+    extrapolated_results: list[ExtrapolationResult | tuple[mp.mpf, mp.mpf]],
+    output_filename: str,
+    caption: str | None = None,
+    precision: int | None = None,
     verbose: bool = False,
     use_dcolumn: bool = False,
-    table_segments=None,
+    table_segments: list[tuple[int, int]] | None = None,
     result_uncertainty_digits: int | None = None,
     latex_group_size: int = 3,
-):
+) -> None:
     """Generate a LaTeX table with the data and extrapolation results."""
-    latex_content = []
+    latex_content: list[str] = []
 
     column_count = len(headers)
-    formatted_data_columns = [[] for _ in range(column_count)]
-    formatted_result_strings = []
+    formatted_data_columns: list[list[str]] = [[] for _ in range(column_count)]
+    formatted_result_strings: list[str] = []
     column_lengths = [len(str(max(1, len(data_rows)))) + 1]
     latex_input_decimals = precision if precision is not None else None
 
