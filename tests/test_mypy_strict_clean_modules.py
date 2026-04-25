@@ -44,6 +44,7 @@ MYPY_CLEAN_MODULES: tuple[str, ...] = (
     "datalab_latex/latex_formatting.py",
     "datalab_latex/expression_engine.py",
     "datalab_latex/latex_tables.py",
+    "fitting/auto_models.py",
 )
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, TypeAlias
 
 from mpmath import mp
 
@@ -40,14 +40,30 @@ class _LinearFitComputation:
     details: dict[str, object]
 
 
-def _power_series_basis(max_power: int) -> tuple[list[Callable[[mp.mpf], mp.mpf]], list[str]]:
-    basis = []
-    texts = []
+# Type alias for the basis-builder return tuple. Used by every
+# ``_*_basis()`` helper below + by ``_power_series_basis``.
+_BasisPack: TypeAlias = tuple[list[Callable[[mp.mpf], mp.mpf]], list[str]]
+
+
+def _power_series_basis(max_power: int) -> _BasisPack:
+    # Closure-cell-freeze factory: each call binds ``p`` in its own
+    # frame so the returned lambda captures the correct power. The
+    # factory has a typed signature so mypy can confirm the lambda
+    # fits ``Callable[[mp.mpf], mp.mpf]`` (the previous
+    # ``lambda x, p=power: ...`` default-arg idiom defeated the
+    # invariant ``list[Callable[[mp.mpf], mp.mpf]]`` element type).
+    def _power_lambda(p: int) -> Callable[[mp.mpf], mp.mpf]:
+        return lambda x: mp.power(x, p)
+
+    basis: list[Callable[[mp.mpf], mp.mpf]] = []
+    texts: list[str] = []
     for power in range(max_power + 1):
         if power == 0:
+            # Constant lambda — captures nothing, so a bare lambda
+            # is closure-safe without going through the factory.
             basis.append(lambda x: mp.mpf("1"))
         else:
-            basis.append(lambda x, p=power: mp.power(x, p))
+            basis.append(_power_lambda(power))
         if power == 0:
             texts.append("1")
         elif power == 1:
@@ -57,46 +73,46 @@ def _power_series_basis(max_power: int) -> tuple[list[Callable[[mp.mpf], mp.mpf]
     return basis, texts
 
 
-def _inverse_basis():
+def _inverse_basis() -> _BasisPack:
     return (
         [lambda x: mp.mpf("1"), lambda x: mp.mpf("1") / x, lambda x: mp.mpf("1") / (x * x)],
         ["1", "1/x", "1/x^2"],
     )
 
 
-def _log_basis():
+def _log_basis() -> _BasisPack:
     return ([lambda x: mp.mpf("1"), lambda x: mp.log(x)], ["1", "ln(x)"])
 
 
-def _log_poly_basis():
+def _log_poly_basis() -> _BasisPack:
     return (
         [lambda x: mp.mpf("1"), lambda x: mp.log(x), lambda x: mp.power(mp.log(x), 2)],
         ["1", "ln(x)", "ln(x)^2"],
     )
 
 
-def _fractional_decay_basis():
+def _fractional_decay_basis() -> _BasisPack:
     return (
         [lambda x: mp.power(x, -3), lambda x: mp.power(x, -4), lambda x: mp.power(x, -5)],
         ["x^{-3}", "x^{-4}", "x^{-5}"],
     )
 
 
-def _exponential_combo_basis():
+def _exponential_combo_basis() -> _BasisPack:
     return (
         [lambda x: mp.e ** (-x), lambda x: mp.e ** (-mp.mpf("0.5") * x), lambda x: mp.mpf("1")],
         ["e^{-x}", "e^{-0.5x}", "1"],
     )
 
 
-def _exponential_flexible_basis():
+def _exponential_flexible_basis() -> _BasisPack:
     return (
         [lambda x: mp.e ** x, lambda x: x * (mp.e ** x), lambda x: mp.mpf("1")],
         ["e^{x}", "x e^{x}", "1"],
     )
 
 
-def _spline_decay_basis():
+def _spline_decay_basis() -> _BasisPack:
     return (
         [lambda x: mp.mpf("1"), lambda x: mp.mpf("1") / (x**3), lambda x: mp.mpf("1") / (x**4), lambda x: mp.mpf("1") / (x**5)],
         ["1", "1/x^3", "1/x^4", "1/x^5"],
@@ -205,11 +221,18 @@ def build_inverse_series_definition(min_power: int, max_power: int) -> AutoModel
         )
     if min_power > max_power:
         min_power, max_power = max_power, min_power
-    basis = []
-    texts = []
-    params = []
+    basis: list[Callable[[mp.mpf], mp.mpf]] = []
+    texts: list[str] = []
+    params: list[str] = []
+
+    # Closure-cell-freeze factory — same idiom as ``_power_lambda``
+    # in ``_power_series_basis`` above. See that function for the
+    # full explanation.
+    def _inverse_power_lambda(p: int) -> Callable[[mp.mpf], mp.mpf]:
+        return lambda x: mp.power(x, -p)
+
     for power in range(min_power, max_power + 1):
-        basis.append(lambda x, p=power: mp.power(x, -p))
+        basis.append(_inverse_power_lambda(power))
         texts.append(f"1/x^{power}")
         params.append(f"A{power}")
     identifier = f"INV{min_power}_{max_power}"
@@ -399,9 +422,21 @@ def fit_linear_model(
         base_fit = _solve(y_series)
         sys_errors: dict[str, mp.mpf] = {}
         sys_notes: list[str] = []
+        # ``system_sigmas`` controls the SYSTEMATIC-uncertainty
+        # branch below: when the caller provided sigmas AND we
+        # didn't promote them to weights, propagate them via
+        # +/- sigma re-fits. ``data_sigmas`` (the original input)
+        # is still consulted later for the ``uncertainty_note``
+        # detail string — the note fires whenever the caller passed
+        # sigmas regardless of whether they became weights or not.
+        # Keep the two names distinct; collapsing them would lose
+        # the weighted-vs-systematic distinction.
         system_sigmas = None if weight_vec else data_sigmas
         if system_sigmas is not None:
-            if len(data_sigmas) != len(y_series):
+            # Use ``system_sigmas`` (narrowed by the ``is not None`` check
+            # above) rather than the wider ``data_sigmas`` so mypy can
+            # confirm the length call is sound.
+            if len(system_sigmas) != len(y_series):
                 raise ValueError(
                     _dual_msg(
                         "不确定度列长度必须与 y 数据一致。",
