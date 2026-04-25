@@ -529,7 +529,7 @@ def validate_method_parameters(method_key: str, params: dict[str, Any]) -> tuple
     Returns:
         (is_valid, error_messages)
     """
-    errors = []
+    errors: list[str] = []
 
     if method_key not in EXTRAPOLATION_METHOD_SPECS:
         return False, [f"Unknown method: {method_key}"]
@@ -552,8 +552,18 @@ def validate_method_parameters(method_key: str, params: dict[str, Any]) -> tuple
 
             # Validate number parameters
             if isinstance(param_spec, NumberWidgetSpec):
+                # ``value`` is ``Any | None`` but the empty / None case
+                # was filtered above. Use an explicit guard rather than
+                # ``assert`` so the validation survives ``python -O``
+                # (PyInstaller bundles can be built with optimisation).
+                if value is None:
+                    continue
                 try:
-                    num_value = float(value) if param_spec.number_type == "float" else int(value)
+                    num_value: float | int = (
+                        float(value)
+                        if param_spec.number_type == "float"
+                        else int(value)
+                    )
                     if param_spec.min_value is not None and num_value < param_spec.min_value:
                         errors.append(f"Parameter '{param_name}' must be >= {param_spec.min_value}")
                     if param_spec.max_value is not None and num_value > param_spec.max_value:

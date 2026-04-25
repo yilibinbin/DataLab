@@ -9,18 +9,11 @@ from mpmath import mp
 
 from shared.numerics import noise_floor
 
-try:  # Allow running as a loose script or as a package
-    from ..extrapolation_methods import (
-        SequenceAcceleratorConfig,
-        SequenceAccelerationError,
-        apply_sequence_accelerator,
-    )
-except ImportError:  # pragma: no cover - fallback for script execution
-    from extrapolation_methods import (  # type: ignore
-        SequenceAcceleratorConfig,
-        SequenceAccelerationError,
-        apply_sequence_accelerator,
-    )
+from extrapolation_methods import (
+    SequenceAcceleratorConfig,
+    SequenceAccelerationError,
+    apply_sequence_accelerator,
+)
 
 from .auto_models import AUTO_MODELS, AutoModelDefinition, fit_linear_model
 from .hp_fitter import FitResult, combine_error_components, fit_custom_model

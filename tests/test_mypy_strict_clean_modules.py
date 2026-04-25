@@ -47,6 +47,14 @@ MYPY_CLEAN_MODULES: tuple[str, ...] = (
     "fitting/auto_models.py",
     "datalab_latex/latex_tables_extrapolation.py",
     "datalab_latex/latex_tables_error_propagation.py",
+    "shared/caching.py",
+    "shared/presets.py",
+    "shared/ui_specs.py",
+    "shared/units.py",
+    "fitting/report.py",
+    "fitting/model_selector.py",
+    "fitting/mcmc_fitter.py",
+    "extrapolation_methods/power_law.py",
 )
 
 
