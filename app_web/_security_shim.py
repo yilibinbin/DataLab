@@ -12,6 +12,7 @@ _logger = logging.getLogger(__name__)
 
 try:
     from .security import (  # type: ignore[import-not-found]
+        _mpmath_lock as mpmath_lock,
         configure_app_security,
         csrf_protect,
         get_csrf_token,
@@ -77,6 +78,12 @@ except ImportError as _import_exc:
     def mpmath_synchronized(f):  # type: ignore[no-redef]
         """Dummy synchronization decorator."""
         return f
+
+    # Dev-mode fallback lock — still real, just isolated from
+    # production. Without this, ``with mpmath_lock`` blows up at
+    # import time in degraded dev mode.
+    import threading as _threading_fallback
+    mpmath_lock = _threading_fallback.Lock()  # type: ignore[no-redef]
 
     def validate_latex_engine(engine):  # type: ignore[no-redef]
         """Dummy LaTeX engine validation."""

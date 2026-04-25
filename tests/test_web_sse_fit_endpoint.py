@@ -237,29 +237,44 @@ def test_rate_limiter_fires_on_auto_fit_endpoint(monkeypatch):
 
 def test_rate_limit_gc_evicts_old_ips(monkeypatch):
     """_rate_gc_locked must prune IPs whose deques aged out.
+
     Otherwise a long-running server hit by many one-off IPs
-    accumulates empty deques forever."""
-    from app_web import server as srv
+    accumulates empty deques forever. We validate the eviction
+    DIRECTLY (rather than relying on the natural admission flow,
+    which leaves all timestamps recent and so evicts nothing) by
+    seeding ``_RATE_HISTORY`` with deques that are already older
+    than ``RATE_WINDOW_SECONDS`` — what `_rate_gc_locked` is
+    explicitly designed to clean up.
+    """
+    import collections
+    import time
+
     from app_web.blueprints import sse as sse_mod
 
     monkeypatch.delenv("DATALAB_SSE_DISABLE_RATE_LIMIT", raising=False)
     with sse_mod._RATE_LOCK:
         sse_mod._RATE_HISTORY.clear()
 
-    app = srv.create_app()
-    app.config["TESTING"] = False
-    client = app.test_client()
-    # Fill the history with fake IPs via X-Forwarded-For… actually
-    # with the new ProxyFix-based design, remote_addr dictates the
-    # rate key. We can't directly spoof remote_addr from a test
-    # client. Instead, call _check_rate_limit directly with
-    # synthetic IPs then inspect _RATE_HISTORY.
-    for i in range(300):
-        sse_mod._check_rate_limit(f"10.0.0.{i % 256}")
-    # After 300 admissions ≥ _RATE_GC_EVERY=256, the GC has run at
-    # least once. Entries whose timestamps haven't aged out of the
-    # 60s window won't be evicted, but the function must have run.
-    # We test that the history didn't grow beyond the number of
-    # unique IPs passed in (no stray entries).
-    with sse_mod._RATE_LOCK:
-        assert len(sse_mod._RATE_HISTORY) <= 256
+        # Plant 50 entries whose timestamps are already older than
+        # the rate window — these should ALL be evicted on GC.
+        old = time.monotonic() - sse_mod.RATE_WINDOW_SECONDS - 10.0
+        for i in range(50):
+            sse_mod._RATE_HISTORY[f"10.1.0.{i}"] = collections.deque([old])
+
+        # Plant 5 entries with fresh timestamps — these must SURVIVE.
+        fresh = time.monotonic()
+        for i in range(5):
+            sse_mod._RATE_HISTORY[f"10.2.0.{i}"] = collections.deque([fresh])
+
+        # Trigger GC directly (lock already held).
+        sse_mod._rate_gc_locked(time.monotonic())
+
+        # All 50 expired IPs must be gone; all 5 fresh IPs remain.
+        remaining = set(sse_mod._RATE_HISTORY.keys())
+        assert not any(k.startswith("10.1.0.") for k in remaining), (
+            f"GC failed to evict expired IPs: {remaining}"
+        )
+        for i in range(5):
+            assert f"10.2.0.{i}" in remaining, (
+                f"GC incorrectly evicted fresh IP 10.2.0.{i}: {remaining}"
+            )

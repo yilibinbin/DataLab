@@ -2,15 +2,23 @@
  * DataLab Web — real-time collaboration client (Phase 3 #17).
  *
  * Lightweight wrapper over socket.io-client that:
- * - creates a session via POST /collab/session (returns session_id)
- * - joins a room via socketio 'join' event on /collab namespace
- * - emits 'state_update' events for local UI changes
+ * - creates a session via POST /collab/session, which returns BOTH
+ *   ``session_id`` AND ``join_token`` — both required to participate
+ * - joins a room via the SocketIO 'join' event on /collab namespace
+ *   (server rejects the join if either is missing or the token is
+ *   wrong)
+ * - emits 'state_update' events for local UI changes (server
+ *   re-verifies the token + room membership on every emit)
  * - applies incoming 'state_update' patches to a caller-supplied
  *   apply callback
  *
- * No persistent storage, no auth — sessions are ephemeral per-process.
- * Callers wanting stronger guarantees should layer an auth cookie
- * and Redis-backed session registry.
+ * Auth model: the ``join_token`` is a per-session bearer secret
+ * minted at creation. Anyone with both the ``session_id`` AND the
+ * ``join_token`` can participate; the id alone is insufficient.
+ * The token is delivered out-of-band (typically alongside a share
+ * link). Sessions are in-memory and tied to one server worker
+ * process — multi-worker collaboration would need a shared registry
+ * (Redis), which is out of scope for the current implementation.
  *
  * Exposes ``window.DATALAB_COLLAB = { createSession, joinSession,
  * leaveSession, sendStateUpdate, currentSessionId }`` so tests +

@@ -16,4 +16,19 @@ if str(ROOT) not in sys.path:
 # Contributors running the full suite don't need to remember the env
 # var; specific tests can still override via
 # ``DATALAB_DEBUG=0 pytest tests/...``.
+#
+# Limitation: a test that wants to pin the *production fail-fast*
+# behaviour cannot ``monkeypatch.delenv("DATALAB_DEBUG")`` and re-
+# import ``_security_shim`` — Python's import cache makes the env
+# var only read once at first import, and that import is already
+# done by the time the test runs. Such tests must spawn a fresh
+# Python subprocess with a clean environment, e.g.::
+#
+#     subprocess.run(
+#         [sys.executable, "-c", "import app_web.server"],
+#         env={"PATH": os.environ["PATH"]},  # NO DATALAB_DEBUG
+#         check=False,
+#     )
+#
+# and inspect the return code / stderr there.
 os.environ.setdefault("DATALAB_DEBUG", "1")

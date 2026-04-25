@@ -132,6 +132,14 @@ def test_collab_session_get_accepts_token_via_header(_app_and_sio):
     assert data["session_id"] == sid
     assert "participants" in data
     assert "shared_state" in data
+    # Critical: the session-snapshot view must NEVER echo the
+    # join_token back to the client. The token is a bearer secret
+    # shared OOB; if it leaked into a JSON response, any page that
+    # could read the response (e.g. via a misconfigured CORS) would
+    # gain full session access. Pinning this so a future refactor
+    # that does ``**session.__dict__`` accidentally doesn't
+    # regress security.
+    assert "join_token" not in data
 
 
 def test_collab_session_get_accepts_token_via_query(_app_and_sio):
@@ -142,6 +150,9 @@ def test_collab_session_get_accepts_token_via_query(_app_and_sio):
     tok = created["join_token"]
     resp = client.get(f"/collab/session/{sid}?token={tok}")
     assert resp.status_code == 200
+    # Same security pin as above — query-arg flavour also must not
+    # echo the token in the response body.
+    assert "join_token" not in resp.get_json()
 
 
 def test_collab_session_get_rejects_wrong_token(_app_and_sio):
