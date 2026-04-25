@@ -40,7 +40,7 @@ cache round-trip.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Callable, Hashable, NamedTuple, Sequence
+from typing import Any, Callable, Hashable, NamedTuple, Sequence
 
 import mpmath as mp
 
@@ -89,7 +89,10 @@ class _CacheInfo(NamedTuple):
     hits: int
     misses: int
     currsize: int
-    maxsize: int
+    # ``functools.lru_cache.cache_info().maxsize`` is ``int | None``
+    # because ``lru_cache(maxsize=None)`` is unbounded. Mirror the
+    # stdlib type so re-serializing the info doesn't require a cast.
+    maxsize: int | None
 
 
 def _xs_to_key(xs: Sequence[mp.mpf], key_precision: int) -> tuple[str, ...]:
@@ -104,7 +107,7 @@ def _cached_sample_impl(
     xs_key: tuple[str, ...],
     precision: int,
     cache_token: Hashable,
-    func_ref: Callable,  # held so lru_cache keeps a strong reference
+    func_ref: Callable[..., Any],  # held so lru_cache keeps a strong reference
 ) -> tuple[str, ...]:
     """Inner cached worker.
 

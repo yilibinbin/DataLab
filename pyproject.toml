@@ -205,6 +205,13 @@ module = [
     "matplotlib.*",
     "sympy",
     "sympy.*",
+    # ``pint`` is the optional ``[units]`` extra (declared above at
+    # line 64). ``shared/units.py`` guards every import with
+    # ``try/except ImportError`` so the runtime stays optional, but
+    # mypy still needs the override to stop emitting
+    # ``[import-not-found]`` when the env doesn't install it.
+    "pint",
+    "pint.*",
 ]
 ignore_missing_imports = true
 follow_imports = "silent"
