@@ -11,7 +11,9 @@ from .model_selector import AutoModelResult
 
 
 def _format_value(value: mp.mpf, digits: int = 6) -> str:
-    return mp.nstr(value, n=digits)
+    # mpmath has no stubs; mp.nstr() is typed Any, so widen explicitly
+    # to str to keep the public signature honest.
+    return str(mp.nstr(value, n=digits))
 
 
 def summarize_fit_result(result: FitResult) -> str:

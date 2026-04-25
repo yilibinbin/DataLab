@@ -179,6 +179,43 @@ strict = true
 # not in scope for Phase 4.
 ignore_missing_imports = true
 
+# Third-party libraries without type stubs. ``ignore_missing_imports``
+# alone doesn't silence the ``[import-untyped]`` warning under
+# ``--strict``; we additionally mark these modules as "follow_imports
+# = silent" so the error code is suppressed cleanly. Adding real
+# stubs (or ``types-mpmath`` / ``types-emcee`` if they ever exist)
+# would be the right long-term fix.
+[[tool.mypy.overrides]]
+module = [
+    # Third-party libraries actually imported by the project that
+    # ship without type stubs (or whose stubs are incomplete on
+    # the strict perimeter). Adding a library here suppresses the
+    # ``[import-untyped]`` errors that ``ignore_missing_imports``
+    # alone doesn't catch under ``--strict``. Keep this list in
+    # sync with ``gui_requirements.txt`` / ``web_requirements.txt``
+    # — adding a library here without a corresponding requirement
+    # masks real "module not installed" failures.
+    "mpmath",
+    "mpmath.*",
+    "emcee",
+    "emcee.*",
+    "corner",
+    "corner.*",
+    "matplotlib",
+    "matplotlib.*",
+    "sympy",
+    "sympy.*",
+    # ``pint`` is the optional ``[units]`` extra (declared above at
+    # line 64). ``shared/units.py`` guards every import with
+    # ``try/except ImportError`` so the runtime stays optional, but
+    # mypy still needs the override to stop emitting
+    # ``[import-not-found]`` when the env doesn't install it.
+    "pint",
+    "pint.*",
+]
+ignore_missing_imports = true
+follow_imports = "silent"
+
 # ------------------------------------------------------------------
 # ruff (fast linter — opt-in, not wired into CI yet)
 # ------------------------------------------------------------------

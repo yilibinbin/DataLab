@@ -45,7 +45,7 @@ try:
 
     HAS_PINT = True
 except ImportError:
-    _pint = None  # type: ignore[assignment]
+    _pint = None
     HAS_PINT = False
 
 

@@ -3,7 +3,7 @@
 Schema:
 
     jobs:
-      - name: str                # human-readable (required)
+      - name: str                # human-readable (required, safe basename)
         operation: str           # "fit" | "auto_fit" | "calc" (required)
         data_path: str           # path to 2-column CSV or .dat (required)
         output_dir: str          # where to write artefacts (required)
@@ -23,6 +23,7 @@ and gives better error locality for end users debugging their YAML.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -48,6 +49,19 @@ MAX_JOBS_PER_BATCH = 1_000
 # a billion-digit mpmath computation.
 MIN_PRECISION = 10
 MAX_PRECISION = 1_000
+
+# Job ``name`` is later used as the JSON output filename
+# (``output_dir / f"{name}.json"`` in cli/main.py). Without this
+# regex, a YAML containing ``name: "../etc/cron.d/evil"`` would write
+# the JSON to an arbitrary path reachable from output_dir. The YAML
+# is operator-controlled (defence-in-depth — a CI pipeline that
+# accepts user-contributed batch configs is a realistic abuse path),
+# so we whitelist a conservative basename grammar:
+# - first char must be alphanumeric
+# - remainder may include letters, digits, dot, dash, underscore
+# - max 128 chars
+# - no slash, backslash, null, leading dot
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,127}$")
 
 
 @dataclass(frozen=True)
@@ -108,6 +122,12 @@ def _coerce_job(raw: dict, index: int) -> BatchJob:
             f"Job #{index}: entry must be a mapping, got {type(raw).__name__}"
         )
     name = _require_str(raw.get("name"), "name", f"#{index}")
+    if not _SAFE_NAME_RE.match(name):
+        raise ValueError(
+            f"Job #{index}: 'name' must be a safe basename "
+            f"(alphanumeric / dot / dash / underscore, no slashes "
+            f"or leading dot, ≤128 chars). Got: {name!r}"
+        )
     operation = _require_str(raw.get("operation"), "operation", name)
     if operation not in ALLOWED_OPERATIONS:
         allowed = ", ".join(sorted(ALLOWED_OPERATIONS))

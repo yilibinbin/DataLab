@@ -1,0 +1,283 @@
+{
+  "metadata": {
+    "generator": "tests/fixtures/mathematica_reference/special_functions/generate.wls",
+    "mathematica_version": "14.3.0 for Mac OS X ARM (64-bit) (July 8, 2025)",
+    "precision_digits": 50,
+    "description": "DataLab whitelist functions vs Mathematica reference values."
+  },
+  "cases": [
+    {
+      "id": "Sin[1]",
+      "function": "Sin",
+      "args": [1],
+      "value": "0.84147098480789650665250232163029899962256306079837",
+      "context": "trig"
+    },
+    {
+      "id": "Sin[Pi/4]",
+      "function": "Sin",
+      "args": ["Pi/4"],
+      "value": "0.70710678118654752440084436210484903928483593768847",
+      "context": "trig"
+    },
+    {
+      "id": "Cos[1]",
+      "function": "Cos",
+      "args": [1],
+      "value": "0.54030230586813971740093660744297660373231042061792",
+      "context": "trig"
+    },
+    {
+      "id": "Cos[Pi/3]",
+      "function": "Cos",
+      "args": ["Pi/3"],
+      "value": "0.50000000000000000000000000000000000000000000000000",
+      "context": "trig"
+    },
+    {
+      "id": "Tan[Pi/6]",
+      "function": "Tan",
+      "args": ["Pi/6"],
+      "value": "0.57735026918962576450914878050195745564760175127013",
+      "context": "trig"
+    },
+    {
+      "id": "Asin[1/2]",
+      "function": "Asin",
+      "args": ["1/2"],
+      "value": "0.52359877559829887307710723054658381403286156656252",
+      "context": "inverse_trig"
+    },
+    {
+      "id": "Acos[1/2]",
+      "function": "Acos",
+      "args": ["1/2"],
+      "value": "1.0471975511965977461542144610931676280657231331250",
+      "context": "inverse_trig"
+    },
+    {
+      "id": "Atan[1]",
+      "function": "Atan",
+      "args": [1],
+      "value": "0.78539816339744830961566084581987572104929234984378",
+      "context": "inverse_trig"
+    },
+    {
+      "id": "Sinh[1]",
+      "function": "Sinh",
+      "args": [1],
+      "value": "1.1752011936438014568823818505956008151557179813341",
+      "context": "hyperbolic"
+    },
+    {
+      "id": "Cosh[1]",
+      "function": "Cosh",
+      "args": [1],
+      "value": "1.5430806348152437784779056207570616826015291123658",
+      "context": "hyperbolic"
+    },
+    {
+      "id": "Tanh[1]",
+      "function": "Tanh",
+      "args": [1],
+      "value": "0.76159415595576488811945828260479359041276859725794",
+      "context": "hyperbolic"
+    },
+    {
+      "id": "Asinh[1]",
+      "function": "Asinh",
+      "args": [1],
+      "value": "0.88137358701954302523260932497979230902816032826164",
+      "context": "hyperbolic"
+    },
+    {
+      "id": "Acosh[2]",
+      "function": "Acosh",
+      "args": [2],
+      "value": "1.3169578969248167086250463473079684440269819714675",
+      "context": "hyperbolic"
+    },
+    {
+      "id": "Atanh[1/2]",
+      "function": "Atanh",
+      "args": ["1/2"],
+      "value": "0.54930614433405484569762261846126285232374527891137",
+      "context": "hyperbolic"
+    },
+    {
+      "id": "Exp[1]",
+      "function": "Exp",
+      "args": [1],
+      "value": "2.7182818284590452353602874713526624977572470936999",
+      "context": "exp_log"
+    },
+    {
+      "id": "Exp[-1]",
+      "function": "Exp",
+      "args": [-1],
+      "value": "0.36787944117144232159552377016146086744581113103177",
+      "context": "exp_log"
+    },
+    {
+      "id": "Log[2]",
+      "function": "Log",
+      "args": [2],
+      "value": "0.69314718055994530941723212145817656807550013436026",
+      "context": "exp_log"
+    },
+    {
+      "id": "Log[10]",
+      "function": "Log",
+      "args": [10],
+      "value": "2.3025850929940456840179914546843642076011014886287",
+      "context": "exp_log"
+    },
+    {
+      "id": "Log10[1000]",
+      "function": "Log10",
+      "args": [1000],
+      "value": "3.0000000000000000000000000000000000000000000000000",
+      "context": "exp_log"
+    },
+    {
+      "id": "Sqrt[2]",
+      "function": "Sqrt",
+      "args": [2],
+      "value": "1.4142135623730950488016887242096980785696718753769",
+      "context": "exp_log"
+    },
+    {
+      "id": "Power[2,10]",
+      "function": "Power",
+      "args": [2, 10],
+      "value": "1024.0000000000000000000000000000000000000000000000",
+      "context": "exp_log"
+    },
+    {
+      "id": "Abs[-3.5]",
+      "function": "Abs",
+      "args": ["-7/2"],
+      "value": "3.5000000000000000000000000000000000000000000000000",
+      "context": "abs"
+    },
+    {
+      "id": "Erf[1]",
+      "function": "Erf",
+      "args": [1],
+      "value": "0.84270079294971486934122063508260925929606699796630",
+      "context": "special"
+    },
+    {
+      "id": "Erf[2]",
+      "function": "Erf",
+      "args": [2],
+      "value": "0.99532226501895273416206925636725292861089179704006",
+      "context": "special"
+    },
+    {
+      "id": "Gamma[5]",
+      "function": "Gamma",
+      "args": [5],
+      "value": "24.000000000000000000000000000000000000000000000000",
+      "context": "special"
+    },
+    {
+      "id": "Gamma[1/2]",
+      "function": "Gamma",
+      "args": ["1/2"],
+      "value": "1.7724538509055160272981674833411451827975494561223",
+      "context": "special"
+    },
+    {
+      "id": "Zeta[2]",
+      "function": "Zeta",
+      "args": [2],
+      "value": "1.6449340668482264364724151666460251892189499012068",
+      "context": "zeta"
+    },
+    {
+      "id": "Zeta[3]",
+      "function": "Zeta",
+      "args": [3],
+      "value": "1.2020569031595942853997381615114499907649862923405",
+      "context": "zeta"
+    },
+    {
+      "id": "Zeta[4]",
+      "function": "Zeta",
+      "args": [4],
+      "value": "1.0823232337111381915160036965411679027747509519187",
+      "context": "zeta"
+    },
+    {
+      "id": "Hyp0f1[2,1]",
+      "function": "Hyp0f1",
+      "args": [2, 1],
+      "value": "1.5906368546373290633822544249996662479544781594955",
+      "context": "hypergeometric"
+    },
+    {
+      "id": "Hyp1f1[1,2,1]",
+      "function": "Hyp1f1",
+      "args": [1, 2, 1],
+      "value": "1.7182818284590452353602874713526624977572470936999",
+      "context": "hypergeometric"
+    },
+    {
+      "id": "Hyp2f1[1/2,1,3/2,1/4]",
+      "function": "Hyp2f1",
+      "args": ["1/2", 1, "3/2", "1/4"],
+      "value": "1.0986122886681096913952452369225257046474905578227",
+      "context": "hypergeometric"
+    },
+    {
+      "id": "PolyLog[2,1/2]",
+      "function": "PolyLog",
+      "args": [2, "1/2"],
+      "value": "0.58224052646501250590265632015968010874419847480613",
+      "context": "polylog"
+    },
+    {
+      "id": "PolyLog[3,1/2]",
+      "function": "PolyLog",
+      "args": [3, "1/2"],
+      "value": "0.53721319360804020094062322559496582667040249934038",
+      "context": "polylog"
+    },
+    {
+      "id": "BesselJ[0,1]",
+      "function": "BesselJ",
+      "args": [0, 1],
+      "value": "0.76519768655796655144971752610266322090927428975533",
+      "context": "bessel"
+    },
+    {
+      "id": "BesselJ[1,1]",
+      "function": "BesselJ",
+      "args": [1, 1],
+      "value": "0.44005058574493351595968220371891491312737230199276",
+      "context": "bessel"
+    },
+    {
+      "id": "BesselY[0,1]",
+      "function": "BesselY",
+      "args": [0, 1],
+      "value": "0.088256964215676957982926766023515162827817523090676",
+      "context": "bessel"
+    },
+    {
+      "id": "Airy[0]",
+      "function": "Airy",
+      "args": [0],
+      "value": "0.35502805388781723926006318600418317639797917419917",
+      "context": "airy"
+    },
+    {
+      "id": "Airy[1]",
+      "function": "Airy",
+      "args": [1],
+      "value": "0.13529241631288141552414742351546630617494414298833",
+      "context": "airy"
+    }
+  ]
+}

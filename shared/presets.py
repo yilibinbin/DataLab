@@ -133,7 +133,7 @@ def save_preset(
 def load_preset(
     name: str,
     store: Optional[SettingsStore] = None,
-) -> Optional[dict]:
+) -> Optional[dict[str, object]]:
     """Return a saved preset, or ``None`` if absent / corrupt."""
     try:
         key = _key_for(name)
@@ -143,7 +143,10 @@ def load_preset(
     if blob is None:
         return None
     try:
-        decoded = json.loads(bytes(blob).decode("utf-8"))
+        # ``QByteArray.data()`` returns ``bytes | bytearray |
+        # memoryview[int]`` per PySide6 stubs; coerce to ``bytes``
+        # explicitly so ``.decode`` is unambiguously available.
+        decoded = json.loads(bytes(blob.data()).decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:
         _logger.warning(
             "preset %r corrupt — decode failed: %s", name, exc

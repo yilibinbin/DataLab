@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """Computation and formatting logic for the Flask web UI.
 
-This package is a compatibility facade. Heavy computation lives in submodules:
+This package was originally a single 2 000+ line ``_legacy_impl.py``
+monolith. Phase 7 finished the split and removed the dead snapshot;
+the modular structure below is now the only source of truth:
 
-- `common`: form parsing, formatting, CSV helpers
-- `extrapolation`: extrapolation pipeline
-- `error_propagation`: error propagation pipeline
-- `fitting`: dataset fitting pipeline
-- `statistics`: statistical aggregation pipeline
-- `plots`: matplotlib render helpers
+- ``common``           form parsing, formatting, CSV helpers
+- ``extrapolation``    extrapolation pipeline
+- ``error_propagation`` error propagation pipeline
+- ``fitting``          dataset fitting pipeline
+- ``statistics``       statistical aggregation pipeline
+- ``plots``            matplotlib render helpers
 
-Route handlers should import from `app_web.logic` to keep `create_app()` small.
+Route handlers should import from ``app_web.logic`` (this facade)
+to keep ``create_app()`` small.
 """
 
 from __future__ import annotations
@@ -19,9 +22,9 @@ import sys
 from pathlib import Path
 
 # Ensure project root is importable when the module is executed directly.
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 from .common import (  # noqa: E402,F401
     _encode_b64,
@@ -66,7 +69,6 @@ from .statistics import (  # noqa: E402,F401
 )
 
 __all__ = [
-    "ROOT",
     "ErrorPropagationBundle",
     "ExtrapolationResultBundle",
     "FitResultBundle",

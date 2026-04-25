@@ -87,7 +87,7 @@ def test_sse_stream_materialises_bare_dict_as_message_event():
 def test_sse_stream_emits_error_frame_on_exception():
     def _failing():
         yield ("progress", {"pct": 10})
-        raise RuntimeError("something broke")
+        raise RuntimeError("internal /private/path/secret.txt details")
 
     frames = list(sse_stream(_failing()))
     assert len(frames) == 2  # progress + error
@@ -98,8 +98,16 @@ def test_sse_stream_emits_error_frame_on_exception():
         ln for ln in frames[1].splitlines() if ln.startswith("data: ")
     )
     err_body = json.loads(err_line[len("data: "):])
+    # Class name is preserved for client-side discrimination…
     assert err_body["error"] == "RuntimeError"
-    assert err_body["message"] == "something broke"
+    # …but the raw exception message is NOT exposed (it could
+    # leak filesystem paths / mpmath internals). Sanitised form
+    # only.
+    assert "private/path/secret" not in err_body["message"], (
+        "raw str(exc) must not reach the client"
+    )
+    assert err_body["message"].startswith("RuntimeError:")
+    assert "See server logs" in err_body["message"]
 
 
 def test_sse_stream_emit_callback_receives_every_frame():

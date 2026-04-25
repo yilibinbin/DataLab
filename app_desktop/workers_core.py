@@ -9,7 +9,11 @@ from typing import Any, Callable
 
 import mpmath as mp
 
-logger = logging.getLogger(__name__)
+# Private-by-convention logger name — matches the rest of DataLab
+# (_logger in sse.py, collaborate.py, mcmc_fitter.py, etc.). The
+# leading underscore prevents ``from app_desktop.workers_core import
+# logger`` from accidentally exposing the handle as a public API.
+_logger = logging.getLogger(__name__)
 
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 
@@ -122,10 +126,10 @@ def _render_extrapolation_plot_bytes(
     if not row_values:
         return None
     try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+        # Centralised backend init (backend=Agg + CJK fonts +
+        # unicode-minus handling). Using this in every site keeps
+        # backend drift from a local matplotlib.use() call impossible.
+        from shared.plotting import plt
     except Exception:
         return None
     try:
@@ -322,12 +326,13 @@ def _execute_auto_fit_job_subprocess(
         try:
             _attach_mcmc_refinement(summary, job)
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
+            _logger.warning(
                 "MCMC refinement failed (%s); "
                 "falling back to LSQ-only result",
                 exc,
             )
     return summary
+
 
 
 def _execute_auto_fit_job(
@@ -362,20 +367,21 @@ def _execute_auto_fit_job(
             per_model_timeout_seconds=timeout_seconds,
         )
         # Phase 3 #12 — MCMC refinement pass on the best-AIC candidate
-        # when the user ticked "Refine with MCMC". Attaches a
-        # ``mcmc_result`` dict to ``summary.best().fit_result.details``
-        # so the renderer can display credible intervals + corner plot
-        # alongside the least-squares output. Silently skipped when
-        # emcee is missing or the MCMC stage raises — LSQ results
-        # remain valid either way.
+        # when the user ticked "Refine with MCMC". Attaches
+        # ``mcmc_refinement`` + ``mcmc_corner_png`` to
+        # ``summary.best().fit_result.details`` so the renderer can
+        # display credible intervals + corner plot alongside the LSQ
+        # output. Silently skipped when emcee is missing or the MCMC
+        # stage raises — LSQ results remain valid either way.
         if getattr(job, "refine_with_mcmc", False):
             try:
                 _attach_mcmc_refinement(summary, job)
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
+                _logger.warning(
                     "MCMC refinement failed (%s); "
                     "falling back to LSQ-only result",
                     exc,
+                    exc_info=True,
                 )
         return summary
 
@@ -383,15 +389,41 @@ def _execute_auto_fit_job(
 def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
     """Run emcee on the best-AIC candidate and attach results.
 
+    Correctness contract (post review-round-1):
+    - Uses ``summary.best()`` (the public method on AutoFitSummary) —
+      NOT ``summary.best_result`` which doesn't exist. That bug made
+      the entire refinement branch a silent no-op.
+    - Re-parameterises the model per-theta by calling
+      ``build_linear_evaluator(definition, new_params)`` and invoking
+      the returned ``evaluator(x)`` with the single-arg signature.
+      The prior call ``evaluator(new_params, x)`` raised TypeError
+      on every evaluation, which was swallowed into -inf — emcee saw
+      a flat likelihood and produced noise. This is CRITICAL correctness.
+    - Wraps every log-probability call in ``precision_guard(precision)``
+      to keep concurrent jobs from racing on ``mp.dps``. emcee calls
+      the closure thousands of times on its own threads, so the outer
+      guard in ``_execute_auto_fit_job`` is insufficient — each
+      call must re-enter.
+    - Reads residuals from ``best_fit.residuals`` (the real dataclass
+      field) — ``details['residuals']`` is unreachable because
+      ``_LinearFitComputation._solve`` never puts it there.
+
     Degrades gracefully:
-    - emcee absent → log + skip (checkbox should already be disabled)
-    - best candidate None → skip
-    - log_probability raises in a worker → skip, keep LSQ result
+    - emcee absent → log + skip
+    - best candidate None → skip with info log
+    - Best model isn't a built-in linear basis → skip (the evaluator
+      rebuild only works for ``AUTO_MODEL_MAP`` definitions)
+    - log_probability raises for any reason → walker rejected
+      (returns -inf); the run continues
+    - run_mcmc raises → log at WARNING with exc_info; LSQ result
+      remains intact
     """
+    from fitting.auto_models import AUTO_MODEL_MAP, build_linear_evaluator
     from fitting.mcmc_fitter import HAS_EMCEE, render_corner_plot, run_mcmc
+    from shared.precision import precision_guard as _pg
 
     if not HAS_EMCEE:
-        logger.info(
+        _logger.info(
             "refine_with_mcmc=True but emcee not installed; skipping"
         )
         return
@@ -402,7 +434,7 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
     # resolved to None and skipped MCMC entirely. See review HIGH #1.
     best = summary.best() if summary.best_model is not None else None
     if best is None or best.fit_result is None:
-        logger.info(
+        _logger.info(
             "refine_with_mcmc=True but no best candidate; skipping"
         )
         return
@@ -410,41 +442,78 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
     best_fit = best.fit_result
     param_names = list(best_fit.params.keys()) if best_fit.params else []
     if not param_names:
-        logger.info("best candidate has no parameters; skipping MCMC")
+        _logger.info("best candidate has no parameters; skipping MCMC")
         return
+
+    # The reparameterisation path works only for models registered
+    # in AUTO_MODEL_MAP (built-in linear basis). Custom non-linear
+    # fits return FitResults whose identifiers aren't in the map —
+    # we decline to refine them rather than silently producing
+    # wrong posteriors.
+    #
+    # Escape hatch (used by tests): if ``best_fit.details`` already
+    # carries an ``evaluator`` callable with signature
+    # ``evaluator(params_dict, x)``, we use it directly and skip
+    # ``build_linear_evaluator``. Production fits don't currently
+    # populate this slot — it's there to make the pre-flight + health-
+    # check unit tests independent from AUTO_MODEL_MAP's parameter
+    # naming conventions.
+    definition = AUTO_MODEL_MAP.get(best.identifier)
+    detail_evaluator = (best_fit.details or {}).get("evaluator")
+    if definition is None and detail_evaluator is None:
+        _logger.info(
+            "MCMC refinement skipped: model %r is not a linear basis "
+            "(custom models not supported by this refinement path)",
+            best.identifier,
+        )
+        return
+
     initial_guess = [float(best_fit.params[name]) for name in param_names]
     rmse = _estimate_rmse(job.y_series, best_fit)
+    xs_f = [float(x) for x in job.x_series]
+    ys_f = [float(y) for y in job.y_series]
+    precision = int(getattr(job, "precision", 50) or 50)
 
     def _log_probability(theta):
-        # Gaussian likelihood around the LSQ model. emcee calls this
-        # many thousands of times — keep it numerically simple.
-        # Returning ``-inf`` (NEVER NaN) on any invalid input is
-        # critical: emcee's red-blue move computes
-        # ``lnpdiff = f + nlp - state.log_prob[j]`` and a single
-        # NaN there poisons all subsequent acceptance decisions
-        # (you'd see RuntimeWarning floods on ill-conditioned data).
-        if not param_names or rmse <= 0:
-            return float("-inf")
+        """Gaussian log-likelihood around the reparameterised model.
+
+        Returns ``-math.inf`` (NEVER NaN) on any invalid input.
+        emcee's red-blue move computes ``lnpdiff = f + nlp -
+        state.log_prob[j]`` and a single NaN poisons all subsequent
+        acceptance decisions (RuntimeWarning floods on ill-
+        conditioned data). Every call enters its own
+        ``precision_guard`` — mp.dps is process-global and emcee
+        invokes this closure many thousands of times on its thread
+        pool, so the outer guard isn't sufficient.
+        """
         import math as _math
 
-        evaluator = best_fit.details.get("evaluator") if best_fit.details else None
-        if evaluator is None:
+        if not param_names or rmse <= 0:
             return float("-inf")
-        new_params = dict(zip(param_names, (float(v) for v in theta)))
         try:
-            residuals_sq = 0.0
-            for x_val, y_val in zip(job.x_series, job.y_series):
-                pred = float(evaluator(new_params, float(x_val)))
-                # Defensive: a model that returns NaN/inf for some
-                # parameter regions (e.g. log of negative) must not
-                # poison the residual sum. ``-inf`` is the right
-                # signal — emcee skips such walkers naturally.
-                if not _math.isfinite(pred):
-                    return float("-inf")
-                residuals_sq += (float(y_val) - pred) ** 2
-                if not _math.isfinite(residuals_sq):
-                    return float("-inf")
-            return -0.5 * residuals_sq / (rmse ** 2)
+            new_params = {
+                name: float(v) for name, v in zip(param_names, theta)
+            }
+            with _pg(precision):
+                if detail_evaluator is not None:
+                    evaluator = lambda x, _e=detail_evaluator, _p=new_params: _e(_p, x)
+                else:
+                    evaluator = build_linear_evaluator(definition, new_params)
+                residuals_sq = 0.0
+                for x_val, y_val in zip(xs_f, ys_f):
+                    pred = float(evaluator(x_val))
+                    # Defensive: a model that returns NaN/inf for some
+                    # parameter regions (e.g. log of negative) must not
+                    # poison the residual sum.
+                    if not _math.isfinite(pred):
+                        return float("-inf")
+                    diff = y_val - pred
+                    residuals_sq += diff * diff
+                    if not _math.isfinite(residuals_sq):
+                        return float("-inf")
+            if not _math.isfinite(residuals_sq):
+                return float("-inf")
+            return -0.5 * residuals_sq / (rmse * rmse)
         except (TypeError, ValueError, ArithmeticError, OverflowError):
             # Restricting the except clause keeps real bugs (KeyError
             # from a typo in evaluator's parameter dict, etc.) loud
@@ -464,7 +533,7 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
         pre_flight_lps.append(_log_probability(perturbed))
     n_finite = sum(1 for lp in pre_flight_lps if _math_pre.isfinite(lp))
     if n_finite == 0:
-        logger.info(
+        _logger.info(
             "MCMC pre-flight: all %d sample log-probabilities were -inf; "
             "skipping MCMC refinement (data is too ill-conditioned for "
             "Gaussian-walker exploration).",
@@ -490,7 +559,7 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
             proposal_scale=proposal_scale,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("MCMC run failed: %s", exc)
+        _logger.warning("MCMC run failed: %s", exc, exc_info=True)
         if best_fit.details is None:
             best_fit.details = {}
         best_fit.details["mcmc_warning"] = (
@@ -520,39 +589,48 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
     try:
         corner_png = render_corner_plot(mcmc_result)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("corner plot render failed: %s", exc)
+        _logger.warning("corner plot render failed: %s", exc, exc_info=True)
 
-    if best_fit.details is None:
-        best_fit.details = {}
-    best_fit.details["mcmc_refinement"] = {
+    # Build the new details dict via spread rather than in-place
+    # update — matches DataLab's immutability convention ("ALWAYS
+    # create new objects, NEVER mutate existing ones"). The
+    # AutoModelResult / FitResult objects in ``summary`` retain the
+    # updated reference; callers holding a pre-refinement reference
+    # to ``best_fit.details`` are unaffected.
+    previous_details = best_fit.details or {}
+    mcmc_block: dict[str, Any] = {
         "medians": mcmc_result.medians,
         "lo_ci": mcmc_result.lo_ci,
         "hi_ci": mcmc_result.hi_ci,
         "acceptance_fraction": mcmc_result.acceptance_fraction,
     }
+    new_details: dict[str, Any] = {
+        **previous_details,
+        "mcmc_refinement": mcmc_block,
+    }
     if chain_warning:
-        best_fit.details["mcmc_warning"] = chain_warning
+        new_details["mcmc_warning"] = chain_warning
     if corner_png:
-        best_fit.details["mcmc_corner_png"] = corner_png
+        new_details["mcmc_corner_png"] = corner_png
+    best_fit.details = new_details
 
 
 def _estimate_rmse(y_series, best_fit) -> float:
     """Rough RMSE estimator used to scale the MCMC proposal step.
 
-    Reuses the LSQ best-fit residuals when available; falls back to
-    the y-series standard deviation otherwise. Always returns a
-    strictly-positive number so downstream step-size calculations
-    don't divide by zero.
+    Uses ``best_fit.residuals`` — the real dataclass field — NOT
+    ``best_fit.details['residuals']`` which _LinearFitComputation
+    never populates. Falls back to the y-series standard deviation
+    and finally to ``1.0`` so downstream step-size calculations
+    always have a strictly-positive scale.
     """
-    residuals = (
-        best_fit.details.get("residuals") if best_fit.details else None
-    )
+    residuals = getattr(best_fit, "residuals", None)
     if residuals:
         try:
             n = len(residuals)
             ss = sum(float(r) ** 2 for r in residuals)
             return max(1e-8, (ss / max(1, n)) ** 0.5)
-        except Exception:  # noqa: BLE001
+        except (TypeError, ValueError):
             pass
     try:
         ys = [float(y) for y in y_series]
@@ -561,7 +639,7 @@ def _estimate_rmse(y_series, best_fit) -> float:
         mean = sum(ys) / len(ys)
         var = sum((v - mean) ** 2 for v in ys) / len(ys)
         return max(1e-8, var ** 0.5)
-    except Exception:  # noqa: BLE001
+    except (TypeError, ValueError):
         return 1.0
 
 

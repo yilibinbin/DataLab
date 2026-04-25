@@ -42,7 +42,11 @@ try:
 
     HAS_EMCEE = True
 except ImportError:
-    _emcee = None  # type: ignore[assignment]
+    _emcee = None
+    # ``numpy`` ships PEP 561 stubs so the import line is module-typed,
+    # making the None fallback an Incompatible-types error under
+    # ``--strict``. The ignore is the canonical pattern for "soft"
+    # third-party dependencies.
     _np = None  # type: ignore[assignment]
     HAS_EMCEE = False
 
@@ -51,7 +55,7 @@ try:
 
     HAS_CORNER = True
 except ImportError:
-    _corner = None  # type: ignore[assignment]
+    _corner = None
     HAS_CORNER = False
 
 

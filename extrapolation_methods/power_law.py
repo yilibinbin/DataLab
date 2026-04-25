@@ -33,7 +33,11 @@ class PowerLawConfig:
                     "Power-law extrapolation requires exactly three bases (x1, x2, x3).",
                 )
             )
-        return tuple(_mpf_from_numeric(value, "x") for value in self.x_values)  # type: ignore[return-value]
+        # The length check above guarantees exactly three values, so the
+        # generator yields three items. Build the fixed-arity tuple
+        # explicitly so mypy --strict sees the right shape.
+        x1, x2, x3 = (_mpf_from_numeric(value, "x") for value in self.x_values)
+        return (x1, x2, x3)
 
     def normalized_precision(self) -> int:
         return max(int(self.precision or 0), 1)
@@ -81,7 +85,11 @@ def extrapolate_power_law(
 
         def _too_close(a: mp.mpf, b: mp.mpf) -> bool:
             scale = max(mp.fabs(a), mp.fabs(b), mp.mpf("1"))
-            return mp.fabs(a - b) <= eps * scale
+            # mpmath comparison returns Python ``bool`` at runtime, but
+            # mypy infers ``Any`` because mpmath ships no stubs. Cast
+            # explicitly so ``--strict``'s ``no-any-return`` rule sees
+            # the declared ``bool`` return.
+            return bool(mp.fabs(a - b) <= eps * scale)
 
         if _too_close(E2, E3):
             raise PowerLawComputationError(

@@ -99,7 +99,9 @@ def apply_sequence_accelerator(
         )
 
 
-def _run_shanks(mp_sequence, variant: str):
+def _run_shanks(
+    mp_sequence: Sequence[mp.mpf], variant: str
+) -> SequenceAcceleratorResult:
     """Run Wynn epsilon/Shanks using mpmath.shanks; variant is label only."""
     try:
         table = mp.shanks(mp_sequence)
@@ -134,7 +136,9 @@ def _run_shanks(mp_sequence, variant: str):
     return SequenceAcceleratorResult(value=limit, metadata=metadata)
 
 
-def _run_levin(mp_sequence, config):
+def _run_levin(
+    mp_sequence: Sequence[mp.mpf], config: SequenceAcceleratorConfig
+) -> SequenceAcceleratorResult:
     def _sanitize_variant(raw: str | None) -> str:
         variant = (raw or "u").strip().lower()
         if variant in {"u", "t", "v"}:
@@ -208,7 +212,9 @@ def _run_levin(mp_sequence, config):
         ) from exc
 
 
-def _mpf_from_numeric(value: float | int | str | mp.mpf, label: str):
+def _mpf_from_numeric(
+    value: float | int | str | mp.mpf, label: str
+) -> mp.mpf:
     try:
         return mp.mpf(value)
     except (ValueError, TypeError):

@@ -20,22 +20,27 @@ from __future__ import annotations
 import argparse
 import os
 
-from . import latex_tables_extrapolation as _tables_extrapolation
-from . import latex_tables_error_propagation as _tables_error
+# Re-export every public symbol from the two implementation modules.
+# ``from … import *`` reads each module's ``__all__`` and binds those
+# names into this façade's namespace — same effect as the previous
+# ``_reexport_public()`` helper, but visible to static type-checkers
+# (mypy can follow ``import *`` through ``__all__`` whereas the
+# dynamic ``globals()[name] = getattr(...)`` loop was opaque).
+# ``noqa: F401, F403`` silences the runtime-linter warnings about
+# unused-but-re-exported names; ``__all__`` (built below) is the
+# canonical public-API contract.
+from .latex_tables_error_propagation import *  # noqa: F401, F403
+from .latex_tables_extrapolation import *  # noqa: F401, F403
 
+# Build ``__all__`` dynamically so adding a name to either submodule's
+# own ``__all__`` automatically exposes it here. No double-binding
+# trap — ``import *`` is the single source of truth.
+from .latex_tables_error_propagation import __all__ as _error_all
+from .latex_tables_extrapolation import __all__ as _extrap_all
 
-def _reexport_public(module, public_names: list[str]) -> None:
-    g = globals()
-    for name in public_names:
-        g[name] = getattr(module, name)
+__all__ = list(_extrap_all) + list(_error_all)
 
-
-_reexport_public(_tables_extrapolation, list(_tables_extrapolation.__all__))
-_reexport_public(_tables_error, list(_tables_error.__all__))
-
-__all__ = list(_tables_extrapolation.__all__) + list(_tables_error.__all__)
-
-del _reexport_public, _tables_extrapolation, _tables_error
+del _error_all, _extrap_all
 
 
 def main() -> int:
