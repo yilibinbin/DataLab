@@ -1755,12 +1755,50 @@ class WindowFittingMixin:
         worker.failed.connect(self._on_auto_fit_failed)
         worker.finished.connect(self._on_auto_fit_thread_done)
         worker.cancelled.connect(self._on_worker_cancelled)
+        worker.progress_changed.connect(self._on_auto_fit_progress)
         if job.verbose:
             worker.log_ready.connect(self._append_log)
         self._auto_fit_worker = worker
         self._set_button_to_stop_mode()
         worker.start()
         self._append_log(self._tr("自动拟合已在后台运行…", "Auto fit running in background…"))
+
+    def _on_auto_fit_progress(self, event):
+        """Receive a ``ProgressEvent`` from the auto-fit worker and
+        surface it in the log. The GUI shows e.g.
+        ``"[3/19] 正在拟合 Padé(1|1)…"`` so the user can see which
+        model is currently running and that the pipeline is
+        progressing — not frozen — even on long fits.
+        """
+        # Translate status into a localised verb. Anything we don't
+        # have a translation for falls through to the raw status
+        # string so a future maintainer adding a new ProgressStatus
+        # value still sees something rather than silently dropping
+        # the event.
+        verbs_zh = {
+            "started": "正在拟合",
+            "ok": "完成",
+            "timeout": "超时跳过",
+            "error": "失败",
+            "cancelled": "已取消",
+        }
+        verbs_en = {
+            "started": "Fitting",
+            "ok": "Done",
+            "timeout": "Timed out",
+            "error": "Failed",
+            "cancelled": "Cancelled",
+        }
+        status = getattr(event, "status", "?")
+        verb = self._tr(verbs_zh.get(status, status), verbs_en.get(status, status))
+        idx = getattr(event, "index", 0) + 1
+        total = getattr(event, "total", 0)
+        label = getattr(event, "label", "?")
+        line = f"[{idx}/{total}] {verb}: {label}"
+        err = getattr(event, "error", None)
+        if err:
+            line += f" — {err}"
+        self._append_log(line)
 
     def _on_auto_fit_finished(self, payload, generate_latex: bool, output_path: str, verbose_mode: bool):
         captured_log = ""

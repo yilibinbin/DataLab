@@ -227,6 +227,109 @@ def _resolve_timeout_seconds(
     return max(5.0, precision * 0.1875)
 
 
+def _execute_auto_fit_job_subprocess(
+    job: AutoFitJob,
+    should_cancel: Callable[[], bool] | None = None,
+    progress_callback: Callable[[Any], None] | None = None,
+):
+    """GUI execution path: run each model in its own subprocess.
+
+    True immediate cancellation — when ``should_cancel`` returns
+    True, the running subprocess is killed via ``Process.kill()``
+    (SIGKILL), so CPU is freed within milliseconds. Compare to
+    ``_execute_auto_fit_job`` (the in-process path used by CLI /
+    tests) where cancellation only takes effect at the next model
+    boundary.
+
+    ``progress_callback(ProgressEvent)`` is invoked at every state
+    transition so the GUI status bar can show "(3/19) Fitting
+    Padé(1|1)…" between models.
+    """
+    from app_desktop.auto_fit_subprocess import (
+        SubprocessAutoFitOrchestrator,
+        task_from_custom_entry,
+        task_from_definition,
+    )
+
+    timeout_seconds = _resolve_timeout_seconds(
+        job.per_model_timeout_seconds, job.precision,
+    )
+
+    # Convert the in-process AutoFitJob (which carries non-picklable
+    # closures inside ``extra_models`` / ``custom_entries``) into a
+    # flat list of pickle-safe ``ModelTask`` descriptors. The order
+    # mirrors the in-process path: AUTO_MODELS → extras → customs.
+    from fitting.auto_models import AUTO_MODELS
+
+    tasks = []
+    # Pre-flight failures — collected here and prepended to results
+    # AFTER the orchestrator runs the rest. Lets a single bad custom
+    # entry (e.g. one with dependent parameters) surface as a clear
+    # per-model failure instead of crashing the entire auto-fit run.
+    pre_flight_failures: list[Any] = []
+
+    for definition in AUTO_MODELS:
+        tasks.append(task_from_definition(definition))
+    seen = {d.identifier for d in AUTO_MODELS}
+    for extra in (job.extra_models or []):
+        if extra.identifier in seen:
+            continue
+        seen.add(extra.identifier)
+        try:
+            tasks.append(task_from_definition(extra))
+        except ValueError as exc:
+            pre_flight_failures.append((extra.identifier, extra.label, str(exc)))
+    for label, spec, state in (job.custom_entries or []):
+        try:
+            tasks.append(task_from_custom_entry(label, spec, state))
+        except ValueError as exc:
+            # ``ValueError`` here is the documented "this entry has
+            # a feature the subprocess path can't transport"
+            # (currently only ``dependent_defs``). Record as a
+            # failure so the user sees the exact message and the
+            # other tasks still run.
+            pre_flight_failures.append(("CUSTOM", label, str(exc)))
+
+    orchestrator = SubprocessAutoFitOrchestrator(
+        precision=job.precision,
+        per_model_timeout_seconds=timeout_seconds,
+    )
+    summary = orchestrator.run(
+        tasks=tasks,
+        x_data=job.x_series,
+        y_data=job.y_series,
+        sigma_data=job.sigma_series,
+        weights=job.weights,
+        should_cancel=should_cancel,
+        progress_callback=progress_callback,
+    )
+
+    # Splice pre-flight failures into the results list so the GUI
+    # shows them in the same place as orchestrator-recorded failures.
+    # ``AutoFitSummary`` is frozen-ish — rebuild with the merged
+    # results list rather than mutating in place.
+    if pre_flight_failures:
+        from fitting.model_selector import AutoFitSummary, AutoModelResult
+        merged = list(summary.results) + [
+            AutoModelResult(ident, label, False, None, err)
+            for ident, label, err in pre_flight_failures
+        ]
+        summary = AutoFitSummary(
+            best_model=summary.best_model, results=merged,
+        )
+
+    if getattr(job, "refine_with_mcmc", False):
+        try:
+            _attach_mcmc_refinement(summary, job)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "MCMC refinement failed (%s); "
+                "falling back to LSQ-only result",
+                exc,
+            )
+    return summary
+
+
 def _execute_auto_fit_job(
     job: AutoFitJob,
     should_cancel: Callable[[], bool] | None = None,
@@ -238,6 +341,10 @@ def _execute_auto_fit_job(
     finish. mpmath holds the GIL through long arithmetic, so we
     cannot interrupt mid-fit; the cancellation point at the model
     boundary is the best the runtime offers.
+
+    NOTE: this is the **in-process** path used by CLI / batch /
+    tests. The GUI uses ``_execute_auto_fit_job_subprocess`` for
+    true immediate cancellation.
     """
     timeout_seconds = _resolve_timeout_seconds(
         job.per_model_timeout_seconds, job.precision,
@@ -256,7 +363,7 @@ def _execute_auto_fit_job(
         )
         # Phase 3 #12 — MCMC refinement pass on the best-AIC candidate
         # when the user ticked "Refine with MCMC". Attaches a
-        # ``mcmc_result`` dict to ``summary.best_result.fit_result.details``
+        # ``mcmc_result`` dict to ``summary.best().fit_result.details``
         # so the renderer can display credible intervals + corner plot
         # alongside the least-squares output. Silently skipped when
         # emcee is missing or the MCMC stage raises — LSQ results
@@ -288,7 +395,12 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
             "refine_with_mcmc=True but emcee not installed; skipping"
         )
         return
-    best = getattr(summary, "best_result", None)
+    # ``AutoFitSummary`` exposes ``best()`` (a method that walks the
+    # results list looking for the entry whose identifier matches
+    # ``best_model``), NOT a ``best_result`` attribute — older code
+    # using ``getattr(summary, "best_result", None)`` always silently
+    # resolved to None and skipped MCMC entirely. See review HIGH #1.
+    best = summary.best() if summary.best_model is not None else None
     if best is None or best.fit_result is None:
         logger.info(
             "refine_with_mcmc=True but no best candidate; skipping"
