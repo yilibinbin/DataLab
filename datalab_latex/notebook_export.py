@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 __all__ = ["build_notebook", "write_notebook"]
 
@@ -116,7 +116,7 @@ def _code_plot(xs: list[float], ys: list[float]) -> list[str]:
     ]
 
 
-def _code_cell(source: list[str]) -> dict:
+def _code_cell(source: list[str]) -> dict[str, Any]:
     return {
         "cell_type": "code",
         "execution_count": None,
@@ -126,7 +126,7 @@ def _code_cell(source: list[str]) -> dict:
     }
 
 
-def _markdown_cell(source: list[str]) -> dict:
+def _markdown_cell(source: list[str]) -> dict[str, Any]:
     return {
         "cell_type": "markdown",
         "metadata": {},
@@ -141,7 +141,7 @@ def build_notebook(
     model_label: str,
     params: Mapping[str, float],
     include_plot: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """Build an nbformat-4 dict for a DataLab fit.
 
     Parameters
@@ -191,7 +191,7 @@ def build_notebook(
     }
 
 
-def write_notebook(notebook: dict, path: Path) -> None:
+def write_notebook(notebook: dict[str, Any], path: Path) -> None:
     """Write an nbformat-4 dict to disk as a ``.ipynb`` file."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
