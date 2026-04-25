@@ -39,6 +39,9 @@ MYPY_CLEAN_MODULES: tuple[str, ...] = (
     "extrapolation_methods/accelerators.py",
     "datalab_latex/derivatives.py",
     "fitting/constraints.py",
+    "fitting/model_parser.py",
+    "fitting/hp_fitter.py",
+    "datalab_latex/latex_formatting.py",
 )
 
 

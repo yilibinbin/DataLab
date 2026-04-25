@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Iterable
 
 from mpmath import mp
 
@@ -30,7 +31,7 @@ def _format_fixed_places(value: mp.mpf, places: int) -> str:
         try:
             return str(int(rounded))
         except Exception:
-            text = mp.nstr(rounded, n=20, strip_zeros=True)
+            text = str(mp.nstr(rounded, n=20, strip_zeros=True))
             return text[:-2] if text.endswith(".0") else text
     sign = "-" if rounded < 0 else ""
     abs_val = mp.fabs(rounded)
@@ -313,7 +314,7 @@ def _auto_uncertainty_digits(uncertainty: mp.mpf) -> int:
     return 2 if leading == 1 else 1
 
 
-def format_scientific_latex(value, use_brackets: bool = True) -> str:
+def format_scientific_latex(value: object, use_brackets: bool = True) -> str:
     """
     Format a number in LaTeX scientific notation with brackets for exponents.
     """
@@ -321,7 +322,7 @@ def format_scientific_latex(value, use_brackets: bool = True) -> str:
     if value == 0:
         return "0"
     mantissa, exponent = _split_mantissa_exponent(value)
-    mantissa_str = mp.nstr(mantissa, n=13, strip_zeros=False)
+    mantissa_str = str(mp.nstr(mantissa, n=13, strip_zeros=False))
     if use_brackets:
         if exponent == 0:
             return mantissa_str
@@ -330,7 +331,7 @@ def format_scientific_latex(value, use_brackets: bool = True) -> str:
     return f"{mantissa_str}E{exponent:+d}"
 
 
-def format_scientific_latex_decimal(value, use_brackets: bool = True) -> str:
+def format_scientific_latex_decimal(value: object, use_brackets: bool = True) -> str:
     """Format a Decimal number in LaTeX scientific notation (maintains high precision)."""
     return format_scientific_latex(value, use_brackets=use_brackets)
 
@@ -354,30 +355,32 @@ def _uncertainty_decimal_places(unc: mp.mpf, target_digits: int) -> tuple[int, s
     return decimal_places, str(unc_int)
 
 
-def format_uncertainty_notation(value, uncertainty, uncertainty_digits: int | None = None) -> str:
+def format_uncertainty_notation(
+    value: object, uncertainty: object, uncertainty_digits: int | None = None
+) -> str:
     """
     Format a value and uncertainty back to the 1.23(1)[-2] notation.
     """
-    value = _mp(value)
-    uncertainty = _mp(uncertainty)
+    val_mp = _mp(value)
+    unc_mp = _mp(uncertainty)
 
-    if uncertainty <= 0:
-        return format_scientific_latex_decimal(value)
+    if unc_mp <= 0:
+        return format_scientific_latex_decimal(val_mp)
 
-    if value == 0:
+    if val_mp == 0:
         common_exp = 0
     else:
-        _, common_exp = _split_mantissa_exponent(value)
+        _, common_exp = _split_mantissa_exponent(val_mp)
 
     exp_factor = mp.power(10, common_exp)
-    scaled_value = value / exp_factor
-    scaled_uncertainty = uncertainty / exp_factor
+    scaled_value = val_mp / exp_factor
+    scaled_uncertainty = unc_mp / exp_factor
     try:
         target_digits = int(uncertainty_digits) if uncertainty_digits is not None else None
     except Exception:
         target_digits = None
     if not target_digits or target_digits <= 0:
-        target_digits = _auto_uncertainty_digits(uncertainty)
+        target_digits = _auto_uncertainty_digits(unc_mp)
     decimal_places, uncertainty_str = _uncertainty_decimal_places(scaled_uncertainty, target_digits)
 
     value_str = _format_fixed_places(scaled_value, decimal_places)
@@ -388,33 +391,35 @@ def format_uncertainty_notation(value, uncertainty, uncertainty_digits: int | No
     return f"{value_str}({uncertainty_str})[\\text{{{exp_str}}}]"
 
 
-def format_result_with_uncertainty_latex(value, uncertainty, uncertainty_digits: int | None = None) -> str:
+def format_result_with_uncertainty_latex(
+    value: object, uncertainty: object, uncertainty_digits: int | None = None
+) -> str:
     """
     Format the result with uncertainty in LaTeX scientific notation.
 
     For example: 0.00012(2) becomes 1.2(2)[-4]
     """
-    value = _mp(value)
-    uncertainty = _mp(uncertainty)
+    val_mp = _mp(value)
+    unc_mp = _mp(uncertainty)
 
-    if uncertainty <= 0:
-        return format_scientific_latex_decimal(value)
+    if unc_mp <= 0:
+        return format_scientific_latex_decimal(val_mp)
 
-    if value == 0:
+    if val_mp == 0:
         common_exp = 0
     else:
-        _, common_exp = _split_mantissa_exponent(value)
+        _, common_exp = _split_mantissa_exponent(val_mp)
 
     exp_factor = mp.power(10, common_exp)
-    scaled_value = value / exp_factor
-    scaled_uncertainty = uncertainty / exp_factor
+    scaled_value = val_mp / exp_factor
+    scaled_uncertainty = unc_mp / exp_factor
 
     try:
         target_digits = int(uncertainty_digits) if uncertainty_digits is not None else None
     except Exception:
         target_digits = None
     if not target_digits or target_digits <= 0:
-        target_digits = _auto_uncertainty_digits(uncertainty)
+        target_digits = _auto_uncertainty_digits(unc_mp)
     decimal_places, unc_str = _uncertainty_decimal_places(scaled_uncertainty, target_digits)
 
     value_str = _format_fixed_places(scaled_value, decimal_places)
@@ -426,8 +431,8 @@ def format_result_with_uncertainty_latex(value, uncertainty, uncertainty_digits:
 
 
 def format_uncertainty_display_latex(
-    value,
-    uncertainty,
+    value: object,
+    uncertainty: object,
     *,
     mp_precision: int | None = None,
     latex_digits: int = 16,
@@ -449,7 +454,11 @@ def format_uncertainty_display_latex(
         return format_result_with_uncertainty_latex(val, sig, uncertainty_digits), True
 
 
-def format_scientific_notation_brackets(value, precision=None, consistent_precision=None) -> str:
+def format_scientific_notation_brackets(
+    value: object,
+    precision: int | None = None,
+    consistent_precision: int | None = None,
+) -> str:
     """
     Format a number in scientific notation with [exponent] brackets.
     """
@@ -463,7 +472,7 @@ def format_scientific_notation_brackets(value, precision=None, consistent_precis
     if actual_precision is not None:
         mantissa_str = _format_fixed_places(mantissa, actual_precision)
     else:
-        mantissa_str = mp.nstr(mantissa, n=20, strip_zeros=False)
+        mantissa_str = str(mp.nstr(mantissa, n=20, strip_zeros=False))
     if consistent_precision is None:
         mantissa_str = mantissa_str.rstrip("0").rstrip(".") if "." in mantissa_str else mantissa_str
     if exponent == 0:
@@ -471,7 +480,11 @@ def format_scientific_notation_brackets(value, precision=None, consistent_precis
     return f"{mantissa_str}[\\text{{{exponent}}}]"
 
 
-def format_scientific_notation_brackets_decimal(value, precision=None, consistent_precision=None) -> str:
+def format_scientific_notation_brackets_decimal(
+    value: object,
+    precision: int | None = None,
+    consistent_precision: int | None = None,
+) -> str:
     """
     Format numbers using plain or scientific notation compatible with siunitx S columns.
     Falls back to mantissa e exponent instead of bracket notation with \\text macros.
@@ -570,8 +583,8 @@ def add_latex_spacing_to_number(number_str: str, group_size: int = 3) -> str:
 
 
 def format_uncertainty_notation_for_dcolumn(
-    value,
-    uncertainty,
+    value: object,
+    uncertainty: object,
     uncertainty_digits: int | None = None,
     *,
     group_size: int = 3,
@@ -580,14 +593,14 @@ def format_uncertainty_notation_for_dcolumn(
     Format a value and uncertainty for dcolumn with proper spacing.
     Uses LaTeX thin spaces (\\\\,) that work with dcolumn.
     """
-    value = _mp(value)
-    uncertainty = _mp(uncertainty)
+    val_mp = _mp(value)
+    unc_mp = _mp(uncertainty)
 
-    if uncertainty <= 0:
-        basic_notation = format_scientific_latex_decimal(value)
+    if unc_mp <= 0:
+        basic_notation = format_scientific_latex_decimal(val_mp)
         return add_latex_spacing_to_number(basic_notation, group_size=group_size)
 
-    basic_notation = format_uncertainty_notation(value, uncertainty, uncertainty_digits)
+    basic_notation = format_uncertainty_notation(val_mp, unc_mp, uncertainty_digits)
     result = add_latex_spacing_to_number(basic_notation, group_size=group_size)
 
     if "[" in result and "]" in result:
@@ -605,7 +618,9 @@ def format_uncertainty_notation_for_dcolumn(
     return result
 
 
-def calculate_dcolumn_format_for_column(data_column, column_name: str = "") -> str:
+def calculate_dcolumn_format_for_column(
+    data_column: Iterable[object], column_name: str = ""
+) -> str:
     """
     Calculate the optimal dcolumn format for a column based on the longest formatted value.
     For scientific notation: uses fixed 2 digits before decimal, dynamic after decimal.

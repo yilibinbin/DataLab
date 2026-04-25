@@ -20,13 +20,32 @@ from typing import Callable, Sequence
 
 from mpmath import mp
 
-from data_extrapolation_latex_latest import (
+# Import directly from the canonical modules instead of the
+# ``data_extrapolation_latex_latest`` shim. The shim re-exports
+# these names via dynamic ``globals()`` assignment, which mypy
+# can't follow under strict mode (the names appear unresolved
+# at static-analysis time even though they exist at runtime).
+# Pinning the canonical paths here both fixes the type-check
+# errors and documents where the symbols actually live.
+#
+# Note for test authors: to patch this in tests, patch
+# ``fitting.model_parser.safe_eval``, not the canonical module —
+# ``from … import`` creates a fresh local binding here.
+from datalab_latex.derivatives import numerical_partial_derivative
+from datalab_latex.expression_engine import (
     _ALLOWED_CONSTANTS,
     _ALLOWED_FUNCTIONS,
-    _dual_msg,
-    numerical_partial_derivative,
     safe_eval,
 )
+from shared.bilingual import _dual_msg
+
+# Signature of the inner per-model evaluator: takes a positional
+# variable-tuple and parameter-tuple of mp.mpf values and returns
+# the model's mp.mpf output. Used by every fit-execution path
+# (custom, polynomial, inverse, Padé, linear-named, auto).
+MpfCallable = Callable[
+    [tuple[mp.mpf, ...], tuple[mp.mpf, ...]], mp.mpf
+]
 
 
 @dataclass
@@ -36,8 +55,8 @@ class ModelSpecification:
     expression: str
     variables: list[str]
     parameters: list[str]
-    evaluate_func: Callable[[tuple, tuple], mp.mpf]
-    gradient_funcs: dict[str, Callable[[tuple, tuple], mp.mpf]]
+    evaluate_func: MpfCallable
+    gradient_funcs: dict[str, MpfCallable]
 
     def evaluate(self, variable_values: dict[str, mp.mpf], parameter_values: dict[str, mp.mpf]) -> mp.mpf:
         var_tuple = tuple(variable_values[name] for name in self.variables)
@@ -82,12 +101,16 @@ def infer_parameter_names(expression: str, variable_names: Sequence[str], config
     return ordered if ordered else list(variable_names)
 
 
-def _build_safe_eval_callable(expression: str, variable_names: list[str], parameter_names: list[str]):
+def _build_safe_eval_callable(
+    expression: str, variable_names: list[str], parameter_names: list[str]
+) -> MpfCallable:
     all_names = list(variable_names) + list(parameter_names)
     var_count = len(variable_names)
     param_count = len(parameter_names)
 
-    def _call(var_tuple: tuple, param_tuple: tuple):
+    def _call(
+        var_tuple: tuple[mp.mpf, ...], param_tuple: tuple[mp.mpf, ...]
+    ) -> mp.mpf:
         if len(var_tuple) != var_count or len(param_tuple) != param_count:
             raise ValueError(
                 _dual_msg(
@@ -103,14 +126,20 @@ def _build_safe_eval_callable(expression: str, variable_names: list[str], parame
 
 
 def _build_numeric_gradient_callable(
-    expression: str, variable_names: list[str], parameter_names: list[str], *, parameter_index: int
-):
+    expression: str,
+    variable_names: list[str],
+    parameter_names: list[str],
+    *,
+    parameter_index: int,
+) -> MpfCallable:
     all_names = list(variable_names) + list(parameter_names)
     var_count = len(variable_names)
     param_count = len(parameter_names)
     deriv_index = var_count + int(parameter_index)
 
-    def _call(var_tuple: tuple, param_tuple: tuple):
+    def _call(
+        var_tuple: tuple[mp.mpf, ...], param_tuple: tuple[mp.mpf, ...]
+    ) -> mp.mpf:
         if len(var_tuple) != var_count or len(param_tuple) != param_count:
             raise ValueError(
                 _dual_msg(
@@ -153,7 +182,7 @@ def build_model_specification(expression: str, variable_names: Sequence[str], pa
 
     evaluate_func = _build_safe_eval_callable(clean_expr, var_names, param_names)
 
-    gradient_funcs: dict[str, Callable[[tuple, tuple], mp.mpf]] = {}
+    gradient_funcs: dict[str, MpfCallable] = {}
     for idx, name in enumerate(param_names):
         gradient_funcs[name] = _build_numeric_gradient_callable(
             clean_expr, var_names, param_names, parameter_index=idx

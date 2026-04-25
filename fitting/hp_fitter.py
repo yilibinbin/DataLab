@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Sequence
 
 from mpmath import mp
 
@@ -82,11 +82,14 @@ def combine_error_components(
     return stat_map, sys_map, total_map
 
 
-def _prepare_points(variable_data: dict[str, Iterable[mp.mpf]], target_data: Iterable[mp.mpf]):
+def _prepare_points(
+    variable_data: dict[str, Sequence[mp.mpf]],
+    target_data: Sequence[mp.mpf],
+) -> tuple[list[dict[str, mp.mpf]], list[mp.mpf]]:
     var_names = list(variable_data.keys())
     value_columns = [list(variable_data[name]) for name in var_names]
     rows = list(zip(*value_columns))
-    observations = []
+    observations: list[dict[str, mp.mpf]] = []
     for row in rows:
         obs = {name: mp.mpf(value) for name, value in zip(var_names, row)}
         observations.append(obs)
@@ -145,11 +148,11 @@ def _gradient_builder(
     parameter_name: str,
     model: ModelSpecification,
     state: ParameterState,
-    observations,
-    targets,
+    observations: Sequence[dict[str, mp.mpf]],
+    targets: Sequence[mp.mpf],
     weights: list[mp.mpf] | None,
-):
-    def _gradient(*free_values):
+) -> Callable[..., mp.mpf]:
+    def _gradient(*free_values: mp.mpf) -> mp.mpf:
         params = state.compose(tuple(free_values))
         total = mp.mpf("0")
         for idx, (obs, target) in enumerate(zip(observations, targets)):
@@ -157,7 +160,7 @@ def _gradient_builder(
             derivative = model.partial(parameter_name, obs, params)
             weight = weights[idx] if weights else mp.mpf("1")
             total += weight * (y_model - target) * derivative
-        return 2 * total
+        return mp.mpf(2) * total
 
     return _gradient
 
@@ -165,13 +168,15 @@ def _gradient_builder(
 def _compute_statistics(
     model: ModelSpecification,
     params: dict[str, mp.mpf],
-    observations,
-    targets,
+    observations: Sequence[dict[str, mp.mpf]],
+    targets: Sequence[mp.mpf],
     free_param_count: int,
     weights: list[mp.mpf] | None,
-):
-    fitted = []
-    residuals = []
+) -> tuple[
+    list[mp.mpf], list[mp.mpf], mp.mpf, mp.mpf, mp.mpf, mp.mpf, mp.mpf, mp.mpf, int
+]:
+    fitted: list[mp.mpf] = []
+    residuals: list[mp.mpf] = []
     for obs, target in zip(observations, targets):
         value = model.evaluate(obs, params)
         fitted.append(value)
@@ -213,7 +218,14 @@ def _compute_statistics(
 
 
 def _compute_covariance(
-    model, params, observations, targets, free_params, chi2, dof, weights: list[mp.mpf] | None
+    model: ModelSpecification,
+    params: dict[str, mp.mpf],
+    observations: Sequence[dict[str, mp.mpf]],
+    targets: Sequence[mp.mpf],
+    free_params: list[str],
+    chi2: mp.mpf,
+    dof: int,
+    weights: list[mp.mpf] | None,
 ) -> tuple[list[list[mp.mpf]], dict[str, mp.mpf], str | None]:
     if not free_params:
         return [], {}, None
@@ -311,8 +323,10 @@ def _propagate_dependent_errors(
                 break
     errors: dict[str, mp.mpf] = {}
     for name in dependent_defs:
-        jac_vec = jacobians.get(name)
-        if jac_vec is None:
+        # Distinct from the ``jac_vec`` built in the loop above; mypy
+        # requires separate names for narrowing.
+        dep_jac: list[mp.mpf] | None = jacobians.get(name)
+        if dep_jac is None:
             errors[name] = mp.nan
             continue
         variance = mp.mpf("0")
@@ -323,7 +337,7 @@ def _propagate_dependent_errors(
                 if mp.isnan(value):
                     invalid = True
                     break
-                variance += jac_vec[i] * value * jac_vec[j]
+                variance += dep_jac[i] * value * dep_jac[j]
             if invalid:
                 break
         if invalid or variance < 0:
@@ -419,8 +433,8 @@ def _detect_boundary_hits(
 def fit_custom_model(
     model: ModelSpecification,
     parameter_state: ParameterState,
-    variable_data: dict[str, Iterable[mp.mpf]],
-    target_data: Iterable[mp.mpf],
+    variable_data: dict[str, Sequence[mp.mpf]],
+    target_data: Sequence[mp.mpf],
     precision: int = 80,
     weights: list[mp.mpf] | None = None,
     data_sigmas: list[mp.mpf | None] | None = None,
@@ -488,7 +502,9 @@ def fit_custom_model(
             last_exc: Exception | None = None
             variants_tried = 0
 
-            def _solve_seed(seed_variant: tuple[mp.mpf, ...]):
+            def _solve_seed(
+                seed_variant: tuple[mp.mpf, ...],
+            ) -> tuple[mp.mpf, ...]:
                 # Scale convergence to the requested precision: mpmath's
                 # default maxsteps=10 silently caps iterations regardless of
                 # mp.dps, so fitting at dps=100 would otherwise stop ~10
@@ -505,7 +521,8 @@ def fit_custom_model(
                         maxsteps=maxsteps,
                     )
                     return (mp.mpf(root),)
-                def system(*values):
+
+                def system(*values: mp.mpf) -> tuple[mp.mpf, ...]:
                     return tuple(func(*values) for func in gradient_funcs)
 
                 candidate = mp.findroot(
@@ -624,7 +641,7 @@ def fit_custom_model(
                     )
                 )
 
-            def _score(candidate: _FitComputation):
+            def _score(candidate: _FitComputation) -> mp.mpf:
                 return candidate.chi2 if not mp.isnan(candidate.chi2) else mp.inf
 
             best = min(candidates, key=_score)
