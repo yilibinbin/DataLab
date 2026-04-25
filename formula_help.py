@@ -90,7 +90,7 @@ FUNCTION_TOOLTIP_EN = (
 # Extrapolation Method Documentation
 # ============================================================
 
-EXTRAPOLATION_METHODS = {
+EXTRAPOLATION_METHODS: dict[str, dict[str, object]] = {
     "power_law": {
         "name_zh": "幂律外推(三点外推)",
         "name_en": "Power law (3-point)",
@@ -441,7 +441,8 @@ def get_method_description(method_key: str, lang: str = "zh") -> str:
     if method_key not in EXTRAPOLATION_METHODS:
         return ""
     method = EXTRAPOLATION_METHODS[method_key]
-    return method.get(f"description_{lang}", "")
+    description = method.get(f"description_{lang}", "")
+    return str(description) if description else ""
 
 
 def get_method_name(method_key: str, lang: str = "zh") -> str:
@@ -449,11 +450,15 @@ def get_method_name(method_key: str, lang: str = "zh") -> str:
     if method_key not in EXTRAPOLATION_METHODS:
         return method_key
     method = EXTRAPOLATION_METHODS[method_key]
-    return method.get(f"name_{lang}", method_key)
+    name = method.get(f"name_{lang}", method_key)
+    return str(name) if name else method_key
 
 
-def get_method_parameters(method_key: str) -> list[dict]:
+def get_method_parameters(method_key: str) -> list[dict[str, object]]:
     """Get parameter definitions for a method."""
     if method_key not in EXTRAPOLATION_METHODS:
         return []
-    return EXTRAPOLATION_METHODS[method_key].get("parameters", [])
+    params = EXTRAPOLATION_METHODS[method_key].get("parameters", [])
+    if isinstance(params, list):
+        return params
+    return []

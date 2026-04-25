@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import logging
 from functools import lru_cache
-from typing import Any, Callable, Hashable, Iterable, NamedTuple, Sequence
+from typing import Any, Callable, Hashable, Iterable, NamedTuple, Optional, Sequence, TypeAlias
 
 # Centralised matplotlib init — backend=Agg, CJK font fallback, and
 # axes.unicode_minus=False are all configured at import time via
@@ -227,6 +227,7 @@ def render_fitting_overview(
 
     if comparison:
         lines = ["Model comparison (AIC/BIC/R2):"]
+        sorted_comp: Sequence[tuple[str, float, float, float]]
         try:
             sorted_comp = sorted(comparison, key=lambda t: t[1])
         except Exception:
@@ -247,8 +248,12 @@ def render_fitting_overview(
     if parameter_info:
         label, params_dict, errors_dict = parameter_info
         names = list(params_dict.keys())
-        values = [float(params_dict[name]) for name in names]
-        yerr = [abs(float(errors_dict.get(name, 0))) for name in names]
+        # dict values are typed as ``object`` to accept ``mp.mpf`` / float /
+        # int / numeric strings — every supported source materialises as
+        # something ``float()`` accepts. See the unit tests in
+        # ``tests/test_plot_fitting_*``.
+        values = [float(params_dict[name]) for name in names]  # type: ignore[arg-type]
+        yerr = [abs(float(errors_dict.get(name, 0))) for name in names]  # type: ignore[arg-type]
         positions = range(len(names))
         # use scientific notation for x-axis
         ax_param.ticklabel_format(axis="x", style="sci", scilimits=(-3, 3))
@@ -620,11 +625,13 @@ def _value_key(value: object) -> str:
     """
     if hasattr(value, "_mpf_"):  # mpmath.mpf marker attribute
         try:
-            return mp.nstr(value, 20)  # type: ignore[arg-type]
+            # mpmath has no stubs, so mp.nstr() returns Any; widen to
+            # str explicitly to satisfy ``no-any-return``.
+            return str(mp.nstr(value, 20))
         except Exception:
-            return repr(float(value))
+            return repr(float(value))  # type: ignore[arg-type]
     try:
-        return repr(float(value))
+        return repr(float(value))  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return str(value)
 
@@ -664,14 +671,43 @@ def _freeze_parameter_info(
     return (_truncate_label(label), params, errors)
 
 
-def _restore_floats(values: tuple[str, ...]) -> list[float]:
+def _restore_floats(values: _FrozenFloatSeq) -> list[float]:
     """Invert ``_freeze_float_seq`` — ``repr`` strings → floats. ``"nan"``
     and ``"inf"`` round-trip correctly through ``float()``."""
     return [float(v) for v in values]
 
 
+# Frozen LRU cache key for ``_cached_render``. Mirrors the packing in
+# ``render_fitting_overview_cached`` (line ~880). Each component is the
+# output of one of the ``_freeze_*`` helpers, so every member is fully
+# hashable.
+_FrozenFloatSeq: TypeAlias = tuple[str, ...]
+_FrozenNamedSeries: TypeAlias = tuple[tuple[str, _FrozenFloatSeq], ...]
+# ``_freeze_comparison`` stringifies AIC/BIC/R2 via ``repr(float)`` for
+# NaN-equality stability, so the cached key holds 4-tuples of ``str``.
+_FrozenComparison: TypeAlias = tuple[tuple[str, str, str, str], ...]
+_FrozenParamInfo: TypeAlias = tuple[
+    str,
+    tuple[tuple[str, str], ...],
+    tuple[tuple[str, str], ...],
+]
+_FitRenderKey: TypeAlias = tuple[
+    _FrozenFloatSeq,                  # xs
+    _FrozenFloatSeq,                  # ys
+    _FrozenNamedSeries,               # fitted
+    _FrozenNamedSeries,               # residuals
+    Optional[_FrozenFloatSeq],        # uncertainties
+    bool,                             # has_uncertainties
+    Optional[_FrozenComparison],      # comparison
+    Optional[_FrozenParamInfo],       # parameter_info
+    Optional[str],                    # log_scale
+    int,                              # dpi
+    bool,                             # show_curves
+]
+
+
 @lru_cache(maxsize=_FIT_RENDER_CACHE_MAXSIZE)
-def _cached_render(key: Hashable) -> bytes:
+def _cached_render(key: _FitRenderKey) -> bytes:
     """LRU-cached render wrapper.
 
     The ``key`` tuple contains the frozen ``(xs, ys, fitted, residuals,
@@ -698,9 +734,13 @@ def _cached_render(key: Hashable) -> bytes:
         dpi,
         show_curves,
     ) = key
-    unc_arg: list[float] | None = (
-        _restore_floats(uncertainties) if has_uncertainties else None
-    )
+    # ``has_uncertainties`` was packed in lockstep with whether
+    # ``uncertainties`` is non-None; assert the invariant for mypy.
+    if has_uncertainties:
+        assert uncertainties is not None
+        unc_arg: list[float] | None = _restore_floats(uncertainties)
+    else:
+        unc_arg = None
     if parameter_info is None:
         param_arg = None
     else:
@@ -877,7 +917,17 @@ def render_fitting_overview_cached(
     # Distinguish uncertainties=None (no error bars) from uncertainties=[]
     # (renderer validates length) — see _cached_render's docstring.
     has_uncertainties = uncertainties is not None
-    key: Hashable = (
+    # The ``any(... is None)`` bypass above guarantees the four required
+    # freezables are non-None on this path. Repeat the asserts for the
+    # type-checker so the _FitRenderKey tuple's required slots resolve.
+    # ``unc_frozen``, ``comparison_frozen`` and ``param_frozen`` stay
+    # Optional in the key shape — None is a legitimate "absent" sentinel
+    # for those fields and the LRU treats the difference correctly.
+    assert xs_frozen is not None
+    assert ys_frozen is not None
+    assert fitted_frozen is not None
+    assert residuals_frozen is not None
+    key: _FitRenderKey = (
         xs_frozen,
         ys_frozen,
         fitted_frozen,

@@ -60,6 +60,7 @@ MYPY_CLEAN_MODULES: tuple[str, ...] = (
     "shared/pdf_preview_raster.py",
     "shared/pdf_preview.py",
     "shared/pdf_preview_integration.py",
+    "fitting/plot_fitting.py",
 )
 
 
@@ -196,6 +197,60 @@ def test_mypy_strict_zero_errors_on_allowlist() -> None:
         formatted = "\n".join(own_errors)
         pytest.fail(
             "mypy --strict reported errors in the allowlisted modules:\n\n"
+            + formatted
+            + "\n\nFix the types instead of adding `# type: ignore`. "
+            "Full mypy output:\n\n"
+            + result.stdout
+            + (("\n--- stderr ---\n" + result.stderr) if result.stderr else "")
+        )
+
+
+# Phase 7 #23 finished — every core-layer module is now mypy --strict
+# clean. The allowlist above is the file-by-file ratchet; this test
+# additionally checks the *whole layer at once*, including transitive
+# imports, so a regression in a non-allowlisted file that the layer
+# imports surfaces immediately rather than getting picked up only when
+# someone next runs mypy by hand.
+@pytest.mark.slow
+@pytest.mark.skipif(
+    shutil.which("mypy") is None,
+    reason="mypy not installed; run `pip install -e \".[typing]\"`",
+)
+def test_mypy_strict_zero_errors_on_full_core_layer() -> None:
+    """Run ``mypy --strict`` on the four core-layer roots and assert
+    zero errors anywhere in the run, transitive imports included.
+
+    The four roots match the ``[[tool.mypy.overrides]]`` strict glob in
+    ``pyproject.toml`` (``shared.* fitting.* extrapolation_methods.*
+    datalab_latex.*``). Phase 7 #23 finished cleaning every file in
+    these directories, so a regression here is the canonical failure
+    mode and should fail CI loudly.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    cmd = [
+        sys.executable, "-m", "mypy",
+        "--strict",
+        "--no-incremental",
+        "shared",
+        "fitting",
+        "extrapolation_methods",
+        "datalab_latex",
+    ]
+    result = subprocess.run(
+        cmd, cwd=repo_root, capture_output=True, text=True, check=False,
+    )
+    if result.returncode not in (0, 1):
+        pytest.fail(
+            f"mypy crashed (rc={result.returncode}) — test is broken:\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
+    error_lines = [
+        line for line in result.stdout.splitlines() if ": error:" in line
+    ]
+    if error_lines:
+        formatted = "\n".join(error_lines)
+        pytest.fail(
+            "mypy --strict reported errors in the core layer:\n\n"
             + formatted
             + "\n\nFix the types instead of adding `# type: ignore`. "
             "Full mypy output:\n\n"
