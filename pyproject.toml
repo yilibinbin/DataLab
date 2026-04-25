@@ -179,6 +179,30 @@ strict = true
 # not in scope for Phase 4.
 ignore_missing_imports = true
 
+# Third-party libraries without type stubs. ``ignore_missing_imports``
+# alone doesn't silence the ``[import-untyped]`` warning under
+# ``--strict``; we additionally mark these modules as "follow_imports
+# = silent" so the error code is suppressed cleanly. Adding real
+# stubs (or ``types-mpmath`` / ``types-emcee`` if they ever exist)
+# would be the right long-term fix.
+[[tool.mypy.overrides]]
+module = [
+    "mpmath",
+    "mpmath.*",
+    "emcee",
+    "emcee.*",
+    "corner",
+    "corner.*",
+    "scipy",
+    "scipy.*",
+    "matplotlib",
+    "matplotlib.*",
+    "pandas",
+    "pandas.*",
+]
+ignore_missing_imports = true
+follow_imports = "silent"
+
 # ------------------------------------------------------------------
 # ruff (fast linter — opt-in, not wired into CI yet)
 # ------------------------------------------------------------------

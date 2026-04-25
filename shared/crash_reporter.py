@@ -37,9 +37,19 @@ import re
 import sys
 import traceback
 from types import TracebackType
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib import error as _urlerror
 from urllib import request as _urlrequest
+
+# Standard signature of ``sys.excepthook`` — see the CPython docs
+# for ``sys.excepthook`` (https://docs.python.org/3/library/sys.html#sys.excepthook)
+# for the canonical shape. We type it once here so the excepthook
+# builder (and any future test that monkey-patches it) can refer
+# to a single name.
+ExceptHook = Callable[
+    [type[BaseException], BaseException, Optional["TracebackType"]],
+    None,
+]
 
 __all__ = [
     "DATALAB_CRASH_REPORT_ENABLE_ENV",
@@ -181,7 +191,9 @@ def send_crash_report(
     )
     try:
         with _urlrequest.urlopen(req, timeout=timeout) as resp:
-            status = resp.status
+            # urllib's response object types ``status`` as ``Any``; the
+            # actual value is always int when the request succeeded.
+            status = int(resp.status)
             return 200 <= status < 300
     except _urlerror.URLError as exc:
         _logger.info("crash_reporter: POST failed (%s)", exc)
@@ -191,7 +203,7 @@ def send_crash_report(
         return False
 
 
-def _build_excepthook(app_version: str):
+def _build_excepthook(app_version: str) -> ExceptHook:
     def _hook(
         exc_type: type[BaseException],
         exc_value: BaseException,
