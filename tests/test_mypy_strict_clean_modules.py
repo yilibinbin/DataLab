@@ -42,6 +42,8 @@ MYPY_CLEAN_MODULES: tuple[str, ...] = (
     "fitting/model_parser.py",
     "fitting/hp_fitter.py",
     "datalab_latex/latex_formatting.py",
+    "datalab_latex/expression_engine.py",
+    "datalab_latex/latex_tables.py",
 )
 
 

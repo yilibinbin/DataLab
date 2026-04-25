@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import re
+from typing import Any, Callable, cast
 
 from mpmath import mp
 
@@ -38,7 +39,7 @@ _ALLOWED_CONSTANTS: dict[str, mp.mpf] = {
     "E": mp.e,
 }
 
-_ALLOWED_FUNCTIONS = {
+_ALLOWED_FUNCTIONS: dict[str, Callable[..., Any]] = {
     # Basic
     "Sin": mp.sin,
     "Cos": mp.cos,
@@ -74,7 +75,9 @@ _ALLOWED_FUNCTIONS = {
     "Airy": mp.airyai,
 }
 
-_BINARY_OPERATORS = {
+_BINARY_OPERATORS: dict[
+    type[ast.operator], Callable[[Any, Any], Any]
+] = {
     ast.Add: lambda a, b: a + b,
     ast.Sub: lambda a, b: a - b,
     ast.Mult: lambda a, b: a * b,
@@ -83,7 +86,9 @@ _BINARY_OPERATORS = {
     ast.Mod: lambda a, b: a % b,
 }
 
-_UNARY_OPERATORS = {
+_UNARY_OPERATORS: dict[
+    type[ast.unaryop], Callable[[Any], Any]
+] = {
     ast.UAdd: lambda a: a,
     ast.USub: lambda a: -a,
 }
@@ -129,17 +134,23 @@ def _detect_lowercase_allowed_function_calls(expression: str) -> set[str]:
 
 
 def _resolve_name(name: str, variables: dict[str, object]) -> object | None:
-    """Resolve a bare name to a variable/constant/function, or None if unknown."""
+    """Resolve a bare name to a variable/constant/function, or None if unknown.
+
+    Returns ``object | None`` (not ``Any``) so callers must check the
+    ``None`` sentinel; the single widening point is the ``cast(...)``
+    in ``_resolve_callable`` after its ``callable()`` guard.
+    """
     if name in variables:
         return variables[name]
     if name in _ALLOWED_CONSTANTS:
-        return _ALLOWED_CONSTANTS[name]
+        # mp.mpf is Any (no stubs); cast restores the narrower contract.
+        return cast(object, _ALLOWED_CONSTANTS[name])
     if name in _ALLOWED_FUNCTIONS:
-        return _ALLOWED_FUNCTIONS[name]
+        return cast(object, _ALLOWED_FUNCTIONS[name])
     return None
 
 
-def safe_eval(expression: str, var_dict: dict[str, object]):
+def safe_eval(expression: str, var_dict: dict[str, object]) -> Any:
     """
     Safely evaluate a mathematical expression with given variables.
 
@@ -186,7 +197,7 @@ def safe_eval(expression: str, var_dict: dict[str, object]):
     return _evaluate_ast(tree.body, variables)
 
 
-def _evaluate_ast(node, variables):
+def _evaluate_ast(node: ast.AST, variables: dict[str, object]) -> Any:
     if isinstance(node, ast.Expression):
         return _evaluate_ast(node.body, variables)
     if isinstance(node, ast.Attribute):
@@ -203,16 +214,16 @@ def _evaluate_ast(node, variables):
     if isinstance(node, ast.BinOp):
         left = _evaluate_ast(node.left, variables)
         right = _evaluate_ast(node.right, variables)
-        operator_type = type(node.op)
-        if operator_type in _BINARY_OPERATORS:
-            return _BINARY_OPERATORS[operator_type](left, right)
-        raise ValueError(_dual_msg(f"不支持的二元操作: {operator_type}", f"Unsupported binary operator: {operator_type}"))
+        bin_op_type = type(node.op)
+        if bin_op_type in _BINARY_OPERATORS:
+            return _BINARY_OPERATORS[bin_op_type](left, right)
+        raise ValueError(_dual_msg(f"不支持的二元操作: {bin_op_type}", f"Unsupported binary operator: {bin_op_type}"))
     if isinstance(node, ast.UnaryOp):
         operand = _evaluate_ast(node.operand, variables)
-        operator_type = type(node.op)
-        if operator_type in _UNARY_OPERATORS:
-            return _UNARY_OPERATORS[operator_type](operand)
-        raise ValueError(_dual_msg(f"不支持的单目操作: {operator_type}", f"Unsupported unary operator: {operator_type}"))
+        un_op_type = type(node.op)
+        if un_op_type in _UNARY_OPERATORS:
+            return _UNARY_OPERATORS[un_op_type](operand)
+        raise ValueError(_dual_msg(f"不支持的单目操作: {un_op_type}", f"Unsupported unary operator: {un_op_type}"))
     if isinstance(node, ast.Call):
         func = _resolve_callable(node.func, variables)
         if node.keywords:
@@ -222,11 +233,17 @@ def _evaluate_ast(node, variables):
     raise ValueError(_dual_msg(f"不支持的语法节点: {type(node)}", f"Unsupported syntax node: {type(node)}"))
 
 
-def _resolve_callable(func_node, variables):
+def _resolve_callable(
+    func_node: ast.AST, variables: dict[str, object]
+) -> Callable[..., Any]:
     if isinstance(func_node, ast.Name):
         func_value = _resolve_name(func_node.id, variables)
         if func_value is not None and callable(func_value):
-            return func_value
+            # ``func_value`` is ``Any`` because the lookup tables hold
+            # untyped mpmath callables — the ``callable()`` check has
+            # narrowed the runtime type but mypy doesn't know that.
+            # Hence the explicit cast to satisfy the return contract.
+            return cast(Callable[..., Any], func_value)
     raise ValueError(_dual_msg(f"不支持的函数调用: {ast.dump(func_node)}", f"Unsupported function call: {ast.dump(func_node)}"))
 
 
@@ -333,6 +350,6 @@ def format_latex_formula(formula_str: str) -> str:
             global_dict={},
             evaluate=False,
         )
-        return sp.latex(expr)
+        return str(sp.latex(expr))
     except Exception:
         return _format_latex_formula_manual(formula_str)
