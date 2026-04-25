@@ -76,60 +76,145 @@ class WindowFittingFormattersMixin:
     def _format_fit_result_text(
         self, fit_result: FitResult, expression: str | None, substituted: str | None
     ) -> str:
-        lines = [self._tr("=== 拟合结果 ===", "=== Fit Results ===")]
-        if expression:
-            lines.append(self._tr(f"模型: {expression}", f"Model: {expression}"))
-        if substituted:
-            lines.append(self._tr(f"代入参数: {substituted}", f"With params: {substituted}"))
-        lines.append("")
-        lines.append(self._tr("参数结果：", "Parameters:"))
-        for name, value in fit_result.params.items():
-            total_err = (fit_result.param_errors_total or fit_result.param_errors).get(name, mp.mpf("0"))
-            stat_err = (fit_result.param_errors_stat or {}).get(name, total_err)
-            sys_err = (fit_result.param_errors_sys or {}).get(name, mp.mpf("0"))
-            line = f"{name} = {self._format_uncertainty_value(value, total_err)}"
-            if sys_err and not mp.almosteq(sys_err, mp.mpf("0")):
-                line += self._tr(
-                    f" (统计 {self._format_precision_value(stat_err)}, 系统 {self._format_precision_value(sys_err)})",
-                    f" (stat {self._format_precision_value(stat_err)}, sys {self._format_precision_value(sys_err)})",
-                )
-            lines.append(line)
-        lines.append("")
-        lines.extend(
-            [
-                self._tr(
-                    f"χ² = {self._format_precision_value(fit_result.chi2)}",
-                    f"χ² = {self._format_precision_value(fit_result.chi2)}",
-                ),
-                self._tr(
-                    f"Reduced χ² = {self._format_precision_value(fit_result.reduced_chi2)}",
-                    f"Reduced χ² = {self._format_precision_value(fit_result.reduced_chi2)}",
-                ),
-                f"AIC = {self._format_precision_value(fit_result.aic)}",
-                f"BIC = {self._format_precision_value(fit_result.bic)}",
-                f"R² = {self._format_precision_value(fit_result.r2)}",
-                f"RMSE = {self._format_precision_value(fit_result.rmse)}",
-            ]
+        """Render a fit result as Markdown for ``setMarkdown`` display.
+
+        The format mirrors the extrapolation / error-propagation /
+        statistics formatters: an ``## H2`` heading, ``**bold**``
+        metadata lines, then one or two Markdown tables. The previous
+        ``=== 拟合结果 ===`` plain-text form rendered acceptably under
+        ``setMarkdown`` but was visually inconsistent with the three
+        sibling features. Aligning it removes a long-standing UI
+        wart without changing what information is shown.
+
+        Three structural tables are produced:
+        1. **Parameters** — name | value ± total | stat σ | sys σ
+           (the ``stat σ`` and ``sys σ`` columns appear only when
+           any parameter has a non-zero systematic error, mirroring
+           the legacy formatter's "show only when present" rule).
+        2. **Goodness of fit** — chi-square stats, AIC/BIC, R², RMSE.
+        3. (No third table — warnings render as bold metadata below.)
+        """
+        params_dict = fit_result.params
+        total_errors = fit_result.param_errors_total or fit_result.param_errors
+        stat_errors = fit_result.param_errors_stat or {}
+        sys_errors = fit_result.param_errors_sys or {}
+
+        # Show systematic-error columns only when at least one parameter
+        # actually has a non-zero systematic error — keeps the table
+        # compact for the common (statistics-only) case.
+        # Use an explicit absolute threshold rather than ``mp.almosteq``
+        # so the guard's behaviour is independent of the active
+        # ``mp.dps`` (which makes ``almosteq``'s default tolerance
+        # vary by ~1e-77 at dps=80) — production ``sys_errors`` dicts
+        # contain exact ``mp.mpf("0")`` for unrefitted parameters, but
+        # a future near-zero refit residual must still collapse to
+        # the 2-column table for visual parity with the legacy form.
+        _SYS_THRESHOLD = mp.mpf("1e-30")
+        has_systematic = any(
+            mp.fabs(err) > _SYS_THRESHOLD
+            for err in sys_errors.values()
+            if err is not None
         )
+
+        lines: list[str] = [self._tr("## 拟合结果", "## Fit Results"), ""]
+
+        # ---- metadata block (model + substituted) -----------------
+        if expression:
+            lines.append(
+                self._tr(f"**模型**: `{expression}`", f"**Model**: `{expression}`")
+            )
+        if substituted:
+            lines.append(
+                self._tr(
+                    f"**代入参数**: `{substituted}`",
+                    f"**With params**: `{substituted}`",
+                )
+            )
+        lines.append("")
+
+        # ---- parameters table ------------------------------------
+        if has_systematic:
+            header_cells = self._tr(
+                "| 参数 | 值 ± 总误差 | 统计 σ | 系统 σ |",
+                "| Parameter | Value ± Total | Stat σ | Sys σ |",
+            )
+            sep_cells = "| --- | --- | --- | --- |"
+        else:
+            header_cells = self._tr(
+                "| 参数 | 值 ± 误差 |",
+                "| Parameter | Value ± Error |",
+            )
+            sep_cells = "| --- | --- |"
+        lines.append(header_cells)
+        lines.append(sep_cells)
+        for name, value in params_dict.items():
+            total_err = total_errors.get(name, mp.mpf("0"))
+            stat_err = stat_errors.get(name, total_err)
+            sys_err = sys_errors.get(name, mp.mpf("0"))
+            value_cell = self._format_uncertainty_value(value, total_err)
+            if has_systematic:
+                stat_cell = self._format_precision_value(stat_err)
+                sys_cell = self._format_precision_value(sys_err)
+                lines.append(
+                    f"| {name} | {value_cell} | {stat_cell} | {sys_cell} |"
+                )
+            else:
+                lines.append(f"| {name} | {value_cell} |")
+        lines.append("")
+
+        # ---- goodness-of-fit metrics table -----------------------
+        lines.append(self._tr("| 指标 | 值 |", "| Metric | Value |"))
+        lines.append("| --- | --- |")
+        metrics: list[tuple[str, mp.mpf]] = [
+            ("χ²", fit_result.chi2),
+            (self._tr("Reduced χ²", "Reduced χ²"), fit_result.reduced_chi2),
+            ("AIC", fit_result.aic),
+            ("BIC", fit_result.bic),
+            ("R²", fit_result.r2),
+            ("RMSE", fit_result.rmse),
+        ]
+        for label, value in metrics:
+            lines.append(f"| {label} | {self._format_precision_value(value)} |")
+        lines.append("")
+
+        # ---- weighted-fit note + uncertainty note + warnings -----
+        # Each renders as a bold metadata line (matching the sibling
+        # formatters' ``**说明**`` / ``**警告**`` convention).
         if fit_result.details.get("weighted"):
-            lines.append(self._tr("说明: 使用测量不确定度加权拟合。", "Note: Weighted by measurement uncertainty."))
+            lines.append(
+                self._tr(
+                    "**说明**: 使用测量不确定度加权拟合。",
+                    "**Note**: Weighted by measurement uncertainty.",
+                )
+            )
         note = fit_result.details.get("uncertainty_note")
         if isinstance(note, dict):
             zh_note = note.get("zh", "")
             en_note = note.get("en", "")
             if zh_note or en_note:
-                lines.append(self._tr(f"说明: {zh_note}", f"Note: {en_note}"))
+                lines.append(
+                    self._tr(f"**说明**: {zh_note}", f"**Note**: {en_note}")
+                )
         elif note:
             localized_note = self._localize_text(str(note))
-            lines.append(self._tr(f"说明: {localized_note}", f"Note: {localized_note}"))
+            lines.append(
+                self._tr(
+                    f"**说明**: {localized_note}",
+                    f"**Note**: {localized_note}",
+                )
+            )
         sys_warning = fit_result.details.get("systematic_warning")
         if sys_warning:
             localized = self._localize_text(str(sys_warning))
-            lines.append(self._tr(f"警告: {localized}", f"Warning: {localized}"))
+            lines.append(
+                self._tr(f"**警告**: {localized}", f"**Warning**: {localized}")
+            )
         warning = fit_result.details.get("boundary_warning")
         if warning:
             localized = self._localize_text(str(warning))
-            lines.append(self._tr(f"警告: {localized}", f"Warning: {localized}"))
+            lines.append(
+                self._tr(f"**警告**: {localized}", f"**Warning**: {localized}")
+            )
         return "\n".join(lines)
 
     def _format_fit_display(self, fit_result: FitResult, expression: str | None, substituted: str | None, batch_idx: int = 1, **_ignored) -> tuple[str, list[dict[str, object]]]:
