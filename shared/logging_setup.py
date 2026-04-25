@@ -28,7 +28,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Iterable, Optional
+from typing import IO, Any, Iterable, Optional
 
 __all__ = [
     "DATALAB_LOG_JSON_ENV",
@@ -155,7 +155,7 @@ def configure_logging(
     *,
     level: Optional[int] = None,
     json_format: Optional[bool] = None,
-    stream=None,
+    stream: Optional[IO[str]] = None,
 ) -> None:
     """Install a single structured handler on the root logger.
 
