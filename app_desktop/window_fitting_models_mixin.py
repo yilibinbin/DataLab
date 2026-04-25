@@ -953,6 +953,7 @@ class WindowFittingModelsMixin:
         worker.failed.connect(self._on_auto_fit_failed)
         worker.finished.connect(self._on_auto_fit_thread_done)
         worker.cancelled.connect(self._on_worker_cancelled)
+        worker.progress_changed.connect(self._on_auto_fit_progress)
         if job.verbose:
             worker.log_ready.connect(self._append_log)
         self._auto_fit_worker = worker

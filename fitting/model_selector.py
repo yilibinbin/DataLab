@@ -4,25 +4,12 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from typing import Callable, Iterable, List, Optional
+from typing import Callable, Iterable, List, Optional, cast
 
 from mpmath import mp
 
 from shared.bilingual import _dual_msg
 from shared.numerics import noise_floor
-
-try:  # Allow running as a loose script or as a package
-    from ..extrapolation_methods import (
-        SequenceAcceleratorConfig,
-        SequenceAccelerationError,
-        apply_sequence_accelerator,
-    )
-except ImportError:  # pragma: no cover - fallback for script execution
-    from extrapolation_methods import (  # type: ignore
-        SequenceAcceleratorConfig,
-        SequenceAccelerationError,
-        apply_sequence_accelerator,
-    )
 
 
 class AutoFitCancelled(Exception):
@@ -99,6 +86,12 @@ def _run_with_timeout(
     if err:
         raise err[0]
     return holder[0]
+
+from extrapolation_methods import (
+    SequenceAcceleratorConfig,
+    SequenceAccelerationError,
+    apply_sequence_accelerator,
+)
 
 from .auto_models import AUTO_MODELS, AutoModelDefinition, fit_linear_model
 from .hp_fitter import FitResult, combine_error_components, fit_custom_model
@@ -261,7 +254,7 @@ def auto_fit_dataset(
                 _dual_msg("自动拟合已取消。", "Auto fit cancelled.")
             )
 
-    def _run_one(label: str, fn: Callable[[], object]) -> object:
+    def _run_one(label: str, fn: Callable[[], FitResult]) -> FitResult:
         """Wrap a single model fit with the optional timeout. Returns
         the fit result, or raises TimeoutError on cap breach. Errors
         from the fit itself propagate so the caller can record them.
@@ -273,9 +266,10 @@ def auto_fit_dataset(
         """
         if per_model_timeout_seconds is None or per_model_timeout_seconds <= 0:
             return fn()
-        return _run_with_timeout(
+        result = _run_with_timeout(
             fn, per_model_timeout_seconds, label, target_dps=precision,
         )
+        return cast(FitResult, result)
 
     definitions = list(AUTO_MODELS)
     if extra_models:
@@ -294,17 +288,16 @@ def auto_fit_dataset(
     for definition in definitions:
         _check_cancel()
         try:
-            fit = _run_one(
-                definition.label,
-                lambda d=definition: fit_linear_model(
+            def _linear_fit(d: AutoModelDefinition = definition) -> FitResult:
+                return fit_linear_model(
                     d,
                     x_series,
                     y_series,
                     precision=precision,
                     weights=weights,
                     data_sigmas=data_sigmas,
-                ),
-            )
+                )
+            fit = _run_one(definition.label, _linear_fit)
             results.append(AutoModelResult(definition.identifier, definition.label, True, fit))
         except Exception as exc:
             results.append(
@@ -322,9 +315,11 @@ def auto_fit_dataset(
         display_label = _unique_label(raw_label, used_labels)
         identifier = _allocate_identifier(CUSTOM_MODEL_ID, used_ids)
         try:
-            fit = _run_one(
-                display_label,
-                lambda s=spec, st=state: fit_custom_model(
+            def _custom_fit(
+                s: ModelSpecification = spec,
+                st: ParameterState = state,
+            ) -> FitResult:
+                return fit_custom_model(
                     s,
                     st,
                     {"x": x_series},
@@ -332,8 +327,8 @@ def auto_fit_dataset(
                     precision=precision,
                     weights=weights,
                     data_sigmas=data_sigmas,
-                ),
-            )
+                )
+            fit = _run_one(display_label, _custom_fit)
             results.append(AutoModelResult(identifier, display_label, True, fit))
         except Exception as exc:
             results.append(AutoModelResult(identifier, display_label, False, None, str(exc)))

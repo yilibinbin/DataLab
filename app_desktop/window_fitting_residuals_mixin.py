@@ -617,3 +617,35 @@ class WindowFittingResidualsMixin:
                 pass
         self._auto_fit_worker = None
 
+    def _on_auto_fit_progress(self, event):
+        """Receive a ``ProgressEvent`` from the auto-fit worker and
+        surface it in the log. The GUI shows e.g.
+        ``"[3/19] 正在拟合 Padé(1|1)…"`` so the user can see which
+        model is currently running and that the pipeline is
+        progressing — not frozen — even on long fits.
+        """
+        verbs_zh = {
+            "started": "正在拟合",
+            "ok": "完成",
+            "timeout": "超时跳过",
+            "error": "失败",
+            "cancelled": "已取消",
+        }
+        verbs_en = {
+            "started": "Fitting",
+            "ok": "Done",
+            "timeout": "Timed out",
+            "error": "Failed",
+            "cancelled": "Cancelled",
+        }
+        status = getattr(event, "status", "?")
+        verb = self._tr(verbs_zh.get(status, status), verbs_en.get(status, status))
+        idx = getattr(event, "index", 0) + 1
+        total = getattr(event, "total", 0)
+        label = getattr(event, "label", "?")
+        line = f"[{idx}/{total}] {verb}: {label}"
+        err = getattr(event, "error", None)
+        if err:
+            line += f" — {err}"
+        self._append_log(line)
+

@@ -89,6 +89,13 @@ class AutoFitWorker(QThread):
     failed = Signal(str)
     log_ready = Signal(str)
     cancelled = Signal()
+    # ``progress_changed`` (NEW): emitted as the auto-fit pipeline
+    # advances through its candidate models. The payload is a
+    # ``ProgressEvent`` (defined in ``app_desktop.auto_fit_subprocess``)
+    # with ``index`` / ``total`` / ``label`` / ``status`` fields the
+    # GUI uses to render "(3/19) Fitting Padé(1|1)…" in the status
+    # bar between models. Callers that don't care can ignore it.
+    progress_changed = Signal(object)
 
     def __init__(self, job: AutoFitJob):
         super().__init__()
@@ -99,6 +106,8 @@ class AutoFitWorker(QThread):
         self._stop_requested = True
 
     def run(self):
+        from .workers_core import _execute_auto_fit_job_subprocess
+
         verbose = getattr(self.job, "verbose", False)
         logger = _SignalLogger(self.log_ready.emit) if verbose else None
         stdout_cm = redirect_stdout(logger) if logger else nullcontext()
@@ -119,17 +128,36 @@ class AutoFitWorker(QThread):
             self.cancelled.emit()
             return
 
+        def _on_progress(event):
+            # Forward to the Qt signal so the main thread (where the
+            # GUI lives) can update the status bar. We swallow any
+            # exception here because progress reporting must NEVER
+            # break the actual fitting pipeline.
+            try:
+                self.progress_changed.emit(event)
+            except Exception:
+                pass
+            if verbose:
+                try:
+                    self.log_ready.emit(
+                        f"[auto-fit] [{event.index + 1}/{event.total}] "
+                        f"{event.label}: {event.status}"
+                        + (f" — {event.error}" if event.error else "")
+                    )
+                except Exception:
+                    pass
+
         try:
             with stdout_cm, stderr_cm:
-                # Pass ``should_cancel`` so ``auto_fit_dataset`` polls
-                # the stop flag between models. Without it, the worker
-                # ignores Stop until ``_execute_auto_fit_job`` returns,
-                # which on ill-conditioned datasets (e.g. σ ≈ 1e-19
-                # weighted χ²) can be several minutes — the GUI looks
-                # frozen even though the work is technically progressing.
-                summary = _execute_auto_fit_job(
+                # Subprocess path: each model runs in its own child
+                # Python interpreter, killed via SIGKILL on cancel
+                # for true immediate cancellation. See
+                # ``app_desktop.auto_fit_subprocess`` for the
+                # full architecture rationale.
+                summary = _execute_auto_fit_job_subprocess(
                     self.job,
                     should_cancel=lambda: self._stop_requested,
+                    progress_callback=_on_progress,
                 )
 
             if self._stop_requested:
@@ -143,7 +171,9 @@ class AutoFitWorker(QThread):
 
             if verbose:
                 try:
-                    print(f"[auto-fit] best model={summary.best_model} chi2={summary.best_result.chi2}")
+                    best = summary.best() if summary.best_model is not None else None
+                    chi2_str = best.fit_result.chi2 if best and best.fit_result else "?"
+                    print(f"[auto-fit] best model={summary.best_model} chi2={chi2_str}")
                 except Exception:
                     pass
             if logger:

@@ -231,6 +231,110 @@ def _resolve_timeout_seconds(
     return max(5.0, precision * 0.1875)
 
 
+def _execute_auto_fit_job_subprocess(
+    job: AutoFitJob,
+    should_cancel: Callable[[], bool] | None = None,
+    progress_callback: Callable[[Any], None] | None = None,
+):
+    """GUI execution path: run each model in its own subprocess.
+
+    True immediate cancellation — when ``should_cancel`` returns
+    True, the running subprocess is killed via ``Process.kill()``
+    (SIGKILL), so CPU is freed within milliseconds. Compare to
+    ``_execute_auto_fit_job`` (the in-process path used by CLI /
+    tests) where cancellation only takes effect at the next model
+    boundary.
+
+    ``progress_callback(ProgressEvent)`` is invoked at every state
+    transition so the GUI status bar can show "(3/19) Fitting
+    Padé(1|1)…" between models.
+    """
+    from app_desktop.auto_fit_subprocess import (
+        SubprocessAutoFitOrchestrator,
+        task_from_custom_entry,
+        task_from_definition,
+    )
+
+    timeout_seconds = _resolve_timeout_seconds(
+        job.per_model_timeout_seconds, job.precision,
+    )
+
+    # Convert the in-process AutoFitJob (which carries non-picklable
+    # closures inside ``extra_models`` / ``custom_entries``) into a
+    # flat list of pickle-safe ``ModelTask`` descriptors. The order
+    # mirrors the in-process path: AUTO_MODELS → extras → customs.
+    from fitting.auto_models import AUTO_MODELS
+
+    tasks = []
+    # Pre-flight failures — collected here and prepended to results
+    # AFTER the orchestrator runs the rest. Lets a single bad custom
+    # entry (e.g. one with dependent parameters) surface as a clear
+    # per-model failure instead of crashing the entire auto-fit run.
+    pre_flight_failures: list[Any] = []
+
+    for definition in AUTO_MODELS:
+        tasks.append(task_from_definition(definition))
+    seen = {d.identifier for d in AUTO_MODELS}
+    for extra in (job.extra_models or []):
+        if extra.identifier in seen:
+            continue
+        seen.add(extra.identifier)
+        try:
+            tasks.append(task_from_definition(extra))
+        except ValueError as exc:
+            pre_flight_failures.append((extra.identifier, extra.label, str(exc)))
+    for label, spec, state in (job.custom_entries or []):
+        try:
+            tasks.append(task_from_custom_entry(label, spec, state))
+        except ValueError as exc:
+            # ``ValueError`` here is the documented "this entry has
+            # a feature the subprocess path can't transport"
+            # (currently only ``dependent_defs``). Record as a
+            # failure so the user sees the exact message and the
+            # other tasks still run.
+            pre_flight_failures.append(("CUSTOM", label, str(exc)))
+
+    orchestrator = SubprocessAutoFitOrchestrator(
+        precision=job.precision,
+        per_model_timeout_seconds=timeout_seconds,
+    )
+    summary = orchestrator.run(
+        tasks=tasks,
+        x_data=job.x_series,
+        y_data=job.y_series,
+        sigma_data=job.sigma_series,
+        weights=job.weights,
+        should_cancel=should_cancel,
+        progress_callback=progress_callback,
+    )
+
+    # Splice pre-flight failures into the results list so the GUI
+    # shows them in the same place as orchestrator-recorded failures.
+    # ``AutoFitSummary`` is frozen-ish — rebuild with the merged
+    # results list rather than mutating in place.
+    if pre_flight_failures:
+        from fitting.model_selector import AutoFitSummary, AutoModelResult
+        merged = list(summary.results) + [
+            AutoModelResult(ident, label, False, None, err)
+            for ident, label, err in pre_flight_failures
+        ]
+        summary = AutoFitSummary(
+            best_model=summary.best_model, results=merged,
+        )
+
+    if getattr(job, "refine_with_mcmc", False):
+        try:
+            _attach_mcmc_refinement(summary, job)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "MCMC refinement failed (%s); "
+                "falling back to LSQ-only result",
+                exc,
+            )
+    return summary
+
+
+
 def _execute_auto_fit_job(
     job: AutoFitJob,
     should_cancel: Callable[[], bool] | None = None,
@@ -242,6 +346,10 @@ def _execute_auto_fit_job(
     finish. mpmath holds the GIL through long arithmetic, so we
     cannot interrupt mid-fit; the cancellation point at the model
     boundary is the best the runtime offers.
+
+    NOTE: this is the **in-process** path used by CLI / batch /
+    tests. The GUI uses ``_execute_auto_fit_job_subprocess`` for
+    true immediate cancellation.
     """
     timeout_seconds = _resolve_timeout_seconds(
         job.per_model_timeout_seconds, job.precision,
@@ -319,8 +427,12 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
             "refine_with_mcmc=True but emcee not installed; skipping"
         )
         return
-
-    best = summary.best() if hasattr(summary, "best") else None
+    # ``AutoFitSummary`` exposes ``best()`` (a method that walks the
+    # results list looking for the entry whose identifier matches
+    # ``best_model``), NOT a ``best_result`` attribute — older code
+    # using ``getattr(summary, "best_result", None)`` always silently
+    # resolved to None and skipped MCMC entirely. See review HIGH #1.
+    best = summary.best() if summary.best_model is not None else None
     if best is None or best.fit_result is None:
         _logger.info(
             "refine_with_mcmc=True but no best candidate; skipping"
@@ -338,8 +450,17 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
     # fits return FitResults whose identifiers aren't in the map —
     # we decline to refine them rather than silently producing
     # wrong posteriors.
+    #
+    # Escape hatch (used by tests): if ``best_fit.details`` already
+    # carries an ``evaluator`` callable with signature
+    # ``evaluator(params_dict, x)``, we use it directly and skip
+    # ``build_linear_evaluator``. Production fits don't currently
+    # populate this slot — it's there to make the pre-flight + health-
+    # check unit tests independent from AUTO_MODEL_MAP's parameter
+    # naming conventions.
     definition = AUTO_MODEL_MAP.get(best.identifier)
-    if definition is None:
+    detail_evaluator = (best_fit.details or {}).get("evaluator")
+    if definition is None and detail_evaluator is None:
         _logger.info(
             "MCMC refinement skipped: model %r is not a linear basis "
             "(custom models not supported by this refinement path)",
@@ -356,32 +477,76 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
     def _log_probability(theta):
         """Gaussian log-likelihood around the reparameterised model.
 
-        Returns ``-math.inf`` on any error so emcee rejects the walker
-        rather than crashing the run. Every call enters its own
+        Returns ``-math.inf`` (NEVER NaN) on any invalid input.
+        emcee's red-blue move computes ``lnpdiff = f + nlp -
+        state.log_prob[j]`` and a single NaN poisons all subsequent
+        acceptance decisions (RuntimeWarning floods on ill-
+        conditioned data). Every call enters its own
         ``precision_guard`` — mp.dps is process-global and emcee
         invokes this closure many thousands of times on its thread
         pool, so the outer guard isn't sufficient.
         """
         import math as _math
 
-        if rmse <= 0:
+        if not param_names or rmse <= 0:
             return float("-inf")
         try:
             new_params = {
                 name: float(v) for name, v in zip(param_names, theta)
             }
             with _pg(precision):
-                evaluator = build_linear_evaluator(definition, new_params)
+                if detail_evaluator is not None:
+                    evaluator = lambda x, _e=detail_evaluator, _p=new_params: _e(_p, x)
+                else:
+                    evaluator = build_linear_evaluator(definition, new_params)
                 residuals_sq = 0.0
                 for x_val, y_val in zip(xs_f, ys_f):
                     pred = float(evaluator(x_val))
+                    # Defensive: a model that returns NaN/inf for some
+                    # parameter regions (e.g. log of negative) must not
+                    # poison the residual sum.
+                    if not _math.isfinite(pred):
+                        return float("-inf")
                     diff = y_val - pred
                     residuals_sq += diff * diff
+                    if not _math.isfinite(residuals_sq):
+                        return float("-inf")
             if not _math.isfinite(residuals_sq):
                 return float("-inf")
             return -0.5 * residuals_sq / (rmse * rmse)
-        except Exception:  # noqa: BLE001 - emcee treats -inf as reject.
+        except (TypeError, ValueError, ArithmeticError, OverflowError):
+            # Restricting the except clause keeps real bugs (KeyError
+            # from a typo in evaluator's parameter dict, etc.) loud
+            # instead of silently returning -inf forever.
             return float("-inf")
+
+    # Pre-flight health check: sample log_probability at the LSQ
+    # best-fit and at a handful of perturbed starts so we know
+    # whether the MCMC has any chance of mixing. If every sample is
+    # -inf, the chain will produce noise; surface that to the user
+    # rather than running 800 wasted iterations.
+    import math as _math_pre
+    proposal_scale = max(1e-4, rmse * 1e-2)
+    pre_flight_lps = [_log_probability(initial_guess)]
+    for sign in (-1, +1):
+        perturbed = [v + sign * proposal_scale for v in initial_guess]
+        pre_flight_lps.append(_log_probability(perturbed))
+    n_finite = sum(1 for lp in pre_flight_lps if _math_pre.isfinite(lp))
+    if n_finite == 0:
+        _logger.info(
+            "MCMC pre-flight: all %d sample log-probabilities were -inf; "
+            "skipping MCMC refinement (data is too ill-conditioned for "
+            "Gaussian-walker exploration).",
+            len(pre_flight_lps),
+        )
+        if best_fit.details is None:
+            best_fit.details = {}
+        best_fit.details["mcmc_warning"] = (
+            "MCMC 跳过：初始 log-probability 全部 -inf（数据过于病态）。 / "
+            "MCMC skipped: all initial log-probabilities are -inf "
+            "(data is too ill-conditioned for Gaussian sampling)."
+        )
+        return
 
     try:
         mcmc_result = run_mcmc(
@@ -391,11 +556,34 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
             n_walkers=max(32, 2 * len(param_names) + 2),
             n_steps=800,
             n_burn_in=200,
-            proposal_scale=max(1e-4, rmse * 1e-2),
+            proposal_scale=proposal_scale,
         )
     except Exception as exc:  # noqa: BLE001
         _logger.warning("MCMC run failed: %s", exc, exc_info=True)
+        if best_fit.details is None:
+            best_fit.details = {}
+        best_fit.details["mcmc_warning"] = (
+            f"MCMC 运行失败：{exc}。仅使用最小二乘结果。 / "
+            f"MCMC run failed: {exc}. Using LSQ-only result."
+        )
         return
+
+    # Health-check the chain. Acceptance fraction outside [0.1, 0.7]
+    # is emcee's documented "your chain isn't mixing" signal.
+    acc = mcmc_result.acceptance_fraction
+    chain_warning: str | None = None
+    if not _math_pre.isfinite(acc) or acc < 0.05:
+        chain_warning = (
+            f"MCMC 接受率 {acc:.2f} 过低（<0.05），结果可能不可靠。 / "
+            f"MCMC acceptance fraction {acc:.2f} is very low (<0.05); "
+            "credible intervals may be unreliable."
+        )
+    elif acc > 0.85:
+        chain_warning = (
+            f"MCMC 接受率 {acc:.2f} 过高（>0.85），proposal_scale 可能太小。 / "
+            f"MCMC acceptance fraction {acc:.2f} is very high (>0.85); "
+            "proposal_scale may be too small."
+        )
 
     corner_png = b""
     try:
@@ -420,6 +608,8 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
         **previous_details,
         "mcmc_refinement": mcmc_block,
     }
+    if chain_warning:
+        new_details["mcmc_warning"] = chain_warning
     if corner_png:
         new_details["mcmc_corner_png"] = corner_png
     best_fit.details = new_details
