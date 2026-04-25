@@ -4,8 +4,11 @@ import ast
 import math
 import random
 import re
+from typing import Literal, overload
 
 from mpmath import mp
+
+from shared.bilingual import _dual_msg, _split_dual
 
 from .derivatives import (
     _get_symbolic_hessian,
@@ -13,7 +16,7 @@ from .derivatives import (
     numerical_partial_derivative,
     numerical_second_partial_derivative,
 )
-from .expression_engine import _dual_msg, _mp, _normalize_expression, _split_dual, format_latex_formula, safe_eval
+from .expression_engine import _mp, _normalize_expression, format_latex_formula, safe_eval
 from .latex_formatting import _format_value_for_latex_file, _siunitx_column_spec, calculate_dcolumn_format_for_column
 from .latex_tables_common import (
     _apply_aliases,
@@ -31,24 +34,28 @@ from .latex_tables_common import (
 class UncertainValue:
     """Class to represent a value with uncertainty."""
 
+    # ``_mp()`` (datalab_latex.expression_engine) accepts mp.mpf, int, float,
+    # or any value whose ``str()`` produces a number string. We name the
+    # union so the public surface stops looking like ``object`` while still
+    # matching what the body actually requires.
     def __init__(
         self,
-        value,
-        uncertainty,
+        value: mp.mpf | int | float | str,
+        uncertainty: mp.mpf | int | float | str,
         uncertainty_digits: int | None = None,
         contributions: dict[str, mp.mpf] | None = None,
-    ):
-        self.value = _mp(value)
-        self.uncertainty = _mp(uncertainty)
+    ) -> None:
+        self.value: mp.mpf = _mp(value)
+        self.uncertainty: mp.mpf = _mp(uncertainty)
         # Keep the significant digits of the uncertainty as provided by the user
-        self.uncertainty_digits = uncertainty_digits
+        self.uncertainty_digits: int | None = uncertainty_digits
         # Optional variance contributions per variable/constant name
-        self.contributions = contributions or None
+        self.contributions: dict[str, mp.mpf] | None = contributions or None
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.value} ± {self.uncertainty}"
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"UncertainValue({self.value}, {self.uncertainty}, digits={self.uncertainty_digits})"
 
 
@@ -131,7 +138,9 @@ def parse_uncertainty_format(number_str: str, lang: str = "en") -> UncertainValu
     return UncertainValue(value, uncertainty, uncertainty_digits=uncertainty_digits)
 
 
-def _process_uncertainty_lines(lines, verbose: bool = False):
+def _process_uncertainty_lines(
+    lines: list[str], verbose: bool = False
+) -> tuple[list[str], list[list[UncertainValue]]]:
     lines = _normalize_input_lines(lines)
     if len(lines) < 2:
         raise ValueError("Input must contain at least a header and one data row")
@@ -143,15 +152,15 @@ def _process_uncertainty_lines(lines, verbose: bool = False):
         print("Found headers: {0}".format(headers))
         print("Processing {0} data rows...".format(len(lines) - 1))
 
-    parsed_data = []
+    parsed_data: list[list[UncertainValue]] = []
 
-    for line_num, line in enumerate(lines[1:], 2):
-        line = line.strip()
+    for line_num, raw_line in enumerate(lines[1:], 2):
+        line = raw_line.strip()
         if not line:
             continue
 
         values = [_normalize_numeric_token(part) for part in line.split()]
-        row_data = []
+        row_data: list[UncertainValue] = []
         for value_str in values:
             try:
                 if "(" in value_str or "[" in value_str:
@@ -176,24 +185,30 @@ def _process_uncertainty_lines(lines, verbose: bool = False):
     return headers, parsed_data
 
 
-def process_uncertainty_data_file(filename, verbose: bool = False):
+def process_uncertainty_data_file(
+    filename: str, verbose: bool = False
+) -> tuple[list[str], list[list[UncertainValue]]]:
     """Process a data file containing values with uncertainties in the format 1.23(1)[-2]."""
     with open(filename, "r") as f:
         lines = f.readlines()
     return _process_uncertainty_lines(lines, verbose)
 
 
-def process_uncertainty_string(content: str, verbose: bool = False):
+def process_uncertainty_string(
+    content: str, verbose: bool = False
+) -> tuple[list[str], list[list[UncertainValue]]]:
     """Process an in-memory string that follows the same format as the uncertainty data file."""
     if not content or not content.strip():
         raise ValueError("输入数据为空，无法解析。")
     return _process_uncertainty_lines(content.splitlines(), verbose)
 
 
-def _process_constants_lines(lines, verbose: bool = False):
-    constants = {}
-    for line_num, line in enumerate(lines, 1):
-        line = line.strip()
+def _process_constants_lines(
+    lines: list[str], verbose: bool = False
+) -> dict[str, UncertainValue]:
+    constants: dict[str, UncertainValue] = {}
+    for line_num, raw_line in enumerate(lines, 1):
+        line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
 
@@ -216,7 +231,7 @@ def _process_constants_lines(lines, verbose: bool = False):
     return constants
 
 
-def process_constants_file(filename, verbose: bool = False):
+def process_constants_file(filename: str, verbose: bool = False) -> dict[str, UncertainValue]:
     """Process a constants file containing constant values with uncertainties."""
     try:
         with open(filename, "r") as f:
@@ -228,7 +243,7 @@ def process_constants_file(filename, verbose: bool = False):
     return _process_constants_lines(lines, verbose)
 
 
-def process_constants_string(content: str, verbose: bool = False):
+def process_constants_string(content: str, verbose: bool = False) -> dict[str, UncertainValue]:
     """Process constants supplied via a string buffer."""
     if not content or not content.strip():
         return {}
@@ -253,13 +268,13 @@ def _extract_referenced_names(expression: str) -> set[str] | None:
         return None
 
     class _NameVisitor(ast.NodeVisitor):
-        def __init__(self):
+        def __init__(self) -> None:
             self.names: set[str] = set()
 
-        def visit_Name(self, node: ast.Name):
+        def visit_Name(self, node: ast.Name) -> None:
             self.names.add(node.id)
 
-        def visit_Call(self, node: ast.Call):
+        def visit_Call(self, node: ast.Call) -> None:
             for arg in node.args:
                 self.visit(arg)
             for kw in node.keywords:
@@ -302,23 +317,23 @@ def detect_used_error_propagation_inputs(
 
 
 def apply_formula_to_data(
-    headers,
-    parsed_data,
-    constants,
-    formula_str,
+    headers: list[str],
+    parsed_data: list[list[UncertainValue]],
+    constants: dict[str, UncertainValue],
+    formula_str: str,
     verbose: bool = False,
-    warnings=None,
+    warnings: list[str] | None = None,
     return_components: bool = False,
     *,
     propagation_method: str = "taylor",
     propagation_order: int = 1,
     mc_samples: int | None = None,
     mc_seed: int | None = None,
-):
+) -> list[UncertainValue]:
     """Apply a formula to each row of data with error propagation."""
-    results = []
+    results: list[UncertainValue] = []
 
-    canonical_vars = []
+    canonical_vars: list[str] = []
     alias_map: dict[str, str] = {}
     seen: set[str] = set()
     for i, header in enumerate(headers):
@@ -402,24 +417,38 @@ def apply_formula_to_data(
         row_uncertainties.extend(const_uncertainties_used)
 
         try:
-            propagation_result = error_propagation(
-                rewritten_formula,
-                canonical_vars_used,
-                row_values,
-                row_uncertainties,
-                warnings=warnings,
-                return_components=return_components,
-                method=propagation_method,
-                order=propagation_order,
-                mc_samples=mc_samples,
-                mc_seed=mc_seed,
-            )
+            # Mypy --strict can't narrow on a runtime bool, so dispatch
+            # each overload explicitly. ``components`` stays None on the
+            # False branch.
+            components: list[tuple[str, mp.mpf]] | None = None
             if return_components:
-                result_value, result_uncertainty, components = propagation_result
+                result_value, result_uncertainty, components = error_propagation(
+                    rewritten_formula,
+                    canonical_vars_used,
+                    row_values,
+                    row_uncertainties,
+                    warnings,
+                    True,
+                    method=propagation_method,
+                    order=propagation_order,
+                    mc_samples=mc_samples,
+                    mc_seed=mc_seed,
+                )
             else:
-                result_value, result_uncertainty = propagation_result
+                result_value, result_uncertainty = error_propagation(
+                    rewritten_formula,
+                    canonical_vars_used,
+                    row_values,
+                    row_uncertainties,
+                    warnings,
+                    False,
+                    method=propagation_method,
+                    order=propagation_order,
+                    mc_samples=mc_samples,
+                    mc_seed=mc_seed,
+                )
 
-            contributions_map = None
+            contributions_map: dict[str, mp.mpf] | None = None
             if return_components and components:
                 contributions_map = {}
                 for name, contrib_var in components:
@@ -453,19 +482,70 @@ def apply_formula_to_data(
     return results
 
 
+@overload
 def error_propagation(
-    formula_str,
-    variables,
-    values,
-    uncertainties,
-    warnings=None,
+    formula_str: str,
+    variables: list[str],
+    values: list[mp.mpf],
+    uncertainties: list[mp.mpf],
+    warnings: list[str] | None = ...,
+    return_components: Literal[False] = ...,
+    *,
+    method: str = ...,
+    order: int = ...,
+    mc_samples: int | None = ...,
+    mc_seed: int | None = ...,
+) -> tuple[mp.mpf, mp.mpf]: ...
+
+
+@overload
+def error_propagation(
+    formula_str: str,
+    variables: list[str],
+    values: list[mp.mpf],
+    uncertainties: list[mp.mpf],
+    warnings: list[str] | None,
+    return_components: Literal[True],
+    *,
+    method: str = ...,
+    order: int = ...,
+    mc_samples: int | None = ...,
+    mc_seed: int | None = ...,
+) -> tuple[mp.mpf, mp.mpf, list[tuple[str, mp.mpf]]]: ...
+
+
+# Keyword-form of the components overload — supports the typical
+# ``error_propagation(..., return_components=True)`` site without
+# forcing the caller to spell out ``warnings`` positionally first.
+@overload
+def error_propagation(
+    formula_str: str,
+    variables: list[str],
+    values: list[mp.mpf],
+    uncertainties: list[mp.mpf],
+    warnings: list[str] | None = ...,
+    *,
+    return_components: Literal[True],
+    method: str = ...,
+    order: int = ...,
+    mc_samples: int | None = ...,
+    mc_seed: int | None = ...,
+) -> tuple[mp.mpf, mp.mpf, list[tuple[str, mp.mpf]]]: ...
+
+
+def error_propagation(
+    formula_str: str,
+    variables: list[str],
+    values: list[mp.mpf],
+    uncertainties: list[mp.mpf],
+    warnings: list[str] | None = None,
     return_components: bool = False,
     *,
     method: str = "taylor",
     order: int = 1,
     mc_samples: int | None = None,
     mc_seed: int | None = None,
-):
+) -> tuple[mp.mpf, mp.mpf] | tuple[mp.mpf, mp.mpf, list[tuple[str, mp.mpf]]]:
     """Propagate uncertainties through a formula (Taylor or Monte Carlo)."""
     method_key = (method or "taylor").strip().lower()
     if method_key in {"mc", "montecarlo", "monte_carlo", "monte-carlo"}:
@@ -656,9 +736,9 @@ def error_propagation(
 
 
 def _error_table_row_strings(
-    headers,  # noqa: ARG001 - retained for backward compatibility
-    formatted_columns,
-    formatted_result_column,
+    headers: list[str],  # noqa: ARG001 - retained for backward compatibility
+    formatted_columns: list[list[str]],
+    formatted_result_column: list[str],
     start_row: int,
     end_row: int,
 ) -> list[str]:
@@ -674,21 +754,21 @@ def _error_table_row_strings(
 
 
 def generate_error_propagation_table(
-    headers,
-    parsed_data,
-    results,
-    constants,
-    formula_str,
-    output_filename,
-    caption=None,
+    headers: list[str],
+    parsed_data: list[list[UncertainValue]],
+    results: list[UncertainValue],
+    constants: dict[str, UncertainValue],
+    formula_str: str,
+    output_filename: str,
+    caption: str | None = None,
     verbose: bool = False,
     use_dcolumn: bool = False,
-    table_segments=None,
+    table_segments: list[tuple[int, int]] | None = None,
     precision: int | None = None,
     result_uncertainty_digits: int | None = None,
     used_columns: list[str] | None = None,
     latex_group_size: int = 3,
-):
+) -> None:
     """Generate a LaTeX table for error propagation results."""
     if used_columns is None:
         header_indices = list(range(len(headers)))
