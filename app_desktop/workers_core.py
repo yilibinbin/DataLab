@@ -418,10 +418,13 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
     def _log_probability(theta):
         # Gaussian likelihood around the LSQ model. emcee calls this
         # many thousands of times — keep it numerically simple.
+        # Returning ``-inf`` (NEVER NaN) on any invalid input is
+        # critical: emcee's red-blue move computes
+        # ``lnpdiff = f + nlp - state.log_prob[j]`` and a single
+        # NaN there poisons all subsequent acceptance decisions
+        # (you'd see RuntimeWarning floods on ill-conditioned data).
         if not param_names or rmse <= 0:
             return float("-inf")
-        # Build substituted parameters dict, evaluate the model,
-        # compare to y. We reuse the same evaluator the fit produced.
         import math as _math
 
         evaluator = best_fit.details.get("evaluator") if best_fit.details else None
@@ -432,12 +435,49 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
             residuals_sq = 0.0
             for x_val, y_val in zip(job.x_series, job.y_series):
                 pred = float(evaluator(new_params, float(x_val)))
+                # Defensive: a model that returns NaN/inf for some
+                # parameter regions (e.g. log of negative) must not
+                # poison the residual sum. ``-inf`` is the right
+                # signal — emcee skips such walkers naturally.
+                if not _math.isfinite(pred):
+                    return float("-inf")
                 residuals_sq += (float(y_val) - pred) ** 2
-            if not _math.isfinite(residuals_sq):
-                return float("-inf")
+                if not _math.isfinite(residuals_sq):
+                    return float("-inf")
             return -0.5 * residuals_sq / (rmse ** 2)
-        except Exception:  # noqa: BLE001
+        except (TypeError, ValueError, ArithmeticError, OverflowError):
+            # Restricting the except clause keeps real bugs (KeyError
+            # from a typo in evaluator's parameter dict, etc.) loud
+            # instead of silently returning -inf forever.
             return float("-inf")
+
+    # Pre-flight health check: sample log_probability at the LSQ
+    # best-fit and at a handful of perturbed starts so we know
+    # whether the MCMC has any chance of mixing. If every sample is
+    # -inf, the chain will produce noise; surface that to the user
+    # rather than running 800 wasted iterations.
+    import math as _math_pre
+    proposal_scale = max(1e-4, rmse * 1e-2)
+    pre_flight_lps = [_log_probability(initial_guess)]
+    for sign in (-1, +1):
+        perturbed = [v + sign * proposal_scale for v in initial_guess]
+        pre_flight_lps.append(_log_probability(perturbed))
+    n_finite = sum(1 for lp in pre_flight_lps if _math_pre.isfinite(lp))
+    if n_finite == 0:
+        logger.info(
+            "MCMC pre-flight: all %d sample log-probabilities were -inf; "
+            "skipping MCMC refinement (data is too ill-conditioned for "
+            "Gaussian-walker exploration).",
+            len(pre_flight_lps),
+        )
+        if best_fit.details is None:
+            best_fit.details = {}
+        best_fit.details["mcmc_warning"] = (
+            "MCMC 跳过：初始 log-probability 全部 -inf（数据过于病态）。 / "
+            "MCMC skipped: all initial log-probabilities are -inf "
+            "(data is too ill-conditioned for Gaussian sampling)."
+        )
+        return
 
     try:
         mcmc_result = run_mcmc(
@@ -447,11 +487,34 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
             n_walkers=max(32, 2 * len(param_names) + 2),
             n_steps=800,
             n_burn_in=200,
-            proposal_scale=max(1e-4, rmse * 1e-2),
+            proposal_scale=proposal_scale,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("MCMC run failed: %s", exc)
+        if best_fit.details is None:
+            best_fit.details = {}
+        best_fit.details["mcmc_warning"] = (
+            f"MCMC 运行失败：{exc}。仅使用最小二乘结果。 / "
+            f"MCMC run failed: {exc}. Using LSQ-only result."
+        )
         return
+
+    # Health-check the chain. Acceptance fraction outside [0.1, 0.7]
+    # is emcee's documented "your chain isn't mixing" signal.
+    acc = mcmc_result.acceptance_fraction
+    chain_warning: str | None = None
+    if not _math_pre.isfinite(acc) or acc < 0.05:
+        chain_warning = (
+            f"MCMC 接受率 {acc:.2f} 过低（<0.05），结果可能不可靠。 / "
+            f"MCMC acceptance fraction {acc:.2f} is very low (<0.05); "
+            "credible intervals may be unreliable."
+        )
+    elif acc > 0.85:
+        chain_warning = (
+            f"MCMC 接受率 {acc:.2f} 过高（>0.85），proposal_scale 可能太小。 / "
+            f"MCMC acceptance fraction {acc:.2f} is very high (>0.85); "
+            "proposal_scale may be too small."
+        )
 
     corner_png = b""
     try:
@@ -467,6 +530,8 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
         "hi_ci": mcmc_result.hi_ci,
         "acceptance_fraction": mcmc_result.acceptance_fraction,
     }
+    if chain_warning:
+        best_fit.details["mcmc_warning"] = chain_warning
     if corner_png:
         best_fit.details["mcmc_corner_png"] = corner_png
 
