@@ -126,42 +126,20 @@ def _build_standalone_preamble(
             ]
         )
 
-    sisetup_lines = [
-        "% Configure siunitx for tight number spacing",
-        "\\sisetup{",
-    ]
+    from .sisetup_block import build_sisetup_block
 
-    if include_dcolumn:
-        sisetup_lines.extend(
-            [
-                "    group-digits = false,",
-                "    tight-spacing = true,",
-                "    uncertainty-mode = compact,",
-            ]
-        )
-    else:
-        if group_size > 0:
-            sisetup_lines.extend(
-                [
-                    "    group-digits = decimal,",
-                    f"    digit-group-size = {group_size},",
-                    r"    group-separator = {\,},",
-                    f"    group-minimum-digits = {group_size},",
-                    "    tight-spacing = true,",
-                    "    uncertainty-mode = compact,",
-                ]
-            )
-        else:
-            sisetup_lines.extend(
-                [
-                    "    group-digits = false,",
-                    "    tight-spacing = true,",
-                    "    uncertainty-mode = compact,",
-                ]
-            )
-
-    sisetup_lines.extend(["}", ""])
-    preamble.extend(sisetup_lines)
+    # Centralized v2/v3-compatible \sisetup{...} body. The helper emits
+    # a guard around the siunitx-v3-only ``digit-group-size`` key so
+    # documents still compile against older TeX Live distributions where
+    # siunitx v2 is the default. (Was 5 near-duplicate inline copies
+    # before — removing them all keeps the format drift-free.)
+    preamble.append(
+        build_sisetup_block(
+            group_size=group_size,
+            include_dcolumn=include_dcolumn,
+        ).rstrip("\n")
+    )
+    preamble.append("")
 
     preamble.extend(
         [

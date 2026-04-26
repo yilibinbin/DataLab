@@ -26,12 +26,21 @@ def _sample_fit_result() -> FitResult:
 def test_build_fit_latex_preamble_includes_expected_packages():
     text = "\n".join(writer.build_fit_latex_preamble(use_dcolumn=False, digits=16, latex_group_size=4))
     assert "\\usepackage{siunitx}" in text
-    assert "digit-group-size = 4," in text
+    # ``digit-group-size`` is siunitx-v3 only; the helper wraps it in
+    # an ``\@ifpackagelater`` guard pinned to siunitx 3.0's release
+    # date (2020-02-08) so v2 installs fall back to the built-in
+    # default rather than erroring out. The v2/v3-safe key that
+    # gates WHEN grouping kicks in is ``group-minimum-digits``.
+    assert "digit-group-size = 4" in text
+    assert "@ifpackagelater" in text
+    assert "group-minimum-digits = 4" in text
     assert "\\usepackage{dcolumn}" not in text
 
     text_dcolumn = "\n".join(writer.build_fit_latex_preamble(use_dcolumn=True, digits=16, latex_group_size=4))
     assert "\\usepackage{dcolumn}" in text_dcolumn
     assert "\\newcolumntype{d}[1]{D{.}{.}{#1}}" in text_dcolumn
+    # dcolumn branch: no grouping at all
+    assert "digit-group-size" not in text_dcolumn
 
 
 def test_build_fit_latex_block_generates_siunitx_column_spec():
