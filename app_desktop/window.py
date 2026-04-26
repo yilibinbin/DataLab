@@ -210,6 +210,28 @@ _MANUAL_EXAMPLES: dict[str, tuple[str, str]] = {
 }
 
 
+def _qt_object_alive(obj) -> bool:
+    """Return False when the Qt C++ object behind ``obj`` has been
+    deleted out from under its Python wrapper.
+
+    Qt deletes child widgets when their parent is destroyed; the
+    Python wrapper outlives the C++ object briefly, and any method
+    call on it segfaults. ``shiboken6.isValid`` is the documented
+    health check; a try/except on a cheap call is the
+    portable fallback when the shiboken module isn't importable
+    (e.g. a future Qt binding swap).
+    """
+    try:
+        from shiboken6 import isValid  # type: ignore[import-not-found]
+        return bool(isValid(obj))
+    except Exception:
+        try:
+            obj.objectName()  # cheap, raises if dead
+            return True
+        except Exception:
+            return False
+
+
 class _CornerExampleClickFilter(QObject):
     """Event filter that fires a callback on a mouse press.
 
@@ -225,19 +247,34 @@ class _CornerExampleClickFilter(QObject):
         super().__init__()
         self._callback = callback
 
-    def eventFilter(self, _obj, event) -> bool:
+    def eventFilter(self, obj, event) -> bool:
+        # Click semantics: fire only when the user *releases* a left
+        # click that *began* on this widget. Without the button +
+        # in-rect checks, a right-click context menu (release fires
+        # on any button) or a press-elsewhere-and-drag-into-corner
+        # gesture would also trigger the example dialog — neither is
+        # what "click the corner" means to a user. ``rect().contains``
+        # uses local coordinates, so a press that started inside the
+        # widget but the user dragged out before release also no
+        # longer triggers — matching the behaviour of a real
+        # ``QAbstractButton.clicked`` signal.
         if event.type() == event.Type.MouseButtonRelease:
+            from PySide6.QtCore import Qt
             try:
-                self._callback()
+                inside = obj.rect().contains(event.position().toPoint())
             except Exception:
-                # Surface but don't propagate — a Qt event filter that
-                # raises corrupts the event-loop dispatch on some
-                # platforms. Logging gives the same diagnostic value
-                # as a raise without the destabilizing side effect.
-                import logging
-                logging.getLogger(__name__).warning(
-                    "corner-click handler failed", exc_info=True
-                )
+                inside = True
+            if event.button() == Qt.LeftButton and inside:
+                try:
+                    self._callback()
+                except Exception:
+                    # Surface but don't propagate — a Qt event filter
+                    # that raises corrupts the event-loop dispatch on
+                    # some platforms.
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "corner-click handler failed", exc_info=True
+                    )
         return False  # don't consume; let Qt do its own processing
 
 
@@ -810,6 +847,15 @@ class ExtrapolationWindow(
         table.setToolTip(tooltip)
 
         corner_button = getattr(self, "_corner_button", None)
+        # Validate the cached reference: a Qt C++ object can be
+        # destroyed underneath a Python wrapper (e.g. if some future
+        # code path rebuilds the table), in which case calling
+        # ``setToolTip`` would segfault. ``shiboken6.isValid`` is the
+        # canonical health check; falling back to a try/except on a
+        # cheap method call covers shiboken6 import failures.
+        if corner_button is not None and not _qt_object_alive(corner_button):
+            corner_button = None
+            self._corner_button = None
         if corner_button is None:
             # The corner button is the lone QAbstractButton child
             # whose parent is the table itself (header buttons live
