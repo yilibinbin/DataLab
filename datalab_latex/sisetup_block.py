@@ -95,37 +95,37 @@ def build_sisetup_block(
     )
 
     if group_size != 3:
-        # ``digit-group-size`` is a siunitx-v3 key, introduced in
-        # siunitx 3.0.0 (released **2020-02-08**). The first attempt
-        # at this guard used ``\@ifpackagelater{siunitx}{2020/01/01}``
-        # — a date some siunitx v2 patch releases also carry, so the
-        # branch fired on v2 and produced ``LaTeX3 Error: The key
-        # 'siunitx/digit-group-size' is unknown``. Pinning the cutoff
-        # to siunitx 3.0's actual release date instead means:
+        # ``digit-group-size`` is a siunitx-v3 key but its presence in
+        # the source tree predates its activation in the dispatcher:
+        # siunitx 3.0.49 (date 2022-02-15) — the version Tectonic
+        # currently bundles — has ``digit-group-size`` defined in
+        # siunitx.sty yet still rejects ``\sisetup{digit-group-size = N}``
+        # at runtime with ``LaTeX3 Error: The key 'siunitx/digit-group-
+        # size' is unknown``. The key reaches a working dispatcher
+        # only in later 3.x releases (verified working on 3.4.14
+        # from 2025-07-09).
         #
-        #   * any siunitx v2 patch (date ≤ 2020/02/07): branch skipped,
-        #     siunitx falls back to its built-in default of 3 (still
-        #     a working compile).
-        #   * any siunitx v3 (date ≥ 2020/02/08): branch fires and
-        #     ``digit-group-size = N`` is honoured.
+        # The cutoff was originally pinned to 2020/01/01 (siunitx v3
+        # introduction date), then 2020/02/08 (3.0.0 release). Both
+        # were too early — the 2022-02-15 Tectonic siunitx slips past
+        # those guards and fires the override against an installation
+        # that doesn't honour the key. ``2024/01/01`` is the empirical
+        # safe cutoff: confirmed Tectonic-bundled v3.0.49 evaluates as
+        # earlier (override skipped, fall back to size 3 default which
+        # still compiles) and TeX Live 2025 v3.4.14 evaluates as later
+        # (override fires, requested size honoured).
         #
         # ``\@ifpackagelater`` is an internal LaTeX2e command, so it
         # has to live inside ``\makeatletter ... \makeatother``.
-        #
-        # An earlier revision of this PR additionally wrapped the body
-        # in ``\begingroup ... \endgroup`` to make the ``\makeatletter``
-        # catcode flip locally scoped. That was a regression: ``\sisetup``
-        # uses option-setting macros that take effect via package-state
-        # variables, and TeX groups SCOPE those variable assignments —
-        # so ``\endgroup`` reverted the override and the rendered PDF
-        # silently fell back to size 3. Codex's adversarial-review probe
-        # caught this. We accept the (theoretical) risk that some weird
-        # surrounding preamble might already have ``\makeatletter`` open
-        # — in practice no DataLab template does, and ``\makeatother``
-        # at the package-loading level is the standard contract.
+        # Previous revisions tried wrapping in ``\begingroup ... \endgroup``
+        # for catcode-flip safety; that was a regression because TeX
+        # groups also scope ``\sisetup``'s package-state assignments,
+        # silently reverting the override. Plain
+        # ``\makeatletter ... \makeatother`` is the right pattern for
+        # a preamble-level package-state mutation.
         lines.append(r"\makeatletter")
         lines.append(
-            r"\@ifpackagelater{siunitx}{2020/02/08}{"
+            r"\@ifpackagelater{siunitx}{2024/01/01}{"
             f"\\sisetup{{digit-group-size = {group_size}}}"
             "}{}"
         )
