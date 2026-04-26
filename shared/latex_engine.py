@@ -44,6 +44,7 @@ from typing import Any, Callable, Literal
 
 __all__ = [
     "EngineChoice",
+    "MissingHomeDirectoryError",
     "TectonicInstallCancelled",
     "UnsupportedPlatformError",
     "discover_bundled_engine",
@@ -61,6 +62,13 @@ __all__ = [
 class UnsupportedPlatformError(RuntimeError):
     """Raised when no Tectonic binary release matches the current
     (platform.system(), platform.machine()) tuple."""
+
+
+class MissingHomeDirectoryError(RuntimeError):
+    """Raised when neither ``HOME`` nor ``USERPROFILE`` is set so the
+    auto-Tectonic installer cannot pick a stable install location.
+    Lets the GUI dispatch a localized error message via ``isinstance``
+    instead of stringly-matching the message text."""
 
 
 EngineSource = Literal["system", "bundled", "auto-tectonic"]
@@ -155,7 +163,7 @@ def tectonic_install_dir() -> Path:
     """
     home = os.environ.get("HOME") or os.environ.get("USERPROFILE")
     if not home:
-        raise RuntimeError(
+        raise MissingHomeDirectoryError(
             "Cannot determine the user's home directory: neither HOME "
             "nor USERPROFILE is set. Tectonic auto-install requires a "
             "stable home path so subsequent runs can locate the binary."
@@ -361,7 +369,16 @@ def _stream_url_to_file(
     cancel_check: Callable[[], bool] | None,
 ) -> None:
     """Stream ``url`` into ``dest`` 8 KiB at a time, polling the cancel
-    flag between chunks so a Stop click aborts within milliseconds.
+    flag after each chunk so a Stop click aborts within one chunk's
+    worth of network read.
+
+    The poll fires AFTER ``response.read`` returns, not before, because
+    the read itself can block for the urlopen timeout (60 s) on a
+    stalled connection — checking pre-read alone leaves the abort
+    latency dominated by that timeout. Worst-case cancellation latency
+    is therefore one stalled-chunk window; typical-case is well under
+    100 ms because chunk reads on a healthy connection complete in
+    microseconds.
 
     Avoids buffering the full ~30 MB archive in RAM (a real concern on
     a desktop GUI process that already hosts matplotlib + PySide6).
@@ -369,12 +386,17 @@ def _stream_url_to_file(
     chunk = 8192
     with _open_url(url) as response, dest.open("wb") as out:
         while True:
-            if cancel_check is not None and cancel_check():
-                raise TectonicInstallCancelled("install cancelled by caller")
             buf = response.read(chunk)
             if not buf:
                 break
             out.write(buf)
+            # Poll AFTER write: the just-finished ``read()`` may have
+            # blocked up to the urlopen timeout (60 s) — pre-read
+            # polling cannot shorten that window. Post-write polling
+            # caps cancel latency at one chunk's worth of network
+            # read (typically <100 ms on a healthy connection).
+            if cancel_check is not None and cancel_check():
+                raise TectonicInstallCancelled("install cancelled by caller")
 
 
 def _extract_tectonic_from_tar(archive_path: Path, dest_dir: Path) -> None:
@@ -427,6 +449,10 @@ def tectonic_compile_argv(binary: str, tex_path: Path | str) -> list[str]:
     - ``--keep-logs``: drop the ``.log`` next to the .tex so the GUI's
       existing log-tail viewer keeps working.
     - ``--outfmt pdf``: explicit format, never assume default.
+    - ``--`` separator before the input path: defense-in-depth so a
+      relative input like ``-V.tex`` cannot be parsed as an option.
+      In practice the desktop mixin always passes an absolute path,
+      but the helper is reachable from CLI / batch callers too.
     - We do NOT pass ``--print``; Tectonic prints to stderr by default
       and the desktop mixin captures both streams already.
     """
@@ -435,5 +461,6 @@ def tectonic_compile_argv(binary: str, tex_path: Path | str) -> list[str]:
         "--keep-logs",
         "--outfmt",
         "pdf",
+        "--",
         str(tex_path),
     ]

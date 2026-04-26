@@ -74,25 +74,29 @@ def test_block_wraps_v3_key_in_ifpackagelater_guard() -> None:
     yet reject the key). v2 falls back to siunitx's built-in default
     of 3 (still a clean compile); v3 honours the requested size.
 
-    The wrapper is ``\\begingroup \\makeatletter ... \\makeatother
-    \\endgroup``: ``\\makeatletter`` is required because
-    ``\\@ifpackagelater`` is an internal LaTeX2e command, and the
-    ``\\begingroup``/``\\endgroup`` envelope keeps the catcode change
-    local to this block — important when the surrounding preamble
-    might already be inside its own ``\\makeatletter`` (some packages
-    use it at load time)."""
+    The wrapper is ``\\makeatletter ... \\makeatother`` because
+    ``\\@ifpackagelater`` is an internal LaTeX2e command. We do NOT
+    additionally wrap in ``\\begingroup ... \\endgroup`` — TeX groups
+    scope ``\\sisetup``'s package-state assignments too, which would
+    silently revert the override the moment ``\\endgroup`` runs (the
+    rendered PDF would fall back to size 3 even on siunitx v3). A
+    prior simplify-pass attempt at "begingroup safety" introduced
+    exactly that regression; the round-2 codex review caught it."""
     from datalab_latex.sisetup_block import build_sisetup_block
 
     block = build_sisetup_block(group_size=4, include_dcolumn=False)
     assert "digit-group-size = 4" in block
     assert "@ifpackagelater" in block
     assert "2020/02/08" in block
-    # Both makeatletter and the begingroup envelope must appear
-    # so the catcode flip is locally scoped.
     assert r"\makeatletter" in block
     assert r"\makeatother" in block
-    assert r"\begingroup" in block
-    assert r"\endgroup" in block
+    # \begingroup must NOT appear — it would scope the \sisetup
+    # assignment and silently negate the override at \endgroup time.
+    assert r"\begingroup" not in block, (
+        "begingroup wrap regresses siunitx v3 group-size override; see "
+        "round-2 codex finding"
+    )
+    assert r"\endgroup" not in block
 
 
 def test_block_omits_v3_key_when_group_size_matches_v2_default() -> None:

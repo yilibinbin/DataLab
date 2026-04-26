@@ -66,6 +66,10 @@ INSTALLED_ROOT="$(find "$STAGING_PARENT" -maxdepth 1 \( -name 'TinyTeX' -o -name
 if [[ -z "$INSTALLED_ROOT" || ! -d "$INSTALLED_ROOT/bin" ]]; then
   echo "[tinytex] ERROR: upstream installer produced no recognizable layout."
   echo "[tinytex] Inspect $STAGING_PARENT for the actual contents."
+  # Disconnect the cleanup trap so the diagnostic dir survives this
+  # exit — otherwise ``rm -rf "$STAGING_PARENT"`` would fire on EXIT
+  # and the user would have nothing to inspect.
+  trap - EXIT
   exit 2
 fi
 

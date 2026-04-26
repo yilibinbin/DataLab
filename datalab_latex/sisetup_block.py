@@ -109,15 +109,20 @@ def build_sisetup_block(
         #   * any siunitx v3 (date ≥ 2020/02/08): branch fires and
         #     ``digit-group-size = N`` is honoured.
         #
-        # Wrapped in ``\begingroup ... \endgroup`` so the catcode change
-        # introduced by ``\makeatletter`` is local to this block. If the
-        # surrounding preamble were already inside its own
-        # ``\makeatletter`` (some packages use it at load time), bare
-        # ``\makeatother`` here would prematurely flip ``@`` back to
-        # "other" and break the outer scope. ``\@ifpackagelater`` is an
-        # internal LaTeX2e command — without ``\makeatletter`` pdflatex
-        # errors with "You can't use \\spacefactor in vertical mode".
-        lines.append(r"\begingroup")
+        # ``\@ifpackagelater`` is an internal LaTeX2e command, so it
+        # has to live inside ``\makeatletter ... \makeatother``.
+        #
+        # An earlier revision of this PR additionally wrapped the body
+        # in ``\begingroup ... \endgroup`` to make the ``\makeatletter``
+        # catcode flip locally scoped. That was a regression: ``\sisetup``
+        # uses option-setting macros that take effect via package-state
+        # variables, and TeX groups SCOPE those variable assignments —
+        # so ``\endgroup`` reverted the override and the rendered PDF
+        # silently fell back to size 3. Codex's adversarial-review probe
+        # caught this. We accept the (theoretical) risk that some weird
+        # surrounding preamble might already have ``\makeatletter`` open
+        # — in practice no DataLab template does, and ``\makeatother``
+        # at the package-loading level is the standard contract.
         lines.append(r"\makeatletter")
         lines.append(
             r"\@ifpackagelater{siunitx}{2020/02/08}{"
@@ -125,7 +130,6 @@ def build_sisetup_block(
             "}{}"
         )
         lines.append(r"\makeatother")
-        lines.append(r"\endgroup")
 
     lines.append("")
     return "\n".join(lines) + "\n"

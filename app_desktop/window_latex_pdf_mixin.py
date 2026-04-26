@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover
 
 from shared.latex_engine import (
     EngineChoice,
+    MissingHomeDirectoryError,
     TectonicInstallCancelled,
     UnsupportedPlatformError,
     ensure_tectonic_installed,
@@ -95,7 +96,11 @@ class _TectonicInstallWorker(QThread):
                 progress_callback=self.stage.emit,
                 cancel_check=lambda: self._stop_requested,
             )
-        except BaseException as exc:  # noqa: BLE001 — surface any error/cancel
+        except Exception as exc:  # noqa: BLE001 — surface any error/cancel
+            # Catch ``Exception`` (not ``BaseException``) so SystemExit
+            # and KeyboardInterrupt propagate normally — swallowing
+            # them into ``worker.error`` would silently subvert
+            # interpreter-level shutdown.
             self.error = exc
 
 
@@ -656,33 +661,56 @@ class WindowLatexPdfMixin:
         # Local event loop driven by the worker's ``finished`` signal
         # keeps the GUI responsive without a busy ``processEvents``
         # poll. ``loop.exec()`` returns when the worker exits run().
+        # ``worker.wait()`` after ``loop.exec()`` guarantees the
+        # underlying OS thread has actually terminated before we
+        # touch ``worker.result`` / ``worker.error`` — between
+        # ``finished`` emission and ``isFinished`` returning True
+        # there is a brief teardown window where the worker is
+        # still technically running.
         loop = QEventLoop(self)
         worker.finished.connect(loop.quit)
         worker.start()
         loop.exec()
+        # Bounded wait: ``finished`` has fired so this is microseconds
+        # in practice, but the timeout guarantees a misbehaving worker
+        # can't wedge the GUI thread permanently.
+        worker.wait(5000)
         progress.close()
 
         err = worker.error
-        if isinstance(err, UnsupportedPlatformError):
-            QMessageBox.critical(
-                self,
-                self._tr("不支持的平台", "Unsupported Platform"),
-                self._tr(
-                    f"当前平台没有可用的 Tectonic 预编译版本：{err}",
-                    f"No prebuilt Tectonic available for this platform: {err}",
-                ),
-            )
-            return None
         if isinstance(err, TectonicInstallCancelled):
             self._append_log(
                 self._tr("Tectonic: 用户已取消安装。", "Tectonic: install cancelled by user.")
             )
             return None
         if err is not None:
+            # Pick a localized title + body per error type, then dispatch
+            # the QMessageBox once to avoid the four near-duplicate calls
+            # the prior revision had drift-prone copies of.
+            if isinstance(err, UnsupportedPlatformError):
+                title_zh, title_en = "不支持的平台", "Unsupported Platform"
+                body_zh = f"当前平台没有可用的 Tectonic 预编译版本：{err}"
+                body_en = f"No prebuilt Tectonic available for this platform: {err}"
+            elif isinstance(err, MissingHomeDirectoryError):
+                # Surfaces in CI / sandboxed environments where neither
+                # HOME nor USERPROFILE is set so the runtime can't pick
+                # a stable install location. Actionable hint > opaque
+                # generic-error string.
+                title_zh, title_en = "Tectonic 安装失败", "Tectonic Install Failed"
+                body_zh = (
+                    "无法确定用户主目录（未设置 HOME / USERPROFILE 环境变量）。"
+                    "请设置任一环境变量后重试。"
+                )
+                body_en = (
+                    "Cannot determine the user home directory (HOME and "
+                    "USERPROFILE are both unset). Set one and retry."
+                )
+            else:
+                title_zh, title_en = "Tectonic 安装失败", "Tectonic Install Failed"
+                body_zh = f"安装失败：{err}"
+                body_en = f"Install failed: {err}"
             QMessageBox.critical(
-                self,
-                self._tr("Tectonic 安装失败", "Tectonic Install Failed"),
-                self._tr(f"安装失败：{err}", f"Install failed: {err}"),
+                self, self._tr(title_zh, title_en), self._tr(body_zh, body_en),
             )
             return None
         return worker.result
