@@ -183,6 +183,33 @@ from .window_fitting_mixin import WindowFittingMixin
 from .window_extrapolation_mixin import WindowExtrapolationMixin
 
 
+# Per-mode example placeholder text. Maps the mode key from
+# ``self.mode_combo.currentData()`` to a ``(zh, en)`` example pair.
+# Adding a new mode requires editing only this table — pre-fix the
+# zh and en branches drifted (extrapolation had different newline
+# counts in the two languages, etc.) because they were two parallel
+# if/elif ladders. The fallback key ``"extrapolation"`` is the
+# default for any unknown mode value.
+_MANUAL_EXAMPLES: dict[str, tuple[str, str]] = {
+    "error": (
+        "误差示例：\nx1 x2\n1.23(4)[-5] 9.9(1)",
+        "Error example:\nx1 x2\n1.23(4)[-5] 9.9(1)",
+    ),
+    "fitting": (
+        "拟合示例：\nx y\n1.0 2.34(5)\n2.0 1.98(3)\n3.0 1.56(4)",
+        "Fitting example:\nx y\n1.0 2.34(5)\n2.0 1.98(3)\n3.0 1.56(4)",
+    ),
+    "statistics": (
+        "统计平均示例：\nValue\n1.234(5)\n1.111(8)\n0.998(6)",
+        "Statistics example:\nValue\n1.234(5)\n1.111(8)\n0.998(6)",
+    ),
+    "extrapolation": (
+        "外推示例：\nA B C\n1.0 1.1 1.2",
+        "Extrapolation example:\nA B C\n1.0 1.1 1.2",
+    ),
+}
+
+
 class _CornerExampleClickFilter(QObject):
     """Event filter that fires a callback on a mouse press.
 
@@ -203,7 +230,14 @@ class _CornerExampleClickFilter(QObject):
             try:
                 self._callback()
             except Exception:
-                pass
+                # Surface but don't propagate — a Qt event filter that
+                # raises corrupts the event-loop dispatch on some
+                # platforms. Logging gives the same diagnostic value
+                # as a raise without the destabilizing side effect.
+                import logging
+                logging.getLogger(__name__).warning(
+                    "corner-click handler failed", exc_info=True
+                )
         return False  # don't consume; let Qt do its own processing
 
 
@@ -753,26 +787,19 @@ class ExtrapolationWindow(
 
     def _set_corner_example_hint(self, example: str) -> None:
         """Show the per-mode example as a tooltip on the table's
-        corner button (row-header × column-header intersection,
-        i.e. the visual "(1,1)" cell users see).
+        corner button (row-header × column-header intersection —
+        the visual "(1,1)" cell users see).
 
-        Per user request the example must NOT be pre-loaded into data
-        rows; the corner button is the canonical "(1,1)" affordance
-        for "click here to see the example". We attach a tooltip to
-        the corner button (via ``QAbstractButton`` lookup, since
-        QTableWidget doesn't expose its corner button directly) and
-        fall back to a table-wide tooltip so users hovering the
-        header intersection still see something on platforms where
-        the corner button isn't a hover target.
-
-        The click-to-show-example wiring deliberately uses an event
-        filter rather than a ``.clicked`` signal connection because
-        QTableWidget's corner button emits an internal
-        ``clicked(QModelIndex)`` signal whose argument shape doesn't
-        match a no-arg slot, leading to PySide6 ``RuntimeWarning:
-        Failed to disconnect`` warnings on every mode switch.
+        First call walks the table's child tree to locate the corner
+        button (QTableWidget doesn't expose it as a named property);
+        subsequent calls reuse the cached reference and only update
+        the tooltip text. The event filter is installed once and
+        carries the click → ``_show_data_file_hint`` wiring; we don't
+        use ``.clicked`` because QTableWidget's corner button emits
+        ``clicked(QModelIndex)`` whose argument shape doesn't match a
+        no-arg slot, producing PySide6 ``Failed to disconnect``
+        warnings on every mode switch.
         """
-        from PySide6.QtCore import QEvent, QObject
         from PySide6.QtWidgets import QAbstractButton
 
         table = self.manual_table
@@ -780,55 +807,42 @@ class ExtrapolationWindow(
             f"示例（点击此处查看）：\n{example}",
             f"Example (click here to view):\n{example}",
         )
-        # Always set the table-level tooltip — this is the visible
-        # surface when the user hovers any non-cell area of the
-        # table (matches "click 1,1 corner to see the example").
         table.setToolTip(tooltip)
 
-        # Find the corner button. QTableWidget doesn't expose it as a
-        # named property; it's the lone QAbstractButton child whose
-        # parent is the table itself (header buttons live under
-        # QHeaderView, not the table directly).
-        corner_button: QAbstractButton | None = None
-        for child in table.findChildren(QAbstractButton):
-            if child.parent() is table:
-                corner_button = child
-                break
+        corner_button = getattr(self, "_corner_button", None)
+        if corner_button is None:
+            # The corner button is the lone QAbstractButton child
+            # whose parent is the table itself (header buttons live
+            # under QHeaderView, not the table directly).
+            corner_button = next(
+                (
+                    child
+                    for child in table.findChildren(QAbstractButton)
+                    if child.parent() is table
+                ),
+                None,
+            )
+            self._corner_button = corner_button
+            if corner_button is not None:
+                self._corner_filter = _CornerExampleClickFilter(
+                    self._show_data_file_hint
+                )
+                corner_button.installEventFilter(self._corner_filter)
         if corner_button is not None:
             corner_button.setToolTip(tooltip)
-            # Install a one-shot mouse-press filter that opens the
-            # example dialog, replacing any prior filter so mode
-            # switches don't stack handlers.
-            existing = getattr(self, "_corner_filter", None)
-            if existing is not None:
-                corner_button.removeEventFilter(existing)
-            filt = _CornerExampleClickFilter(self._show_data_file_hint)
-            corner_button.installEventFilter(filt)
-            self._corner_filter = filt
 
     def _update_manual_placeholder(self, mode: str | None):
         system_lang = getattr(self, "_system_lang", _LANG_EN)
         is_en = self._lang_mode == _LANG_EN or (self._lang_mode == _LANG_AUTO and system_lang == _LANG_EN)
-        if is_en:
-            base = "Paste data here (first row as headers).\n\n"
-            if mode == "error":
-                example = "Error example:\nx1 x2\n1.23(4)[-5] 9.9(1)"
-            elif mode == "fitting":
-                example = "Fitting example:\nx y\n1.0 2.34(5)\n2.0 1.98(3)\n3.0 1.56(4)"
-            elif mode == "statistics":
-                example = "Statistics example:\nValue\n1.234(5)\n1.111(8)\n0.998(6)"
-            else:
-                example = "Extrapolation example:\nA B C\n1.0 1.1 1.2"
-        else:
-            base = "在此粘贴与数据文件完全一致的内容（首行为表头）。\n\n"
-            if mode == "error":
-                example = "误差示例：\nx1 x2\n1.23(4)[-5] 9.9(1)"
-            elif mode == "fitting":
-                example = "拟合示例：\nx y\n1.0 2.34(5)\n2.0 1.98(3)\n3.0 1.56(4)"
-            elif mode == "statistics":
-                example = "统计平均示例：\nValue\n1.234(5)\n1.111(8)\n0.998(6)"
-            else:
-                example = "外推示例：\nA B C\n1.0 1.1 1.2"
+        base = (
+            "Paste data here (first row as headers).\n\n"
+            if is_en
+            else "在此粘贴与数据文件完全一致的内容（首行为表头）。\n\n"
+        )
+        zh_example, en_example = _MANUAL_EXAMPLES.get(
+            mode or "extrapolation", _MANUAL_EXAMPLES["extrapolation"]
+        )
+        example = en_example if is_en else zh_example
         self._current_example_text = example
         placeholder = base + example
         self.manual_data_edit.setPlaceholderText(placeholder)
