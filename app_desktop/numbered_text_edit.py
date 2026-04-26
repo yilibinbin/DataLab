@@ -67,7 +67,11 @@ class NumberedTextEdit(QPlainTextEdit):
     def line_number_area_paint_event(self, event) -> None:
         painter = QPainter(self._line_number_area)
         palette = self.palette()
-        bg = palette.color(QPalette.ColorRole.AlternateBase)
+        # Use ``Base`` (the editor's text-area background) so the gutter
+        # blends seamlessly with the editor body — pre-fix we used
+        # ``AlternateBase`` which produced a visibly different stripe to
+        # the left of the text and the user reported it as "不协调".
+        bg = palette.color(QPalette.ColorRole.Base)
         fg = palette.color(QPalette.ColorRole.PlaceholderText)
         if not fg.isValid():
             fg = palette.color(QPalette.ColorRole.WindowText)
@@ -111,12 +115,18 @@ class NumberedTextEdit(QPlainTextEdit):
     def _highlight_current_line(self) -> None:
         # Subtle current-line highlight matches Qt's CodeEditor demo —
         # keeps the user oriented when a long .tex scrolls past several
-        # screens.
+        # screens. Derive the highlight from ``Base`` so it stays
+        # gentle relative to the (now-matching) gutter background:
+        # a slightly-tinted version of the editor body itself.
         if self.isReadOnly():
             self.setExtraSelections([])
             return
         selection = QTextEdit.ExtraSelection()
-        line_color = self.palette().color(QPalette.ColorRole.AlternateBase).lighter(115)
+        base = self.palette().color(QPalette.ColorRole.Base)
+        # Pick the brightness shift that nudges *toward* contrast: a
+        # dark theme needs a lighter tint; a light theme a slightly
+        # darker one. ``lightness < 128`` is the standard dark check.
+        line_color = base.lighter(115) if base.lightness() < 128 else base.darker(105)
         selection.format.setBackground(line_color)
         selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
         selection.cursor = self.textCursor()
