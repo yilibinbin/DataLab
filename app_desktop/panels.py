@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -77,6 +78,26 @@ _REFCOL_AUTO_MAX_DIFF_EN = "Max-diff column"
 # serialiser agree on the mapping.
 _STACK_PAGE_TABLE = 0
 _STACK_PAGE_TEXT = 1
+
+
+def _apply_equal_column_stretch(table: QTableWidget) -> None:
+    """Make every column share the table width equally.
+
+    ``setStretchLastSection(True)`` only stretches the last column —
+    after the user adds / removes rows or columns, the leading
+    columns retain their default narrow width and the table looks
+    lopsided. ``QHeaderView.Stretch`` resize-mode for *all* sections
+    distributes the available width evenly, which is what users
+    expect from a CSV-style data grid. Re-apply this after any
+    ``setColumnCount`` change because Qt resets the resize mode for
+    new columns to the header default (Interactive).
+    """
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.Stretch)
+    # Stretch already fills the table width; the legacy
+    # ``setStretchLastSection`` flag is now redundant and would
+    # otherwise interact oddly with Stretch mode.
+    header.setStretchLastSection(False)
 
 # --- Theme-aware stylesheets ---
 
@@ -455,7 +476,7 @@ def build_left_panel(self):
     self.manual_table = QTableWidget(6, 3)
     self.manual_table.setHorizontalHeaderLabels(["A", "B", "C"])
     self.manual_table.verticalHeader().setVisible(True)
-    self.manual_table.horizontalHeader().setStretchLastSection(True)
+    _apply_equal_column_stretch(self.manual_table)
     self.manual_table.setAlternatingRowColors(True)
     self.manual_table.setStyleSheet(_get_table_style())
     self.manual_table.setMinimumHeight(180)
@@ -776,7 +797,7 @@ def build_left_panel(self):
 
     self.constants_table = QTableWidget(4, 2)
     self.constants_table.setHorizontalHeaderLabels(["Name", "Value"])
-    self.constants_table.horizontalHeader().setStretchLastSection(True)
+    _apply_equal_column_stretch(self.constants_table)
     self.constants_table.setMinimumHeight(160)
     self.constants_table.setStyleSheet(_get_table_style())
     self._constants_stack.addWidget(self.constants_table)
@@ -1554,6 +1575,11 @@ def _add_table_column(self):
     if col >= 26:
         letter = chr(64 + col // 26) + letter
     table.setHorizontalHeaderItem(col, QTableWidgetItem(letter))
+    # Re-apply equal-stretch resize: ``setColumnCount`` resets the
+    # new column's resize mode to Interactive (header default), so
+    # without this the new column shows up at narrow default width
+    # and the visible columns become uneven.
+    _apply_equal_column_stretch(table)
 
 
 def _add_table_row(self):
@@ -1586,6 +1612,10 @@ def _remove_table_column(self):
     current = table.columnCount()
     if current > 1:
         table.setColumnCount(current - 1)
+        # Stretch mode survives a column drop on Qt 6.x but the
+        # remaining columns share the freed width unevenly without
+        # an explicit re-apply. Cheap to call regardless.
+        _apply_equal_column_stretch(table)
 
 
 def _view_toggle_label(self, current_index: int) -> str:
@@ -1676,6 +1706,7 @@ def _load_text_into_table(self, text: str):
         for i in range(max_cols)
     ]
     table.setHorizontalHeaderLabels(headers)
+    _apply_equal_column_stretch(table)
 
     table.setRowCount(max(len(result.rows), 5))
     for r, row in enumerate(result.rows):
@@ -1756,6 +1787,7 @@ def _clear_table(self):
     table.setColumnCount(3)
     table.setHorizontalHeaderLabels(["A", "B", "C"])
     table.clearContents()
+    _apply_equal_column_stretch(table)
 
 
 def _clear_constants_table(self):
