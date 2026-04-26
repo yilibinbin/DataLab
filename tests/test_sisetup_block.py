@@ -68,26 +68,37 @@ def test_block_uses_group_minimum_digits_for_v2_compat() -> None:
 
 
 def test_block_wraps_v3_key_in_ifpackagelater_guard() -> None:
-    """``digit-group-size`` is siunitx-v3 only; siunitx 3.0.0 was
-    released 2020-02-08. Pin the ``\\@ifpackagelater`` cutoff to that
-    date (NOT 2020/01/01 — some v2 patches carry early-2020 dates
-    yet reject the key). v2 falls back to siunitx's built-in default
-    of 3 (still a clean compile); v3 honours the requested size.
+    """``digit-group-size`` is a siunitx-v3 key but the activation
+    history is messy: siunitx 3.0.49 (the version Tectonic bundles,
+    date 2022-02-15) defines the key in source yet rejects
+    ``\\sisetup{digit-group-size = N}`` at runtime. Working dispatch
+    only lands in later 3.x releases (verified on 3.4.14, date
+    2025-07-09).
 
-    The wrapper is ``\\makeatletter ... \\makeatother`` because
-    ``\\@ifpackagelater`` is an internal LaTeX2e command. We do NOT
-    additionally wrap in ``\\begingroup ... \\endgroup`` — TeX groups
-    scope ``\\sisetup``'s package-state assignments too, which would
-    silently revert the override the moment ``\\endgroup`` runs (the
-    rendered PDF would fall back to size 3 even on siunitx v3). A
-    prior simplify-pass attempt at "begingroup safety" introduced
-    exactly that regression; the round-2 codex review caught it."""
+    Cutoff therefore pinned to **2024/01/01** — empirically:
+    Tectonic-bundled 3.0.49 evaluates as earlier (override skipped,
+    siunitx falls back to its default of 3 → still compiles) and TeX
+    Live 2025 v3.4.14 evaluates as later (override fires, requested
+    size honoured).
+
+    Earlier cutoff revisions (2020/01/01, 2020/02/08) bracketed
+    Tectonic's siunitx and re-introduced the user-reported error.
+
+    The wrapper is plain ``\\makeatletter ... \\makeatother`` — NOT
+    additionally wrapped in ``\\begingroup ... \\endgroup`` because
+    TeX groups scope ``\\sisetup``'s package-state assignments and
+    would silently revert the override at ``\\endgroup`` time.
+    """
     from datalab_latex.sisetup_block import build_sisetup_block
 
     block = build_sisetup_block(group_size=4, include_dcolumn=False)
     assert "digit-group-size = 4" in block
     assert "@ifpackagelater" in block
-    assert "2020/02/08" in block
+    # The cutoff date is the load-bearing detail — assert it exactly
+    # so a future "let's bump it earlier for some reason" change has
+    # to consciously update this test and acknowledge the Tectonic
+    # regression risk.
+    assert "2024/01/01" in block
     assert r"\makeatletter" in block
     assert r"\makeatother" in block
     # \begingroup must NOT appear — it would scope the \sisetup
