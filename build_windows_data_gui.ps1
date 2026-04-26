@@ -23,10 +23,26 @@ function Invoke-WithArgs {
     $full = $BaseCommand + $ExtraArgs
     if ($full.Length -eq 0) {
         throw "No command specified."
-    } elseif ($full.Length -eq 1) {
-        & $full[0]
-    } else {
-        & $full[0] @($full[1..($full.Length - 1)])
+    }
+    # Bracket the call with a relaxed ErrorActionPreference so a native
+    # tool that writes to stderr (PyInstaller emits ``INFO:`` lines on
+    # stderr by design) is not treated as a PowerShell-level error
+    # under ``$ErrorActionPreference = "Stop"``. We instead inspect
+    # ``$LASTEXITCODE`` ourselves and throw on a non-zero exit so a
+    # genuine compile failure still aborts the script.
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        if ($full.Length -eq 1) {
+            & $full[0]
+        } else {
+            & $full[0] @($full[1..($full.Length - 1)])
+        }
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed (exit $LASTEXITCODE): $($full -join ' ')"
     }
 }
 
