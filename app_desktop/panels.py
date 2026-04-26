@@ -1485,7 +1485,13 @@ def build_right_panel(self, layout: QVBoxLayout):
     self._register_text(self.latex_status_label, "未加载 LaTeX 文件", "No LaTeX loaded")
     toolbar.addWidget(self.latex_status_label)
     latex_layout.addLayout(toolbar)
-    self.latex_edit = QPlainTextEdit()
+    from app_desktop.numbered_text_edit import NumberedTextEdit
+
+    # ``NumberedTextEdit`` is a ``QPlainTextEdit`` with a left-margin
+    # line-number gutter — needed because Tectonic / pdflatex error
+    # messages reference line numbers (``error: 1.tex:57: ...``) and
+    # users have to find the offending line by scrolling without that.
+    self.latex_edit = NumberedTextEdit()
     self.latex_edit.setPlaceholderText("% LaTeX 内容将在此显示…")
     # Attach syntax highlighter
     from app_desktop.latex_highlighter import LatexHighlighter
@@ -1520,6 +1526,12 @@ def build_right_panel(self, layout: QVBoxLayout):
     # install can still produce PDFs out of the box. See
     # ``shared.latex_engine`` for the resolution + install pipeline.
     self.latex_engine_combo.addItems(["pdflatex", "xelatex", "tectonic"])
+    # Tectonic is the default: it auto-installs (~30 MB single binary)
+    # if missing and resolves LaTeX packages over the net per-document,
+    # so users without a local TeX Live install still get a working
+    # PDF on first run. ``pdflatex`` / ``xelatex`` remain available
+    # for power users with a tuned local TeX install.
+    self.latex_engine_combo.setCurrentText("tectonic")
     latex_controls_row.addWidget(self.latex_engine_combo)
     engine_btn = QPushButton("选择引擎路径…")
     engine_btn.clicked.connect(self._prompt_engine_selection)

@@ -355,15 +355,49 @@ def _uncertainty_decimal_places(unc: mp.mpf, target_digits: int) -> tuple[int, s
     return decimal_places, str(unc_int)
 
 
+def _select_common_exponent(val_mp: mp.mpf, unc_mp: mp.mpf) -> int:
+    """Pick the exponent the parenthetical compact form anchors to.
+
+    Default behaviour: anchor to the value's exponent so the leading
+    digit of the displayed number is the value's leading significant
+    digit (the most readable form when value and uncertainty are of
+    comparable magnitude — ``4.0(15)[\\text{-18}]``).
+
+    When the uncertainty dominates (more than ~2 orders of magnitude
+    larger than the value), anchoring to the value blows up the
+    parenthetical integer to 20+ digits — the bug the user reported
+    as ``4(1543551156637860)[\\text{-18}]``. Instead we anchor to
+    the uncertainty's exponent so the parenthetical stays bounded
+    and the value rounds to ``0`` if it falls below the displayed
+    precision. The output stays in pure siunitx parenthetical syntax,
+    so an ``S`` column accepts it without raising "Missing $".
+    """
+    if val_mp == 0 and unc_mp == 0:
+        return 0
+    if val_mp == 0:
+        _, exp = _split_mantissa_exponent(unc_mp)
+        return exp
+    _, val_exp = _split_mantissa_exponent(val_mp)
+    if unc_mp <= 0:
+        return val_exp
+    _, unc_exp = _split_mantissa_exponent(unc_mp)
+    if unc_exp - val_exp > 2:
+        return unc_exp
+    return val_exp
+
+
 def format_uncertainty_notation(
     value: object, uncertainty: object, uncertainty_digits: int | None = None
 ) -> str:
     """
     Format a value and uncertainty back to the 1.23(1)[-2] notation.
 
-    Falls back to ``value \\pm uncertainty`` when the compact form
-    would overflow — see ``_compact_form_unsuitable`` for the
-    threshold + rationale.
+    Always emits siunitx-compatible parenthetical syntax (no ``\\pm``
+    or other math-mode escape) so the output works inside an ``S``
+    column. When the uncertainty dominates the value by more than
+    ~2 orders of magnitude the displayed exponent anchors to the
+    uncertainty rather than the value — the value rounds to ``0``
+    in the displayed precision but the form stays valid LaTeX.
     """
     val_mp = _mp(value)
     unc_mp = _mp(uncertainty)
@@ -371,13 +405,7 @@ def format_uncertainty_notation(
     if unc_mp <= 0:
         return format_scientific_latex_decimal(val_mp)
 
-    if _compact_form_unsuitable(val_mp, unc_mp):
-        return _format_value_pm_uncertainty_latex(val_mp, unc_mp)
-
-    if val_mp == 0:
-        common_exp = 0
-    else:
-        _, common_exp = _split_mantissa_exponent(val_mp)
+    common_exp = _select_common_exponent(val_mp, unc_mp)
 
     exp_factor = mp.power(10, common_exp)
     scaled_value = val_mp / exp_factor
@@ -398,51 +426,6 @@ def format_uncertainty_notation(
     return f"{value_str}({uncertainty_str})[\\text{{{exp_str}}}]"
 
 
-def _compact_form_unsuitable(val_mp: mp.mpf, unc_mp: mp.mpf) -> bool:
-    """Return True when the compact ``X.YZ(WW)`` parenthetical form
-    would produce an unreadable output.
-
-    The compact form aligns the integer in parentheses to the value's
-    last-displayed decimal place. When uncertainty >> value (typical
-    ill-conditioned auto-fit output: parameter ~1e-18, sigma ~1e3),
-    that integer balloons to 20+ digits and the result looks like
-    ``4(150000000000000000000)[\\text{-18}]`` — informationally
-    correct but useless to read. In those cases we fall back to a
-    plain ``value \\pm uncertainty`` rendering.
-
-    The 2-orders-of-magnitude threshold matches what a user can
-    visually parse: an uncertainty up to 100x the value still fits
-    in a few parenthetical digits; beyond that the form degenerates.
-    """
-    if unc_mp <= 0:
-        return False
-    if val_mp == 0:
-        # Any non-trivial uncertainty around zero has no "last digit
-        # of value" to align to — use the explicit form.
-        return True
-    try:
-        val_order = int(mp.floor(mp.log10(mp.fabs(val_mp))))
-        unc_order = int(mp.floor(mp.log10(mp.fabs(unc_mp))))
-    except Exception:
-        return False
-    return unc_order - val_order > 2
-
-
-def _format_value_pm_uncertainty_latex(
-    val_mp: mp.mpf, unc_mp: mp.mpf
-) -> str:
-    """Fallback rendering when the compact form would overflow.
-
-    Emits ``value \\pm uncertainty`` with each side independently
-    rendered in DataLab's scientific bracket notation. Both sides
-    retain their own exponent so the order-of-magnitude mismatch
-    that triggered this branch is plainly visible to the reader.
-    """
-    val_str = format_scientific_latex_decimal(val_mp)
-    unc_str = format_scientific_latex_decimal(unc_mp)
-    return f"{val_str} \\pm {unc_str}"
-
-
 def format_result_with_uncertainty_latex(
     value: object, uncertainty: object, uncertainty_digits: int | None = None
 ) -> str:
@@ -451,10 +434,10 @@ def format_result_with_uncertainty_latex(
 
     For example: 0.00012(2) becomes 1.2(2)[-4]
 
-    Falls back to ``value \\pm uncertainty`` when the uncertainty is
-    more than 2 orders of magnitude larger than the value — the
-    compact parenthetical form has no meaningful "last-digit
-    alignment" in that regime.
+    Always emits siunitx-compatible parenthetical syntax (works in
+    ``S`` columns). When uncertainty dominates value, anchors the
+    exponent to the uncertainty so the parenthetical never balloons
+    to 20+ digits (see ``_select_common_exponent``).
     """
     val_mp = _mp(value)
     unc_mp = _mp(uncertainty)
@@ -462,13 +445,7 @@ def format_result_with_uncertainty_latex(
     if unc_mp <= 0:
         return format_scientific_latex_decimal(val_mp)
 
-    if _compact_form_unsuitable(val_mp, unc_mp):
-        return _format_value_pm_uncertainty_latex(val_mp, unc_mp)
-
-    if val_mp == 0:
-        common_exp = 0
-    else:
-        _, common_exp = _split_mantissa_exponent(val_mp)
+    common_exp = _select_common_exponent(val_mp, unc_mp)
 
     exp_factor = mp.power(10, common_exp)
     scaled_value = val_mp / exp_factor
