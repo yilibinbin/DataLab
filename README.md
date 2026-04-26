@@ -220,3 +220,14 @@ Issues and pull requests welcome at
 When reporting a numerical bug please include the **exact input data** (or
 attach the offending file) and the active precision setting — high-precision
 regressions are usually trivial to reproduce given the inputs.
+
+For development setup, coding conventions, and the PR flow see
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Security vulnerabilities go through the
+private channel described in [`SECURITY.md`](SECURITY.md), **not** public
+issues. Per-version changes are tracked in [`CHANGELOG.md`](CHANGELOG.md).
+
+## 📜 License
+
+DataLab is released under the [MIT License](LICENSE). The bundled LaTeX
+engine ([Tectonic](https://tectonic-typesetting.github.io/)) is downloaded
+on-demand and licensed separately under the MIT License.

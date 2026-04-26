@@ -1,0 +1,45 @@
+name: ✨ Feature request / 功能请求
+description: Suggest a new feature or enhancement. 建议新功能或改进。
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / 问题
+      description: |
+        What can't you currently do, or what's painful about the current
+        workflow? 当前不能做什么,或者哪个流程很别扭?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution / 建议方案
+      description: |
+        How could DataLab make this easier? Be as concrete as possible.
+        DataLab 可以怎么改进?越具体越好。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered / 备选方案
+      description: |
+        Other tools or workarounds you've tried, and why they fall short.
+        你试过的其它工具或绕行方案,以及它们为何不够好。
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope / 范围
+      options:
+        - Desktop only / 仅桌面端
+        - Web only / 仅 Web 端
+        - Both / 两者都需要
+        - Not sure / 不确定
+    validations:
+      required: true

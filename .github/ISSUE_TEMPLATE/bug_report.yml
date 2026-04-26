@@ -1,0 +1,91 @@
+name: 🐛 Bug report / 缺陷报告
+description: Report a numerical or behavior bug. 报告数值或行为缺陷。
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+        感谢花时间报告问题。
+
+        For **security vulnerabilities**, please use the private channel
+        instead — see [SECURITY.md](../SECURITY.md).
+        **安全漏洞**请走私下渠道,见 [SECURITY.md](../SECURITY.md)。
+
+  - type: input
+    id: version
+    attributes:
+      label: DataLab version / DataLab 版本
+      description: Release tag (e.g. `v2.0.0`) or git SHA. / 发布版本号或 git SHA。
+      placeholder: v2.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform / 平台
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows 10/11 (x64)
+        - Linux (please describe in steps)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frontend
+    attributes:
+      label: Frontend / 前端
+      options:
+        - Desktop (PySide6)
+        - Web (Flask)
+        - Both / 都有
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps / 复现步骤
+      description: |
+        Mode (extrapolation / fitting / error-prop / stats), formula,
+        precision dps, and any other settings.
+        模式、公式、精度 dps,以及其它设置。
+      placeholder: |
+        1. Mode = Curve Fitting
+        2. Open examples/fitting_powerlaw.txt
+        3. Custom formula = "A*x**(-p)+C"
+        4. dps = 80
+        5. Click "开始执行"
+    validations:
+      required: true
+
+  - type: textarea
+    id: input
+    attributes:
+      label: Input data / 输入数据
+      description: |
+        Paste the input file content, or attach the file. Numerical
+        bugs are very hard to reproduce without exact data.
+        粘贴输入文件内容,或附上文件。数值类问题不附数据极难复现。
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs. observed / 期望与实际
+      description: What did you expect, and what actually happened? / 你期望什么,实际发生了什么?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / 日志
+      description: Attach relevant log from `~/.datalab/logs/` if possible. / 可附上 `~/.datalab/logs/` 下的相关日志。
+      render: text
+    validations:
+      required: false
