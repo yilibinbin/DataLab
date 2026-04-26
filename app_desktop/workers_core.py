@@ -83,21 +83,28 @@ def _safe_resolve_path(text: str) -> Path:
         return candidate
 
 
+_READ_FALLBACK_ENCODINGS: tuple[str, ...] = (
+    "utf-8",       # de-facto standard for new content
+    "utf-8-sig",   # some Windows editors emit a BOM
+    "gbk",         # zh-CN Windows default; ``cp936`` is just an
+                   # alias on CPython so we don't list it twice
+    "latin-1",     # terminator: never raises on byte input
+)
+
+
 def _safe_read_text(path: Path) -> str:
     """Read text with multi-encoding fallback.
 
-    Tries UTF-8 first (the de-facto standard for new content), then
-    UTF-8 with BOM (some Windows editors write this), then GBK / CP936
-    (the default on zh-CN Windows boxes — a real LaTeX user reported
-    a .tex saved this way producing ``UnicodeDecodeError: 'utf-8'
-    codec can't decode byte 0xcd``), and finally Latin-1 as a never-
-    raises catch-all so the user sees content rather than a fatal
-    error. Mojibake from a wrong-encoding fallback is recoverable
-    (the user can re-save in UTF-8); a hard error is not.
+    A real LaTeX user reported ``UnicodeDecodeError: 'utf-8' codec
+    can't decode byte 0xcd`` opening a .tex saved as GBK on a
+    zh-CN Windows box. The fallback chain (see
+    ``_READ_FALLBACK_ENCODINGS``) ends with Latin-1, which never
+    raises on byte input — mojibake from a wrong-encoding decode
+    is recoverable (the user can re-save in UTF-8), a fatal dialog
+    is not.
 
     Raises ``ValueError`` only on actual filesystem errors (missing
-    file, permission denied, etc.) — encoding alone never blocks a
-    read because the Latin-1 step always succeeds.
+    file, permission denied, etc.).
     """
     try:
         raw = path.read_bytes()
@@ -109,15 +116,12 @@ def _safe_read_text(path: Path) -> str:
             )
         ) from exc
 
-    for encoding in ("utf-8", "utf-8-sig", "gbk", "cp936"):
+    for encoding in _READ_FALLBACK_ENCODINGS[:-1]:
         try:
             return raw.decode(encoding)
         except UnicodeDecodeError:
             continue
-    # Latin-1 maps every byte 0x00-0xff to U+0000-U+00FF, so it
-    # never raises on byte input. Garbled output is strictly better
-    # than a fatal dialog because the user can still inspect/edit.
-    return raw.decode("latin-1")
+    return raw.decode(_READ_FALLBACK_ENCODINGS[-1])
 
 
 def split_extrapolation_result(result):
