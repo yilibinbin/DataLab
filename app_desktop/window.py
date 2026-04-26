@@ -183,6 +183,30 @@ from .window_fitting_mixin import WindowFittingMixin
 from .window_extrapolation_mixin import WindowExtrapolationMixin
 
 
+class _CornerExampleClickFilter(QObject):
+    """Event filter that fires a callback on a mouse press.
+
+    Used to attach the "click the (1,1) corner cell to see the
+    example" handler to QTableWidget's corner button without
+    touching its internal ``clicked(QModelIndex)`` signal —
+    that signal's argument shape mismatches our zero-arg slot
+    and produces ``Failed to disconnect`` warnings on every
+    mode switch.
+    """
+
+    def __init__(self, callback) -> None:
+        super().__init__()
+        self._callback = callback
+
+    def eventFilter(self, _obj, event) -> bool:
+        if event.type() == event.Type.MouseButtonRelease:
+            try:
+                self._callback()
+            except Exception:
+                pass
+        return False  # don't consume; let Qt do its own processing
+
+
 class ExtrapolationWindow(
     QMainWindow,
     WindowLatexPdfMixin,
@@ -727,6 +751,61 @@ class ExtrapolationWindow(
             self.levin_beta_label.setVisible(show_beta)
         self.levin_beta_spin.setVisible(show_beta)
 
+    def _set_corner_example_hint(self, example: str) -> None:
+        """Show the per-mode example as a tooltip on the table's
+        corner button (row-header × column-header intersection,
+        i.e. the visual "(1,1)" cell users see).
+
+        Per user request the example must NOT be pre-loaded into data
+        rows; the corner button is the canonical "(1,1)" affordance
+        for "click here to see the example". We attach a tooltip to
+        the corner button (via ``QAbstractButton`` lookup, since
+        QTableWidget doesn't expose its corner button directly) and
+        fall back to a table-wide tooltip so users hovering the
+        header intersection still see something on platforms where
+        the corner button isn't a hover target.
+
+        The click-to-show-example wiring deliberately uses an event
+        filter rather than a ``.clicked`` signal connection because
+        QTableWidget's corner button emits an internal
+        ``clicked(QModelIndex)`` signal whose argument shape doesn't
+        match a no-arg slot, leading to PySide6 ``RuntimeWarning:
+        Failed to disconnect`` warnings on every mode switch.
+        """
+        from PySide6.QtCore import QEvent, QObject
+        from PySide6.QtWidgets import QAbstractButton
+
+        table = self.manual_table
+        tooltip = self._tr(
+            f"示例（点击此处查看）：\n{example}",
+            f"Example (click here to view):\n{example}",
+        )
+        # Always set the table-level tooltip — this is the visible
+        # surface when the user hovers any non-cell area of the
+        # table (matches "click 1,1 corner to see the example").
+        table.setToolTip(tooltip)
+
+        # Find the corner button. QTableWidget doesn't expose it as a
+        # named property; it's the lone QAbstractButton child whose
+        # parent is the table itself (header buttons live under
+        # QHeaderView, not the table directly).
+        corner_button: QAbstractButton | None = None
+        for child in table.findChildren(QAbstractButton):
+            if child.parent() is table:
+                corner_button = child
+                break
+        if corner_button is not None:
+            corner_button.setToolTip(tooltip)
+            # Install a one-shot mouse-press filter that opens the
+            # example dialog, replacing any prior filter so mode
+            # switches don't stack handlers.
+            existing = getattr(self, "_corner_filter", None)
+            if existing is not None:
+                corner_button.removeEventFilter(existing)
+            filt = _CornerExampleClickFilter(self._show_data_file_hint)
+            corner_button.installEventFilter(filt)
+            self._corner_filter = filt
+
     def _update_manual_placeholder(self, mode: str | None):
         system_lang = getattr(self, "_system_lang", _LANG_EN)
         is_en = self._lang_mode == _LANG_EN or (self._lang_mode == _LANG_AUTO and system_lang == _LANG_EN)
@@ -760,21 +839,15 @@ class ExtrapolationWindow(
         target_height = max(120, int(line_count * 18 + 40))
         self.manual_data_edit.setMinimumHeight(target_height)
 
-        # Also load example data into table if table is empty
+        # Auto-loading the example INTO the data table was confusing
+        # users — pre-populated cells got mistaken for real data and
+        # the example also leaked across mode switches because the
+        # "table is empty" check fired only on the first switch. The
+        # placeholder text + the "示例" tooltip on the corner header
+        # button (set up below) are the right places for the example;
+        # the data table stays clean until the user types.
         if hasattr(self, "manual_table"):
-            table = self.manual_table
-            has_data = False
-            for r in range(table.rowCount()):
-                for c in range(table.columnCount()):
-                    item = table.item(r, c)
-                    if item and item.text().strip():
-                        has_data = True
-                        break
-                if has_data:
-                    break
-            if not has_data:
-                from app_desktop.panels import _load_text_into_table
-                _load_text_into_table(self, example)
+            self._set_corner_example_hint(example)
 
     def _show_data_file_hint(self):
         """Show the current data example (same content as the '?' tooltip)."""
