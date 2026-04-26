@@ -95,28 +95,31 @@ def build_sisetup_block(
     )
 
     if group_size != 3:
-        # ``digit-group-size`` is a siunitx-v3-only key (introduced in
-        # siunitx 3.0, Feb 2020). Date-based ``\@ifpackagelater`` checks
-        # are unreliable here — some siunitx-v2 patch releases carry
-        # post-2020-01-01 dates yet still don't have the key. To stay
-        # safe across the install matrix we emit the override only
-        # when explicitly opting into a v3-only build via the env var
-        # ``DATALAB_SIUNITX_V3=1`` at LaTeX-export time. Users on a v2
-        # install get siunitx's built-in default of group-size=3, which
-        # matches the group-minimum-digits value emitted above.
+        # ``digit-group-size`` is a siunitx-v3 key, introduced in
+        # siunitx 3.0.0 (released **2020-02-08**). The first attempt
+        # at this guard used ``\@ifpackagelater{siunitx}{2020/01/01}``
+        # — a date some siunitx v2 patch releases also carry, so the
+        # branch fired on v2 and produced ``LaTeX3 Error: The key
+        # 'siunitx/digit-group-size' is unknown``. Pinning the cutoff
+        # to siunitx 3.0's actual release date instead means:
         #
-        # The user-visible effect: ``group_size != 3`` requests on
-        # siunitx v2 silently render with size 3 (acceptable: most
-        # publication conventions use 3 anyway, and the export-text
-        # for non-3 cases stays unchanged so a power user can edit
-        # it manually). On siunitx v3, no such override fires from
-        # this block — but ``group-minimum-digits = N`` already gates
-        # WHEN grouping kicks in, which is the more common need.
+        #   * any siunitx v2 patch (date ≤ 2020/02/07): branch skipped,
+        #     siunitx falls back to its built-in default of 3 (still
+        #     a working compile).
+        #   * any siunitx v3 (date ≥ 2020/02/08): branch fires and
+        #     ``digit-group-size = N`` is honoured.
+        #
+        # Wrapped in ``\makeatletter ... \makeatother`` because
+        # ``\@ifpackagelater`` is an internal LaTeX2e command and
+        # without that wrapper pdflatex errors with ``You can't use
+        # \\spacefactor in vertical mode``.
+        lines.append(r"\makeatletter")
         lines.append(
-            f"% Note: group-size = {group_size} requested; siunitx v2 "
-            "ignores the size and uses 3. Edit the .tex if exact "
-            "non-3 grouping is required."
+            r"\@ifpackagelater{siunitx}{2020/02/08}{"
+            f"\\sisetup{{digit-group-size = {group_size}}}"
+            "}{}"
         )
+        lines.append(r"\makeatother")
 
     lines.append("")
     return "\n".join(lines) + "\n"
