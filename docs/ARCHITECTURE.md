@@ -1,6 +1,7 @@
-# CLAUDE.md
+# DataLab Architecture & Developer Guide
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+> 项目架构 + 开发者上手指南。终端用户请看仓库根的 [README.md](../README.md)。
+> Architecture + developer onboarding. End-users: see the repo-root [README.md](../README.md).
 
 ## Project Overview
 
