@@ -216,7 +216,7 @@ For architecture + per-platform packaging see [`docs/ARCHITECTURE.md`](docs/ARCH
 ## 🤝 Reporting issues / Contributing
 
 Issues and pull requests welcome at
-[GitHub Issues](https://github.com/yilibinbin/datalab-review-r9/issues).
+[GitHub Issues](https://github.com/yilibinbin/DataLab/issues).
 When reporting a numerical bug please include the **exact input data** (or
 attach the offending file) and the active precision setting — high-precision
 regressions are usually trivial to reproduce given the inputs.

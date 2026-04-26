@@ -1,10 +1,10 @@
 blank_issues_enabled: false
 contact_links:
   - name: 🔒 Security vulnerability / 安全漏洞
-    url: https://github.com/yilibinbin/datalab-review-r9/security/advisories/new
+    url: https://github.com/yilibinbin/DataLab/security/advisories/new
     about: |
       Please report security vulnerabilities privately, not via public issues.
       安全漏洞请走私下渠道,不要用公开 issue。
   - name: 📖 Documentation / 文档
-    url: https://github.com/yilibinbin/datalab-review-r9/blob/main/README.md
+    url: https://github.com/yilibinbin/DataLab/blob/main/README.md
     about: README + bilingual docs / README 与中英文档

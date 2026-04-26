@@ -18,8 +18,8 @@
 ### 开发环境搭建
 
 ```bash
-git clone https://github.com/yilibinbin/datalab-review-r9.git
-cd datalab-review-r9
+git clone https://github.com/yilibinbin/DataLab.git
+cd DataLab
 
 # 桌面端
 pip install -r gui_requirements.txt
@@ -70,8 +70,8 @@ attach the relevant log from `~/.datalab/logs/`.
 ### Development setup
 
 ```bash
-git clone https://github.com/yilibinbin/datalab-review-r9.git
-cd datalab-review-r9
+git clone https://github.com/yilibinbin/DataLab.git
+cd DataLab
 
 # Desktop frontend
 pip install -r gui_requirements.txt
