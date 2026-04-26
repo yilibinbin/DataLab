@@ -13,9 +13,18 @@ Used for the LaTeX output tab so the user can locate compile errors
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, QSize, Qt
-from PySide6.QtGui import QColor, QPainter, QPalette, QTextFormat
+from PySide6.QtCore import QEvent, QRect, QSize, Qt
+from PySide6.QtGui import QColor, QPainter, QPalette, QTextCharFormat, QTextFormat
 from PySide6.QtWidgets import QPlainTextEdit, QTextEdit, QWidget
+
+# Pixel padding around the digit column inside the gutter. The numbers
+# are tuned for the default Qt 12-px font; bump them in proportion if a
+# bigger global font is ever set on the editor.
+_GUTTER_LEFT_PAD = 8
+_GUTTER_RIGHT_PAD = 4
+# Always reserve room for at least 3-digit line numbers so the gutter
+# width doesn't shimmer on documents that grow past 9 / 99 lines.
+_GUTTER_MIN_DIGITS = 3
 
 
 class _LineNumberArea(QWidget):
@@ -43,6 +52,17 @@ class NumberedTextEdit(QPlainTextEdit):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._line_number_area = _LineNumberArea(self)
+        # Cached colours + format objects. Rebuilt lazily and on
+        # palette / style changes (see ``changeEvent``) so the per-
+        # paint and per-cursor-move hot paths don't re-fetch them.
+        self._gutter_bg: QColor | None = None
+        self._gutter_fg: QColor | None = None
+        self._highlight_fmt: QTextCharFormat | None = None
+        # Cache the last-emitted gutter width so updates that don't
+        # change it can skip ``setViewportMargins`` (which forces a
+        # layout pass).
+        self._last_gutter_width: int = -1
+
         # Keep gutter synchronised with editor scroll / content edits.
         self.blockCountChanged.connect(self._update_line_number_area_width)
         self.updateRequest.connect(self._update_line_number_area)
@@ -51,11 +71,8 @@ class NumberedTextEdit(QPlainTextEdit):
         self._highlight_current_line()
 
     def line_number_area_width(self) -> int:
-        # 4 + max(3, log10(blockCount)) digits worth of horizontal
-        # space, computed against the current font's '9' advance.
-        digits = max(3, len(str(max(1, self.blockCount()))))
-        space = 8 + self.fontMetrics().horizontalAdvance("9") * digits
-        return space
+        digits = max(_GUTTER_MIN_DIGITS, len(str(max(1, self.blockCount()))))
+        return _GUTTER_LEFT_PAD + self.fontMetrics().horizontalAdvance("9") * digits
 
     def resizeEvent(self, event) -> None:  # noqa: N802 — Qt naming
         super().resizeEvent(event)
@@ -64,19 +81,39 @@ class NumberedTextEdit(QPlainTextEdit):
             QRect(rect.left(), rect.top(), self.line_number_area_width(), rect.height())
         )
 
+    def changeEvent(self, event) -> None:  # noqa: N802 — Qt naming
+        # Drop cached colours / format on palette or style changes so
+        # the next paint / highlight rebuilds them against the new
+        # palette. Cheaper than recomputing every paint.
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.StyleChange):
+            self._gutter_bg = None
+            self._gutter_fg = None
+            self._highlight_fmt = None
+        super().changeEvent(event)
+
+    def _ensure_gutter_colours(self) -> tuple[QColor, QColor]:
+        if self._gutter_bg is None or self._gutter_fg is None:
+            palette = self.palette()
+            # ``Base`` is the editor's text-area background — using it
+            # makes the gutter blend with the editor body. ``AlternateBase``
+            # produced a visibly different stripe and was reported as
+            # "不协调".
+            self._gutter_bg = palette.color(QPalette.ColorRole.Base)
+            fg = palette.color(QPalette.ColorRole.PlaceholderText)
+            if not fg.isValid():
+                fg = palette.color(QPalette.ColorRole.WindowText)
+                fg.setAlpha(140)
+            self._gutter_fg = fg
+        return self._gutter_bg, self._gutter_fg
+
     def line_number_area_paint_event(self, event) -> None:
         painter = QPainter(self._line_number_area)
-        palette = self.palette()
-        # Use ``Base`` (the editor's text-area background) so the gutter
-        # blends seamlessly with the editor body — pre-fix we used
-        # ``AlternateBase`` which produced a visibly different stripe to
-        # the left of the text and the user reported it as "不协调".
-        bg = palette.color(QPalette.ColorRole.Base)
-        fg = palette.color(QPalette.ColorRole.PlaceholderText)
-        if not fg.isValid():
-            fg = palette.color(QPalette.ColorRole.WindowText)
-            fg.setAlpha(140)
+        bg, fg = self._ensure_gutter_colours()
         painter.fillRect(event.rect(), bg)
+
+        # Hoist per-paint constants out of the per-block loop below.
+        line_height = self.fontMetrics().height()
+        gutter_width_minus_pad = self._line_number_area.width() - _GUTTER_RIGHT_PAD
 
         block = self.firstVisibleBlock()
         block_number = block.blockNumber()
@@ -84,17 +121,12 @@ class NumberedTextEdit(QPlainTextEdit):
         bottom = top + round(self.blockBoundingRect(block).height())
 
         painter.setPen(fg)
-        right_pad = 4
+        align_right = Qt.AlignmentFlag.AlignRight
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
-                number = str(block_number + 1)
                 painter.drawText(
-                    0,
-                    top,
-                    self._line_number_area.width() - right_pad,
-                    self.fontMetrics().height(),
-                    Qt.AlignmentFlag.AlignRight,
-                    number,
+                    0, top, gutter_width_minus_pad, line_height,
+                    align_right, str(block_number + 1),
                 )
             block = block.next()
             top = bottom
@@ -102,7 +134,13 @@ class NumberedTextEdit(QPlainTextEdit):
             block_number += 1
 
     def _update_line_number_area_width(self, _block_count: int) -> None:
-        self.setViewportMargins(self.line_number_area_width(), 0, 0, 0)
+        new_width = self.line_number_area_width()
+        # Skip the layout pass when the width hasn't actually changed —
+        # ``updateRequest`` fires on every cursor blink + keystroke,
+        # so a no-op guard saves a layout per event in the common case.
+        if new_width != self._last_gutter_width:
+            self._last_gutter_width = new_width
+            self.setViewportMargins(new_width, 0, 0, 0)
 
     def _update_line_number_area(self, rect: QRect, dy: int) -> None:
         if dy:
@@ -112,23 +150,30 @@ class NumberedTextEdit(QPlainTextEdit):
         if rect.contains(self.viewport().rect()):
             self._update_line_number_area_width(0)
 
+    def _ensure_highlight_format(self) -> QTextCharFormat:
+        if self._highlight_fmt is None:
+            base = self.palette().color(QPalette.ColorRole.Base)
+            # Lightness < 128 = dark theme: nudge toward lighter so the
+            # current line stands out against the gutter+body. Light
+            # theme: nudge slightly darker.
+            tint = base.lighter(115) if base.lightness() < 128 else base.darker(105)
+            fmt = QTextCharFormat()
+            fmt.setBackground(tint)
+            fmt.setProperty(QTextFormat.Property.FullWidthSelection, True)
+            self._highlight_fmt = fmt
+        return self._highlight_fmt
+
     def _highlight_current_line(self) -> None:
         # Subtle current-line highlight matches Qt's CodeEditor demo —
         # keeps the user oriented when a long .tex scrolls past several
-        # screens. Derive the highlight from ``Base`` so it stays
-        # gentle relative to the (now-matching) gutter background:
-        # a slightly-tinted version of the editor body itself.
+        # screens. The format object is cached on the editor and only
+        # the cursor changes per call (the colour / theme tracking
+        # lives in ``changeEvent`` cache invalidation).
         if self.isReadOnly():
             self.setExtraSelections([])
             return
         selection = QTextEdit.ExtraSelection()
-        base = self.palette().color(QPalette.ColorRole.Base)
-        # Pick the brightness shift that nudges *toward* contrast: a
-        # dark theme needs a lighter tint; a light theme a slightly
-        # darker one. ``lightness < 128`` is the standard dark check.
-        line_color = base.lighter(115) if base.lightness() < 128 else base.darker(105)
-        selection.format.setBackground(line_color)
-        selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+        selection.format = self._ensure_highlight_format()
         selection.cursor = self.textCursor()
         selection.cursor.clearSelection()
         self.setExtraSelections([selection])
