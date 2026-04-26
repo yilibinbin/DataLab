@@ -3,7 +3,13 @@ param(
     [string]$PythonPath = "",
     [switch]$SkipOneFile,
     [string]$IconPath = "",
-    [switch]$UseExistingPython
+    [switch]$UseExistingPython,
+    # Opt-in: bundle TinyTeX (~200 MB) into the installer so users
+    # without a local TeX Live install can compile PDFs offline. The
+    # runtime discovery layer (shared.latex_engine) looks under
+    # <app>\resources\tinytex\bin\<arch>; the installer step below
+    # puts it exactly there.
+    [switch]$BundleTinyTeX
 )
 
 Set-StrictMode -Version Latest
@@ -187,6 +193,29 @@ if (Test-Path $helpSpecsFile) {
     Write-Warning ("Help specs file not found: {0}" -f $helpSpecsFile)
 }
 
+# Optional: bundle TinyTeX (~200 MB) so users without a local TeX Live
+# install can compile PDFs offline. Opt-in via the -BundleTinyTeX flag
+# because the bundle size impact is large. The runtime discovery layer
+# (shared.latex_engine) looks under <app>\resources\tinytex\bin\<arch>;
+# the installer + --add-data pair below put it exactly there.
+if ($BundleTinyTeX) {
+    Write-Host "[info] Bundling TinyTeX (-BundleTinyTeX)..."
+    $tinytexDir = Join-Path $projectRoot "resources\\tinytex"
+    $bashExe = (Get-Command bash -ErrorAction SilentlyContinue).Source
+    if ($bashExe) {
+        & $bashExe (Join-Path $projectRoot "tools/install_tinytex.sh")
+        if (Test-Path $tinytexDir) {
+            $tinytexAbs = (Resolve-Path $tinytexDir).Path
+            Write-Host ("[info] Including TinyTeX bundle: {0}" -f $tinytexAbs)
+            $dataArgs += @("--add-data", ("{0};resources\\tinytex" -f $tinytexAbs))
+        } else {
+            Write-Warning ("TinyTeX install ran but {0} missing." -f $tinytexDir)
+        }
+    } else {
+        Write-Warning "bash.exe not found; cannot run tools/install_tinytex.sh on Windows. Install Git Bash / WSL and re-run."
+    }
+}
+
 $pyinstallerBase = @($venvPython, "-m", "PyInstaller")
 try {
     Invoke-WithArgs $pyinstallerBase @("--version") | Out-Null
@@ -260,7 +289,17 @@ $commonArgs = @(
     "--clean",
     "--paths", $projectRoot,
     "--hidden-import", "mpmath",
-    "--collect-all", "mpmath"
+    "--collect-all", "mpmath",
+    # emcee and corner sit behind ``HAS_EMCEE`` guards in
+    # fitting.mcmc_fitter, so PyInstaller's static import graph won't
+    # pick them up automatically; declare them explicitly so the bundled
+    # .exe actually ships MCMC support.
+    "--hidden-import", "emcee",
+    "--hidden-import", "emcee.moves",
+    "--hidden-import", "emcee.backends",
+    "--collect-all", "emcee",
+    "--hidden-import", "corner",
+    "--collect-all", "corner"
 ) + $excludeArgs + $iconArgs + $dataArgs
 $entryArgs = @($entryFile)
 

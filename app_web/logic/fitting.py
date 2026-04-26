@@ -424,42 +424,16 @@ def _generate_fitting_latex(
         )
     lines.append("\\usepackage{siunitx}")
 
-    # Configure siunitx: dcolumn never uses grouping, siunitx only if group_size > 0
-    sisetup_lines = ["\\sisetup{"]
+    from datalab_latex.sisetup_block import build_sisetup_block
 
-    if use_dcolumn:
-        # dcolumn mode: no grouping
-        sisetup_lines.extend(
-            [
-                "    group-digits = false,",
-                "    tight-spacing = true,",
-                "    uncertainty-mode = compact,",
-            ]
-        )
-    else:
-        # siunitx S-column mode: group only if group_size > 0
-        if group_size > 0:
-            sisetup_lines.extend(
-                [
-                    "    group-digits = decimal,",
-                    f"    digit-group-size = {group_size},",
-                    r"    group-separator = {\,},",
-                    f"    group-minimum-digits = {group_size},",
-                    "    tight-spacing = true,",
-                    "    uncertainty-mode = compact,",
-                ]
-            )
-        else:
-            sisetup_lines.extend(
-                [
-                    "    group-digits = false,",
-                    "    tight-spacing = true,",
-                    "    uncertainty-mode = compact,",
-                ]
-            )
-
-    sisetup_lines.append("}")
-    lines.extend(sisetup_lines)
+    # Centralized v2/v3-compatible \sisetup{...} block — see helper for
+    # the ``\@ifpackagelater`` guard around v3-only ``digit-group-size``.
+    lines.append(
+        build_sisetup_block(
+            group_size=group_size,
+            include_dcolumn=use_dcolumn,
+        ).rstrip("\n")
+    )
 
     _table_caption = caption if caption else f"Fitting Results: {latex_escape(best_label)}"
 

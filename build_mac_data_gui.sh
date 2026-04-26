@@ -180,6 +180,40 @@ else
   echo "[warn] Help specs file not found: $HELP_SPECS_FILE"
 fi
 
+# Optional: bundle TinyTeX (~200 MB) into the .app so users without a
+# local TeX Live install can compile PDFs offline. Opt-in via
+# ``DATALAB_BUNDLE_TINYTEX=1`` because the bundle size impact is large.
+# The runtime discovery layer (``shared.latex_engine``) looks under
+# ``<app>/resources/tinytex/bin/<arch>``; the installer + --add-data
+# pair below puts it exactly there.
+if [[ "${DATALAB_BUNDLE_TINYTEX:-0}" == "1" ]]; then
+  echo "[2.7/4] Bundling TinyTeX (DATALAB_BUNDLE_TINYTEX=1)..."
+  bash "$PROJECT_ROOT/tools/install_tinytex.sh"
+  TINYTEX_DIR="$PROJECT_ROOT/resources/tinytex"
+  if [[ -d "$TINYTEX_DIR" ]]; then
+    echo "[info] Including TinyTeX bundle: $TINYTEX_DIR"
+    DOCS_DATA_FLAGS+=(--add-data "$TINYTEX_DIR:resources/tinytex")
+  else
+    echo "[warn] TinyTeX install reported success but $TINYTEX_DIR missing."
+  fi
+fi
+
+# Hidden imports — modules that the static analyzer can miss because they
+# are imported lazily / conditionally. emcee and corner sit behind
+# ``HAS_EMCEE`` guards in fitting.mcmc_fitter, so PyInstaller's import
+# graph won't pick them up automatically; declare them explicitly so the
+# bundled .app actually ships MCMC support.
+HIDDEN_IMPORT_FLAGS=(
+  --hidden-import "mpmath"
+  --collect-all "mpmath"
+  --hidden-import "emcee"
+  --hidden-import "emcee.moves"
+  --hidden-import "emcee.backends"
+  --collect-all "emcee"
+  --hidden-import "corner"
+  --collect-all "corner"
+)
+
 echo "[3/4] Building macOS app bundle with PyInstaller..."
 rm -rf "$PROJECT_ROOT/dist"
 TARGET_ARCH_FLAG=()
@@ -194,6 +228,7 @@ pyinstaller "$ENTRY_FILE" \
   "${ICON_FLAG[@]}" \
   "${TARGET_ARCH_FLAG[@]}" \
   "${DOCS_DATA_FLAGS[@]}" \
+  "${HIDDEN_IMPORT_FLAGS[@]}" \
   "${EXCLUDE_FLAGS[@]}"
 
 APP_BUNDLE="$PROJECT_ROOT/dist/${APP_NAME}.app"

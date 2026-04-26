@@ -19,6 +19,15 @@ except ImportError:  # pragma: no cover
     Image = object  # type: ignore[assignment]
     ImageOps = object  # type: ignore[assignment]
 
+from shared.latex_engine import (
+    EngineChoice,
+    UnsupportedPlatformError,
+    ensure_tectonic_installed,
+    find_app_root,
+    resolve_engine,
+    tectonic_compile_argv,
+)
+
 from .resources import _ensure_default_path_augmented, _pil_to_qpixmap
 from .workers_core import _safe_read_text, _safe_resolve_path
 
@@ -83,6 +92,21 @@ class WindowLatexPdfMixin:
         pdf_path = pdf_dir / (target.stem + ".pdf")
 
         def _run_engine(path: Path):
+            # Tectonic uses a different CLI shape (no -interaction /
+            # -halt-on-error flags). The ``shared.latex_engine`` helper
+            # builds the right argv list based on engine name; we
+            # detect Tectonic by binary basename so the manual file-
+            # picker path also flows through the right branch.
+            if path.stem.lower().endswith("tectonic"):
+                cmd = tectonic_compile_argv(str(path), target)
+                return subprocess.run(
+                    cmd,
+                    cwd=str(pdf_dir),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=300,  # Tectonic may pull packages over the net
+                )
             cmd = [str(path), "-interaction=nonstopmode", "-halt-on-error", target.name]
             return subprocess.run(cmd, cwd=str(pdf_dir), capture_output=True, text=True, check=False, timeout=120)
 
@@ -460,17 +484,114 @@ class WindowLatexPdfMixin:
             self._append_log(f"{engine} 路径更新为: {selected}")
 
     def _ensure_latex_engine(self, engine: str):
+        """Resolve a usable LaTeX engine across three install tiers.
+
+        Resolution order:
+          1. Manual override (cached from a prior file-picker selection).
+          2. ``shared.latex_engine.resolve_engine`` — system PATH, then
+             bundled TinyTeX inside ``<app>/resources/tinytex/``, then
+             auto-installed Tectonic at ``~/.datalab/bin``.
+          3. Engine-specific auto-installer: for ``tectonic`` we offer
+             a one-shot download (~30 MB) instead of failing.
+          4. Last-resort: prompt the user to point at a binary.
+        """
         _ensure_default_path_augmented()
         cached = self._latex_engine_paths.get(engine)
         if cached and Path(cached).exists():
             return cached
-        which = shutil.which(engine)
-        if which:
-            self._latex_engine_paths[engine] = which
-            self._append_log(f"使用 {engine}: {which}")
-            return which
-        msg_zh = f"未在 PATH 中找到 {engine}，请选择可执行文件。"
-        msg_en = f"{engine} not found in PATH. Please select the executable file."
+
+        choice = resolve_engine(engine, bundle_root=find_app_root())
+        if choice is not None:
+            self._latex_engine_paths[engine] = choice.path
+            self._append_log(
+                self._tr(
+                    f"使用 {engine}: {choice.path} (来源: {choice.source})",
+                    f"Using {engine}: {choice.path} (source: {choice.source})",
+                )
+            )
+            return choice.path
+
+        # Engine missing. For Tectonic specifically we can offer a
+        # one-shot installer because it's a single binary; for the
+        # heavier engines (pdflatex/xelatex) we fall back to the file
+        # picker like before.
+        if engine == "tectonic":
+            installed = self._offer_tectonic_install()
+            if installed:
+                self._latex_engine_paths[engine] = installed.path
+                return installed.path
+
+        msg_zh = (
+            f"未在系统 PATH 或捆绑资源中找到 {engine}。请安装、选择可执行文件，"
+            "或在引擎下拉框中切换到 Tectonic（自动下载约 30 MB）。"
+        )
+        msg_en = (
+            f"{engine} not found on PATH or in bundled resources. "
+            "Please install it, point to the executable manually, or "
+            "switch the engine to Tectonic (auto-downloads ~30 MB)."
+        )
         QMessageBox.warning(self, self._tr("提示", "Notice"), self._tr(msg_zh, msg_en))
         self._prompt_engine_selection()
         return self._latex_engine_paths.get(engine)
+
+    def _offer_tectonic_install(self) -> "EngineChoice | None":
+        """Ask the user before downloading Tectonic.
+
+        Returns the resolved ``EngineChoice`` on success, ``None``
+        when the user declines or the install fails (caller already
+        falls back to the file picker in the latter case).
+        """
+        prompt_zh = (
+            "未检测到 Tectonic。是否立即下载约 30 MB 的 Tectonic 二进制到\n"
+            "~/.datalab/bin/，以便无需安装 TeX Live 即可编译 PDF？"
+        )
+        prompt_en = (
+            "Tectonic was not found. Download the ~30 MB Tectonic binary\n"
+            "to ~/.datalab/bin/ now? This lets you compile PDFs without\n"
+            "installing TeX Live."
+        )
+        reply = QMessageBox.question(
+            self,
+            self._tr("自动安装 Tectonic", "Install Tectonic"),
+            self._tr(prompt_zh, prompt_en),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply != QMessageBox.Yes:
+            return None
+
+        def _on_progress(stage: str) -> None:
+            stage_zh = {
+                "downloading": "下载中…",
+                "extracting": "解压中…",
+                "installed": "安装完成。",
+                "already-installed": "已安装。",
+            }.get(stage, stage)
+            stage_en = {
+                "downloading": "Downloading…",
+                "extracting": "Extracting…",
+                "installed": "Installed.",
+                "already-installed": "Already installed.",
+            }.get(stage, stage)
+            self._append_log(self._tr(f"Tectonic: {stage_zh}", f"Tectonic: {stage_en}"))
+            QApplication.processEvents()
+
+        try:
+            return ensure_tectonic_installed(progress_callback=_on_progress)
+        except UnsupportedPlatformError as exc:
+            QMessageBox.critical(
+                self,
+                self._tr("不支持的平台", "Unsupported Platform"),
+                self._tr(
+                    f"当前平台没有可用的 Tectonic 预编译版本：{exc}",
+                    f"No prebuilt Tectonic available for this platform: {exc}",
+                ),
+            )
+            return None
+        except Exception as exc:  # noqa: BLE001 — surface any IO/extraction error
+            QMessageBox.critical(
+                self,
+                self._tr("Tectonic 安装失败", "Tectonic Install Failed"),
+                self._tr(f"安装失败：{exc}", f"Install failed: {exc}"),
+            )
+            return None

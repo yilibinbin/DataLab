@@ -59,18 +59,16 @@ def build_fit_latex_preamble(*, use_dcolumn: bool, digits: int, latex_group_size
                 "\\newcolumntype{d}[1]{D{.}{.}{#1}}",
             ]
         )
-    lines.extend(
-        [
-            "\\usepackage{siunitx}",
-            "\\sisetup{",
-            "    group-digits = decimal,",
-            f"    digit-group-size = {group_size},",
-            r"    group-separator = {\,},",
-            f"    group-minimum-digits = {group_size},",
-            "    tight-spacing = true,",
-            "    uncertainty-mode = compact,",
-            "}",
-        ]
+    from datalab_latex.sisetup_block import build_sisetup_block
+
+    lines.append("\\usepackage{siunitx}")
+    # Centralized v2/v3-compatible \sisetup{...} block — see helper for
+    # the ``\@ifpackagelater`` guard around v3-only ``digit-group-size``.
+    lines.append(
+        build_sisetup_block(
+            group_size=group_size,
+            include_dcolumn=use_dcolumn,
+        ).rstrip("\n")
     )
     lines.extend(
         [

@@ -71,7 +71,12 @@ def test_siunitx_mode_with_grouping():
         print(sisetup)
 
         assert "group-digits = decimal" in content, "Expected group-digits=decimal"
-        assert "digit-group-size = 3" in content, "Expected digit-group-size=3"
+        # Pre-fix the assertion was ``digit-group-size = 3``, but the
+        # central helper now omits that key when ``group_size == 3``
+        # (it matches both siunitx v2 and v3 built-in defaults). The
+        # v2-safe key that actually controls when grouping kicks in is
+        # ``group-minimum-digits``.
+        assert "group-minimum-digits = 3" in content, "Expected group-minimum-digits=3"
         assert "group-separator" in content, "Expected group-separator"
         print("✓ Grouping enabled correctly")
 

@@ -1255,7 +1255,12 @@ def build_left_panel(self):
 
     engine_row = QHBoxLayout()
     self.latex_engine_combo = QComboBox()
-    self.latex_engine_combo.addItems(["pdflatex", "xelatex"])
+    # ``tectonic`` is offered alongside the traditional engines because
+    # it auto-downloads (~30 MB single binary) and resolves missing
+    # LaTeX packages over the net, so users without a local TeX Live
+    # install can still produce PDFs out of the box. See
+    # ``shared.latex_engine`` for the resolution + install pipeline.
+    self.latex_engine_combo.addItems(["pdflatex", "xelatex", "tectonic"])
     lbl_engine = QLabel("LaTeX 引擎：")
     self._register_text(lbl_engine, "LaTeX 引擎：", "LaTeX engine:")
     engine_row.addWidget(lbl_engine)
