@@ -67,17 +67,25 @@ def test_block_uses_group_minimum_digits_for_v2_compat() -> None:
     assert "group-minimum-digits = 3" in block
 
 
-def test_block_wraps_v3_key_in_ifpackagelater_guard() -> None:
-    """``digit-group-size`` is siunitx v3 only. Wrapping it in
-    ``\\@ifpackagelater{siunitx}{2020/01/01}{...}{}`` keeps v3 compiles
-    using the configured size while v2 compiles fall back to siunitx's
-    built-in default of 3 (which matches the most common ``group_size``)."""
+def test_block_omits_unsafe_v3_override_for_non_default_size() -> None:
+    """``digit-group-size`` is siunitx v3 only and date-based
+    ``\\@ifpackagelater`` checks are unreliable: some v2 patch releases
+    carry post-2020 dates yet reject the key. Rather than risk the
+    user's reported ``LaTeX3 Error: The key 'siunitx/digit-group-size'
+    is unknown`` again, we emit a comment explaining the trade-off
+    and let siunitx's built-in default of 3 stand. ``group-minimum-
+    digits`` already controls WHEN grouping kicks in — the more
+    common knob."""
     from datalab_latex.sisetup_block import build_sisetup_block
 
     block = build_sisetup_block(group_size=4, include_dcolumn=False)
-    assert "@ifpackagelater" in block
-    assert "siunitx" in block
-    assert "digit-group-size = 4" in block
+    # The unreliable v3-only key MUST NOT appear (this was the bug).
+    assert "digit-group-size = 4" not in block
+    assert "@ifpackagelater" not in block
+    # group-minimum-digits stays — works in both v2 and v3 since 2.7.
+    assert "group-minimum-digits = 4" in block
+    # And we leave a comment documenting the limitation.
+    assert "siunitx v2" in block or "manually" in block.lower() or "Note" in block
 
 
 def test_block_omits_v3_key_when_group_size_matches_v2_default() -> None:

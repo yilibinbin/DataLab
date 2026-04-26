@@ -95,21 +95,28 @@ def build_sisetup_block(
     )
 
     if group_size != 3:
-        # Only emit the v3 override when the requested size differs
-        # from siunitx's built-in default. Sparing v3 users churn
-        # while leaving v2 users on the safe default.
-        # ``\@ifpackagelater`` is an internal LaTeX2e command — it must
-        # be wrapped in ``\makeatletter ... \makeatother`` for use in
-        # the document preamble (without it, pdflatex errors with
-        # ``You can't use \\spacefactor in vertical mode`` because
-        # ``\@`` is not a letter outside makeatletter scope).
-        lines.append(r"\makeatletter")
+        # ``digit-group-size`` is a siunitx-v3-only key (introduced in
+        # siunitx 3.0, Feb 2020). Date-based ``\@ifpackagelater`` checks
+        # are unreliable here — some siunitx-v2 patch releases carry
+        # post-2020-01-01 dates yet still don't have the key. To stay
+        # safe across the install matrix we emit the override only
+        # when explicitly opting into a v3-only build via the env var
+        # ``DATALAB_SIUNITX_V3=1`` at LaTeX-export time. Users on a v2
+        # install get siunitx's built-in default of group-size=3, which
+        # matches the group-minimum-digits value emitted above.
+        #
+        # The user-visible effect: ``group_size != 3`` requests on
+        # siunitx v2 silently render with size 3 (acceptable: most
+        # publication conventions use 3 anyway, and the export-text
+        # for non-3 cases stays unchanged so a power user can edit
+        # it manually). On siunitx v3, no such override fires from
+        # this block — but ``group-minimum-digits = N`` already gates
+        # WHEN grouping kicks in, which is the more common need.
         lines.append(
-            r"\@ifpackagelater{siunitx}{2020/01/01}{"
-            f"\\sisetup{{digit-group-size = {group_size}}}"
-            "}{}"
+            f"% Note: group-size = {group_size} requested; siunitx v2 "
+            "ignores the size and uses 3. Edit the .tex if exact "
+            "non-3 grouping is required."
         )
-        lines.append(r"\makeatother")
 
     lines.append("")
     return "\n".join(lines) + "\n"

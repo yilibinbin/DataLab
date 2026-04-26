@@ -26,14 +26,13 @@ def _sample_fit_result() -> FitResult:
 def test_build_fit_latex_preamble_includes_expected_packages():
     text = "\n".join(writer.build_fit_latex_preamble(use_dcolumn=False, digits=16, latex_group_size=4))
     assert "\\usepackage{siunitx}" in text
-    # The v3-only ``digit-group-size`` key now lives inside an
-    # ``\@ifpackagelater`` guard (so siunitx v2 doesn't choke). The
-    # legacy form ``digit-group-size = 4,`` (with trailing comma) is
-    # gone; the guarded form ``digit-group-size = 4}`` is what
-    # ``build_sisetup_block`` emits.
-    assert "digit-group-size = 4" in text
-    assert "@ifpackagelater" in text
-    # group_size=4 also surfaces via the v2-safe minimum-digits key
+    # ``digit-group-size`` is siunitx-v3-only and date-based checks
+    # are unreliable, so the helper now omits the override and lets
+    # siunitx's built-in default of 3 stand. The v2/v3-safe key that
+    # actually controls when grouping kicks in is ``group-minimum-
+    # digits``, which IS emitted with the requested size.
+    assert "digit-group-size = 4" not in text
+    assert "@ifpackagelater" not in text
     assert "group-minimum-digits = 4" in text
     assert "\\usepackage{dcolumn}" not in text
 
