@@ -355,33 +355,47 @@ def _uncertainty_decimal_places(unc: mp.mpf, target_digits: int) -> tuple[int, s
     return decimal_places, str(unc_int)
 
 
+# Threshold (in orders of magnitude) at which the parenthetical
+# compact form switches its exponent anchor from the value to the
+# uncertainty. Below this, the parenthetical integer would balloon
+# to 20+ digits (e.g. ``4(1543551156637860)[\\text{-18}]``); above
+# it, the form stays bounded and the value rounds to ``0`` at the
+# displayed precision (the correct visual signal that the
+# uncertainty dominates). Pinned by tests; bumping it is a visible
+# behaviour change.
+_UNCERTAINTY_DOMINATES_EXP_GAP = 2
+
+
 def _select_common_exponent(val_mp: mp.mpf, unc_mp: mp.mpf) -> int:
     """Pick the exponent the parenthetical compact form anchors to.
 
-    Default behaviour: anchor to the value's exponent so the leading
-    digit of the displayed number is the value's leading significant
-    digit (the most readable form when value and uncertainty are of
+    Default: anchor to the value's exponent so the leading digit of
+    the displayed number is the value's leading significant digit
+    (the most readable form when value and uncertainty are of
     comparable magnitude — ``4.0(15)[\\text{-18}]``).
 
-    When the uncertainty dominates (more than ~2 orders of magnitude
-    larger than the value), anchoring to the value blows up the
-    parenthetical integer to 20+ digits — the bug the user reported
-    as ``4(1543551156637860)[\\text{-18}]``. Instead we anchor to
-    the uncertainty's exponent so the parenthetical stays bounded
-    and the value rounds to ``0`` if it falls below the displayed
-    precision. The output stays in pure siunitx parenthetical syntax,
-    so an ``S`` column accepts it without raising "Missing $".
+    When ``unc_exp - val_exp > _UNCERTAINTY_DOMINATES_EXP_GAP`` we
+    anchor to the uncertainty's exponent instead so the
+    parenthetical integer stays bounded — the output stays in pure
+    siunitx parenthetical syntax, so an ``S`` column accepts it
+    without raising "Missing $".
     """
+    # Compute the uncertainty exponent first — it's the only one
+    # always needed (val_mp == 0 short-circuits to it; the dominance
+    # check needs it). The value exponent is only fetched when both
+    # are non-zero.
     if val_mp == 0 and unc_mp == 0:
         return 0
-    if val_mp == 0:
-        _, exp = _split_mantissa_exponent(unc_mp)
-        return exp
-    _, val_exp = _split_mantissa_exponent(val_mp)
     if unc_mp <= 0:
+        # ``unc_mp`` non-positive means no uncertainty — anchor to
+        # value (or zero if the value is zero too, handled above).
+        _, val_exp = _split_mantissa_exponent(val_mp)
         return val_exp
     _, unc_exp = _split_mantissa_exponent(unc_mp)
-    if unc_exp - val_exp > 2:
+    if val_mp == 0:
+        return unc_exp
+    _, val_exp = _split_mantissa_exponent(val_mp)
+    if unc_exp - val_exp > _UNCERTAINTY_DOMINATES_EXP_GAP:
         return unc_exp
     return val_exp
 
