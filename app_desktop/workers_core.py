@@ -84,16 +84,23 @@ def _safe_resolve_path(text: str) -> Path:
 
 
 def _safe_read_text(path: Path) -> str:
-    """Read UTF-8 text with a helpful error message."""
+    """Read text with multi-encoding fallback.
+
+    Tries UTF-8 first (the de-facto standard for new content), then
+    UTF-8 with BOM (some Windows editors write this), then GBK / CP936
+    (the default on zh-CN Windows boxes — a real LaTeX user reported
+    a .tex saved this way producing ``UnicodeDecodeError: 'utf-8'
+    codec can't decode byte 0xcd``), and finally Latin-1 as a never-
+    raises catch-all so the user sees content rather than a fatal
+    error. Mojibake from a wrong-encoding fallback is recoverable
+    (the user can re-save in UTF-8); a hard error is not.
+
+    Raises ``ValueError`` only on actual filesystem errors (missing
+    file, permission denied, etc.) — encoding alone never blocks a
+    read because the Latin-1 step always succeeds.
+    """
     try:
-        return path.read_text(encoding="utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError(
-            _dual_msg(
-                f"无法以 UTF-8 读取文件 {path}: {exc}",
-                f"Failed to decode file as UTF-8: {path} ({exc})",
-            )
-        ) from exc
+        raw = path.read_bytes()
     except OSError as exc:
         raise ValueError(
             _dual_msg(
@@ -101,6 +108,16 @@ def _safe_read_text(path: Path) -> str:
                 f"Failed to read file: {path} ({exc})",
             )
         ) from exc
+
+    for encoding in ("utf-8", "utf-8-sig", "gbk", "cp936"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    # Latin-1 maps every byte 0x00-0xff to U+0000-U+00FF, so it
+    # never raises on byte input. Garbled output is strictly better
+    # than a fatal dialog because the user can still inspect/edit.
+    return raw.decode("latin-1")
 
 
 def split_extrapolation_result(result):

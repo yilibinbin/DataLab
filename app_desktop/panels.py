@@ -419,9 +419,21 @@ def build_left_panel(self):
     add_col_btn = QPushButton("+ 列")
     self._register_text(add_col_btn, "+ 列", "+ Column")
     add_col_btn.clicked.connect(lambda: _add_table_column(self))
+    remove_col_btn = QPushButton("- 列")
+    self._register_text(remove_col_btn, "- 列", "- Column")
+    remove_col_btn.setToolTip(
+        self._tr("删除最后一列（含数据）", "Remove the last column (and its data)")
+    )
+    remove_col_btn.clicked.connect(lambda: _remove_table_column(self))
     add_row_btn = QPushButton("+ 行")
     self._register_text(add_row_btn, "+ 行", "+ Row")
     add_row_btn.clicked.connect(lambda: _add_table_row(self))
+    remove_row_btn = QPushButton("- 行")
+    self._register_text(remove_row_btn, "- 行", "- Row")
+    remove_row_btn.setToolTip(
+        self._tr("删除最后一行（含数据）", "Remove the last row (and its data)")
+    )
+    remove_row_btn.clicked.connect(lambda: _remove_table_row(self))
     clear_btn = QPushButton("清除")
     self._register_text(clear_btn, "清除", "Clear")
     clear_btn.clicked.connect(lambda: _clear_table(self))
@@ -429,7 +441,9 @@ def build_left_panel(self):
     self._register_text(self._data_view_toggle, "文本视图", "Text View")
     self._data_view_toggle.clicked.connect(lambda: _toggle_data_view(self))
     table_toolbar.addWidget(add_col_btn)
+    table_toolbar.addWidget(remove_col_btn)
     table_toolbar.addWidget(add_row_btn)
+    table_toolbar.addWidget(remove_row_btn)
     table_toolbar.addWidget(clear_btn)
     table_toolbar.addWidget(self._data_view_toggle)
     table_toolbar.addStretch()
@@ -1546,6 +1560,32 @@ def _add_table_row(self):
     """Append a new row to the manual data table."""
     table = self.manual_table
     table.setRowCount(table.rowCount() + 1)
+
+
+def _remove_table_row(self):
+    """Drop the last row from the manual data table.
+
+    Keeps a minimum of one row so the user always has somewhere to
+    type. ``setRowCount(N-1)`` discards the last row's QTableWidgetItem
+    instances along with any data they held.
+    """
+    table = self.manual_table
+    current = table.rowCount()
+    if current > 1:
+        table.setRowCount(current - 1)
+
+
+def _remove_table_column(self):
+    """Drop the last column from the manual data table.
+
+    Keeps a minimum of one column for the same reason as
+    ``_remove_table_row``. The header label is dropped automatically
+    by ``setColumnCount`` along with the column's items.
+    """
+    table = self.manual_table
+    current = table.columnCount()
+    if current > 1:
+        table.setColumnCount(current - 1)
 
 
 def _view_toggle_label(self, current_index: int) -> str:
