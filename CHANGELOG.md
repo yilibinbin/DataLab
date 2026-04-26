@@ -52,5 +52,5 @@ stack embedded — no external runtime needed.
 - Coverage spans high-precision Mathematica reference values, all four
   modes end-to-end, and every LaTeX output path
 
-[Unreleased]: https://github.com/yilibinbin/datalab-review-r9/compare/v2.0.0...HEAD
-[2.0.0]: https://github.com/yilibinbin/datalab-review-r9/releases/tag/v2.0.0
+[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/yilibinbin/DataLab/releases/tag/v2.0.0
