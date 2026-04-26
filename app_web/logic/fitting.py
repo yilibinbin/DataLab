@@ -16,6 +16,7 @@ from data_extrapolation_latex_latest import (
     parse_uncertainty_format,
     siunitx_column_spec,
 )
+from datalab_latex.sisetup_block import build_sisetup_block
 from fitting import (
     AUTO_MODELS,
     auto_fit_dataset,
@@ -423,8 +424,6 @@ def _generate_fitting_latex(
             ]
         )
     lines.append("\\usepackage{siunitx}")
-
-    from datalab_latex.sisetup_block import build_sisetup_block
 
     # Centralized v2/v3-compatible \sisetup{...} block — see helper for
     # the ``\@ifpackagelater`` guard around v3-only ``digit-group-size``.

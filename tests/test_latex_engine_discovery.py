@@ -196,8 +196,13 @@ def test_tectonic_download_url_for_windows_x64(monkeypatch) -> None:
     monkeypatch.setattr("platform.machine", lambda: "AMD64")
     url = tectonic_download_url()
     assert "x86_64-pc-windows-msvc" in url
-    # Windows release is a zip
-    assert url.endswith(".zip") or "windows" in url.lower()
+    # Windows release ships as a .zip (not a .tar.gz like the unix
+    # builds). The extractor branches on ``url.endswith(".zip")``,
+    # so this is a hard contract — not "either zip OR has 'windows'
+    # in the URL", which the v1 of this assertion was (a tautology
+    # because the Windows triple ``x86_64-pc-windows-msvc`` already
+    # contains the substring "windows").
+    assert url.endswith(".zip"), f"Windows asset must be a zip; got {url}"
 
 
 def test_tectonic_download_url_for_linux_x64(monkeypatch) -> None:

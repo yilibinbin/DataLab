@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from .sisetup_block import build_sisetup_block
+
 
 def _normalize_input_lines(lines: list[str]) -> list[str]:
     """Strip trailing whitespace and leading blank lines."""
@@ -125,8 +127,6 @@ def _build_standalone_preamble(
                 "",
             ]
         )
-
-    from .sisetup_block import build_sisetup_block
 
     # Centralized v2/v3-compatible \sisetup{...} body. The helper emits
     # a guard around the siunitx-v3-only ``digit-group-size`` key so

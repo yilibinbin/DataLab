@@ -109,10 +109,15 @@ def build_sisetup_block(
         #   * any siunitx v3 (date ≥ 2020/02/08): branch fires and
         #     ``digit-group-size = N`` is honoured.
         #
-        # Wrapped in ``\makeatletter ... \makeatother`` because
-        # ``\@ifpackagelater`` is an internal LaTeX2e command and
-        # without that wrapper pdflatex errors with ``You can't use
-        # \\spacefactor in vertical mode``.
+        # Wrapped in ``\begingroup ... \endgroup`` so the catcode change
+        # introduced by ``\makeatletter`` is local to this block. If the
+        # surrounding preamble were already inside its own
+        # ``\makeatletter`` (some packages use it at load time), bare
+        # ``\makeatother`` here would prematurely flip ``@`` back to
+        # "other" and break the outer scope. ``\@ifpackagelater`` is an
+        # internal LaTeX2e command — without ``\makeatletter`` pdflatex
+        # errors with "You can't use \\spacefactor in vertical mode".
+        lines.append(r"\begingroup")
         lines.append(r"\makeatletter")
         lines.append(
             r"\@ifpackagelater{siunitx}{2020/02/08}{"
@@ -120,6 +125,7 @@ def build_sisetup_block(
             "}{}"
         )
         lines.append(r"\makeatother")
+        lines.append(r"\endgroup")
 
     lines.append("")
     return "\n".join(lines) + "\n"

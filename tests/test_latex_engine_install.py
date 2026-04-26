@@ -44,6 +44,18 @@ def _build_fake_zip_with_tectonic() -> bytes:
     return buf.getvalue()
 
 
+def _fake_url_response(payload: bytes) -> MagicMock:
+    """MagicMock matching the urllib response shape ``ensure_tectonic_installed``
+    consumes via ``_stream_url_to_file``: chunked ``.read(n)`` calls until
+    an empty buffer signals EOF, plus context-manager protocol."""
+    response = MagicMock()
+    # First .read() yields the whole payload, second yields b"" (EOF).
+    response.read.side_effect = [payload, b""]
+    response.__enter__ = MagicMock(return_value=response)
+    response.__exit__ = MagicMock(return_value=False)
+    return response
+
+
 def test_ensure_tectonic_installed_downloads_and_extracts(
     tmp_path, monkeypatch
 ) -> None:
@@ -54,14 +66,9 @@ def test_ensure_tectonic_installed_downloads_and_extracts(
     monkeypatch.setattr("platform.system", lambda: "Darwin")
     monkeypatch.setattr("platform.machine", lambda: "arm64")
 
-    fake_archive = _build_fake_tar_with_tectonic(tmp_path)
-    fake_response = MagicMock()
-    fake_response.read.return_value = fake_archive
-    fake_response.__enter__ = MagicMock(return_value=fake_response)
-    fake_response.__exit__ = MagicMock(return_value=False)
-
     with patch.object(
-        latex_engine, "_open_url", return_value=fake_response
+        latex_engine, "_open_url",
+        return_value=_fake_url_response(_build_fake_tar_with_tectonic(tmp_path)),
     ) as mock_open:
         choice = latex_engine.ensure_tectonic_installed()
 
@@ -108,13 +115,10 @@ def test_ensure_tectonic_installed_windows_zip(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("platform.system", lambda: "Windows")
     monkeypatch.setattr("platform.machine", lambda: "AMD64")
 
-    fake_archive = _build_fake_zip_with_tectonic()
-    fake_response = MagicMock()
-    fake_response.read.return_value = fake_archive
-    fake_response.__enter__ = MagicMock(return_value=fake_response)
-    fake_response.__exit__ = MagicMock(return_value=False)
-
-    with patch.object(latex_engine, "_open_url", return_value=fake_response):
+    with patch.object(
+        latex_engine, "_open_url",
+        return_value=_fake_url_response(_build_fake_zip_with_tectonic()),
+    ):
         choice = latex_engine.ensure_tectonic_installed()
 
     assert choice is not None
@@ -134,6 +138,34 @@ def test_ensure_tectonic_installed_unsupported_platform_raises(
 
     with pytest.raises(latex_engine.UnsupportedPlatformError):
         latex_engine.ensure_tectonic_installed()
+
+
+def test_ensure_tectonic_installed_honours_cancel_check(
+    tmp_path, monkeypatch
+) -> None:
+    """Cancel check must abort the download promptly and clean up the
+    staging dir — otherwise the QProgressDialog Cancel button would
+    leave a half-extracted state behind."""
+    from shared import latex_engine
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr("platform.system", lambda: "Darwin")
+    monkeypatch.setattr("platform.machine", lambda: "arm64")
+
+    with patch.object(
+        latex_engine, "_open_url",
+        return_value=_fake_url_response(_build_fake_tar_with_tectonic(tmp_path)),
+    ):
+        with pytest.raises(latex_engine.TectonicInstallCancelled):
+            latex_engine.ensure_tectonic_installed(cancel_check=lambda: True)
+
+    # Final binary must NOT have been published; staging dir must be
+    # cleaned up so the install_dir doesn't accumulate orphan trees.
+    install_dir = tmp_path / ".datalab" / "bin"
+    assert not (install_dir / "tectonic").exists()
+    leftovers = list(install_dir.glob(".tectonic-install-*"))
+    assert leftovers == [], f"staging dir leaked on cancel: {leftovers}"
 
 
 # ---------------------------------------------------------------------------

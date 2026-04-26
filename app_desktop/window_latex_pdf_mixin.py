@@ -7,8 +7,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QMessageBox
+from PySide6.QtCore import QEventLoop, Qt, QThread, Signal
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QLabel,
+    QMessageBox,
+    QProgressDialog,
+)
 
 try:
     from PIL import Image, ImageOps
@@ -21,6 +27,7 @@ except ImportError:  # pragma: no cover
 
 from shared.latex_engine import (
     EngineChoice,
+    TectonicInstallCancelled,
     UnsupportedPlatformError,
     ensure_tectonic_installed,
     find_app_root,
@@ -28,8 +35,68 @@ from shared.latex_engine import (
     tectonic_compile_argv,
 )
 
+
+# Bilingual labels for every Tectonic install stage in one place — adding
+# a new stage requires editing only this table (was two parallel dicts in
+# the previous revision; quality reviewer flagged the drift risk).
+_TECTONIC_STAGE_LABELS: dict[str, tuple[str, str]] = {
+    "downloading": ("下载中…", "Downloading…"),
+    "extracting": ("解压中…", "Extracting…"),
+    "installed": ("安装完成。", "Installed."),
+    "already-installed": ("已安装。", "Already installed."),
+}
+
 from .resources import _ensure_default_path_augmented, _pil_to_qpixmap
 from .workers_core import _safe_read_text, _safe_resolve_path
+
+
+class _TectonicInstallWorker(QThread):
+    """Background worker for ``ensure_tectonic_installed``.
+
+    Runs the synchronous urllib download + tar/zip extract on a Qt
+    thread so the GUI event loop stays responsive — a 30 MB pull on a
+    slow connection would otherwise freeze the main thread for tens
+    of seconds, and ``QApplication.processEvents()`` from a foreground
+    busy-loop opens the door to re-entrant event-processing bugs.
+
+    The worker exposes its outcome via two attributes:
+    - ``result``: ``EngineChoice`` on success, ``None`` on failure
+    - ``error``: the exception raised, or ``None`` on success
+    Storing the exception itself (rather than a stringly-typed
+    discriminator) lets the caller branch with ``isinstance`` against
+    ``UnsupportedPlatformError`` / ``TectonicInstallCancelled``
+    without re-encoding the type as a string.
+
+    Cancellation is cooperative: ``request_stop()`` flips a flag that
+    ``ensure_tectonic_installed`` polls between download chunks and
+    raises ``TectonicInstallCancelled`` from. The caller wires the
+    ``QProgressDialog.canceled`` signal to ``request_stop`` so the
+    visible Cancel button actually does something.
+    """
+
+    stage = Signal(str)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.result: EngineChoice | None = None
+        self.error: BaseException | None = None
+        self._stop_requested = False
+
+    def request_stop(self) -> None:
+        self._stop_requested = True
+
+    def run(self) -> None:
+        # Reset state so a reused worker doesn't leak the previous
+        # run's outcome into the next.
+        self.result = None
+        self.error = None
+        try:
+            self.result = ensure_tectonic_installed(
+                progress_callback=self.stage.emit,
+                cancel_check=lambda: self._stop_requested,
+            )
+        except BaseException as exc:  # noqa: BLE001 — surface any error/cancel
+            self.error = exc
 
 
 class WindowLatexPdfMixin:
@@ -537,9 +604,14 @@ class WindowLatexPdfMixin:
     def _offer_tectonic_install(self) -> "EngineChoice | None":
         """Ask the user before downloading Tectonic.
 
+        Runs the download + extract on a ``_TectonicInstallWorker``
+        QThread and drives a modal ``QProgressDialog``. The dialog's
+        Cancel button is wired to the worker's stop flag, which the
+        engine streamer polls between chunks — a click aborts the
+        install within ~10 ms and cleans up the staging dir.
+
         Returns the resolved ``EngineChoice`` on success, ``None``
-        when the user declines or the install fails (caller already
-        falls back to the file picker in the latter case).
+        when the user declines, cancels, or the install fails.
         """
         prompt_zh = (
             "未检测到 Tectonic。是否立即下载约 30 MB 的 Tectonic 二进制到\n"
@@ -560,38 +632,57 @@ class WindowLatexPdfMixin:
         if reply != QMessageBox.Yes:
             return None
 
-        def _on_progress(stage: str) -> None:
-            stage_zh = {
-                "downloading": "下载中…",
-                "extracting": "解压中…",
-                "installed": "安装完成。",
-                "already-installed": "已安装。",
-            }.get(stage, stage)
-            stage_en = {
-                "downloading": "Downloading…",
-                "extracting": "Extracting…",
-                "installed": "Installed.",
-                "already-installed": "Already installed.",
-            }.get(stage, stage)
-            self._append_log(self._tr(f"Tectonic: {stage_zh}", f"Tectonic: {stage_en}"))
-            QApplication.processEvents()
+        progress = QProgressDialog(
+            self._tr("正在准备 Tectonic…", "Preparing Tectonic…"),
+            self._tr("取消", "Cancel"),
+            0, 0, self,
+        )
+        progress.setWindowTitle(self._tr("自动安装 Tectonic", "Install Tectonic"))
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setAutoClose(False)
+        progress.setMinimumDuration(0)
 
-        try:
-            return ensure_tectonic_installed(progress_callback=_on_progress)
-        except UnsupportedPlatformError as exc:
+        worker = _TectonicInstallWorker(self)
+
+        def _on_stage(stage: str) -> None:
+            zh, en = _TECTONIC_STAGE_LABELS.get(stage, (stage, stage))
+            label = self._tr(f"Tectonic: {zh}", f"Tectonic: {en}")
+            self._append_log(label)
+            progress.setLabelText(label)
+
+        worker.stage.connect(_on_stage)
+        progress.canceled.connect(worker.request_stop)
+
+        # Local event loop driven by the worker's ``finished`` signal
+        # keeps the GUI responsive without a busy ``processEvents``
+        # poll. ``loop.exec()`` returns when the worker exits run().
+        loop = QEventLoop(self)
+        worker.finished.connect(loop.quit)
+        worker.start()
+        loop.exec()
+        progress.close()
+
+        err = worker.error
+        if isinstance(err, UnsupportedPlatformError):
             QMessageBox.critical(
                 self,
                 self._tr("不支持的平台", "Unsupported Platform"),
                 self._tr(
-                    f"当前平台没有可用的 Tectonic 预编译版本：{exc}",
-                    f"No prebuilt Tectonic available for this platform: {exc}",
+                    f"当前平台没有可用的 Tectonic 预编译版本：{err}",
+                    f"No prebuilt Tectonic available for this platform: {err}",
                 ),
             )
             return None
-        except Exception as exc:  # noqa: BLE001 — surface any IO/extraction error
+        if isinstance(err, TectonicInstallCancelled):
+            self._append_log(
+                self._tr("Tectonic: 用户已取消安装。", "Tectonic: install cancelled by user.")
+            )
+            return None
+        if err is not None:
             QMessageBox.critical(
                 self,
                 self._tr("Tectonic 安装失败", "Tectonic Install Failed"),
-                self._tr(f"安装失败：{exc}", f"Install failed: {exc}"),
+                self._tr(f"安装失败：{err}", f"Install failed: {err}"),
             )
             return None
+        return worker.result

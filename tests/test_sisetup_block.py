@@ -74,17 +74,25 @@ def test_block_wraps_v3_key_in_ifpackagelater_guard() -> None:
     yet reject the key). v2 falls back to siunitx's built-in default
     of 3 (still a clean compile); v3 honours the requested size.
 
-    The wrapper is ``\\makeatletter ... \\makeatother`` because
-    ``\\@ifpackagelater`` is an internal LaTeX2e command — without
-    that wrapper pdflatex errors with ``You can't use \\spacefactor``."""
+    The wrapper is ``\\begingroup \\makeatletter ... \\makeatother
+    \\endgroup``: ``\\makeatletter`` is required because
+    ``\\@ifpackagelater`` is an internal LaTeX2e command, and the
+    ``\\begingroup``/``\\endgroup`` envelope keeps the catcode change
+    local to this block — important when the surrounding preamble
+    might already be inside its own ``\\makeatletter`` (some packages
+    use it at load time)."""
     from datalab_latex.sisetup_block import build_sisetup_block
 
     block = build_sisetup_block(group_size=4, include_dcolumn=False)
     assert "digit-group-size = 4" in block
     assert "@ifpackagelater" in block
     assert "2020/02/08" in block
+    # Both makeatletter and the begingroup envelope must appear
+    # so the catcode flip is locally scoped.
     assert r"\makeatletter" in block
     assert r"\makeatother" in block
+    assert r"\begingroup" in block
+    assert r"\endgroup" in block
 
 
 def test_block_omits_v3_key_when_group_size_matches_v2_default() -> None:
