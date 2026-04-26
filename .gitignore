@@ -22,3 +22,7 @@ datalab.egg-info/
 docs/PROGRAM_FRAMEWORK.out
 docs/PROGRAM_FRAMEWORK.pdf
 docs/PROGRAM_FRAMEWORK.synctex.gz
+# AI assistant session planning artifacts (per-session, not source).
+findings.md
+progress.md
+task_plan.md

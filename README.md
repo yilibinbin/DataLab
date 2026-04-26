@@ -41,7 +41,7 @@
 
 ### 📷 界面截图
 
-> 截图位于 [`docs/screenshots/`](docs/screenshots/),正式发布前会替换为真实截图。
+> 截图位于 [`docs/screenshots/`](docs/screenshots/),来自 macOS 上运行的桌面 GUI(Qt 内部 grab 直出,1400×900)。
 
 ![主界面 / Main Window](docs/screenshots/main_window.png)
 *主界面:左侧计算面板,右侧 5 个标签页(数据 / 结果 / 日志 / LaTeX / PDF 预览)*
@@ -113,7 +113,7 @@ pip install -r requirements-test.txt
 QT_QPA_PLATFORM=offscreen pytest -q   # 770+ tests
 ```
 
-详细架构 + 跨平台打包指南见 [`CLAUDE.md`](CLAUDE.md) 和 [`docs/desktop/`](docs/desktop/) / [`docs/web/`](docs/web/)。
+详细架构 + 跨平台打包指南见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 和 [`docs/desktop/`](docs/desktop/) / [`docs/web/`](docs/web/)。
 
 ---
 
@@ -153,8 +153,8 @@ runtime install needed**.
 
 ### 📷 Screenshots
 
-See [`docs/screenshots/`](docs/screenshots/) (placeholders shipped with this
-release; will be replaced with real captures in the next).
+See [`docs/screenshots/`](docs/screenshots/) — captured directly from the
+desktop GUI on macOS via Qt's in-process `QWidget.grab()` (1400×900 window).
 
 ### 🏃 Quick start (with bundled examples)
 
@@ -208,7 +208,7 @@ pip install -r requirements-test.txt
 QT_QPA_PLATFORM=offscreen pytest -q   # 770+ tests
 ```
 
-For architecture + per-platform packaging see [`CLAUDE.md`](CLAUDE.md) and
+For architecture + per-platform packaging see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and
 [`docs/desktop/`](docs/desktop/) / [`docs/web/`](docs/web/).
 
 ---
