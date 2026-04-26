@@ -1,0 +1,36 @@
+# Physical constants for the error-propagation form.
+#
+# Format: ``NAME VALUE`` per line (whitespace-separated; tabs OK).
+# Lines beginning with ``#`` and blank lines are ignored.
+# The ``VALUE`` field uses the same parenthetical-uncertainty
+# notation as data files:
+#   *  ``7.2973525693(11)``      ->  value 7.2973525693, sigma 0.0000000011
+#   *  ``7.2973525693(11)[-3]``  ->  value 7.2973525693e-3, sigma 0.0011e-3
+#
+# Constants referenced from the formula expression (by NAME) are
+# automatically substituted with their VALUE and propagated through
+# the partial derivatives.
+
+# CODATA 2018 fine-structure constant
+ALPHA 7.2973525693(11)[-3]
+
+# CODATA 2018 Newtonian constant of gravitation (m^3 kg^-1 s^-2)
+G 6.67430(15)[-11]
+
+# Speed of light in vacuum (exact, m/s)
+C 299792458
+
+# Planck constant (exact since 2019 SI redefinition, J s)
+H 6.62607015[-34]
+
+# Reduced Planck constant (J s)
+HBAR 1.054571817[-34]
+
+# Boltzmann constant (exact since 2019 SI redefinition, J/K)
+K_B 1.380649[-23]
+
+# Avogadro constant (exact since 2019 SI redefinition, 1/mol)
+N_A 6.02214076[23]
+
+# Elementary charge (exact since 2019 SI redefinition, C)
+E_CHARGE 1.602176634[-19]
