@@ -75,8 +75,13 @@ def test_block_wraps_v3_key_in_ifpackagelater_guard() -> None:
     of 3 (still a clean compile); v3 honours the requested size.
 
     The wrapper is ``\\makeatletter ... \\makeatother`` because
-    ``\\@ifpackagelater`` is an internal LaTeX2e command — without
-    that wrapper pdflatex errors with ``You can't use \\spacefactor``."""
+    ``\\@ifpackagelater`` is an internal LaTeX2e command. We do NOT
+    additionally wrap in ``\\begingroup ... \\endgroup`` — TeX groups
+    scope ``\\sisetup``'s package-state assignments too, which would
+    silently revert the override the moment ``\\endgroup`` runs (the
+    rendered PDF would fall back to size 3 even on siunitx v3). A
+    prior simplify-pass attempt at "begingroup safety" introduced
+    exactly that regression; the round-2 codex review caught it."""
     from datalab_latex.sisetup_block import build_sisetup_block
 
     block = build_sisetup_block(group_size=4, include_dcolumn=False)
@@ -85,6 +90,13 @@ def test_block_wraps_v3_key_in_ifpackagelater_guard() -> None:
     assert "2020/02/08" in block
     assert r"\makeatletter" in block
     assert r"\makeatother" in block
+    # \begingroup must NOT appear — it would scope the \sisetup
+    # assignment and silently negate the override at \endgroup time.
+    assert r"\begingroup" not in block, (
+        "begingroup wrap regresses siunitx v3 group-size override; see "
+        "round-2 codex finding"
+    )
+    assert r"\endgroup" not in block
 
 
 def test_block_omits_v3_key_when_group_size_matches_v2_default() -> None:

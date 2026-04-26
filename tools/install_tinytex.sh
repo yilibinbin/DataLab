@@ -12,8 +12,17 @@
 # canonical TeX Live binaries, so pdflatex / xelatex / lualatex all work the
 # same as a full TeX Live install once it's bundled. Re-running this script is
 # idempotent: it skips the bootstrap when the binaries already exist.
+#
+# Layout note: TinyTeX's upstream installer always nests the install under a
+# ``TinyTeX``-named subdirectory (``$TINYTEX_DIR/TinyTeX`` on macOS,
+# ``$TINYTEX_DIR/.TinyTeX`` on Linux). The runtime discovery contract puts
+# binaries one level up from that, so this script flattens the inner
+# directory after the installer finishes. Don't try to "simplify" by passing
+# our final target as ``TINYTEX_DIR`` directly — the upstream layout convention
+# makes that strictly worse than the explicit move below.
 
 set -e
+set -o pipefail  # `curl | sh` would otherwise hide curl failures
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALL_ROOT="$PROJECT_ROOT/resources/tinytex"
@@ -30,16 +39,45 @@ if [[ -d "$INSTALL_ROOT/bin" ]]; then
 fi
 
 echo "[tinytex] Installing TinyTeX into $INSTALL_ROOT (~150 MB)..."
-mkdir -p "$INSTALL_ROOT"
+STAGING_PARENT="$(mktemp -d)"
+trap 'rm -rf "$STAGING_PARENT"' EXIT
 
-# TinyTeX's installer respects TINYTEX_DIR for the destination. The installer
-# defaults to ~/.TinyTeX; we redirect it into resources/tinytex so PyInstaller
-# can pick it up at bundle time. The shell-based installer covers Linux + mac
-# in one path; on Windows the ps1 build script handles it via a different
-# bootstrap (Scoop / direct .zip download).
-TINYTEX_DIR="$INSTALL_ROOT" \
+# Download installer to a tempfile first. ``set -o pipefail`` would catch a
+# curl failure in a pipeline, but splitting the steps gives a clearer error
+# message and lets a future maintainer add a SHA-256 verification step
+# between the download and the execution.
+INSTALLER_SCRIPT="$STAGING_PARENT/tinytex_install.sh"
+echo "[tinytex] Downloading installer script..."
+curl -fsSL "$TINYTEX_INSTALLER_URL" -o "$INSTALLER_SCRIPT"
+
+# Run the upstream installer with TINYTEX_DIR pointing at our staging
+# parent. The installer creates ``$STAGING_PARENT/TinyTeX`` (macOS) or
+# ``$STAGING_PARENT/.TinyTeX`` (Linux) — see the URL pinned above for the
+# canonical layout convention.
+echo "[tinytex] Running installer (TINYTEX_DIR=$STAGING_PARENT)..."
+TINYTEX_DIR="$STAGING_PARENT" \
   TINYTEX_INSTALLER="TinyTeX" \
-  bash -c "curl -fsSL '$TINYTEX_INSTALLER_URL' | sh -s - --admin --no-path"
+  sh "$INSTALLER_SCRIPT" --admin --no-path
+
+# Locate the installer's actual output directory (handles both ``TinyTeX`` and
+# ``.TinyTeX`` upstream conventions; ``find -maxdepth 2`` reaches into the
+# inner ``texmf-dist`` parent without descending the whole tree).
+INSTALLED_ROOT="$(find "$STAGING_PARENT" -maxdepth 1 \( -name 'TinyTeX' -o -name '.TinyTeX' \) -type d -print -quit)"
+if [[ -z "$INSTALLED_ROOT" || ! -d "$INSTALLED_ROOT/bin" ]]; then
+  echo "[tinytex] ERROR: upstream installer produced no recognizable layout."
+  echo "[tinytex] Inspect $STAGING_PARENT for the actual contents."
+  # Disconnect the cleanup trap so the diagnostic dir survives this
+  # exit — otherwise ``rm -rf "$STAGING_PARENT"`` would fire on EXIT
+  # and the user would have nothing to inspect.
+  trap - EXIT
+  exit 2
+fi
+
+# Move the installed tree to its final home. Using ``mv`` rather than ``cp``
+# keeps disk usage minimal during the build; ``mkdir -p`` covers the case
+# where ``resources/`` itself doesn't yet exist.
+mkdir -p "$(dirname "$INSTALL_ROOT")"
+mv "$INSTALLED_ROOT" "$INSTALL_ROOT"
 
 # Sanity-check the install: the runtime discovery (shared.latex_engine) needs
 # at least one engine under resources/tinytex/bin/<arch>/.

@@ -29,12 +29,12 @@ from discovery so callers can show a progress dialog around it.
 
 from __future__ import annotations
 
-import io
 import os
 import platform
 import shutil
 import sys
 import tarfile
+import tempfile
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -44,6 +44,8 @@ from typing import Any, Callable, Literal
 
 __all__ = [
     "EngineChoice",
+    "MissingHomeDirectoryError",
+    "TectonicInstallCancelled",
     "UnsupportedPlatformError",
     "discover_bundled_engine",
     "discover_system_engine",
@@ -60,6 +62,13 @@ __all__ = [
 class UnsupportedPlatformError(RuntimeError):
     """Raised when no Tectonic binary release matches the current
     (platform.system(), platform.machine()) tuple."""
+
+
+class MissingHomeDirectoryError(RuntimeError):
+    """Raised when neither ``HOME`` nor ``USERPROFILE`` is set so the
+    auto-Tectonic installer cannot pick a stable install location.
+    Lets the GUI dispatch a localized error message via ``isinstance``
+    instead of stringly-matching the message text."""
 
 
 EngineSource = Literal["system", "bundled", "auto-tectonic"]
@@ -144,13 +153,21 @@ def tectonic_executable_name() -> str:
 
 def tectonic_install_dir() -> Path:
     """``~/.datalab/bin`` (cross-platform, respects ``$HOME`` /
-    ``$USERPROFILE``)."""
+    ``$USERPROFILE``).
+
+    Raises ``RuntimeError`` if neither environment variable is set —
+    falling back to ``cwd`` would silently install the binary into
+    whatever directory the user happened to launch from, which is
+    surprising and makes the binary impossible for ``resolve_engine``
+    to locate on subsequent runs.
+    """
     home = os.environ.get("HOME") or os.environ.get("USERPROFILE")
     if not home:
-        # Best-effort fallback — Path.home() reads the same env vars
-        # but raises on Windows when neither is set; we'd rather
-        # return an absolute path than crash.
-        home = str(Path.cwd())
+        raise MissingHomeDirectoryError(
+            "Cannot determine the user's home directory: neither HOME "
+            "nor USERPROFILE is set. Tectonic auto-install requires a "
+            "stable home path so subsequent runs can locate the binary."
+        )
     return Path(home) / ".datalab" / "bin"
 
 
@@ -272,18 +289,33 @@ def _open_url(url: str) -> Any:
     return urllib.request.urlopen(url, timeout=60)  # noqa: S310 — pinned URL
 
 
+class TectonicInstallCancelled(RuntimeError):
+    """Raised when ``cancel_check`` returns True during install."""
+
+
 def ensure_tectonic_installed(
-    *, progress_callback: ProgressCallback | None = None
+    *,
+    progress_callback: ProgressCallback | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> EngineChoice:
     """Download + extract Tectonic to ``~/.datalab/bin``.
 
     Idempotent: if the binary is already present, returns the existing
     path without hitting the network. Raises ``UnsupportedPlatformError``
-    when no release matches the current platform.
+    when no release matches the current platform, or
+    ``TectonicInstallCancelled`` when ``cancel_check`` reports True
+    during the download/extract — the half-installed staging tree is
+    cleaned up before the exception propagates.
 
-    ``progress_callback(stage: str)`` is invoked with brief status
-    strings so the desktop GUI can show "Downloading…" / "Extracting…"
-    / "Installed" in a status label without coupling this module to Qt.
+    Streams the archive to disk via ``shutil.copyfileobj`` (chunked,
+    8 KiB per loop) so the full ~30 MB never lands in RAM and the
+    cancel check fires within ~10 ms of the user clicking Stop.
+
+    Atomicity: the binary lands in a sibling staging dir on the same
+    filesystem and is published with ``os.replace``. A killed process
+    can leave the staging dir behind but never a truncated
+    ``tectonic`` binary that the next ``resolve_engine`` call would
+    mistakenly treat as installed.
     """
     install_dir = tectonic_install_dir()
     binary = install_dir / tectonic_executable_name()
@@ -295,32 +327,79 @@ def ensure_tectonic_installed(
     url = tectonic_download_url()  # raises UnsupportedPlatformError if needed
     install_dir.mkdir(parents=True, exist_ok=True)
 
-    if progress_callback:
-        progress_callback("downloading")
-    with _open_url(url) as response:
-        archive_bytes = response.read()
+    stage_dir = Path(tempfile.mkdtemp(prefix=".tectonic-install-", dir=install_dir))
+    try:
+        if progress_callback:
+            progress_callback("downloading")
+        archive_path = stage_dir / ("archive.zip" if url.endswith(".zip") else "archive.tar.gz")
+        _stream_url_to_file(url, archive_path, cancel_check)
 
-    if progress_callback:
-        progress_callback("extracting")
-    if url.endswith(".zip"):
-        _extract_tectonic_from_zip(archive_bytes, install_dir)
-    else:
-        _extract_tectonic_from_tar(archive_bytes, install_dir)
+        if progress_callback:
+            progress_callback("extracting")
+        if url.endswith(".zip"):
+            _extract_tectonic_from_zip(archive_path, stage_dir)
+        else:
+            _extract_tectonic_from_tar(archive_path, stage_dir)
 
-    if not binary.is_file():
-        raise RuntimeError(
-            f"Tectonic archive at {url} did not contain a "
-            f"{tectonic_executable_name()} binary at the expected path"
-        )
-    if platform.system() != "Windows":
-        binary.chmod(binary.stat().st_mode | 0o755)
+        staged_binary = stage_dir / tectonic_executable_name()
+        if not staged_binary.is_file():
+            raise RuntimeError(
+                f"Tectonic archive at {url} did not contain a "
+                f"{tectonic_executable_name()} binary at the expected path"
+            )
+        if platform.system() != "Windows":
+            staged_binary.chmod(staged_binary.stat().st_mode | 0o755)
+
+        # Atomic publish — concurrent installers race here, but
+        # whichever ``replace`` runs last wins and leaves a complete
+        # binary either way. No truncated half-write is observable
+        # to a subsequent ``resolve_engine`` call.
+        os.replace(staged_binary, binary)
+    finally:
+        shutil.rmtree(stage_dir, ignore_errors=True)
 
     if progress_callback:
         progress_callback("installed")
     return EngineChoice(path=str(binary), source="auto-tectonic")
 
 
-def _extract_tectonic_from_tar(archive_bytes: bytes, dest_dir: Path) -> None:
+def _stream_url_to_file(
+    url: str,
+    dest: Path,
+    cancel_check: Callable[[], bool] | None,
+) -> None:
+    """Stream ``url`` into ``dest`` 8 KiB at a time, polling the cancel
+    flag after each chunk so a Stop click aborts within one chunk's
+    worth of network read.
+
+    The poll fires AFTER ``response.read`` returns, not before, because
+    the read itself can block for the urlopen timeout (60 s) on a
+    stalled connection — checking pre-read alone leaves the abort
+    latency dominated by that timeout. Worst-case cancellation latency
+    is therefore one stalled-chunk window; typical-case is well under
+    100 ms because chunk reads on a healthy connection complete in
+    microseconds.
+
+    Avoids buffering the full ~30 MB archive in RAM (a real concern on
+    a desktop GUI process that already hosts matplotlib + PySide6).
+    """
+    chunk = 8192
+    with _open_url(url) as response, dest.open("wb") as out:
+        while True:
+            buf = response.read(chunk)
+            if not buf:
+                break
+            out.write(buf)
+            # Poll AFTER write: the just-finished ``read()`` may have
+            # blocked up to the urlopen timeout (60 s) — pre-read
+            # polling cannot shorten that window. Post-write polling
+            # caps cancel latency at one chunk's worth of network
+            # read (typically <100 ms on a healthy connection).
+            if cancel_check is not None and cancel_check():
+                raise TectonicInstallCancelled("install cancelled by caller")
+
+
+def _extract_tectonic_from_tar(archive_path: Path, dest_dir: Path) -> None:
     """Pull the ``tectonic`` binary out of a .tar.gz release archive.
 
     Tectonic's tarballs vary across versions: some are flat (the
@@ -328,7 +407,7 @@ def _extract_tectonic_from_tar(archive_bytes: bytes, dest_dir: Path) -> None:
     whole archive for any member whose basename is ``tectonic`` and
     write it to ``dest_dir/tectonic``.
     """
-    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:*") as tar:
+    with tarfile.open(archive_path, mode="r:*") as tar:
         for member in tar.getmembers():
             if not member.isfile():
                 continue
@@ -343,9 +422,9 @@ def _extract_tectonic_from_tar(archive_bytes: bytes, dest_dir: Path) -> None:
     raise RuntimeError("tectonic binary not found in tar archive")
 
 
-def _extract_tectonic_from_zip(archive_bytes: bytes, dest_dir: Path) -> None:
+def _extract_tectonic_from_zip(archive_path: Path, dest_dir: Path) -> None:
     """Pull ``tectonic.exe`` out of a Windows zip release."""
-    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+    with zipfile.ZipFile(archive_path) as zf:
         for name in zf.namelist():
             if Path(name).name.lower() == "tectonic.exe":
                 with zf.open(name) as src:
@@ -370,6 +449,10 @@ def tectonic_compile_argv(binary: str, tex_path: Path | str) -> list[str]:
     - ``--keep-logs``: drop the ``.log`` next to the .tex so the GUI's
       existing log-tail viewer keeps working.
     - ``--outfmt pdf``: explicit format, never assume default.
+    - ``--`` separator before the input path: defense-in-depth so a
+      relative input like ``-V.tex`` cannot be parsed as an option.
+      In practice the desktop mixin always passes an absolute path,
+      but the helper is reachable from CLI / batch callers too.
     - We do NOT pass ``--print``; Tectonic prints to stderr by default
       and the desktop mixin captures both streams already.
     """
@@ -378,5 +461,6 @@ def tectonic_compile_argv(binary: str, tex_path: Path | str) -> list[str]:
         "--keep-logs",
         "--outfmt",
         "pdf",
+        "--",
         str(tex_path),
     ]

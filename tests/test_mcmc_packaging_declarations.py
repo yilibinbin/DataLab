@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -42,7 +44,16 @@ def test_web_requirements_declares_emcee_and_corner() -> None:
 
 
 def test_pyproject_mcmc_extra_declares_emcee_and_corner() -> None:
-    """The opt-in [mcmc] extra must keep listing both libs."""
+    """The opt-in [mcmc] extra must keep listing both libs.
+
+    Skipped (rather than ``FileNotFoundError``-ed) when the project
+    happens to be on a revision without ``pyproject.toml`` — earlier
+    DataLab branches used ``setup.py`` + ``requirements.txt`` only,
+    and bisecting through those revisions shouldn't blow up CI.
+    """
+    pyproject = REPO_ROOT / "pyproject.toml"
+    if not pyproject.is_file():
+        pytest.skip("pyproject.toml absent in this revision")
     text = _read("pyproject.toml")
     assert '"emcee>=3.1"' in text or "'emcee>=3.1'" in text, (
         "pyproject.toml [mcmc] extra must list emcee"

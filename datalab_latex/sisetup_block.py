@@ -109,10 +109,20 @@ def build_sisetup_block(
         #   * any siunitx v3 (date ≥ 2020/02/08): branch fires and
         #     ``digit-group-size = N`` is honoured.
         #
-        # Wrapped in ``\makeatletter ... \makeatother`` because
-        # ``\@ifpackagelater`` is an internal LaTeX2e command and
-        # without that wrapper pdflatex errors with ``You can't use
-        # \\spacefactor in vertical mode``.
+        # ``\@ifpackagelater`` is an internal LaTeX2e command, so it
+        # has to live inside ``\makeatletter ... \makeatother``.
+        #
+        # An earlier revision of this PR additionally wrapped the body
+        # in ``\begingroup ... \endgroup`` to make the ``\makeatletter``
+        # catcode flip locally scoped. That was a regression: ``\sisetup``
+        # uses option-setting macros that take effect via package-state
+        # variables, and TeX groups SCOPE those variable assignments —
+        # so ``\endgroup`` reverted the override and the rendered PDF
+        # silently fell back to size 3. Codex's adversarial-review probe
+        # caught this. We accept the (theoretical) risk that some weird
+        # surrounding preamble might already have ``\makeatletter`` open
+        # — in practice no DataLab template does, and ``\makeatother``
+        # at the package-loading level is the standard contract.
         lines.append(r"\makeatletter")
         lines.append(
             r"\@ifpackagelater{siunitx}{2020/02/08}{"

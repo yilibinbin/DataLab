@@ -14,6 +14,7 @@ from data_extrapolation_latex_latest import (
     format_value_for_latex_file,
     siunitx_column_spec,
 )
+from datalab_latex.sisetup_block import build_sisetup_block
 from fitting.hp_fitter import FitResult
 
 
@@ -59,8 +60,6 @@ def build_fit_latex_preamble(*, use_dcolumn: bool, digits: int, latex_group_size
                 "\\newcolumntype{d}[1]{D{.}{.}{#1}}",
             ]
         )
-    from datalab_latex.sisetup_block import build_sisetup_block
-
     lines.append("\\usepackage{siunitx}")
     # Centralized v2/v3-compatible \sisetup{...} block — see helper for
     # the ``\@ifpackagelater`` guard around v3-only ``digit-group-size``.
