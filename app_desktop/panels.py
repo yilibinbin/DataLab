@@ -1288,24 +1288,12 @@ def build_left_panel(self):
     self._register_text(self.verbose_checkbox, "显示详细日志", "Verbose log")
     options_layout.addWidget(self.verbose_checkbox)
 
-    engine_row = QHBoxLayout()
-    self.latex_engine_combo = QComboBox()
-    # ``tectonic`` is offered alongside the traditional engines because
-    # it auto-downloads (~30 MB single binary) and resolves missing
-    # LaTeX packages over the net, so users without a local TeX Live
-    # install can still produce PDFs out of the box. See
-    # ``shared.latex_engine`` for the resolution + install pipeline.
-    self.latex_engine_combo.addItems(["pdflatex", "xelatex", "tectonic"])
-    lbl_engine = QLabel("LaTeX 引擎：")
-    self._register_text(lbl_engine, "LaTeX 引擎：", "LaTeX engine:")
-    engine_row.addWidget(lbl_engine)
-    engine_row.addWidget(self.latex_engine_combo)
-    options_layout.addLayout(engine_row)
-
-    engine_btn = QPushButton("选择引擎路径…")
-    engine_btn.clicked.connect(self._prompt_engine_selection)
-    self._register_text(engine_btn, "选择引擎路径…", "Select engine path…")
-    options_layout.addWidget(engine_btn)
+    # NOTE: ``latex_engine_combo`` + the engine-path picker were moved
+    # into the LaTeX output tab (next to the font-size row) because
+    # they're compile-time, not compute-time, controls. The widgets
+    # are still created on ``self`` so other code paths
+    # (window_latex_pdf_mixin.compile_latex_to_pdf) keep working
+    # unchanged — they reference ``self.latex_engine_combo``.
 
     self.left_layout.addWidget(options_box)
 
@@ -1502,7 +1490,44 @@ def build_right_panel(self, layout: QVBoxLayout):
     # Attach syntax highlighter
     from app_desktop.latex_highlighter import LatexHighlighter
     self._latex_highlighter = LatexHighlighter(self.latex_edit.document())
-    self._add_font_control_row(latex_layout, self.latex_edit, "字体大小：")
+
+    # Compose font-size row + LaTeX-engine controls into one toolbar.
+    # The engine selector lives here (rather than the compute panel
+    # on the left) because it's a compile-time setting — it has no
+    # effect on the numerical results, only on how the .tex is
+    # rendered to PDF.
+    latex_controls_row = QHBoxLayout()
+    lbl_font = QLabel("字体大小：")
+    self._register_text(lbl_font, "字体大小：", "Font size:")
+    latex_controls_row.addWidget(lbl_font)
+    latex_font_spin = QSpinBox()
+    latex_font_spin.setRange(8, 32)
+    _default_size = self.latex_edit.font().pointSize()
+    latex_font_spin.setValue(max(8, _default_size if _default_size > 0 else 12))
+    latex_font_spin.valueChanged.connect(
+        lambda value, target=self.latex_edit: self._apply_editor_font_size(target, value)
+    )
+    latex_controls_row.addWidget(latex_font_spin)
+
+    lbl_engine = QLabel("LaTeX 引擎：")
+    self._register_text(lbl_engine, "LaTeX 引擎：", "LaTeX engine:")
+    latex_controls_row.addSpacing(16)
+    latex_controls_row.addWidget(lbl_engine)
+    self.latex_engine_combo = QComboBox()
+    # ``tectonic`` is offered alongside the traditional engines because
+    # it auto-downloads (~30 MB single binary) and resolves missing
+    # LaTeX packages over the net, so users without a local TeX Live
+    # install can still produce PDFs out of the box. See
+    # ``shared.latex_engine`` for the resolution + install pipeline.
+    self.latex_engine_combo.addItems(["pdflatex", "xelatex", "tectonic"])
+    latex_controls_row.addWidget(self.latex_engine_combo)
+    engine_btn = QPushButton("选择引擎路径…")
+    engine_btn.clicked.connect(self._prompt_engine_selection)
+    self._register_text(engine_btn, "选择引擎路径…", "Select engine path…")
+    latex_controls_row.addWidget(engine_btn)
+    latex_controls_row.addStretch()
+    latex_layout.addLayout(latex_controls_row)
+
     latex_layout.addWidget(self.latex_edit)
     self.tabs.addTab(latex_widget, "LaTeX")
 
