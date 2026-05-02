@@ -8,13 +8,6 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [2.0.2] — 2026-05-02
 
-### Fixed
-- Update checker now prefers the bundled/source `pyproject.toml`
-  version over stale editable-install metadata, so packaged apps do not
-  report themselves outdated after a release build.
-
-## [2.0.1] — 2026-05-02
-
 ### Added
 - Desktop Help menu now links to the public project homepage and checks
   GitHub Releases for newer DataLab versions.
@@ -27,6 +20,9 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 - Frozen desktop packages now bundle `pyproject.toml` and the app icon
   image so version display, update checks, and About branding work in
   packaged apps.
+- Update checker now prefers bundled version metadata over stale
+  installed package metadata, so released apps do not falsely report
+  themselves outdated.
 
 ## [2.0.0] — 2026-04-26
 
@@ -75,6 +71,5 @@ stack embedded — no external runtime needed.
   modes end-to-end, and every LaTeX output path
 
 [Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.0.2...HEAD
-[2.0.2]: https://github.com/yilibinbin/DataLab/compare/v2.0.1...v2.0.2
-[2.0.1]: https://github.com/yilibinbin/DataLab/compare/v2.0.0...v2.0.1
+[2.0.2]: https://github.com/yilibinbin/DataLab/compare/v2.0.0...v2.0.2
 [2.0.0]: https://github.com/yilibinbin/DataLab/releases/tag/v2.0.0
