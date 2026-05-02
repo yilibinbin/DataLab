@@ -42,6 +42,8 @@ def _rel(*parts: str) -> str:
 
 
 datas = [
+    (_rel("pyproject.toml"), "."),
+    (_rel("DataLab.png"), "."),
     (_rel("docs", "desktop"), "docs/desktop"),
     (_rel("shared", "help_specs.json"), "shared"),
 ]

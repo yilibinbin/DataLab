@@ -190,6 +190,15 @@ with Image.open(src) as im:
 }
 
 # Bundle desktop docs (docs\\desktop) into the packaged app.
+$pyprojectFile = Join-Path $projectRoot "pyproject.toml"
+if (Test-Path $pyprojectFile) {
+    $pyprojectAbs = (Resolve-Path $pyprojectFile).Path
+    Write-Host ("[info] Including project metadata: {0}" -f $pyprojectAbs)
+    $dataArgs += @("--add-data", ("{0};." -f $pyprojectAbs))
+} else {
+    Write-Warning ("pyproject.toml not found: {0}" -f $pyprojectFile)
+}
+
 $desktopDocsDir = Join-Path $projectRoot "docs\\desktop"
 if (Test-Path $desktopDocsDir) {
     $desktopDocsAbs = (Resolve-Path $desktopDocsDir).Path

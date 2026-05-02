@@ -164,6 +164,21 @@ for module in "${QT_EXCLUDES[@]}"; do
 done
 
 DOCS_DATA_FLAGS=()
+if [[ -f "$ICON_SOURCE" ]]; then
+  echo "[info] Including app icon image: $ICON_SOURCE"
+  DOCS_DATA_FLAGS+=(--add-data "$ICON_SOURCE:.")
+else
+  echo "[warn] App icon image not found: $ICON_SOURCE"
+fi
+
+PYPROJECT_FILE="$PROJECT_ROOT/pyproject.toml"
+if [[ -f "$PYPROJECT_FILE" ]]; then
+  echo "[info] Including project metadata: $PYPROJECT_FILE"
+  DOCS_DATA_FLAGS+=(--add-data "$PYPROJECT_FILE:.")
+else
+  echo "[warn] pyproject.toml not found: $PYPROJECT_FILE"
+fi
+
 DESKTOP_DOCS_DIR="$PROJECT_ROOT/docs/desktop"
 if [[ -d "$DESKTOP_DOCS_DIR" ]]; then
   echo "[info] Including desktop docs: $DESKTOP_DOCS_DIR"

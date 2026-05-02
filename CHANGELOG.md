@@ -6,6 +6,21 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.0.1] — 2026-05-02
+
+### Added
+- Desktop Help menu now links to the public project homepage and checks
+  GitHub Releases for newer DataLab versions.
+- About dialog now uses a native rich-text presentation with the DataLab
+  icon, repository link, license link, and desktop documentation link.
+
+### Fixed
+- PyInstaller-frozen desktop builds no longer reopen extra GUI windows
+  when automatic fitting starts multiprocessing worker processes.
+- Frozen desktop packages now bundle `pyproject.toml` and the app icon
+  image so version display, update checks, and About branding work in
+  packaged apps.
+
 ## [2.0.0] — 2026-04-26
 
 First public release. Desktop is shipped as one-click installable
@@ -52,5 +67,6 @@ stack embedded — no external runtime needed.
 - Coverage spans high-precision Mathematica reference values, all four
   modes end-to-end, and every LaTeX output path
 
-[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/yilibinbin/DataLab/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/yilibinbin/DataLab/releases/tag/v2.0.0

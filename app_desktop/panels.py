@@ -254,6 +254,20 @@ def build_menu(self):
     help_menu = menubar.addMenu("帮助")
     self._register_text(help_menu, "帮助", "Help", "setTitle")
 
+    project_action = QAction("项目主页", self)
+    project_action.setMenuRole(QAction.NoRole)
+    project_action.triggered.connect(self._open_project_homepage)
+    help_menu.addAction(project_action)
+    self._register_text(project_action, "项目主页", "Project Homepage", "setText")
+
+    update_action = QAction("检查更新", self)
+    update_action.setMenuRole(QAction.NoRole)
+    update_action.triggered.connect(self._check_for_updates)
+    help_menu.addAction(update_action)
+    self._register_text(update_action, "检查更新", "Check for Updates", "setText")
+
+    help_menu.addSeparator()
+
     docs_action = QAction("文档", self)
     docs_action.setMenuRole(QAction.NoRole)
     docs_action.triggered.connect(self._show_docs)

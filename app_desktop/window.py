@@ -26,8 +26,9 @@ import re
 
 import mpmath as mp
 from desktop_doc_loader import load_desktop_doc, load_desktop_manifest
+from shared.update_checker import REPOSITORY_URL, RELEASES_URL, check_for_updates
 
-from PySide6.QtCore import Qt, QSize, QTimer, QLocale, Signal, QObject, QThread
+from PySide6.QtCore import Qt, QSize, QTimer, QLocale, Signal, QObject, QThread, QUrl
 from PySide6.QtGui import (
     QPixmap,
     QImage,
@@ -36,6 +37,7 @@ from PySide6.QtGui import (
     QPalette,
     QIcon,
     QColor,
+    QDesktopServices,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -147,6 +149,7 @@ _REFCOL_AUTO_MAX_DIFF_ZH = "最大差异列"
 _REFCOL_AUTO_MAX_DIFF_EN = "Max-diff column"
 
 
+from .about_dialog import show_about_dialog
 from .docs_dialog import DocsDialog
 from .resources import (
     _apply_system_theme,
@@ -503,13 +506,62 @@ class ExtrapolationWindow(
         self._open_docs_dialogs.append(dlg)
         dlg.destroyed.connect(lambda: self._open_docs_dialogs.remove(dlg) if dlg in self._open_docs_dialogs else None)
 
+    def _open_project_homepage(self, _checked: bool = False):
+        QDesktopServices.openUrl(QUrl(REPOSITORY_URL))
+
+    def _check_for_updates(self, _checked: bool = False):
+        result = check_for_updates()
+
+        if result.status == "unavailable":
+            message_zh = (
+                f"无法检查更新：{result.error or '未知错误'}\n\n"
+                f"也可以手动访问发布页面：\n{RELEASES_URL}"
+            )
+            message_en = (
+                f"Unable to check for updates: {result.error or 'unknown error'}\n\n"
+                f"You can also visit the releases page manually:\n{RELEASES_URL}"
+            )
+            QMessageBox.warning(
+                self,
+                self._tr("检查更新失败", "Update Check Failed"),
+                self._tr(message_zh, message_en),
+            )
+            return
+
+        if result.update_available and result.release is not None:
+            release_url = result.release.html_url or RELEASES_URL
+            message_zh = (
+                f"发现新版本 {result.latest_version}（当前版本 {result.current_version}）。\n\n"
+                f"是否打开发布页面下载更新？\n{release_url}"
+            )
+            message_en = (
+                f"Version {result.latest_version} is available "
+                f"(current version {result.current_version}).\n\n"
+                f"Open the release page to download the update?\n{release_url}"
+            )
+            reply = QMessageBox.question(
+                self,
+                self._tr("发现新版本", "Update Available"),
+                self._tr(message_zh, message_en),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if reply == QMessageBox.Yes:
+                QDesktopServices.openUrl(QUrl(release_url))
+            return
+
+        QMessageBox.information(
+            self,
+            self._tr("已是最新版本", "Up to Date"),
+            self._tr(
+                f"当前版本 {result.current_version} 已是最新发布版本。",
+                f"Version {result.current_version} is already up to date.",
+            ),
+        )
+
     def _show_about(self):
-        text_zh = "DataLab 数据处理工具\n中国科学院精密测量院外场理论组 · 方昊 设计编写"
-        text_en = "DataLab - Extrapolation & Error Propagation GUI\nDesigned and coded by Fang Hao (CAS WIPM, External field Theory Group)"
-        if self._is_en():
-            QMessageBox.information(self, "About", text_en)
-        else:
-            QMessageBox.information(self, "关于", text_zh)
+        lang = "en" if self._is_en() else "zh"
+        show_about_dialog(parent=self, lang=lang)
 
     def _toggle_latex_options(self, checked: bool):
         self.latex_options_widget.setVisible(checked)
