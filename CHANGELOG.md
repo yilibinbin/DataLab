@@ -6,6 +6,13 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.0.2] — 2026-05-02
+
+### Fixed
+- Update checker now prefers the bundled/source `pyproject.toml`
+  version over stale editable-install metadata, so packaged apps do not
+  report themselves outdated after a release build.
+
 ## [2.0.1] — 2026-05-02
 
 ### Added
@@ -67,6 +74,7 @@ stack embedded — no external runtime needed.
 - Coverage spans high-precision Mathematica reference values, all four
   modes end-to-end, and every LaTeX output path
 
-[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.0.2...HEAD
+[2.0.2]: https://github.com/yilibinbin/DataLab/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/yilibinbin/DataLab/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/yilibinbin/DataLab/releases/tag/v2.0.0

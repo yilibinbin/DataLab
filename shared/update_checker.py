@@ -104,14 +104,13 @@ def is_newer_version(latest_version_or_tag: str, current_version_or_tag: str) ->
 
 
 def current_version() -> str:
-    """Return the installed DataLab version, falling back to ``pyproject.toml``."""
-    try:
-        return metadata.version("datalab")
-    except metadata.PackageNotFoundError:
-        pass
-
+    """Return the DataLab version, preferring bundled/source metadata."""
     if tomllib is None:
-        return "0.0.0"
+        try:
+            return metadata.version("datalab")
+        except metadata.PackageNotFoundError:
+            return "0.0.0"
+
     candidates = []
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
@@ -124,6 +123,11 @@ def current_version() -> str:
         except (OSError, tomllib.TOMLDecodeError):
             continue
         return str(data.get("project", {}).get("version", "0.0.0"))
+
+    try:
+        return metadata.version("datalab")
+    except metadata.PackageNotFoundError:
+        pass
     return "0.0.0"
 
 

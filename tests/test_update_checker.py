@@ -135,8 +135,6 @@ def test_check_for_updates_converts_network_errors_to_unavailable(monkeypatch) -
 
 
 def test_current_version_reads_pyproject_from_pyinstaller_meipass(tmp_path, monkeypatch) -> None:
-    from importlib import metadata
-
     from shared import update_checker
 
     (tmp_path / "pyproject.toml").write_text(
@@ -144,13 +142,32 @@ def test_current_version_reads_pyproject_from_pyinstaller_meipass(tmp_path, monk
         encoding="utf-8",
     )
 
-    def missing_distribution(_name: str) -> str:
-        raise metadata.PackageNotFoundError
-
-    monkeypatch.setattr(update_checker.metadata, "version", missing_distribution)
+    monkeypatch.setattr(update_checker.metadata, "version", lambda _name: "1.0.0")
     monkeypatch.setattr(update_checker.sys, "_MEIPASS", str(tmp_path), raising=False)
 
     assert update_checker.current_version() == "9.8.7"
+
+
+def test_current_version_prefers_source_pyproject_over_stale_editable_metadata(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from shared import update_checker
+
+    shared_dir = tmp_path / "shared"
+    shared_dir.mkdir()
+    fake_module = shared_dir / "update_checker.py"
+    fake_module.write_text("", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "datalab"\nversion = "9.9.1"\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.delattr(update_checker.sys, "_MEIPASS", raising=False)
+    monkeypatch.setattr(update_checker, "__file__", str(fake_module))
+    monkeypatch.setattr(update_checker.metadata, "version", lambda _name: "2.0.0.dev0")
+
+    assert update_checker.current_version() == "9.9.1"
 
 
 def test_pyinstaller_builds_bundle_pyproject_for_frozen_version_fallback() -> None:
