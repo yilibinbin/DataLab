@@ -3,8 +3,12 @@
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import sys
+
+# Frozen multiprocessing workers must be diverted before Qt imports.
+multiprocessing.freeze_support()
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication

@@ -6,6 +6,11 @@ This module re-exports the public API so existing imports keep working.
 
 from __future__ import annotations
 
+import multiprocessing
+
+# Frozen multiprocessing workers must be diverted before GUI imports.
+multiprocessing.freeze_support()
+
 from app_desktop import main as _main
 
 _globals = globals()
