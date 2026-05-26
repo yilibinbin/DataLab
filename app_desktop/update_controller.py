@@ -133,12 +133,13 @@ class UpdateController:
 
         try:
             payload = self._resolve_payload(result.release, result.current_version)
-        except UpdatePayloadError as exc:
+        except (UpdatePayloadError, OSError) as exc:
             if manual:
+                release_url = result.release.html_url or RELEASES_URL
                 self.window.warning(
                     "Manual Update Required",
                     "Automatic installation is unavailable: "
-                    f"{exc}\n\n{result.release.html_url}",
+                    f"{exc}\n\n{release_url}",
                 )
             return
 

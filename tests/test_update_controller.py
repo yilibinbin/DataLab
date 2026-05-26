@@ -10,6 +10,7 @@ from shared.update_payload import InstallerAsset, UpdatePayload
 class FakePreferences:
     def __init__(self) -> None:
         self.enabled = False
+        self.checked = False
         self.checked_at: datetime | None = None
         self.skipped: set[str] = set()
         self.cached: list[tuple[str, str, str, str]] = []
@@ -24,6 +25,7 @@ class FakePreferences:
         return self.enabled
 
     def mark_checked(self, when: datetime) -> None:
+        self.checked = True
         self.checked_at = when
 
     def is_skipped(self, version: str) -> bool:
@@ -73,12 +75,12 @@ class FakeWindow:
         self.exited = True
 
 
-def release() -> ReleaseInfo:
+def release(*, html_url: str = "https://github.com/yilibinbin/DataLab/releases/tag/v2.3.0") -> ReleaseInfo:
     return ReleaseInfo(
         tag_name="v2.3.0",
         name="DataLab v2.3.0",
         version="2.3.0",
-        html_url="https://github.com/yilibinbin/DataLab/releases/tag/v2.3.0",
+        html_url=html_url,
         body="Release body",
         published_at="2026-05-26T00:00:00Z",
         assets=(),
@@ -166,7 +168,65 @@ def test_auto_offline_failure_is_quiet_and_marks_checked() -> None:
 
     assert window.warnings == []
     assert window.questions == []
+    assert prefs.checked is True
     assert prefs.checked_at == now
+
+
+def test_auto_payload_resolution_oserror_is_quiet_and_returns_idle() -> None:
+    from app_desktop.update_controller import UpdateController, UpdateState
+
+    window = FakeWindow()
+    prefs = FakePreferences()
+    prefs.enabled = True
+    controller = UpdateController(
+        window,
+        preferences=prefs,
+        check_for_updates=lambda: UpdateCheckResult(
+            status="update-available",
+            current_version="2.2.0",
+            latest_version="2.3.0",
+            release=release(),
+        ),
+        resolve_payload=lambda _release, current_version: (_ for _ in ()).throw(
+            OSError("manifest fetch failed")
+        ),
+        now=lambda: datetime(2026, 5, 26, tzinfo=timezone.utc),
+    )
+
+    controller.maybe_auto_check()
+
+    assert window.warnings == []
+    assert window.questions == []
+    assert prefs.checked is True
+    assert controller.state is UpdateState.IDLE
+
+
+def test_manual_payload_resolution_failure_uses_releases_fallback() -> None:
+    from app_desktop.update_controller import UpdateController
+    from shared.update_checker import RELEASES_URL
+
+    window = FakeWindow()
+    controller = UpdateController(
+        window,
+        preferences=FakePreferences(),
+        check_for_updates=lambda: UpdateCheckResult(
+            status="update-available",
+            current_version="2.2.0",
+            latest_version="2.3.0",
+            release=release(html_url=""),
+        ),
+        resolve_payload=lambda _release, current_version: (_ for _ in ()).throw(
+            OSError("manifest fetch failed")
+        ),
+        now=lambda: datetime(2026, 5, 26, tzinfo=timezone.utc),
+    )
+
+    controller.check_now()
+
+    assert len(window.warnings) == 1
+    assert "manifest fetch failed" in window.warnings[0][1]
+    assert RELEASES_URL in window.warnings[0][1]
+    assert window.questions == []
 
 
 def test_reentrant_update_check_is_rejected_when_downloading() -> None:
