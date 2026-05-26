@@ -295,6 +295,14 @@ def build_menu(self):
     help_menu.addAction(update_action)
     self._register_text(update_action, "检查更新", "Check for Updates", "setText")
 
+    auto_update_action = QAction("自动更新", self)
+    auto_update_action.setMenuRole(QAction.NoRole)
+    auto_update_action.setCheckable(True)
+    auto_update_action.setChecked(self._update_controller.auto_update_enabled())
+    auto_update_action.toggled.connect(self._set_auto_update_enabled)
+    help_menu.addAction(auto_update_action)
+    self._register_text(auto_update_action, "自动更新", "Automatic Updates", "setText")
+
     help_menu.addSeparator()
 
     docs_action = QAction("文档", self)

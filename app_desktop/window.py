@@ -26,7 +26,8 @@ import re
 
 import mpmath as mp
 from desktop_doc_loader import load_desktop_doc, load_desktop_manifest
-from shared.update_checker import REPOSITORY_URL, RELEASES_URL, check_for_updates
+from app_desktop.update_controller import UpdateController
+from shared.update_checker import REPOSITORY_URL
 
 from PySide6.QtCore import Qt, QSize, QTimer, QLocale, Signal, QObject, QThread, QUrl
 from PySide6.QtGui import (
@@ -360,6 +361,7 @@ class ExtrapolationWindow(
         self._combo_translations: list[tuple[QComboBox, list[tuple[str, str, object]]]] = []
         self._lang_mode = _LANG_AUTO
         self._system_lang = self._detect_system_language()
+        self._update_controller = UpdateController(self)
         self._build_menu()
         self._build_ui()
         self._initialize_workspace_tracking()
@@ -368,6 +370,7 @@ class ExtrapolationWindow(
         self._toggle_latex_options(self.generate_latex_checkbox.isChecked())
         self._apply_language(self._system_lang if self._lang_mode == _LANG_AUTO else self._lang_mode)
         self._update_workspace_window_title()
+        QTimer.singleShot(1500, self._update_controller.maybe_auto_check)
         app = QApplication.instance()
         if app:
             app.aboutToQuit.connect(self._cleanup_workers)
@@ -777,54 +780,44 @@ class ExtrapolationWindow(
         QDesktopServices.openUrl(QUrl(REPOSITORY_URL))
 
     def _check_for_updates(self, _checked: bool = False):
-        result = check_for_updates()
+        self._update_controller.check_now()
 
-        if result.status == "unavailable":
-            message_zh = (
-                f"无法检查更新：{result.error or '未知错误'}\n\n"
-                f"也可以手动访问发布页面：\n{RELEASES_URL}"
-            )
-            message_en = (
-                f"Unable to check for updates: {result.error or 'unknown error'}\n\n"
-                f"You can also visit the releases page manually:\n{RELEASES_URL}"
-            )
-            QMessageBox.warning(
-                self,
-                self._tr("检查更新失败", "Update Check Failed"),
-                self._tr(message_zh, message_en),
-            )
-            return
+    def _set_auto_update_enabled(self, checked: bool) -> None:
+        self._update_controller.set_auto_update_enabled(bool(checked))
 
-        if result.update_available and result.release is not None:
-            release_url = result.release.html_url or RELEASES_URL
-            message_zh = (
-                f"发现新版本 {result.latest_version}（当前版本 {result.current_version}）。\n\n"
-                f"是否打开发布页面下载更新？\n{release_url}"
-            )
-            message_en = (
-                f"Version {result.latest_version} is available "
-                f"(current version {result.current_version}).\n\n"
-                f"Open the release page to download the update?\n{release_url}"
-            )
-            reply = QMessageBox.question(
-                self,
-                self._tr("发现新版本", "Update Available"),
-                self._tr(message_zh, message_en),
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if reply == QMessageBox.Yes:
-                QDesktopServices.openUrl(QUrl(release_url))
-            return
+    def is_english(self) -> bool:
+        return self._is_en()
 
-        QMessageBox.information(
-            self,
-            self._tr("已是最新版本", "Up to Date"),
-            self._tr(
-                f"当前版本 {result.current_version} 已是最新发布版本。",
-                f"Version {result.current_version} is already up to date.",
-            ),
-        )
+    def ask_update(self, title: str, message: str, *, was_skipped: bool = False) -> str:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(title)
+        box.setText(message)
+        update_button = box.addButton("Update Now", QMessageBox.ButtonRole.AcceptRole)
+        later_button = box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        skip_button = box.addButton("Skip This Version", QMessageBox.ButtonRole.DestructiveRole)
+        box.setDefaultButton(update_button)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked == update_button:
+            return "update"
+        if clicked == skip_button:
+            return "skip"
+        if clicked == later_button:
+            return "later"
+        return "later"
+
+    def warning(self, title: str, message: str) -> None:
+        QMessageBox.warning(self, title, message)
+
+    def information(self, title: str, message: str) -> None:
+        QMessageBox.information(self, title, message)
+
+    def open_url(self, url: str) -> None:
+        QDesktopServices.openUrl(QUrl(url))
+
+    def exit_for_update(self) -> None:
+        QApplication.quit()
 
     def _show_about(self):
         lang = "en" if self._is_en() else "zh"
