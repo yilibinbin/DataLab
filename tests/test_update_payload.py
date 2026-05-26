@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Callable, cast
+import hashlib
+from pathlib import Path
+from typing import Any, Callable, Literal, cast
 
 import pytest
 
@@ -224,3 +226,107 @@ def test_manifest_release_url_rejects_query_string() -> None:
             platform_key="macos",
             current_version="2.2.0",
         )
+
+
+class FakeResponse:
+    def __init__(self, content: bytes) -> None:
+        self._content = content
+        self._offset = 0
+
+    def __enter__(self) -> FakeResponse:
+        return self
+
+    def __exit__(self, *_: object) -> Literal[False]:
+        return False
+
+    def read(self, size: int = -1) -> bytes:
+        if self._offset >= len(self._content):
+            return b""
+        if size is None or size < 0:
+            size = len(self._content) - self._offset
+        start = self._offset
+        end = min(start + size, len(self._content))
+        self._offset = end
+        return self._content[start:end]
+
+
+def test_download_installer_verifies_size_and_sha(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from shared import update_payload
+    from shared.update_payload import InstallerAsset, download_and_verify_installer
+
+    content = b"installer"
+    sha = hashlib.sha256(content).hexdigest()
+    asset = InstallerAsset(
+        platform_key="macos",
+        name="DataLab-2.3.0-macOS.pkg",
+        url="https://example.invalid/mac.pkg",
+        sha256=sha,
+        size_bytes=len(content),
+    )
+    seen: dict[str, object] = {}
+
+    def fake_urlopen(request: Any, timeout: float) -> FakeResponse:
+        seen["url"] = request.full_url
+        seen["timeout"] = timeout
+        seen["user_agent"] = request.headers.get("User-agent")
+        return FakeResponse(content)
+
+    monkeypatch.setattr(update_payload, "_urlopen", fake_urlopen)
+    monkeypatch.setattr(update_payload, "update_cache_dir", lambda: tmp_path)
+
+    path = download_and_verify_installer(asset, timeout=7)
+
+    assert seen == {
+        "url": asset.url,
+        "timeout": 7,
+        "user_agent": "DataLab Update Checker",
+    }
+    assert path == tmp_path / asset.name
+    assert path.read_bytes() == content
+    assert not (tmp_path / f"{asset.name}.part").exists()
+
+
+def test_download_installer_deletes_bad_sha(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from shared import update_payload
+    from shared.update_payload import InstallerAsset, UpdatePayloadError, download_and_verify_installer
+
+    asset = InstallerAsset(
+        platform_key="macos",
+        name="DataLab-2.3.0-macOS.pkg",
+        url="https://example.invalid/mac.pkg",
+        sha256="0" * 64,
+        size_bytes=9,
+    )
+
+    def fake_urlopen(_request: Any, _timeout: float) -> FakeResponse:
+        return FakeResponse(b"installer")
+
+    monkeypatch.setattr(update_payload, "_urlopen", fake_urlopen)
+    monkeypatch.setattr(update_payload, "update_cache_dir", lambda: tmp_path)
+
+    with pytest.raises(UpdatePayloadError, match="sha256 mismatch"):
+        download_and_verify_installer(asset)
+
+    assert not (tmp_path / asset.name).exists()
+    assert not (tmp_path / f"{asset.name}.part").exists()
+
+
+def test_update_lock_rejects_second_holder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from shared import update_payload
+    from shared.update_payload import UpdateCacheLock, UpdatePayloadError
+
+    monkeypatch.setattr(update_payload, "update_cache_dir", lambda: tmp_path)
+
+    with UpdateCacheLock():
+        with pytest.raises(UpdatePayloadError, match="already in progress"):
+            with UpdateCacheLock():
+                pass

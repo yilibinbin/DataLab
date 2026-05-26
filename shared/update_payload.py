@@ -1,20 +1,22 @@
 """Update payload manifest validation for installer-based DataLab updates.
 
-This module stays Qt-free so installer metadata can be tested without GUI
-dependencies. It validates release metadata only; download, hashing, locking,
-and installer launch are intentionally left to later tasks.
+This module stays Qt-free so installer metadata and downloads can be tested
+without GUI dependencies. Installer launch remains a desktop-layer concern.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
 import re
 import tempfile
+import time
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import SplitResult, urlsplit
 
 from shared.update_checker import ReleaseInfo, is_newer_version, normalize_version_tag
@@ -32,6 +34,7 @@ _PLATFORM_SUFFIXES = {
     "macos": ".pkg",
     "windows-x64": ".exe",
 }
+_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 class UpdatePayloadError(ValueError):
@@ -90,15 +93,19 @@ def _validate_release_url(manifest_url: str, release_url: str) -> str:
 
 
 def _validate_asset_name(platform_key: str, name: str) -> None:
-    if not name or name != name.strip():
-        raise UpdatePayloadError("asset name is invalid")
-    if "/" in name or "\\" in name or Path(name).is_absolute():
-        raise UpdatePayloadError("asset name is invalid")
-    if _CONTROL_CHARS_RE.search(name):
-        raise UpdatePayloadError("asset name is invalid")
+    _validate_asset_basename(name)
     suffix = _PLATFORM_SUFFIXES.get(platform_key)
     if suffix is not None and not name.lower().endswith(suffix):
         raise UpdatePayloadError(f"asset suffix must be {suffix} for {platform_key}")
+
+
+def _validate_asset_basename(name: str) -> None:
+    if not name or name != name.strip():
+        raise UpdatePayloadError("asset name is invalid")
+    if name in {".", ".."} or "/" in name or "\\" in name or Path(name).is_absolute():
+        raise UpdatePayloadError("asset name is invalid")
+    if _CONTROL_CHARS_RE.search(name):
+        raise UpdatePayloadError("asset name is invalid")
 
 
 def _asset_url_by_name(release: ReleaseInfo, name: str) -> str:
@@ -122,6 +129,10 @@ def loads_manifest(raw: bytes) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise UpdatePayloadError("updates.json must be an object")
     return data
+
+
+def _urlopen(request: urllib.request.Request, timeout: float) -> Any:
+    return urllib.request.urlopen(request, timeout=timeout)  # noqa: S310
 
 
 def select_update_payload(
@@ -192,3 +203,118 @@ def update_cache_dir() -> Path:
         root = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
         return Path(root) / "DataLab" / "Updates"
     return Path(tempfile.gettempdir()) / "DataLab" / "Updates"
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(_DOWNLOAD_CHUNK_BYTES), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_installer_file(path: Path, asset: InstallerAsset) -> None:
+    if not path.is_file():
+        raise UpdatePayloadError(f"installer not found: {path}")
+    size_bytes = path.stat().st_size
+    if size_bytes != asset.size_bytes:
+        raise UpdatePayloadError(f"size mismatch: expected {asset.size_bytes}, got {size_bytes}")
+    if sha256_file(path).lower() != asset.sha256.lower():
+        raise UpdatePayloadError("sha256 mismatch")
+
+
+def _safe_target_path(cache_dir: Path, name: str) -> Path:
+    _validate_asset_basename(name)
+    return cache_dir / name
+
+
+def download_and_verify_installer(
+    asset: InstallerAsset,
+    timeout: float = DEFAULT_DOWNLOAD_TIMEOUT,
+) -> Path:
+    if asset.size_bytes <= 0 or asset.size_bytes > MAX_INSTALLER_BYTES:
+        raise UpdatePayloadError("size_bytes is outside the allowed range")
+
+    cache_dir = update_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    target = _safe_target_path(cache_dir, asset.name)
+    partial = target.with_name(f"{target.name}.part")
+    request = urllib.request.Request(asset.url, headers={"User-Agent": "DataLab Update Checker"})
+
+    try:
+        bytes_written = 0
+        with _urlopen(request, timeout) as response:
+            with partial.open("wb") as file:
+                while True:
+                    chunk = response.read(_DOWNLOAD_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    bytes_written += len(chunk)
+                    if bytes_written > MAX_INSTALLER_BYTES:
+                        raise UpdatePayloadError("installer exceeds maximum size")
+                    file.write(chunk)
+
+        if bytes_written != asset.size_bytes:
+            raise UpdatePayloadError(f"size mismatch: expected {asset.size_bytes}, got {bytes_written}")
+        verify_installer_file(partial, asset)
+        partial.replace(target)
+        return target
+    except Exception:
+        partial.unlink(missing_ok=True)
+        target.unlink(missing_ok=True)
+        raise
+
+
+def fetch_manifest_for_release(
+    release: ReleaseInfo,
+    timeout: float = DEFAULT_DOWNLOAD_TIMEOUT,
+) -> dict[str, Any]:
+    url = find_manifest_asset_url(release)
+    request = urllib.request.Request(url, headers={"User-Agent": "DataLab Update Checker"})
+    with _urlopen(request, timeout) as response:
+        return loads_manifest(response.read(MANIFEST_MAX_BYTES + 1))
+
+
+def resolve_update_payload_for_release(
+    release: ReleaseInfo,
+    current_version: str,
+    platform_key: str | None = None,
+) -> UpdatePayload:
+    manifest = fetch_manifest_for_release(release)
+    return select_update_payload(
+        release=release,
+        manifest=manifest,
+        platform_key=platform_key or current_platform_key(),
+        current_version=current_version,
+    )
+
+
+class UpdateCacheLock:
+    def __init__(self, stale_after_seconds: int = 6 * 60 * 60) -> None:
+        self._stale_after_seconds = stale_after_seconds
+        self._path = update_cache_dir() / ".update.lock"
+        self._acquired = False
+
+    def __enter__(self) -> UpdateCacheLock:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        if self._path.exists():
+            age_seconds = time.time() - self._path.stat().st_mtime
+            if age_seconds <= self._stale_after_seconds:
+                raise UpdatePayloadError("update already in progress")
+            self._path.unlink(missing_ok=True)
+
+        try:
+            fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError as exc:
+            raise UpdatePayloadError("update already in progress") from exc
+
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write(str(os.getpid()))
+        self._acquired = True
+        return self
+
+    def __exit__(self, *_: object) -> Literal[False]:
+        if self._acquired:
+            self._path.unlink(missing_ok=True)
+            self._acquired = False
+        return False
