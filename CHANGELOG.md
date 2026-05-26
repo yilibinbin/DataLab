@@ -6,6 +6,8 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-05-26
+
 ### Added
 - Added a user-authorized installer-based update flow with release-note
   prompts, offline-friendly automatic checks, installer integrity
@@ -96,7 +98,8 @@ stack embedded — no external runtime needed.
 - Coverage spans high-precision Mathematica reference values, all four
   modes end-to-end, and every LaTeX output path
 
-[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/yilibinbin/DataLab/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/yilibinbin/DataLab/compare/v2.0.2...v2.1.0
 [2.0.2]: https://github.com/yilibinbin/DataLab/compare/v2.0.0...v2.0.2
 [2.0.0]: https://github.com/yilibinbin/DataLab/releases/tag/v2.0.0
