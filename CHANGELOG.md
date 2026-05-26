@@ -6,6 +6,27 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-05-26
+
+### Added
+- Desktop app now supports self-contained `.datalab` workspace files
+  for saving and reopening a calculation session.
+- Workspace files preserve embedded input data, constants, current
+  configuration, LaTeX source, CSV/result text, and saved plot
+  snapshots without depending on the original input file paths.
+- File menu now includes New, Open, Save, and Save As workspace
+  actions with dirty-state window titles and prompts for unsaved work.
+
+### Changed
+- Restored workspace results are clearly treated as saved snapshots:
+  users can inspect and export saved artifacts, and recomputation
+  restores full live result interactivity.
+
+### Security
+- `.datalab` files are validated as hostile ZIP input, including
+  schema checks, path traversal rejection, duplicate-entry detection,
+  attachment limits, and plot/source hash validation.
+
 ## [2.0.2] — 2026-05-02
 
 ### Added
@@ -70,6 +91,7 @@ stack embedded — no external runtime needed.
 - Coverage spans high-precision Mathematica reference values, all four
   modes end-to-end, and every LaTeX output path
 
-[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.0.2...HEAD
+[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/yilibinbin/DataLab/compare/v2.0.2...v2.1.0
 [2.0.2]: https://github.com/yilibinbin/DataLab/compare/v2.0.0...v2.0.2
 [2.0.0]: https://github.com/yilibinbin/DataLab/releases/tag/v2.0.0
