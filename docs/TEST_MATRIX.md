@@ -7,6 +7,17 @@ Run from `data_extrapolation_gui/DataLab`:
 - Syntax compile: `python -m compileall -q .`
 - Unit/integration tests: `pytest -q`
 
+### Installer Update Release Gate
+
+- macOS `.pkg` is signed and notarized before auto-installable release
+  status.
+- Windows Inno installer is Authenticode-signed before
+  auto-installable release status.
+- `updates.json` contains only metadata, size, and SHA-256 values;
+  installer arguments are constructed by application code.
+- Offline startup performs no network request unless automatic updates
+  were enabled.
+
 ## What the automated tests cover
 
 ### Extrapolation
@@ -60,4 +71,3 @@ Then, for each page (Extrapolation / Error Propagation / Fitting / Statistics):
 - LaTeX controls: input digits, uncertainty digits, `use_dcolumn`, `latex_group_size`, segmented tables (if enabled).
 - Export: CSV/LaTeX/PDF (where supported), and verify preview matches saved files.
 - Help: function list/help panel and all “?” tooltips/dialogs in both `zh/en`.
-

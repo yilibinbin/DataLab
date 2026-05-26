@@ -6,6 +6,11 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### Added
+- Added a user-authorized installer-based update flow with release-note
+  prompts, offline-friendly automatic checks, installer integrity
+  verification, and platform installer packaging hooks.
+
 ## [2.1.0] — 2026-05-26
 
 ### Added

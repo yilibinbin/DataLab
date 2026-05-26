@@ -2086,7 +2086,7 @@ Expected: exits 0 with no output.
 Run:
 
 ```bash
-rg -n "install_args|LOADINF|allowUntrusted|shell=True|localhost|127\\.0\\.0\\.1|/Users/|apm8517|TemporaryItems" shared app_desktop tools packaging docs/superpowers/specs/2026-05-26-datalab-installer-auto-update-design.md
+rg -n "<remote-argv-or-private-path-regex>" shared app_desktop tools packaging docs/superpowers/specs/2026-05-26-datalab-installer-auto-update-design.md
 ```
 
 Expected: no unsafe updater findings. Existing historical local-only planning files are outside this scan.
@@ -2134,7 +2134,7 @@ Expected:
 Run:
 
 ```bash
-VERSION="$(python -c 'import tomllib; print(tomllib.loads(open("pyproject.toml","rb").read())["project"]["version"])')"
+VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
 python tools/generate_updates_manifest.py \
   --version "$VERSION" \
   --release-url "https://github.com/yilibinbin/DataLab/releases/tag/vTEST" \
@@ -2149,10 +2149,10 @@ Expected: `dist/updates.json` contains `size_bytes`, `sha256`, and no installer 
 
 - [ ] **Step 4: Windows packaging on remote host**
 
-Run from macOS after syncing source to the Windows host:
+Run from macOS after syncing source to the Windows build machine:
 
 ```bash
-ssh apm8517 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Users\\hfang\\codex-datalab\\DataLab-review\\build_windows_data_gui.ps1 -BuildInnoInstaller"
+ssh <windows-builder> "powershell -NoProfile -ExecutionPolicy Bypass -File <checkout>\\build_windows_data_gui.ps1 -BuildInnoInstaller"
 ```
 
 Expected:
@@ -2207,7 +2207,7 @@ Expected: full suite passes, with existing skips/warnings only.
 Run:
 
 ```bash
-rg -n "localhost|127\\.0\\.0\\.1|/Users/|apm8517|TemporaryItems|codex-datalab|Windows host" CHANGELOG.md docs README.md app_desktop shared tools packaging
+rg -n "<private-or-local-release-wording-regex>" CHANGELOG.md docs README.md app_desktop shared tools packaging
 ```
 
 Expected: no new public-facing private/local wording. If existing non-public planning files match, exclude them from the release commit.
