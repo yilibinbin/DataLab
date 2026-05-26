@@ -9,10 +9,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from app_desktop.update_dialogs import build_update_message
-from app_desktop.update_installer import (
-    InstallerLaunchError,
-    launch_installer as launch_platform_installer,
-)
+from app_desktop.update_installer import launch_installer as launch_platform_installer
 from shared.update_checker import RELEASES_URL, ReleaseInfo, UpdateCheckResult
 from shared.update_checker import check_for_updates as default_check_for_updates
 from shared.update_payload import (
@@ -180,9 +177,9 @@ class UpdateController:
                 )
                 self.state = UpdateState.LAUNCHING
                 launched = self._launch_installer(path, payload.asset)
-        except (UpdatePayloadError, InstallerLaunchError, OSError) as exc:
+        except Exception as exc:  # noqa: BLE001 - injected update hooks must not wedge state
             self.state = UpdateState.IDLE
-            self.window.warning("Update Failed", str(exc))
+            self.window.warning("Update Failed", str(exc) or type(exc).__name__)
             return
 
         if launched:

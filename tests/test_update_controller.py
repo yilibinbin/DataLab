@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
+from app_desktop.update_controller import UpdateController
 from shared.update_checker import ReleaseInfo, UpdateCheckResult
 from shared.update_payload import InstallerAsset, UpdatePayload
 
@@ -239,6 +241,130 @@ def test_reentrant_update_check_is_rejected_when_downloading() -> None:
     controller.check_now()
 
     assert "already in progress" in window.warnings[0][1]
+
+
+def _controller_for_update_attempt(
+    *,
+    window: FakeWindow,
+    download_installer: Callable[[InstallerAsset], Path],
+    launch_installer: Callable[[Path, InstallerAsset], bool],
+) -> UpdateController:
+    return UpdateController(
+        window,
+        preferences=FakePreferences(),
+        check_for_updates=lambda: UpdateCheckResult(
+            status="update-available",
+            current_version="2.2.0",
+            latest_version="2.3.0",
+            release=release(),
+        ),
+        resolve_payload=lambda _release, current_version: payload(),
+        download_installer=download_installer,
+        launch_installer=launch_installer,
+        now=lambda: datetime(2026, 5, 26, tzinfo=timezone.utc),
+    )
+
+
+def test_download_update_payload_error_warns_and_resets_idle() -> None:
+    from app_desktop.update_controller import UpdateState
+    from shared.update_payload import UpdatePayloadError
+
+    window = FakeWindow(choice="update")
+    controller = _controller_for_update_attempt(
+        window=window,
+        download_installer=lambda asset: (_ for _ in ()).throw(
+            UpdatePayloadError("bad installer metadata")
+        ),
+        launch_installer=lambda path, asset: True,
+    )
+
+    controller.check_now()
+
+    assert "bad installer metadata" in window.warnings[0][1]
+    assert controller.state is UpdateState.IDLE
+    assert window.exited is False
+
+
+def test_download_oserror_warns_and_resets_idle() -> None:
+    from app_desktop.update_controller import UpdateState
+
+    window = FakeWindow(choice="update")
+    controller = _controller_for_update_attempt(
+        window=window,
+        download_installer=lambda asset: (_ for _ in ()).throw(OSError("disk full")),
+        launch_installer=lambda path, asset: True,
+    )
+
+    controller.check_now()
+
+    assert "disk full" in window.warnings[0][1]
+    assert controller.state is UpdateState.IDLE
+    assert window.exited is False
+
+
+def test_download_runtime_error_warns_and_resets_idle() -> None:
+    from app_desktop.update_controller import UpdateState
+
+    window = FakeWindow(choice="update")
+    controller = _controller_for_update_attempt(
+        window=window,
+        download_installer=lambda asset: (_ for _ in ()).throw(RuntimeError("boom")),
+        launch_installer=lambda path, asset: True,
+    )
+
+    controller.check_now()
+
+    assert "boom" in window.warnings[0][1]
+    assert controller.state is UpdateState.IDLE
+    assert window.exited is False
+
+
+def test_launch_failures_warn_and_reset_idle(tmp_path: Path) -> None:
+    from app_desktop.update_controller import UpdateState
+    from app_desktop.update_installer import InstallerLaunchError
+
+    installer = tmp_path / "DataLab.pkg"
+    installer.write_bytes(b"installer")
+
+    for exc in (RuntimeError("launch boom"), InstallerLaunchError("bad launch")):
+        def fail_launch(
+            path: Path,
+            asset: InstallerAsset,
+            captured: Exception = exc,
+        ) -> bool:
+            raise captured
+
+        window = FakeWindow(choice="update")
+        controller = _controller_for_update_attempt(
+            window=window,
+            download_installer=lambda asset: installer,
+            launch_installer=fail_launch,
+        )
+
+        controller.check_now()
+
+        assert str(exc) in window.warnings[0][1]
+        assert controller.state is UpdateState.IDLE
+        assert window.exited is False
+
+
+def test_launch_false_resets_idle_without_exit_or_warning(tmp_path: Path) -> None:
+    from app_desktop.update_controller import UpdateState
+
+    installer = tmp_path / "DataLab.pkg"
+    installer.write_bytes(b"installer")
+    window = FakeWindow(choice="update")
+    controller = _controller_for_update_attempt(
+        window=window,
+        download_installer=lambda asset: installer,
+        launch_installer=lambda path, asset: False,
+    )
+
+    controller.check_now()
+
+    assert window.warnings == []
+    assert controller.state is UpdateState.IDLE
+    assert window.exited is False
 
 
 def test_skipped_version_suppresses_auto_but_manual_prompt_indicates_skipped() -> None:
