@@ -273,6 +273,77 @@ else
   echo "[error] 未找到生成的 .app，无法签名。"
 fi
 
+if [[ "${DATALAB_BUILD_PKG:-0}" == "1" ]]; then
+  echo "[5/6] Building macOS installer package (DATALAB_BUILD_PKG=1)..."
+  if [[ ! -d "$APP_BUNDLE" ]]; then
+    echo "[error] 未找到生成的 .app，无法生成 PKG。"
+    exit 1
+  fi
+  if ! command -v pkgbuild >/dev/null 2>&1; then
+    echo "[error] pkgbuild command not found; install Xcode command line tools."
+    exit 1
+  fi
+  if ! command -v productbuild >/dev/null 2>&1; then
+    echo "[error] productbuild command not found; install Xcode command line tools."
+    exit 1
+  fi
+  APP_VERSION="$("$PYTHON_BIN" - "$PYPROJECT_FILE" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+pyproject = Path(sys.argv[1])
+try:
+    import tomllib
+except ModuleNotFoundError:
+    in_project = False
+    for line in pyproject.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped == "[project]":
+            in_project = True
+            continue
+        if in_project and stripped.startswith("["):
+            break
+        if in_project and stripped.startswith("version"):
+            print(stripped.split("=", 1)[1].strip().strip('"'))
+            break
+    else:
+        raise SystemExit("project.version not found in pyproject.toml")
+else:
+    metadata = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    print(metadata["project"]["version"])
+PY
+)"
+  echo "[info] App version: $APP_VERSION"
+
+  PKG_ROOT="$BUILD_ROOT/pkgroot"
+  PKG_COMPONENT="$BUILD_ROOT/DataLab-component.pkg"
+  PKG_OUTPUT="$PROJECT_ROOT/dist/DataLab-${APP_VERSION}-macOS.pkg"
+  rm -rf "$PKG_ROOT" "$PKG_COMPONENT" "$PKG_OUTPUT"
+  mkdir -p "$PKG_ROOT/Applications"
+  ditto "$APP_BUNDLE" "$PKG_ROOT/Applications/${APP_NAME}.app"
+
+  PKGBUILD_ARGS=(
+    --root "$PKG_ROOT"
+    --identifier org.datalab.desktop
+    --version "$APP_VERSION"
+    --install-location /
+  )
+  if [[ -n "${DATALAB_MAC_INSTALLER_IDENTITY:-}" ]]; then
+    echo "[info] Signing PKG with Developer ID Installer identity: $DATALAB_MAC_INSTALLER_IDENTITY"
+    PKGBUILD_ARGS+=(--sign "$DATALAB_MAC_INSTALLER_IDENTITY")
+  else
+    echo "[warn] DATALAB_MAC_INSTALLER_IDENTITY is not set; pkg is not auto-installable on standard macOS."
+    echo "[warn] Expected Developer ID Installer format: Developer ID Installer: Name (TEAMID)"
+  fi
+  PKGBUILD_ARGS+=("$PKG_COMPONENT")
+
+  pkgbuild "${PKGBUILD_ARGS[@]}"
+  productbuild --package "$PKG_COMPONENT" "$PKG_OUTPUT"
+  echo "[info] Installer package: $PKG_OUTPUT"
+fi
+
 echo "[5/5] Bundling complete."
 echo "Resulting app: $PROJECT_ROOT/dist/${APP_NAME}.app"
 echo "You can move the .app bundle anywhere; it already embeds Python and required libraries."
