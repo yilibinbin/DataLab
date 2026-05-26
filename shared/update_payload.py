@@ -15,9 +15,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import SplitResult, urlsplit
 
-from shared.update_checker import ReleaseInfo, normalize_version_tag
+from shared.update_checker import ReleaseInfo, is_newer_version, normalize_version_tag
 
 
 UPDATES_MANIFEST_NAME = "updates.json"
@@ -27,6 +27,11 @@ DEFAULT_DOWNLOAD_TIMEOUT = 30.0
 DEFAULT_STALL_TIMEOUT = 30.0
 
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+_PLATFORM_SUFFIXES = {
+    "macos": ".pkg",
+    "windows-x64": ".exe",
+}
 
 
 class UpdatePayloadError(ValueError):
@@ -61,20 +66,39 @@ def current_platform_key() -> str:
     raise UpdatePayloadError(f"unsupported platform: {system}/{machine}")
 
 
-def _norm_url(url: str) -> str:
+def _split_release_url(url: str) -> SplitResult:
     parts = urlsplit(str(url or "").strip())
-    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), "", ""))
+    if parts.scheme.lower() != "https":
+        raise UpdatePayloadError("release_url must use https")
+    if parts.query or parts.fragment:
+        raise UpdatePayloadError("release_url must not include query or fragment")
+    return parts
 
 
-def _version_key(version: str) -> tuple[int, int, int]:
-    parts = normalize_version_tag(version).split(".")
-    values: list[int] = []
-    for part in parts[:3]:
-        match = re.match(r"^(\d+)", part)
-        values.append(int(match.group(1)) if match else 0)
-    while len(values) < 3:
-        values.append(0)
-    return values[0], values[1], values[2]
+def _validate_release_url(manifest_url: str, release_url: str) -> str:
+    manifest_parts = _split_release_url(manifest_url)
+    release_parts = _split_release_url(release_url)
+    if (
+        manifest_parts.netloc.lower(),
+        manifest_parts.path.rstrip("/"),
+    ) != (
+        release_parts.netloc.lower(),
+        release_parts.path.rstrip("/"),
+    ):
+        raise UpdatePayloadError("release_url does not match GitHub release")
+    return release_url
+
+
+def _validate_asset_name(platform_key: str, name: str) -> None:
+    if not name or name != name.strip():
+        raise UpdatePayloadError("asset name is invalid")
+    if "/" in name or "\\" in name or Path(name).is_absolute():
+        raise UpdatePayloadError("asset name is invalid")
+    if _CONTROL_CHARS_RE.search(name):
+        raise UpdatePayloadError("asset name is invalid")
+    suffix = _PLATFORM_SUFFIXES.get(platform_key)
+    if suffix is not None and not name.lower().endswith(suffix):
+        raise UpdatePayloadError(f"asset suffix must be {suffix} for {platform_key}")
 
 
 def _asset_url_by_name(release: ReleaseInfo, name: str) -> str:
@@ -115,14 +139,13 @@ def select_update_payload(
         raise UpdatePayloadError("manifest version does not match release tag")
 
     min_client = str(manifest.get("min_client_version") or "").strip()
-    if min_client and _version_key(current_version) < _version_key(min_client):
+    if min_client and is_newer_version(min_client, current_version):
         raise UpdatePayloadError("client is too old for this update")
 
     release_url_value = manifest.get("release_url")
-    if release_url_value is not None and _norm_url(str(release_url_value)) != _norm_url(
-        release.html_url
-    ):
-        raise UpdatePayloadError("release_url does not match GitHub release")
+    release_url = release.html_url
+    if release_url_value is not None:
+        release_url = _validate_release_url(str(release_url_value), release.html_url)
 
     assets = manifest.get("assets")
     if not isinstance(assets, dict) or platform_key not in assets:
@@ -133,14 +156,16 @@ def select_update_payload(
         raise UpdatePayloadError(f"platform asset must be an object: {platform_key}")
 
     name = str(asset_data.get("name") or "")
+    _validate_asset_name(platform_key, name)
+
     sha256 = str(asset_data.get("sha256") or "")
     if not _SHA256_RE.fullmatch(sha256):
         raise UpdatePayloadError("sha256 must be 64 hexadecimal characters")
 
-    try:
-        size_bytes = int(asset_data.get("size_bytes"))
-    except (TypeError, ValueError) as exc:
-        raise UpdatePayloadError("size_bytes must be an integer") from exc
+    raw_size = asset_data.get("size_bytes")
+    if not isinstance(raw_size, int) or isinstance(raw_size, bool):
+        raise UpdatePayloadError("size_bytes must be an integer")
+    size_bytes = raw_size
     if size_bytes <= 0 or size_bytes > MAX_INSTALLER_BYTES:
         raise UpdatePayloadError("size_bytes is outside the allowed range")
 
@@ -149,7 +174,7 @@ def select_update_payload(
         version=version,
         notes=str(manifest.get("notes") or release.body),
         published_at=str(manifest.get("published_at") or release.published_at),
-        release_url=release.html_url,
+        release_url=release_url,
         asset=InstallerAsset(
             platform_key=platform_key,
             name=name,
