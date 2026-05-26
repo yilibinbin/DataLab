@@ -108,12 +108,14 @@ def test_fetch_latest_release_parses_asset_size(monkeypatch) -> None:
 def test_format_release_notes_for_dialog_plain_text_and_truncates() -> None:
     from shared.update_checker import format_release_notes_for_dialog
 
-    body = "# Changes\n<script>alert(1)</script>\nFixed <b>updates</b>\n" + ("x" * 5000)
+    body = "# Changes\n<script>alert(1)</script>\nFixed \x00<b>updates</b>\x07\n" + ("x" * 5000)
 
     formatted = format_release_notes_for_dialog(body, max_chars=80)
 
     assert "<script>" not in formatted
     assert "<b>" not in formatted
+    assert "\x00" not in formatted
+    assert "\x07" not in formatted
     assert "Fixed updates" in formatted
     assert len(formatted) <= 80
     assert formatted.endswith("...")
