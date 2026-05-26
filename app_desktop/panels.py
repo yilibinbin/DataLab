@@ -236,6 +236,35 @@ def _get_result_style() -> str:
 def build_menu(self):
     menubar = self.menuBar()
 
+    file_menu = menubar.addMenu("文件")
+    self._register_text(file_menu, "文件", "File", "setTitle")
+
+    new_workspace_action = QAction("新建工作区", self)
+    new_workspace_action.setMenuRole(QAction.NoRole)
+    new_workspace_action.triggered.connect(self.new_workspace)
+    file_menu.addAction(new_workspace_action)
+    self._register_text(new_workspace_action, "新建工作区", "New Workspace", "setText")
+
+    open_workspace_action = QAction("打开工作区…", self)
+    open_workspace_action.setMenuRole(QAction.NoRole)
+    open_workspace_action.triggered.connect(self.open_workspace)
+    file_menu.addAction(open_workspace_action)
+    self._register_text(open_workspace_action, "打开工作区…", "Open Workspace…", "setText")
+
+    file_menu.addSeparator()
+
+    save_workspace_action = QAction("保存工作区", self)
+    save_workspace_action.setMenuRole(QAction.NoRole)
+    save_workspace_action.triggered.connect(self.save_workspace)
+    file_menu.addAction(save_workspace_action)
+    self._register_text(save_workspace_action, "保存工作区", "Save Workspace", "setText")
+
+    save_workspace_as_action = QAction("工作区另存为…", self)
+    save_workspace_as_action.setMenuRole(QAction.NoRole)
+    save_workspace_as_action.triggered.connect(self.save_workspace_as)
+    file_menu.addAction(save_workspace_as_action)
+    self._register_text(save_workspace_as_action, "工作区另存为…", "Save Workspace As…", "setText")
+
     lang_menu = menubar.addMenu("语言")
     self._register_text(lang_menu, "语言", "Language", "setTitle")
     action_lang_auto = QAction("自动", self)

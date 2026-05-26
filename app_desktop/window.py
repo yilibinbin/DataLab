@@ -333,6 +333,12 @@ class ExtrapolationWindow(
         self._result_plot_default_zoom = 1.0
         self._zoom_spin_syncing = False
         self._user_zoom_override = False
+        self._workspace_path: Path | None = None
+        self._workspace_dirty = False
+        self._workspace_degraded = False
+        self._workspace_snapshot_only = False
+        self._workspace_snapshot_stale = False
+        self._workspace_restoring = False
 
         self.current_fit_figures: list[Path] = []
         self.current_stats_figures: list[Path] = []
@@ -356,10 +362,12 @@ class ExtrapolationWindow(
         self._system_lang = self._detect_system_language()
         self._build_menu()
         self._build_ui()
+        self._initialize_workspace_tracking()
         self._init_theme_tracking()
         self._update_method_state()
         self._toggle_latex_options(self.generate_latex_checkbox.isChecked())
         self._apply_language(self._system_lang if self._lang_mode == _LANG_AUTO else self._lang_mode)
+        self._update_workspace_window_title()
         app = QApplication.instance()
         if app:
             app.aboutToQuit.connect(self._cleanup_workers)
@@ -375,6 +383,265 @@ class ExtrapolationWindow(
     def _build_left_panel(self):
         from . import panels as _panels
         _panels.build_left_panel(self)
+
+    def _workspace_title(self) -> str:
+        if self._workspace_path is None:
+            return "Untitled"
+        return self._workspace_path.name
+
+    def _update_workspace_window_title(self) -> None:
+        suffix = " *" if self._workspace_dirty else ""
+        self.setWindowTitle(f"DataLab - {self._workspace_title()}{suffix}")
+
+    def _mark_workspace_dirty(self, *_args) -> None:
+        if getattr(self, "_workspace_restoring", False):
+            return
+        self._workspace_dirty = True
+        if self._workspace_snapshot_only and not self._workspace_snapshot_stale:
+            self._workspace_snapshot_stale = True
+            warning = self._tr(
+                "结果为保存的快照，当前输入或配置已更改，请重新计算。",
+                "This is a saved result snapshot. Inputs or settings have changed; rerun to update.",
+            )
+            if hasattr(self, "result_edit") and warning not in self.result_edit.toPlainText():
+                current = self.result_edit.toPlainText()
+                self.result_edit.setPlainText(f"{warning}\n\n{current}" if current else warning)
+        self._update_workspace_window_title()
+
+    def _set_snapshot_controls_enabled(self, enabled: bool) -> None:
+        for widget_name in ("scientific_checkbox", "display_digits_spin"):
+            widget = getattr(self, widget_name, None)
+            if widget is not None:
+                widget.setEnabled(enabled)
+
+    def _initialize_workspace_tracking(self) -> None:
+        widgets = [
+            getattr(self, "data_file_edit", None),
+            getattr(self, "manual_data_edit", None),
+            getattr(self, "constants_file_edit", None),
+            getattr(self, "manual_constants_edit", None),
+            getattr(self, "custom_formula_edit", None),
+            getattr(self, "formula_edit", None),
+            getattr(self, "fit_expr_edit", None),
+            getattr(self, "fit_target_edit", None),
+            getattr(self, "stats_value_column_edit", None),
+            getattr(self, "stats_sigma_column_edit", None),
+            getattr(self, "output_file_edit", None),
+            getattr(self, "caption_edit", None),
+            getattr(self, "latex_edit", None),
+        ]
+        for widget in widgets:
+            if widget is None:
+                continue
+            signal = getattr(widget, "textChanged", None)
+            if signal is not None:
+                signal.connect(self._mark_workspace_dirty)
+        for table_name in ("manual_table", "constants_table"):
+            table = getattr(self, table_name, None)
+            if table is not None:
+                table.itemChanged.connect(self._mark_workspace_dirty)
+        for combo_name in (
+            "mode_combo",
+            "method_combo",
+            "levin_variant_combo",
+            "levin_weight_combo",
+            "error_method_combo",
+            "stats_mode_combo",
+            "fit_model_combo",
+            "latex_engine_combo",
+        ):
+            combo = getattr(self, combo_name, None)
+            if combo is not None:
+                combo.currentIndexChanged.connect(self._mark_workspace_dirty)
+        for check_name in (
+            "use_file_checkbox",
+            "constants_checkbox",
+            "use_constants_file_checkbox",
+            "generate_latex_checkbox",
+            "generate_plots_checkbox",
+            "verbose_checkbox",
+            "scientific_checkbox",
+            "dcolumn_checkbox",
+            "caption_checkbox",
+            "fit_weighted_checkbox",
+            "fit_mcmc_refine",
+            "enable_constraints_checkbox",
+            "stats_sample_checkbox",
+            "stats_weight_variance_checkbox",
+            "log_x_checkbox",
+            "log_y_checkbox",
+        ):
+            checkbox = getattr(self, check_name, None)
+            if checkbox is not None:
+                checkbox.toggled.connect(self._mark_workspace_dirty)
+        for spin_name in (
+            "mpmath_precision_spin",
+            "uncertainty_digits_spin",
+            "display_digits_spin",
+            "latex_input_precision_spin",
+            "latex_group_size_spin",
+            "levin_order_spin",
+            "levin_beta_spin",
+            "richardson_p_spin",
+            "error_order_spin",
+            "error_mc_samples_spin",
+            "inverse_min_spin",
+            "inverse_max_spin",
+            "pade_m_spin",
+            "pade_n_spin",
+            "poly_degree_spin",
+        ):
+            spin = getattr(self, spin_name, None)
+            if spin is not None:
+                spin.valueChanged.connect(self._mark_workspace_dirty)
+
+    def _workspace_guard_running(self) -> bool:
+        if self._has_running_worker():
+            QMessageBox.information(
+                self,
+                self._tr("任务正在运行", "Task running"),
+                self._tr(
+                    "请等待或停止当前计算后再保存或打开工作区。",
+                    "Wait for or stop the current task before saving or opening a workspace.",
+                ),
+            )
+            return False
+        return True
+
+    def _confirm_workspace_discard_or_save(self) -> bool:
+        if not self._workspace_dirty:
+            return True
+        reply = QMessageBox.question(
+            self,
+            self._tr("保存工作区？", "Save workspace?"),
+            self._tr(
+                "当前工作区有未保存更改。是否先保存？",
+                "The current workspace has unsaved changes. Save before continuing?",
+            ),
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return False
+        if reply == QMessageBox.StandardButton.Save:
+            return self.save_workspace()
+        return True
+
+    def new_workspace(self, _checked: bool = False) -> bool:
+        if not self._workspace_guard_running() or not self._confirm_workspace_discard_or_save():
+            return False
+        self._workspace_restoring = True
+        try:
+            self._workspace_path = None
+            self._workspace_dirty = False
+            self._workspace_degraded = False
+            self._workspace_snapshot_only = False
+            self._workspace_snapshot_stale = False
+            self.result_edit.clear()
+            self.log_edit.clear()
+            self.latex_edit.clear()
+            self._reset_csv_data()
+            self.result_plot_bytes = None
+            self._result_plot_base_pixmap = None
+            if hasattr(self, "result_plot_label"):
+                self.result_plot_label.setText(self._tr("尚无图片", "No image yet"))
+            self._last_result_kind = None
+            self._last_result_payloads = {}
+        finally:
+            self._workspace_restoring = False
+        self._update_workspace_window_title()
+        return True
+
+    def save_workspace(self, _checked: bool = False) -> bool:
+        if self._workspace_path is None:
+            return self.save_workspace_as()
+        return self._save_workspace_to_path(self._workspace_path)
+
+    def save_workspace_as(self, _checked: bool = False) -> bool:
+        if not self._workspace_guard_running():
+            return False
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            self._tr("保存工作区", "Save Workspace"),
+            str(self._workspace_path or Path("analysis.datalab")),
+            "DataLab Workspace (*.datalab);;All Files (*)",
+        )
+        if not filename:
+            return False
+        path = Path(filename)
+        if path.suffix.lower() != ".datalab":
+            path = path.with_suffix(".datalab")
+        return self._save_workspace_to_path(path)
+
+    def _save_workspace_to_path(self, path: Path) -> bool:
+        if not self._workspace_guard_running():
+            return False
+        if self._workspace_degraded and self._workspace_path == path:
+            reply = QMessageBox.warning(
+                self,
+                self._tr("降级工作区", "Degraded workspace"),
+                self._tr(
+                    "此工作区曾以降级模式打开。建议使用“另存为”修复副本。仍要覆盖原文件吗？",
+                    "This workspace was opened in degraded mode. Save As is recommended. Overwrite anyway?",
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return False
+        try:
+            from app_desktop.workspace_controller import capture_workspace
+            from shared.workspace_io import write_workspace
+
+            bundle = capture_workspace(self, title=path.stem)
+            write_workspace(path, bundle.manifest, bundle.attachments)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, self._tr("保存失败", "Save failed"), str(exc))
+            return False
+        self._workspace_path = path
+        self._workspace_dirty = False
+        self._workspace_degraded = False
+        self._update_workspace_window_title()
+        return True
+
+    def open_workspace(self, _checked: bool = False) -> bool:
+        if not self._workspace_guard_running() or not self._confirm_workspace_discard_or_save():
+            return False
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            self._tr("打开工作区", "Open Workspace"),
+            "",
+            "DataLab Workspace (*.datalab);;All Files (*)",
+        )
+        if not filename:
+            return False
+        return self._open_workspace_from_path(Path(filename))
+
+    def _open_workspace_from_path(self, path: Path) -> bool:
+        if not self._workspace_guard_running():
+            return False
+        try:
+            from app_desktop.workspace_controller import restore_workspace
+            from shared.workspace_io import read_workspace
+
+            loaded = read_workspace(path)
+            self._workspace_restoring = True
+            try:
+                restore_workspace(self, loaded.manifest, loaded.attachments)
+            finally:
+                self._workspace_restoring = False
+        except Exception as exc:  # noqa: BLE001
+            self._workspace_restoring = False
+            QMessageBox.critical(self, self._tr("打开失败", "Open failed"), str(exc))
+            return False
+        self._workspace_path = path
+        self._workspace_dirty = False
+        self._workspace_degraded = False
+        self._workspace_snapshot_stale = False
+        self._update_workspace_window_title()
+        return True
 
     def _next_variable_name(self) -> str:
         existing = {
@@ -1237,6 +1504,8 @@ class ExtrapolationWindow(
             self._csv_suggest_name = suggestion
         if hasattr(self, "export_csv_btn"):
             self.export_csv_btn.setEnabled(bool(self._csv_rows))
+        if hasattr(self, "_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
+            self._mark_workspace_dirty()
 
     def _export_csv_data(self):
         if not getattr(self, "_csv_rows", None):
@@ -1283,6 +1552,11 @@ class ExtrapolationWindow(
         if not hasattr(self, "_last_result_payloads"):
             self._last_result_payloads = {}
         self._last_result_payloads[kind] = payload
+        self._workspace_snapshot_only = False
+        self._workspace_snapshot_stale = False
+        self._set_snapshot_controls_enabled(True)
+        if hasattr(self, "_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
+            self._mark_workspace_dirty()
 
     def _refresh_display_format(self):
         """Reformat the last shown results using the current display format controls."""
@@ -1496,6 +1770,10 @@ class ExtrapolationWindow(
                 "Splitter state save skipped during close",
                 exc_info=True,
             )
+
+        if event.spontaneous() and not self._confirm_workspace_discard_or_save():
+            event.ignore()
+            return
 
         if self._has_running_worker():
             reply = QMessageBox.question(
