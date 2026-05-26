@@ -9,7 +9,9 @@ param(
     # runtime discovery layer (shared.latex_engine) looks under
     # <app>\resources\tinytex\bin\<arch>; the installer step below
     # puts it exactly there.
-    [switch]$BundleTinyTeX
+    [switch]$BundleTinyTeX,
+    [switch]$BuildInnoInstaller,
+    [string]$InnoSetupPath = ""
 )
 
 Set-StrictMode -Version Latest
@@ -86,6 +88,56 @@ function New-BuildDirectory {
         Remove-Item -Path $Path -Recurse -Force
     }
     New-Item -ItemType Directory -Path $Path | Out-Null
+}
+
+function Get-ProjectVersion {
+    param([string]$PyprojectPath)
+    if (-not (Test-Path $PyprojectPath)) {
+        throw "pyproject.toml not found: $PyprojectPath"
+    }
+
+    foreach ($line in Get-Content -Path $PyprojectPath -Encoding UTF8) {
+        if ($line -match '^\s*version\s*=\s*"([^"]+)"\s*$') {
+            return $Matches[1]
+        }
+    }
+    throw "Unable to parse project version from pyproject.toml."
+}
+
+function Resolve-InnoSetupCompiler {
+    param([string]$PathOverride)
+
+    $candidates = @()
+    if ($PathOverride) {
+        if (Test-Path $PathOverride -PathType Container) {
+            $candidates += (Join-Path $PathOverride "ISCC.exe")
+        } else {
+            $candidates += $PathOverride
+        }
+    }
+
+    $programFilesX86 = [Environment]::GetFolderPath("ProgramFilesX86")
+    if ($programFilesX86) {
+        $candidates += (Join-Path $programFilesX86 "Inno Setup 6\ISCC.exe")
+    }
+
+    $programFiles = [Environment]::GetFolderPath("ProgramFiles")
+    if ($programFiles) {
+        $candidates += (Join-Path $programFiles "Inno Setup 6\ISCC.exe")
+    }
+
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path $candidate -PathType Leaf)) {
+            return (Resolve-Path $candidate).Path
+        }
+    }
+
+    $pathCommand = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
+    if ($pathCommand) {
+        return $pathCommand.Source
+    }
+
+    throw "Unable to locate ISCC.exe. Install Inno Setup 6, add ISCC.exe to PATH, or pass -InnoSetupPath."
 }
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -338,9 +390,27 @@ if (-not $SkipOneFile) {
     Invoke-WithArgs $pyinstallerBase ($commonArgs + @("--windowed", "--onefile", "--name", $onefileName) + $entryArgs)
 }
 
+if ($BuildInnoInstaller) {
+    Write-Host "[5c/6] Building Inno Setup installer..."
+    $appVersion = Get-ProjectVersion -PyprojectPath $pyprojectFile
+    $env:DATALAB_APP_VERSION = $appVersion
+    $env:DATALAB_WINDOWS_DIST_DIR = Join-Path $distDir $onedirName
+    $env:DATALAB_WINDOWS_INSTALLER_DIR = $distDir
+
+    if (-not (Test-Path $env:DATALAB_WINDOWS_DIST_DIR -PathType Container)) {
+        throw "PyInstaller onedir output not found: $env:DATALAB_WINDOWS_DIST_DIR"
+    }
+
+    $iscc = Resolve-InnoSetupCompiler -PathOverride $InnoSetupPath
+    Invoke-WithArgs @($iscc) @((Join-Path $projectRoot "packaging\windows\DataLab.iss"))
+}
+
 Write-Host "[6/6] Windows packaging complete."
 Write-Host ("onedir output : {0}" -f (Join-Path $distDir $onedirName))
 if (-not $SkipOneFile) {
     Write-Host ("onefile output: {0}" -f (Join-Path $distDir ("{0}.exe" -f $onefileName)))
+}
+if ($BuildInnoInstaller) {
+    Write-Host ("installer    : {0}" -f (Join-Path $distDir ("DataLab-{0}-Windows-x64.exe" -f $env:DATALAB_APP_VERSION)))
 }
 Write-Host "Distribute the contents of dist/ to end users; Python and all dependencies are bundled."
