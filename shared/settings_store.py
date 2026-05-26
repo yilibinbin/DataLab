@@ -86,6 +86,7 @@ _ALLOWED_KEY_PREFIXES: tuple[str, ...] = (
     "Extrapolation/",  # last-used method / parameters
     "Preview/",     # zoom, dark mode, last dpi
     "Preferences/", # generic UI prefs
+    "Update/",      # non-sensitive update preferences/cache state
 )
 
 
@@ -311,6 +312,75 @@ class SettingsStore:
         return value
 
     # ------------------------------------------------------------------
+    # Small typed helpers (plain-text non-sensitive preferences)
+    # ------------------------------------------------------------------
+
+    def save_bool(self, key: str, value: bool) -> None:
+        """Persist a boolean preference in plaintext QSettings."""
+        _validate_key(key)
+        try:
+            self._store.setValue(key, bool(value))
+            self._store.sync()
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("SettingsStore.save_bool(%s) raised: %s", key, exc)
+        self._check_status("save_bool", key)
+
+    def load_bool(self, key: str, default: bool = False) -> bool:
+        """Load a boolean preference, accepting Qt/string persisted values."""
+        if not isinstance(default, bool):
+            raise TypeError(
+                f"default must be bool, got {type(default).__name__}"
+            )
+        try:
+            raw = self._store.value(key)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("SettingsStore.load_bool(%s) failed: %s", key, exc)
+            return default
+        if raw is None:
+            return default
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, int):
+            return bool(raw)
+        if isinstance(raw, str):
+            lowered = raw.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+        return default
+
+    def save_string(self, key: str, value: str | None) -> None:
+        """Persist a short non-sensitive string. ``None`` clears the key."""
+        _validate_key(key)
+        try:
+            if value is None:
+                self._store.remove(key)
+            else:
+                self._store.setValue(key, str(value))
+            self._store.sync()
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("SettingsStore.save_string(%s) raised: %s", key, exc)
+        self._check_status("save_string", key)
+
+    def load_string(self, key: str, default: str = "") -> str:
+        """Load a string preference. Non-string values are coerced safely."""
+        if not isinstance(default, str):
+            raise TypeError(
+                f"default must be str, got {type(default).__name__}"
+            )
+        try:
+            raw = self._store.value(key)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("SettingsStore.load_string(%s) failed: %s", key, exc)
+            return default
+        if raw is None:
+            return default
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8", errors="replace")
+        return str(raw)
+
+    # ------------------------------------------------------------------
     # Bookkeeping
     # ------------------------------------------------------------------
 
@@ -339,6 +409,15 @@ class SettingsStore:
 KEY_MAIN_WINDOW_GEOMETRY = "MainWindow/geometry"
 KEY_MAIN_WINDOW_STATE = "MainWindow/state"
 KEY_MAIN_SPLITTER_STATE = "MainWindow/main_splitter_state"
+
+KEY_UPDATE_AUTO_ENABLED = "Update/prefs/auto_update_enabled"
+KEY_UPDATE_SKIPPED_VERSION = "Update/prefs/skipped_version"
+KEY_UPDATE_LAST_CHECKED_AT = "Update/state/last_checked_at"
+KEY_UPDATE_LAST_SEEN_VERSION = "Update/state/last_seen_current_version"
+KEY_UPDATE_CACHE_VERSION = "Update/cache/release_version"
+KEY_UPDATE_CACHE_NOTES = "Update/cache/release_notes"
+KEY_UPDATE_CACHE_URL = "Update/cache/release_url"
+KEY_UPDATE_CACHE_PUBLISHED_AT = "Update/cache/release_published_at"
 
 
 # QSplitter saveState() blob format (Qt 6.x): big-endian 32-bit magic
