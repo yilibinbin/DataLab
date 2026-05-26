@@ -60,6 +60,14 @@ class UpdatePayload:
     asset: InstallerAsset
 
 
+@dataclass(frozen=True)
+class _LockSnapshot:
+    st_dev: int
+    st_ino: int
+    st_mtime_ns: int
+    content: bytes
+
+
 def current_platform_key() -> str:
     system = platform.system().lower()
     machine = platform.machine().lower()
@@ -295,11 +303,36 @@ def resolve_update_payload_for_release(
     )
 
 
+def _read_lock_snapshot(path: Path) -> _LockSnapshot:
+    stat_result = path.stat()
+    return _LockSnapshot(
+        st_dev=stat_result.st_dev,
+        st_ino=stat_result.st_ino,
+        st_mtime_ns=stat_result.st_mtime_ns,
+        content=path.read_bytes(),
+    )
+
+
+def _same_lock_snapshot(left: _LockSnapshot, right: _LockSnapshot) -> bool:
+    return (
+        left.st_dev,
+        left.st_ino,
+        left.st_mtime_ns,
+        left.content,
+    ) == (
+        right.st_dev,
+        right.st_ino,
+        right.st_mtime_ns,
+        right.content,
+    )
+
+
 class UpdateCacheLock:
     def __init__(self, stale_after_seconds: int = 6 * 60 * 60) -> None:
         self._stale_after_seconds = stale_after_seconds
         self._path = update_cache_dir() / ".update.lock"
         self._acquired = False
+        self._token = f"{os.getpid()}:{time.time_ns()}"
 
     def __enter__(self) -> UpdateCacheLock:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -308,19 +341,22 @@ class UpdateCacheLock:
                 fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError as exc:
                 try:
-                    stat_result = self._path.stat()
+                    observed = _read_lock_snapshot(self._path)
                 except FileNotFoundError:
                     continue
 
-                age_seconds = time.time() - stat_result.st_mtime
+                age_seconds = time.time() - (observed.st_mtime_ns / 1_000_000_000)
                 if age_seconds <= self._stale_after_seconds:
                     raise UpdatePayloadError("update already in progress") from exc
 
                 try:
-                    stat_result = self._path.stat()
+                    current = _read_lock_snapshot(self._path)
                 except FileNotFoundError:
                     continue
-                age_seconds = time.time() - stat_result.st_mtime
+                if not _same_lock_snapshot(observed, current):
+                    raise UpdatePayloadError("update already in progress") from exc
+
+                age_seconds = time.time() - (current.st_mtime_ns / 1_000_000_000)
                 if age_seconds <= self._stale_after_seconds:
                     raise UpdatePayloadError("update already in progress") from exc
 
@@ -334,7 +370,7 @@ class UpdateCacheLock:
             raise UpdatePayloadError("update already in progress")
 
         with os.fdopen(fd, "w", encoding="utf-8") as file:
-            file.write(str(os.getpid()))
+            file.write(self._token)
         self._acquired = True
         return self
 

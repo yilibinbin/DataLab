@@ -393,7 +393,7 @@ def test_update_lock_replaces_stale_holder(tmp_path: Path, monkeypatch: pytest.M
     os.utime(lock_path, (stale_time, stale_time))
 
     with UpdateCacheLock(stale_after_seconds=1):
-        assert lock_path.read_text(encoding="utf-8") == str(os.getpid())
+        assert lock_path.read_text(encoding="utf-8").startswith(f"{os.getpid()}:")
 
     assert not lock_path.exists()
 
@@ -438,6 +438,45 @@ def test_update_lock_retries_when_stale_lock_disappears_during_stat(
     monkeypatch.setattr(Path, "stat", flaky_stat)
 
     with UpdateCacheLock(stale_after_seconds=1):
-        assert lock_path.read_text(encoding="utf-8") == str(os.getpid())
+        assert lock_path.read_text(encoding="utf-8").startswith(f"{os.getpid()}:")
 
     assert calls == 1
+
+
+def test_update_lock_does_not_remove_fresh_lock_that_replaces_stale_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from shared import update_payload
+    from shared.update_payload import UpdateCacheLock, UpdatePayloadError
+
+    monkeypatch.setattr(update_payload, "update_cache_dir", lambda: tmp_path)
+    lock_path = tmp_path / ".update.lock"
+    lock_path.write_text("stale", encoding="utf-8")
+    stale_time = time.time() - 20
+    os.utime(lock_path, (stale_time, stale_time))
+
+    real_stat = Path.stat
+    replaced = False
+    stat_calls = 0
+
+    def racing_stat(path: Path, *args: Any, **kwargs: Any) -> os.stat_result:
+        nonlocal replaced, stat_calls
+        if path == lock_path:
+            stat_calls += 1
+        if path == lock_path and stat_calls == 2 and not replaced:
+            replaced = True
+            stale_stat = real_stat(path, *args, **kwargs)
+            lock_path.unlink()
+            lock_path.write_text("fresh", encoding="utf-8")
+            return stale_stat
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", racing_stat)
+
+    with pytest.raises(UpdatePayloadError, match="already in progress"):
+        with UpdateCacheLock(stale_after_seconds=1):
+            pass
+
+    assert replaced is True
+    assert lock_path.read_text(encoding="utf-8") == "fresh"
