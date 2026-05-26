@@ -6,6 +6,7 @@ so version comparison and network parsing remain easy to test offline.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import sys
@@ -32,6 +33,7 @@ UpdateStatus = Literal["update-available", "up-to-date", "unavailable"]
 class ReleaseAsset:
     name: str
     browser_download_url: str
+    size: int = 0
 
 
 @dataclass(frozen=True)
@@ -137,6 +139,7 @@ def _release_from_payload(payload: dict[str, Any]) -> ReleaseInfo:
         ReleaseAsset(
             name=str(asset.get("name") or ""),
             browser_download_url=str(asset.get("browser_download_url") or ""),
+            size=int(asset.get("size") or 0),
         )
         for asset in payload.get("assets", []) or []
         if isinstance(asset, dict)
@@ -150,6 +153,23 @@ def _release_from_payload(payload: dict[str, Any]) -> ReleaseInfo:
         published_at=str(payload.get("published_at") or ""),
         assets=assets,
     )
+
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def format_release_notes_for_dialog(body: str, *, max_chars: int = 4000) -> str:
+    text = html.unescape(body or "")
+    text = _HTML_TAG_RE.sub("", text)
+    text = _CONTROL_CHARS_RE.sub("", text)
+    lines = [line.rstrip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    text = "\n".join(lines).strip()
+    if not text:
+        return "No release notes were provided."
+    if len(text) > max_chars:
+        return text[: max_chars - 3].rstrip() + "..."
+    return text
 
 
 def _urlopen(request: urllib.request.Request, *, timeout: float) -> Any:
