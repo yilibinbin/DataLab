@@ -329,18 +329,23 @@ PY
     --identifier org.datalab.desktop
     --version "$APP_VERSION"
     --install-location /
+    "$PKG_COMPONENT"
+  )
+  pkgbuild "${PKGBUILD_ARGS[@]}"
+
+  PRODUCTBUILD_ARGS=(
+    --package "$PKG_COMPONENT"
   )
   if [[ -n "${DATALAB_MAC_INSTALLER_IDENTITY:-}" ]]; then
-    echo "[info] Signing PKG with Developer ID Installer identity: $DATALAB_MAC_INSTALLER_IDENTITY"
-    PKGBUILD_ARGS+=(--sign "$DATALAB_MAC_INSTALLER_IDENTITY")
+    echo "[info] Signing final product package with Developer ID Installer identity: $DATALAB_MAC_INSTALLER_IDENTITY"
+    PRODUCTBUILD_ARGS+=(--sign "$DATALAB_MAC_INSTALLER_IDENTITY")
   else
     echo "[warn] DATALAB_MAC_INSTALLER_IDENTITY is not set; pkg is not auto-installable on standard macOS."
     echo "[warn] Expected Developer ID Installer format: Developer ID Installer: Name (TEAMID)"
   fi
-  PKGBUILD_ARGS+=("$PKG_COMPONENT")
+  PRODUCTBUILD_ARGS+=("$PKG_OUTPUT")
 
-  pkgbuild "${PKGBUILD_ARGS[@]}"
-  productbuild --package "$PKG_COMPONENT" "$PKG_OUTPUT"
+  productbuild "${PRODUCTBUILD_ARGS[@]}"
   echo "[info] Installer package: $PKG_OUTPUT"
 fi
 

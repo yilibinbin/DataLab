@@ -12,3 +12,11 @@ def test_mac_build_script_has_optional_pkg_packaging() -> None:
     assert "productbuild" in text
     assert "DataLab-${APP_VERSION}-macOS.pkg" in text
     assert "Developer ID Installer" in text
+    assert "PRODUCTBUILD_ARGS=(" in text
+    assert 'PRODUCTBUILD_ARGS+=(--sign "$DATALAB_MAC_INSTALLER_IDENTITY")' in text
+    assert 'productbuild "${PRODUCTBUILD_ARGS[@]}"' in text
+
+    pkgbuild_section = text[
+        text.index("PKGBUILD_ARGS=(") : text.index('pkgbuild "${PKGBUILD_ARGS[@]}"')
+    ]
+    assert "--sign" not in pkgbuild_section
