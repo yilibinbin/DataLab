@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import time
 from pathlib import Path
 from typing import Any, Callable, Literal, cast
 
@@ -250,6 +252,25 @@ class FakeResponse:
         return self._content[start:end]
 
 
+class ChunkedFakeResponse:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+        self._offset = 0
+
+    def __enter__(self) -> ChunkedFakeResponse:
+        return self
+
+    def __exit__(self, *_: object) -> Literal[False]:
+        return False
+
+    def read(self, _size: int = -1) -> bytes:
+        if self._offset >= len(self._chunks):
+            raise AssertionError("download continued after declared size overflow")
+        chunk = self._chunks[self._offset]
+        self._offset += 1
+        return chunk
+
+
 def test_download_installer_verifies_size_and_sha(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -317,6 +338,35 @@ def test_download_installer_deletes_bad_sha(
     assert not (tmp_path / f"{asset.name}.part").exists()
 
 
+def test_download_installer_deletes_declared_size_overflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from shared import update_payload
+    from shared.update_payload import InstallerAsset, UpdatePayloadError, download_and_verify_installer
+
+    declared_content = b"installer"
+    asset = InstallerAsset(
+        platform_key="macos",
+        name="DataLab-2.3.0-macOS.pkg",
+        url="https://example.invalid/mac.pkg",
+        sha256=hashlib.sha256(declared_content).hexdigest(),
+        size_bytes=len(declared_content),
+    )
+
+    def fake_urlopen(_request: Any, _timeout: float) -> ChunkedFakeResponse:
+        return ChunkedFakeResponse([declared_content, b"x"])
+
+    monkeypatch.setattr(update_payload, "_urlopen", fake_urlopen)
+    monkeypatch.setattr(update_payload, "update_cache_dir", lambda: tmp_path)
+
+    with pytest.raises(UpdatePayloadError, match="size mismatch"):
+        download_and_verify_installer(asset)
+
+    assert not (tmp_path / asset.name).exists()
+    assert not (tmp_path / f"{asset.name}.part").exists()
+
+
 def test_update_lock_rejects_second_holder(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -330,3 +380,64 @@ def test_update_lock_rejects_second_holder(
         with pytest.raises(UpdatePayloadError, match="already in progress"):
             with UpdateCacheLock():
                 pass
+
+
+def test_update_lock_replaces_stale_holder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from shared import update_payload
+    from shared.update_payload import UpdateCacheLock
+
+    monkeypatch.setattr(update_payload, "update_cache_dir", lambda: tmp_path)
+    lock_path = tmp_path / ".update.lock"
+    lock_path.write_text("stale", encoding="utf-8")
+    stale_time = time.time() - 20
+    os.utime(lock_path, (stale_time, stale_time))
+
+    with UpdateCacheLock(stale_after_seconds=1):
+        assert lock_path.read_text(encoding="utf-8") == str(os.getpid())
+
+    assert not lock_path.exists()
+
+
+def test_update_lock_rejects_fresh_holder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from shared import update_payload
+    from shared.update_payload import UpdateCacheLock, UpdatePayloadError
+
+    monkeypatch.setattr(update_payload, "update_cache_dir", lambda: tmp_path)
+    lock_path = tmp_path / ".update.lock"
+    lock_path.write_text("fresh", encoding="utf-8")
+
+    with pytest.raises(UpdatePayloadError, match="already in progress"):
+        with UpdateCacheLock(stale_after_seconds=60):
+            pass
+
+    assert lock_path.read_text(encoding="utf-8") == "fresh"
+
+
+def test_update_lock_retries_when_stale_lock_disappears_during_stat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from shared import update_payload
+    from shared.update_payload import UpdateCacheLock
+
+    monkeypatch.setattr(update_payload, "update_cache_dir", lambda: tmp_path)
+    lock_path = tmp_path / ".update.lock"
+    lock_path.write_text("stale", encoding="utf-8")
+
+    real_stat = Path.stat
+    calls = 0
+
+    def flaky_stat(path: Path, *args: Any, **kwargs: Any) -> os.stat_result:
+        nonlocal calls
+        if path == lock_path and calls == 0:
+            calls += 1
+            lock_path.unlink()
+            raise FileNotFoundError(path)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", flaky_stat)
+
+    with UpdateCacheLock(stale_after_seconds=1):
+        assert lock_path.read_text(encoding="utf-8") == str(os.getpid())
+
+    assert calls == 1

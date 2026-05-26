@@ -35,6 +35,7 @@ _PLATFORM_SUFFIXES = {
     "windows-x64": ".exe",
 }
 _DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+_LOCK_ACQUIRE_ATTEMPTS = 5
 
 
 class UpdatePayloadError(ValueError):
@@ -249,9 +250,14 @@ def download_and_verify_installer(
                     chunk = response.read(_DOWNLOAD_CHUNK_BYTES)
                     if not chunk:
                         break
-                    bytes_written += len(chunk)
-                    if bytes_written > MAX_INSTALLER_BYTES:
+                    next_size = bytes_written + len(chunk)
+                    if next_size > asset.size_bytes:
+                        raise UpdatePayloadError(
+                            f"size mismatch: expected {asset.size_bytes}, got more than {asset.size_bytes}"
+                        )
+                    if next_size > MAX_INSTALLER_BYTES:
                         raise UpdatePayloadError("installer exceeds maximum size")
+                    bytes_written = next_size
                     file.write(chunk)
 
         if bytes_written != asset.size_bytes:
@@ -297,16 +303,35 @@ class UpdateCacheLock:
 
     def __enter__(self) -> UpdateCacheLock:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        if self._path.exists():
-            age_seconds = time.time() - self._path.stat().st_mtime
-            if age_seconds <= self._stale_after_seconds:
-                raise UpdatePayloadError("update already in progress")
-            self._path.unlink(missing_ok=True)
+        for _attempt in range(_LOCK_ACQUIRE_ATTEMPTS):
+            try:
+                fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError as exc:
+                try:
+                    stat_result = self._path.stat()
+                except FileNotFoundError:
+                    continue
 
-        try:
-            fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError as exc:
-            raise UpdatePayloadError("update already in progress") from exc
+                age_seconds = time.time() - stat_result.st_mtime
+                if age_seconds <= self._stale_after_seconds:
+                    raise UpdatePayloadError("update already in progress") from exc
+
+                try:
+                    stat_result = self._path.stat()
+                except FileNotFoundError:
+                    continue
+                age_seconds = time.time() - stat_result.st_mtime
+                if age_seconds <= self._stale_after_seconds:
+                    raise UpdatePayloadError("update already in progress") from exc
+
+                try:
+                    self._path.unlink()
+                except FileNotFoundError:
+                    continue
+                continue
+            break
+        else:
+            raise UpdatePayloadError("update already in progress")
 
         with os.fdopen(fd, "w", encoding="utf-8") as file:
             file.write(str(os.getpid()))
