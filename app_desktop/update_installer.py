@@ -49,7 +49,7 @@ def _argv(path: Path, platform_key: str) -> list[str]:
             raise InstallerLaunchError("installer extension must be .pkg for macos")
         if system != "Darwin":
             raise InstallerLaunchError("platform mismatch: macos requires Darwin")
-        return ["/usr/sbin/installer", "-pkg", str(path), "-target", "/"]
+        return ["/usr/bin/open", str(path)]
 
     raise InstallerLaunchError(f"unsupported platform: {platform_key}")
 

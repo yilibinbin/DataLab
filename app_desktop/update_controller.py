@@ -8,9 +8,15 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Protocol
 
-from app_desktop.update_dialogs import build_update_message
+from app_desktop.update_dialogs import build_post_update_notice, build_update_message
 from app_desktop.update_installer import launch_installer as launch_platform_installer
-from shared.update_checker import RELEASES_URL, ReleaseInfo, UpdateCheckResult
+from shared.update_checker import (
+    RELEASES_URL,
+    ReleaseInfo,
+    UpdateCheckResult,
+    current_version,
+    normalize_version_tag,
+)
 from shared.update_checker import check_for_updates as default_check_for_updates
 from shared.update_payload import (
     InstallerAsset,
@@ -20,7 +26,7 @@ from shared.update_payload import (
     download_and_verify_installer,
     resolve_update_payload_for_release,
 )
-from shared.update_preferences import UpdatePreferences
+from shared.update_preferences import CachedReleaseNotes, UpdatePreferences
 
 
 class UpdateState(Enum):
@@ -45,6 +51,8 @@ class UpdatePreferencesLike(Protocol):
     def mark_checked(self, when: datetime) -> None: ...
     def is_skipped(self, version: str) -> bool: ...
     def skip_version(self, version: str) -> None: ...
+    def cached_release_notes(self) -> CachedReleaseNotes | None: ...
+    def consume_version_changed_notice(self, current_version: str) -> bool: ...
 
     def cache_release_notes(
         self,
@@ -91,6 +99,24 @@ class UpdateController:
         if not self._preferences.should_auto_check(self.now()):
             return
         self._run_check(manual=False)
+
+    def maybe_show_startup_update_notice(self) -> None:
+        cached = self._preferences.cached_release_notes()
+        if cached is None:
+            return
+        version = current_version()
+        if normalize_version_tag(cached.version) != normalize_version_tag(version):
+            return
+        if not self._preferences.consume_version_changed_notice(version):
+            return
+        message = build_post_update_notice(
+            version=version,
+            notes=cached.notes,
+            url=cached.url,
+            published_at=cached.published_at,
+            lang=self._lang(),
+        )
+        self.window.information("Update Complete", message)
 
     def _run_check(self, *, manual: bool) -> None:
         self.state = UpdateState.CHECKING

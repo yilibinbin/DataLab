@@ -34,6 +34,7 @@ def test_window_delegates_update_flow_to_controller() -> None:
     assert "self._update_controller = UpdateController(self)" in text
     assert "self._update_controller.check_now()" in text
     assert "self._update_controller.set_auto_update_enabled" in text
+    assert "self._update_controller.maybe_show_startup_update_notice" in text
     assert "self._update_controller.maybe_auto_check" in text
     assert "def exit_for_update" in text
 

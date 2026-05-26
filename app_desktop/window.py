@@ -370,6 +370,7 @@ class ExtrapolationWindow(
         self._toggle_latex_options(self.generate_latex_checkbox.isChecked())
         self._apply_language(self._system_lang if self._lang_mode == _LANG_AUTO else self._lang_mode)
         self._update_workspace_window_title()
+        QTimer.singleShot(500, self._update_controller.maybe_show_startup_update_notice)
         QTimer.singleShot(1500, self._update_controller.maybe_auto_check)
         app = QApplication.instance()
         if app:

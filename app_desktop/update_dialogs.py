@@ -36,3 +36,32 @@ def build_update_message(
         "系统可能显示安全或管理员授权提示。安装器启动后 DataLab 将关闭。"
         f"{skipped}"
     )
+
+
+def build_post_update_notice(
+    *,
+    version: str,
+    notes: str,
+    url: str,
+    published_at: str,
+    lang: str,
+) -> str:
+    formatted_notes = format_release_notes_for_dialog(notes)
+    if lang == "en":
+        published = f"Published: {published_at}\n" if published_at else ""
+        release = f"Release: {url}\n\n" if url else "\n"
+        return (
+            f"DataLab has been updated to version {version}.\n\n"
+            f"{published}"
+            f"{release}"
+            f"Release notes:\n{formatted_notes}"
+        )
+
+    published = f"发布时间：{published_at}\n" if published_at else ""
+    release = f"发布页面：{url}\n\n" if url else "\n"
+    return (
+        f"DataLab 已更新到版本 {version}。\n\n"
+        f"{published}"
+        f"{release}"
+        f"本次更新内容：\n{formatted_notes}"
+    )

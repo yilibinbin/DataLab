@@ -7,6 +7,7 @@ from typing import Callable
 from app_desktop.update_controller import UpdateController
 from shared.update_checker import ReleaseInfo, UpdateCheckResult
 from shared.update_payload import InstallerAsset, UpdatePayload
+from shared.update_preferences import CachedReleaseNotes
 
 
 class FakePreferences:
@@ -16,6 +17,9 @@ class FakePreferences:
         self.checked_at: datetime | None = None
         self.skipped: set[str] = set()
         self.cached: list[tuple[str, str, str, str]] = []
+        self.cached_notice: CachedReleaseNotes | None = None
+        self.last_seen_versions: list[str] = []
+        self.consume_notice = True
 
     def auto_update_enabled(self) -> bool:
         return self.enabled
@@ -35,6 +39,13 @@ class FakePreferences:
 
     def skip_version(self, version: str) -> None:
         self.skipped.add(version)
+
+    def cached_release_notes(self) -> CachedReleaseNotes | None:
+        return self.cached_notice
+
+    def consume_version_changed_notice(self, current_version: str) -> bool:
+        self.last_seen_versions.append(current_version)
+        return self.consume_notice
 
     def cache_release_notes(
         self,
@@ -365,6 +376,55 @@ def test_launch_false_resets_idle_without_exit_or_warning(tmp_path: Path) -> Non
     assert window.warnings == []
     assert controller.state is UpdateState.IDLE
     assert window.exited is False
+
+
+def test_startup_update_notice_uses_cached_release_notes_once(monkeypatch) -> None:
+    from app_desktop import update_controller
+
+    prefs = FakePreferences()
+    prefs.cached_notice = CachedReleaseNotes(
+        version="2.3.0",
+        notes="Cached post-update notes",
+        url="https://github.com/yilibinbin/DataLab/releases/tag/v2.3.0",
+        published_at="2026-05-26T00:00:00Z",
+    )
+    window = FakeWindow(english=True)
+    monkeypatch.setattr(update_controller, "current_version", lambda: "2.3.0")
+    controller = UpdateController(
+        window,
+        preferences=prefs,
+        check_for_updates=lambda: (_ for _ in ()).throw(AssertionError("network check")),
+    )
+
+    controller.maybe_show_startup_update_notice()
+    prefs.consume_notice = False
+    controller.maybe_show_startup_update_notice()
+
+    assert len(window.infos) == 1
+    assert window.infos[0][0] == "Update Complete"
+    assert "DataLab has been updated to version 2.3.0" in window.infos[0][1]
+    assert "Cached post-update notes" in window.infos[0][1]
+    assert prefs.last_seen_versions == ["2.3.0", "2.3.0"]
+
+
+def test_startup_update_notice_ignores_cache_for_other_version(monkeypatch) -> None:
+    from app_desktop import update_controller
+
+    prefs = FakePreferences()
+    prefs.cached_notice = CachedReleaseNotes(
+        version="2.2.0",
+        notes="Old notes",
+        url="https://example.invalid/old",
+        published_at="2026-05-25T00:00:00Z",
+    )
+    window = FakeWindow()
+    monkeypatch.setattr(update_controller, "current_version", lambda: "2.3.0")
+    controller = UpdateController(window, preferences=prefs)
+
+    controller.maybe_show_startup_update_notice()
+
+    assert window.infos == []
+    assert prefs.last_seen_versions == []
 
 
 def test_skipped_version_suppresses_auto_but_manual_prompt_indicates_skipped() -> None:

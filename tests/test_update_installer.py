@@ -68,8 +68,8 @@ def test_macos_installer_command_is_constructed_in_code(
     )
 
     assert result.launched is True
-    assert result.argv == ("/usr/sbin/installer", "-pkg", str(path), "-target", "/")
-    assert captured == [["/usr/sbin/installer", "-pkg", str(path), "-target", "/"]]
+    assert result.argv == ("/usr/bin/open", str(path))
+    assert captured == [["/usr/bin/open", str(path)]]
 
 
 def test_windows_launcher_rejects_wrong_extension(
