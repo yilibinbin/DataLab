@@ -247,6 +247,40 @@ pyinstaller "$ENTRY_FILE" \
   "${EXCLUDE_FLAGS[@]}"
 
 APP_BUNDLE="$PROJECT_ROOT/dist/${APP_NAME}.app"
+INFO_PLIST_FILE="$APP_BUNDLE/Contents/Info.plist"
+PLIST_BUDDY="/usr/libexec/PlistBuddy"
+
+if [[ ! -f "$INFO_PLIST_FILE" ]]; then
+  echo "[error] Missing generated Info.plist: $INFO_PLIST_FILE"
+  exit 1
+fi
+
+echo "[3.5/4] Patching macOS document type metadata..."
+"$PLIST_BUDDY" -c "Delete :CFBundleDocumentTypes" "$INFO_PLIST_FILE" 2>/dev/null || true
+"$PLIST_BUDDY" -c "Delete :UTExportedTypeDeclarations" "$INFO_PLIST_FILE" 2>/dev/null || true
+if ! "$PLIST_BUDDY" -c "Set :CFBundleIdentifier org.datalab.desktop" "$INFO_PLIST_FILE" 2>/dev/null; then
+  "$PLIST_BUDDY" -c "Add :CFBundleIdentifier string org.datalab.desktop" "$INFO_PLIST_FILE"
+fi
+
+"$PLIST_BUDDY" -c "Add :CFBundleDocumentTypes array" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :CFBundleDocumentTypes:0 dict" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :CFBundleDocumentTypes:0:CFBundleTypeName string DataLab Workspace" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :CFBundleDocumentTypes:0:CFBundleTypeRole string Editor" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :CFBundleDocumentTypes:0:LSHandlerRank string Owner" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes array" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes:0 string org.datalab.workspace" "$INFO_PLIST_FILE"
+
+"$PLIST_BUDDY" -c "Add :UTExportedTypeDeclarations array" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :UTExportedTypeDeclarations:0 dict" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :UTExportedTypeDeclarations:0:UTTypeIdentifier string org.datalab.workspace" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :UTExportedTypeDeclarations:0:UTTypeDescription string DataLab Workspace" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :UTExportedTypeDeclarations:0:UTTypeConformsTo array" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :UTExportedTypeDeclarations:0:UTTypeConformsTo:0 string public.data" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :UTExportedTypeDeclarations:0:UTTypeTagSpecification dict" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension array" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension:0 string datalab" "$INFO_PLIST_FILE"
+"$PLIST_BUDDY" -c "Add :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.mime-type string application/vnd.datalab.workspace" "$INFO_PLIST_FILE"
+
 STAGING_DIR="$(mktemp -d)"
 STAGED_APP="$STAGING_DIR/${APP_NAME}.app"
 

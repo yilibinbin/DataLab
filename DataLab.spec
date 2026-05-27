@@ -68,6 +68,27 @@ for _pkg in ("mpmath", "emcee", "corner"):
 # erroring on a missing path.
 _icon_path = Path(_rel("build", "macos_gui_build", "app_icon.icns"))
 ICON = str(_icon_path) if _icon_path.is_file() else None
+INFO_PLIST = {
+    "CFBundleDocumentTypes": [
+        {
+            "CFBundleTypeName": "DataLab Workspace",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Owner",
+            "LSItemContentTypes": ["org.datalab.workspace"],
+        }
+    ],
+    "UTExportedTypeDeclarations": [
+        {
+            "UTTypeIdentifier": "org.datalab.workspace",
+            "UTTypeDescription": "DataLab Workspace",
+            "UTTypeConformsTo": ["public.data"],
+            "UTTypeTagSpecification": {
+                "public.filename-extension": ["datalab"],
+                "public.mime-type": "application/vnd.datalab.workspace",
+            },
+        }
+    ],
+}
 
 
 a = Analysis(
@@ -141,5 +162,6 @@ app = BUNDLE(
     coll,
     name="DataLab.app",
     icon=ICON,
-    bundle_identifier=None,
+    bundle_identifier="org.datalab.desktop",
+    info_plist=INFO_PLIST,
 )
