@@ -47,3 +47,12 @@ def test_workspace_window_title_tracks_path_and_dirty_state(qtbot, tmp_path) -> 
 
     win._mark_workspace_dirty()
     assert win.windowTitle() == "DataLab - case.datalab *"
+
+
+def test_window_exposes_workspace_path_open_wrapper() -> None:
+    text = (ROOT / "app_desktop" / "window.py").read_text(encoding="utf-8")
+
+    assert "def open_workspace_path(self, path: Path" in text
+    assert "confirm_discard: bool = True" in text
+    assert "self._confirm_workspace_discard_or_save()" in text
+    assert "return self._open_workspace_from_path(Path(path))" in text
