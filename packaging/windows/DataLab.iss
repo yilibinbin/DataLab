@@ -36,7 +36,6 @@ Root: HKCR; Subkey: ".datalab"; ValueType: string; ValueName: ""; ValueData: "Da
 Root: HKCR; Subkey: ".datalab\OpenWithProgids"; ValueType: string; ValueName: "DataLab.Workspace"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKCR; Subkey: "DataLab.Workspace"; ValueType: string; ValueName: ""; ValueData: "DataLab Workspace"; Flags: uninsdeletekey
 Root: HKCR; Subkey: "DataLab.Workspace\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\DataLab.exe,0"
-; Open command: "{app}\DataLab.exe" "%1"
 Root: HKCR; Subkey: "DataLab.Workspace\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\DataLab.exe"" ""%1"""
 
 [Icons]

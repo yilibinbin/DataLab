@@ -35,10 +35,19 @@ def test_mac_build_preserves_existing_pyinstaller_cli_features_and_patches_info_
 
 def test_windows_inno_registers_datalab_file_association() -> None:
     text = (ROOT / "packaging" / "windows" / "DataLab.iss").read_text(encoding="utf-8")
+    registry_lines = [
+        line
+        for line in text.splitlines()
+        if line.strip().startswith("Root:") and not line.strip().startswith(";")
+    ]
+    open_command_row = next(
+        (line for line in registry_lines if r"DataLab.Workspace\shell\open\command" in line),
+        "",
+    )
 
     assert "ChangesAssociations=yes" in text
     assert "[Registry]" in text
     assert "DataLab.Workspace" in text
     assert '".datalab"' in text
-    assert '"{app}\\DataLab.exe" "%1"' in text
+    assert 'ValueData: """{app}\\DataLab.exe"" ""%1"""' in open_command_row
     assert "OpenWithProgids" in text
