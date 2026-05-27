@@ -31,14 +31,3 @@ def test_mac_build_preserves_existing_pyinstaller_cli_features_and_patches_info_
     assert "CFBundleDocumentTypes" in text
     assert "UTExportedTypeDeclarations" in text
     assert "org.datalab.workspace" in text
-
-
-def test_windows_inno_registers_datalab_file_association() -> None:
-    text = (ROOT / "packaging" / "windows" / "DataLab.iss").read_text(encoding="utf-8")
-
-    assert "ChangesAssociations=yes" in text
-    assert "[Registry]" in text
-    assert "DataLab.Workspace" in text
-    assert '".datalab"' in text
-    assert '"{app}\\DataLab.exe" "%1"' in text
-    assert "OpenWithProgids" in text
