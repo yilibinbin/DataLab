@@ -6,6 +6,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _section_lines(text: str, section_name: str) -> list[str]:
+    section_header = f"[{section_name}]"
+    lines: list[str] = []
+    in_section = False
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            if in_section:
+                break
+            in_section = line == section_header
+            continue
+        if in_section and line and not line.startswith(";"):
+            lines.append(line)
+
+    return lines
+
+
 def test_macos_spec_declares_datalab_document_type_for_direct_spec_builds() -> None:
     text = (ROOT / "DataLab.spec").read_text(encoding="utf-8")
 
@@ -35,19 +53,28 @@ def test_mac_build_preserves_existing_pyinstaller_cli_features_and_patches_info_
 
 def test_windows_inno_registers_datalab_file_association() -> None:
     text = (ROOT / "packaging" / "windows" / "DataLab.iss").read_text(encoding="utf-8")
-    registry_lines = [
-        line
-        for line in text.splitlines()
-        if line.strip().startswith("Root:") and not line.strip().startswith(";")
-    ]
-    open_command_row = next(
-        (line for line in registry_lines if r"DataLab.Workspace\shell\open\command" in line),
-        "",
-    )
+    setup_lines = _section_lines(text, "Setup")
+    registry_lines = _section_lines(text, "Registry")
 
-    assert "ChangesAssociations=yes" in text
-    assert "[Registry]" in text
-    assert "DataLab.Workspace" in text
-    assert '".datalab"' in text
-    assert 'ValueData: """{app}\\DataLab.exe"" ""%1"""' in open_command_row
-    assert "OpenWithProgids" in text
+    assert "ChangesAssociations=yes" in setup_lines
+    assert (
+        'Root: HKCR; Subkey: ".datalab"; ValueType: string; ValueName: ""; '
+        'ValueData: "DataLab.Workspace"; Flags: uninsdeletevalue'
+    ) in registry_lines
+    assert (
+        'Root: HKCR; Subkey: ".datalab\\OpenWithProgids"; ValueType: string; '
+        'ValueName: "DataLab.Workspace"; ValueData: ""; Flags: uninsdeletevalue'
+    ) in registry_lines
+    assert (
+        'Root: HKCR; Subkey: "DataLab.Workspace"; ValueType: string; '
+        'ValueName: ""; ValueData: "DataLab Workspace"; Flags: uninsdeletekey'
+    ) in registry_lines
+    assert (
+        'Root: HKCR; Subkey: "DataLab.Workspace\\DefaultIcon"; ValueType: string; '
+        'ValueName: ""; ValueData: "{app}\\DataLab.exe,0"'
+    ) in registry_lines
+    assert (
+        'Root: HKCR; Subkey: "DataLab.Workspace\\shell\\open\\command"; '
+        'ValueType: string; ValueName: ""; '
+        'ValueData: """{app}\\DataLab.exe"" ""%1"""'
+    ) in registry_lines
