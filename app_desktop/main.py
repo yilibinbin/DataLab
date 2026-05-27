@@ -73,13 +73,14 @@ class WorkspaceOpenDispatcher:
         key = _workspace_path_key(path)
         if key in self._accepted_keys:
             return True
-        self._accepted_keys.add(key)
 
         if self._window is None:
             if self._pending is None:
                 self._pending = (path, confirm_discard)
+                self._accepted_keys.add(key)
             return True
 
+        self._accepted_keys.add(key)
         return bool(
             self._window.open_workspace_path(path, confirm_discard=confirm_discard)  # type: ignore[attr-defined]
         )

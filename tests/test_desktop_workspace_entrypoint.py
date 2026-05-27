@@ -55,6 +55,23 @@ def test_workspace_open_dispatcher_keeps_single_pending_path(tmp_path) -> None:
     assert window.opened == [(first, True)]
 
 
+def test_workspace_open_dispatcher_dropped_pending_path_can_open_later(tmp_path) -> None:
+    from app_desktop.main import WorkspaceOpenDispatcher
+
+    first = tmp_path / "first.datalab"
+    second = tmp_path / "second.datalab"
+    dispatcher = WorkspaceOpenDispatcher()
+    window = _FakeWindow()
+
+    assert dispatcher.request_open(first, confirm_discard=True) is True
+    assert dispatcher.request_open(second, confirm_discard=True) is True
+    dispatcher.set_window(window)
+    assert window.opened == [(first, True)]
+
+    assert dispatcher.request_open(second, confirm_discard=True) is True
+    assert window.opened == [(first, True), (second, True)]
+
+
 def test_workspace_open_dispatcher_deduplicates_paths_after_window_registered(tmp_path) -> None:
     from app_desktop.main import WorkspaceOpenDispatcher
 
