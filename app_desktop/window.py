@@ -611,6 +611,8 @@ class ExtrapolationWindow(
         return True
 
     def open_workspace_path(self, path: Path, *, confirm_discard: bool = True) -> bool:
+        if not self._workspace_guard_running():
+            return False
         if confirm_discard and not self._confirm_workspace_discard_or_save():
             return False
         return self._open_workspace_from_path(Path(path))

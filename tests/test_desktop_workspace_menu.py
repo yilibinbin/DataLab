@@ -56,3 +56,50 @@ def test_window_exposes_workspace_path_open_wrapper() -> None:
     assert "confirm_discard: bool = True" in text
     assert "self._confirm_workspace_discard_or_save()" in text
     assert "return self._open_workspace_from_path(Path(path))" in text
+
+
+def test_open_workspace_path_guard_blocks_confirmation_and_open(
+    qtbot, monkeypatch, tmp_path
+) -> None:
+    from app_desktop.window import ExtrapolationWindow
+
+    win = ExtrapolationWindow()
+    qtbot.addWidget(win)
+    calls: list[str] = []
+
+    monkeypatch.setattr(win, "_workspace_guard_running", lambda: False)
+    monkeypatch.setattr(
+        win, "_confirm_workspace_discard_or_save", lambda: calls.append("confirm")
+    )
+    monkeypatch.setattr(
+        win, "_open_workspace_from_path", lambda path: calls.append("open")
+    )
+
+    assert win.open_workspace_path(tmp_path / "blocked.datalab") is False
+    assert calls == []
+
+
+def test_open_workspace_path_can_skip_discard_confirmation(
+    qtbot, monkeypatch, tmp_path
+) -> None:
+    from app_desktop.window import ExtrapolationWindow
+
+    win = ExtrapolationWindow()
+    qtbot.addWidget(win)
+    calls: list[tuple[str, Path]] = []
+    workspace_path = tmp_path / "case.datalab"
+
+    monkeypatch.setattr(win, "_workspace_guard_running", lambda: True)
+    monkeypatch.setattr(
+        win,
+        "_confirm_workspace_discard_or_save",
+        lambda: (_ for _ in ()).throw(AssertionError("confirmation should be skipped")),
+    )
+    monkeypatch.setattr(
+        win,
+        "_open_workspace_from_path",
+        lambda path: calls.append(("open", path)) or True,
+    )
+
+    assert win.open_workspace_path(workspace_path, confirm_discard=False) is True
+    assert calls == [("open", workspace_path)]
