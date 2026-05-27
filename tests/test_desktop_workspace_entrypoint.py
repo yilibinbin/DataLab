@@ -39,6 +39,16 @@ class _FakeWindow:
         return True
 
 
+class _FlakyWindow:
+    def __init__(self) -> None:
+        self.opened: list[tuple[Path, bool]] = []
+        self.results = [False, True]
+
+    def open_workspace_path(self, path: Path, *, confirm_discard: bool = True) -> bool:
+        self.opened.append((path, confirm_discard))
+        return self.results.pop(0)
+
+
 def test_workspace_open_dispatcher_keeps_single_pending_path(tmp_path) -> None:
     from app_desktop.main import WorkspaceOpenDispatcher
 
@@ -85,6 +95,19 @@ def test_workspace_open_dispatcher_deduplicates_paths_after_window_registered(tm
     assert window.opened == [(path, True)]
 
 
+def test_workspace_open_dispatcher_retries_after_failed_open(tmp_path) -> None:
+    from app_desktop.main import WorkspaceOpenDispatcher
+
+    path = tmp_path / "case.datalab"
+    dispatcher = WorkspaceOpenDispatcher()
+    window = _FlakyWindow()
+    dispatcher.set_window(window)
+
+    assert dispatcher.request_open(path, confirm_discard=True) is False
+    assert dispatcher.request_open(path, confirm_discard=False) is True
+    assert window.opened == [(path, True), (path, False)]
+
+
 def test_workspace_file_open_filter_accepts_qfileopen_event(qtbot, tmp_path) -> None:
     from PySide6.QtGui import QFileOpenEvent
 
@@ -98,3 +121,17 @@ def test_workspace_file_open_filter_accepts_qfileopen_event(qtbot, tmp_path) -> 
 
     assert file_filter.eventFilter(None, QFileOpenEvent(str(path))) is True
     assert window.opened == [(path, True)]
+
+
+def test_workspace_file_open_filter_ignores_non_workspace_file(qtbot, tmp_path) -> None:
+    from PySide6.QtGui import QFileOpenEvent
+
+    from app_desktop.main import WorkspaceFileOpenFilter, WorkspaceOpenDispatcher
+
+    dispatcher = WorkspaceOpenDispatcher()
+    window = _FakeWindow()
+    dispatcher.set_window(window)
+    file_filter = WorkspaceFileOpenFilter(dispatcher)
+
+    assert file_filter.eventFilter(None, QFileOpenEvent(str(tmp_path / "notes.txt"))) is False
+    assert window.opened == []

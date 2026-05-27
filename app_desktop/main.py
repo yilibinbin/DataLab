@@ -80,10 +80,12 @@ class WorkspaceOpenDispatcher:
                 self._accepted_keys.add(key)
             return True
 
-        self._accepted_keys.add(key)
-        return bool(
+        opened = bool(
             self._window.open_workspace_path(path, confirm_discard=confirm_discard)  # type: ignore[attr-defined]
         )
+        if opened:
+            self._accepted_keys.add(key)
+        return opened
 
 
 class WorkspaceFileOpenFilter(QObject):
@@ -101,8 +103,8 @@ class WorkspaceFileOpenFilter(QObject):
         if not raw_path:
             raw_path = event.url().toLocalFile()
         if raw_path:
-            self._dispatcher.request_open(Path(raw_path), confirm_discard=True)
-        return True
+            return self._dispatcher.request_open(Path(raw_path), confirm_discard=True)
+        return False
 
 
 def main() -> None:
