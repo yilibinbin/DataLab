@@ -49,6 +49,13 @@ class _FlakyWindow:
         return self.results.pop(0)
 
 
+class _FakeFileOpenTypeEvent:
+    def type(self):
+        from PySide6.QtCore import QEvent
+
+        return QEvent.Type.FileOpen
+
+
 def test_workspace_open_dispatcher_keeps_single_pending_path(tmp_path) -> None:
     from app_desktop.main import WorkspaceOpenDispatcher
 
@@ -134,4 +141,16 @@ def test_workspace_file_open_filter_ignores_non_workspace_file(qtbot, tmp_path) 
     file_filter = WorkspaceFileOpenFilter(dispatcher)
 
     assert file_filter.eventFilter(None, QFileOpenEvent(str(tmp_path / "notes.txt"))) is False
+    assert window.opened == []
+
+
+def test_workspace_file_open_filter_ignores_non_qfileopen_event(tmp_path) -> None:
+    from app_desktop.main import WorkspaceFileOpenFilter, WorkspaceOpenDispatcher
+
+    dispatcher = WorkspaceOpenDispatcher()
+    window = _FakeWindow()
+    dispatcher.set_window(window)
+    file_filter = WorkspaceFileOpenFilter(dispatcher)
+
+    assert file_filter.eventFilter(None, _FakeFileOpenTypeEvent()) is False
     assert window.opened == []

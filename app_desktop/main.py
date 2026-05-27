@@ -97,7 +97,7 @@ class WorkspaceFileOpenFilter(QObject):
         if event is None or event.type() != QEvent.Type.FileOpen:
             return False
         if not isinstance(event, QFileOpenEvent):
-            return True
+            return False
 
         raw_path = event.file()
         if not raw_path:
