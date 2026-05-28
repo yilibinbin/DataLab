@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import io
 import logging
-import multiprocessing
-import queue
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,8 +9,9 @@ from typing import Any, Callable
 
 import mpmath as mp
 
+from shared.parallel_backend import KillableProcessTaskRunner
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
-from shared.parallel_config import ParallelConfig
+from shared.parallel_config import NestedParallelPolicy, ParallelConfig, ParallelMode
 
 from data_extrapolation_latex_latest import (
     _dual_msg,
@@ -1364,6 +1362,7 @@ class FitJob:
     implicit_definition: ImplicitModelDefinition | None = None
     timeout_seconds: float | None = None
     custom_constants: dict[str, str] | None = None
+    parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
 
 
 @dataclass
@@ -1401,12 +1400,40 @@ class AutoFitRenderResult:
     substituted: str | None
 
 
-_FIT_SUBPROCESS_POLL_INTERVAL = 0.05
-_FIT_SUBPROCESS_TIMEOUT_SLACK = 0.05
-
-
 def _fit_job_requires_process_boundary(job: FitJob) -> bool:
     return job.model_type == "self_consistent"
+
+
+def _serialize_parallel_config(config: ParallelConfig) -> dict[str, Any]:
+    return {
+        "mode": config.mode,
+        "max_workers": config.max_workers,
+        "reserve_cores": config.reserve_cores,
+        "default_worker_cap": config.default_worker_cap,
+        "min_process_tasks": config.min_process_tasks,
+        "nested_policy": config.nested_policy,
+        "process_start_method": config.process_start_method,
+        "enable_new_auto_fit_backend": config.enable_new_auto_fit_backend,
+        "enable_new_implicit_backend": config.enable_new_implicit_backend,
+    }
+
+
+def _deserialize_parallel_config(payload: dict[str, Any] | None) -> ParallelConfig:
+    if not payload:
+        return ParallelConfig()
+    return ParallelConfig(
+        mode=ParallelMode(payload.get("mode", ParallelMode.AUTO)),
+        max_workers=payload.get("max_workers"),
+        reserve_cores=int(payload.get("reserve_cores", 1)),
+        default_worker_cap=int(payload.get("default_worker_cap", 16)),
+        min_process_tasks=int(payload.get("min_process_tasks", 4)),
+        nested_policy=NestedParallelPolicy(
+            payload.get("nested_policy", NestedParallelPolicy.SERIAL_WHEN_NESTED)
+        ),
+        process_start_method=str(payload.get("process_start_method", "spawn")),
+        enable_new_auto_fit_backend=bool(payload.get("enable_new_auto_fit_backend", False)),
+        enable_new_implicit_backend=bool(payload.get("enable_new_implicit_backend", True)),
+    )
 
 
 def _mp_to_string(value: Any, keep_digits: int) -> str:
@@ -1527,6 +1554,7 @@ def _serialize_fit_job(job: FitJob) -> dict[str, Any]:
         "implicit_definition": _serialize_implicit_definition(job.implicit_definition),
         "timeout_seconds": job.timeout_seconds,
         "custom_constants": dict(job.custom_constants or {}),
+        "parallel_config": _serialize_parallel_config(job.parallel_config),
     }
 
 
@@ -1577,6 +1605,7 @@ def _deserialize_fit_job(payload: dict[str, Any]) -> FitJob:
             implicit_definition=_deserialize_implicit_definition(payload.get("implicit_definition")),
             timeout_seconds=payload.get("timeout_seconds"),
             custom_constants=dict(payload.get("custom_constants") or {}),
+            parallel_config=_deserialize_parallel_config(payload.get("parallel_config")),
         )
 
 
@@ -1661,35 +1690,11 @@ def _deserialize_fit_result_payload(payload: dict[str, Any]) -> FitResultPayload
         )
 
 
-def _fit_job_subprocess_entry(result_queue, job_payload: dict[str, Any]) -> None:
-    try:
-        with _mp_precision_guard(int(job_payload["precision"])):
-            job = _deserialize_fit_job(job_payload)
-            payload = _execute_fit_job_payload(job)
-        result_queue.put({"ok": True, "payload": _serialize_fit_result_payload(payload)})
-    except BaseException as exc:  # noqa: BLE001
-        try:
-            result_queue.put({"ok": False, "error": str(exc)})
-        except Exception:
-            pass
-
-
-def _terminate_fit_subprocess(proc: multiprocessing.Process) -> None:
-    if not proc.is_alive():
-        proc.join(timeout=0.2)
-        return
-    try:
-        proc.terminate()
-        proc.join(timeout=1.0)
-        if proc.is_alive():
-            proc.kill()
-            proc.join(timeout=1.0)
-    except Exception:
-        try:
-            proc.kill()
-            proc.join(timeout=1.0)
-        except Exception:
-            pass
+def _fit_job_subprocess_entry(job_payload: dict[str, Any]) -> dict[str, Any]:
+    with _mp_precision_guard(int(job_payload["precision"])):
+        job = _deserialize_fit_job(job_payload)
+        payload = _execute_fit_job_payload(job)
+        return _serialize_fit_result_payload(payload)
 
 
 def _execute_fit_job_payload_subprocess(
@@ -1697,68 +1702,30 @@ def _execute_fit_job_payload_subprocess(
     timeout_seconds: float | None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> FitResultPayload:
-    ctx = multiprocessing.get_context("spawn")
-    result_queue = ctx.Queue()
     job_payload = _serialize_fit_job(job)
-    proc = ctx.Process(
-        target=_fit_job_subprocess_entry,
-        args=(result_queue, job_payload),
-        name=f"datalab-fit-{job.model_type}",
-    )
-    proc.start()
-
     timeout = timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None
-    deadline = (
-        time.monotonic() + timeout + _FIT_SUBPROCESS_TIMEOUT_SLACK
-        if timeout is not None else None
-    )
     try:
-        while True:
-            if should_cancel is not None and should_cancel():
-                _terminate_fit_subprocess(proc)
-                raise InterruptedError(_dual_msg("自洽隐式拟合已取消。", "Self-consistent fit cancelled."))
+        runner = KillableProcessTaskRunner(config=job.parallel_config)
+        payload = runner.run_killable(
+            _fit_job_subprocess_entry,
+            job_payload,
+            timeout_seconds=timeout,
+            should_cancel=should_cancel,
+        )
+    except InterruptedError as exc:
+        raise InterruptedError(_dual_msg(
+            "自洽隐式拟合已取消。",
+            "Self-consistent fit cancelled.",
+        )) from exc
+    except TimeoutError as exc:
+        display_timeout = timeout if timeout is not None else 0.0
+        raise TimeoutError(_dual_msg(
+            f"自洽隐式拟合超过 {display_timeout:.0f}s 仍未完成，已停止。",
+            f"Self-consistent fit exceeded {display_timeout:.0f}s and was stopped.",
+        )) from exc
 
-            try:
-                payload = result_queue.get(timeout=_FIT_SUBPROCESS_POLL_INTERVAL)
-                proc.join(timeout=1.0)
-                if isinstance(payload, dict) and payload.get("ok"):
-                    with _mp_precision_guard(job.precision):
-                        return _deserialize_fit_result_payload(payload["payload"])
-                error = payload.get("error", "unknown error") if isinstance(payload, dict) else str(payload)
-                raise RuntimeError(error)
-            except queue.Empty:
-                pass
-
-            if deadline is not None and time.monotonic() > deadline:
-                _terminate_fit_subprocess(proc)
-                raise TimeoutError(_dual_msg(
-                    f"自洽隐式拟合超过 {timeout:.0f}s 仍未完成，已停止。",
-                    f"Self-consistent fit exceeded {timeout:.0f}s and was stopped.",
-                ))
-
-            if not proc.is_alive():
-                proc.join(timeout=0.2)
-                try:
-                    payload = result_queue.get(timeout=0.2)
-                    if isinstance(payload, dict) and payload.get("ok"):
-                        with _mp_precision_guard(job.precision):
-                            return _deserialize_fit_result_payload(payload["payload"])
-                    error = payload.get("error", "unknown error") if isinstance(payload, dict) else str(payload)
-                    raise RuntimeError(error)
-                except queue.Empty:
-                    pass
-                raise RuntimeError(_dual_msg(
-                    "自洽隐式拟合子进程退出但未返回结果。",
-                    "Self-consistent fit subprocess exited without returning a result.",
-                ))
-    finally:
-        if proc.is_alive():
-            _terminate_fit_subprocess(proc)
-        try:
-            result_queue.close()
-            result_queue.join_thread()
-        except Exception:
-            pass
+    with _mp_precision_guard(job.precision):
+        return _deserialize_fit_result_payload(payload)
 
 
 def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:

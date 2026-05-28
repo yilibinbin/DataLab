@@ -161,7 +161,12 @@ class KillableHandle(Generic[R]):
         default_factory=threading.Lock, init=False, repr=False
     )
 
-    def wait(self, timeout_seconds: float | None = None) -> R:
+    def wait(
+        self,
+        timeout_seconds: float | None = None,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> R:
         deadline = (
             None
             if timeout_seconds is None
@@ -169,6 +174,10 @@ class KillableHandle(Generic[R]):
         )
         try:
             while True:
+                if should_cancel is not None and should_cancel():
+                    self.terminate()
+                    raise InterruptedError("Killable process task cancelled")
+
                 remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
                     self.terminate()
@@ -273,11 +282,13 @@ class KillableProcessTaskRunner:
     def __init__(
         self,
         *,
+        config: ParallelConfig | None = None,
         worker_budget: LocalWorkerBudget | None = None,
-        process_start_method: str = "spawn",
+        process_start_method: str | None = None,
     ):
         self.worker_budget = worker_budget or _GLOBAL_WORKER_BUDGET
-        self.process_start_method = process_start_method
+        self.config = config or ParallelConfig()
+        self.process_start_method = process_start_method or self.config.process_start_method
 
     def run_killable(
         self,
@@ -285,9 +296,13 @@ class KillableProcessTaskRunner:
         payload: T,
         *,
         timeout_seconds: float | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> R:
         handle = self.start_killable(target, payload)
-        return handle.wait(timeout_seconds=timeout_seconds)
+        return handle.wait(
+            timeout_seconds=timeout_seconds,
+            should_cancel=should_cancel,
+        )
 
     def start_killable(
         self,

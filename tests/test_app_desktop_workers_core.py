@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pickle
+import os
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -28,6 +29,7 @@ from fitting.model_selector import AutoFitSummary
 from fitting.hp_fitter import FitResult
 from fitting.implicit_model import ImplicitModelDefinition, ImplicitSolveOptions
 from shared.parallel_config import ParallelConfig, ParallelMode
+from shared.parallel_backend import KillableProcessTaskRunner, current_parallel_depth
 
 
 def _small_self_consistent_fit_job(*, precision: int = 50) -> FitJob:
@@ -114,6 +116,14 @@ def _small_auto_fit_job(
         render_plots=False,
         parallel_config=parallel_config,
     )
+
+
+def _depth_probe_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "payload": payload,
+        "env_depth": os.environ.get("DATALAB_PARALLEL_DEPTH"),
+        "current_depth": current_parallel_depth(),
+    }
 
 
 def test_execute_fit_job_payload_poly_recovers_linear_params():
@@ -330,6 +340,13 @@ def test_self_consistent_fit_job_is_marked_for_process_boundary() -> None:
     assert _fit_job_requires_process_boundary(direct_job) is False
 
 
+def test_fit_job_default_parallel_config_enables_implicit_backend() -> None:
+    job = _small_self_consistent_fit_job()
+
+    assert isinstance(job.parallel_config, ParallelConfig)
+    assert job.parallel_config.enable_new_implicit_backend is True
+
+
 def test_self_consistent_fit_job_payload_is_spawn_picklable() -> None:
     payload = _serialize_fit_job(_small_self_consistent_fit_job())
     roundtrip = pickle.loads(pickle.dumps(payload))
@@ -340,6 +357,148 @@ def test_self_consistent_fit_job_payload_is_spawn_picklable() -> None:
     assert restored.implicit_definition.equation == "a + b*x"
     assert restored.implicit_definition.solve_options.method == "root"
     assert restored.timeout_seconds == 10.0
+    assert restored.parallel_config.process_start_method == "spawn"
+
+
+def test_self_consistent_fit_subprocess_uses_killable_runner_and_forwards_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _small_self_consistent_fit_job()
+    calls: dict[str, object] = {}
+
+    class FakeRunner:
+        def __init__(self, *, config: ParallelConfig) -> None:
+            calls["config"] = config
+
+        def run_killable(
+            self,
+            target: Callable[[dict[str, Any]], dict[str, Any]],
+            payload: dict[str, Any],
+            *,
+            timeout_seconds: float | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> dict[str, Any]:
+            calls["target"] = target
+            calls["payload"] = payload
+            calls["timeout_seconds"] = timeout_seconds
+            calls["should_cancel"] = should_cancel
+            return workers_core._serialize_fit_result_payload(
+                workers_core.FitResultPayload(
+                    job=job,
+                    fit_result=FitResult(
+                        params={"a": mp.mpf("1"), "b": mp.mpf("2")},
+                        param_errors={},
+                        chi2=mp.mpf("0"),
+                        reduced_chi2=mp.mpf("0"),
+                        aic=mp.mpf("0"),
+                        bic=mp.mpf("0"),
+                        r2=mp.mpf("1"),
+                        rmse=mp.mpf("0"),
+                        residuals=[],
+                        fitted_curve=[],
+                        covariance=[],
+                        details={},
+                    ),
+                    expression="u",
+                    logs=[],
+                    warnings=[],
+                )
+            )
+
+    monkeypatch.setattr(workers_core, "KillableProcessTaskRunner", FakeRunner)
+
+    result = _execute_fit_job_payload_subprocess(
+        job,
+        timeout_seconds=12.5,
+        should_cancel=lambda: False,
+    )
+
+    assert result.fit_result.params["a"] == mp.mpf("1")
+    assert calls["config"] is job.parallel_config
+    assert calls["target"] is workers_core._fit_job_subprocess_entry
+    assert calls["payload"] == _serialize_fit_job(job)
+    assert calls["timeout_seconds"] == 12.5
+    assert callable(calls["should_cancel"])
+
+
+def test_self_consistent_fit_subprocess_target_uses_job_precision_under_low_ambient_dps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _small_self_consistent_fit_job(precision=90)
+    precise = mp.mpf("1.234567890123456789012345678901234567890123456789")
+    job.y_series[0] = precise
+    job.target_series[0] = precise
+    observed: dict[str, object] = {}
+
+    def fake_execute(received_job: FitJob) -> workers_core.FitResultPayload:
+        observed["mp_dps"] = mp.mp.dps
+        observed["target_value"] = received_job.target_series[0]
+        return workers_core.FitResultPayload(
+            job=received_job,
+            fit_result=FitResult(
+                params={"a": precise},
+                param_errors={},
+                chi2=precise,
+                reduced_chi2=mp.mpf("0"),
+                aic=mp.mpf("0"),
+                bic=mp.mpf("0"),
+                r2=mp.mpf("1"),
+                rmse=mp.mpf("0"),
+                residuals=[precise],
+                fitted_curve=[precise],
+                covariance=[],
+                details={},
+            ),
+            expression="u",
+            logs=[],
+            warnings=[],
+        )
+
+    monkeypatch.setattr(workers_core, "_execute_fit_job_payload", fake_execute)
+    payload = _serialize_fit_job(job)
+
+    with mp.workdps(15):
+        result_payload = workers_core._fit_job_subprocess_entry(payload)
+        restored = workers_core._deserialize_fit_result_payload(result_payload)
+
+    assert observed["mp_dps"] == 90
+    with mp.workdps(100):
+        assert mp.almosteq(observed["target_value"], precise, abs_eps=mp.mpf("1e-70"))
+        assert mp.almosteq(restored.fit_result.params["a"], precise, abs_eps=mp.mpf("1e-70"))
+
+
+def test_self_consistent_fit_subprocess_maps_backend_interruption_to_cancelled_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _small_self_consistent_fit_job()
+
+    class InterruptingRunner:
+        def __init__(self, *, config: ParallelConfig) -> None:
+            self.config = config
+
+        def run_killable(self, *args: object, **kwargs: object) -> object:
+            raise InterruptedError("backend interrupted")
+
+    monkeypatch.setattr(workers_core, "KillableProcessTaskRunner", InterruptingRunner)
+
+    with pytest.raises(InterruptedError, match="Self-consistent fit cancelled"):
+        _execute_fit_job_payload_subprocess(job, timeout_seconds=10.0)
+
+
+def test_fit_killable_runner_child_depth_marker_is_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATALAB_PARALLEL_DEPTH", raising=False)
+    runner = KillableProcessTaskRunner(config=ParallelConfig())
+
+    payload = runner.run_killable(
+        _depth_probe_payload,
+        {"kind": "fit"},
+        timeout_seconds=2.0,
+    )
+
+    assert payload["payload"] == {"kind": "fit"}
+    assert payload["env_depth"] == "1" or payload["current_depth"] >= 1
 
 
 def test_self_consistent_fit_job_serialization_preserves_high_precision_values() -> None:
