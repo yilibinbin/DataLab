@@ -257,6 +257,20 @@ def _safe_target_path(cache_dir: Path, name: str) -> Path:
     return cache_dir / name
 
 
+def _notify_download_progress(
+    progress_callback: Callable[[DownloadProgress], None] | None,
+    progress: DownloadProgress,
+) -> None:
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(progress)
+    except Exception:
+        # Progress callbacks are best-effort; payload validity is checked by
+        # byte count and hash verification below.
+        return
+
+
 def download_and_verify_installer(
     asset: InstallerAsset,
     timeout: float = DEFAULT_DOWNLOAD_TIMEOUT,
@@ -290,14 +304,14 @@ def download_and_verify_installer(
                         raise UpdatePayloadError("installer exceeds maximum size")
                     bytes_written = next_size
                     file.write(chunk)
-                    if progress_callback is not None:
-                        progress_callback(
-                            DownloadProgress(
-                                downloaded_bytes=bytes_written,
-                                total_bytes=asset.size_bytes,
-                                elapsed_seconds=max(time.monotonic() - started_at, 0.0),
-                            )
-                        )
+                    _notify_download_progress(
+                        progress_callback,
+                        DownloadProgress(
+                            downloaded_bytes=bytes_written,
+                            total_bytes=asset.size_bytes,
+                            elapsed_seconds=max(time.monotonic() - started_at, 0.0),
+                        ),
+                    )
 
         if bytes_written != asset.size_bytes:
             raise UpdatePayloadError(f"size mismatch: expected {asset.size_bytes}, got {bytes_written}")

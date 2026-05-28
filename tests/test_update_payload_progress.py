@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import io
 from pathlib import Path
+from types import TracebackType
+
+import pytest
 
 from shared.update_payload import DownloadProgress, InstallerAsset, download_and_verify_installer
 
@@ -15,7 +18,12 @@ class ChunkedResponse:
     def __enter__(self) -> ChunkedResponse:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         return None
 
     def read(self, requested: int) -> bytes:
@@ -32,7 +40,7 @@ def _asset(data: bytes) -> InstallerAsset:
     )
 
 
-def test_download_progress_reports_multiple_chunks(monkeypatch, tmp_path: Path) -> None:
+def test_download_progress_reports_multiple_chunks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     data = b"abcd" * 2048
     asset = _asset(data)
     events: list[DownloadProgress] = []
@@ -53,7 +61,7 @@ def test_download_progress_reports_multiple_chunks(monkeypatch, tmp_path: Path) 
     assert events[-1].bytes_per_second > 0
 
 
-def test_existing_download_call_signature_still_works(monkeypatch, tmp_path: Path) -> None:
+def test_existing_download_call_signature_still_works(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     data = b"ok"
     asset = _asset(data)
 
@@ -64,3 +72,28 @@ def test_existing_download_call_signature_still_works(monkeypatch, tmp_path: Pat
     )
 
     assert download_and_verify_installer(asset).is_file()
+
+
+def test_raising_progress_callback_does_not_abort_or_delete_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    data = b"verified installer payload"
+    asset = _asset(data)
+    target = tmp_path / asset.name
+    target.write_bytes(b"pre-existing installer")
+
+    def raising_progress_callback(progress: DownloadProgress) -> None:
+        raise RuntimeError("progress sink failed")
+
+    monkeypatch.setattr("shared.update_payload.update_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "shared.update_payload._urlopen",
+        lambda request, timeout: ChunkedResponse(data, 4),
+    )
+
+    path = download_and_verify_installer(asset, progress_callback=raising_progress_callback)
+
+    assert path == target
+    assert target.is_file()
+    assert target.read_bytes() == data
