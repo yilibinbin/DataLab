@@ -26,3 +26,13 @@ def test_progress_dialog_cannot_be_dismissed_during_download(qtbot: Any) -> None
 
     assert dialog.close() is False
     assert dialog.isVisible()
+
+
+def test_progress_dialog_allows_controller_cleanup(qtbot: Any) -> None:
+    dialog = UpdateProgressDialog(_asset(), "en")
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    dialog.finish_and_close()
+
+    assert not dialog.isVisible()

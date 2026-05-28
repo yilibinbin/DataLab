@@ -12,6 +12,7 @@ class UpdateProgressDialog(QDialog):
     def __init__(self, asset: InstallerAsset, lang: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._lang = lang
+        self._allow_close = False
         self.setWindowTitle("Updating DataLab" if lang == "en" else "正在更新 DataLab")
         self.setModal(True)
 
@@ -26,10 +27,18 @@ class UpdateProgressDialog(QDialog):
         self.update_progress(DownloadProgress(0, asset.size_bytes, 0.0))
 
     def reject(self) -> None:
-        return
+        if self._allow_close:
+            super().reject()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt naming
+        if self._allow_close:
+            event.accept()
+            return
         event.ignore()
+
+    def finish_and_close(self) -> None:
+        self._allow_close = True
+        self.close()
 
     def update_progress(self, progress: DownloadProgress) -> None:
         percent = int(progress.fraction * 100)

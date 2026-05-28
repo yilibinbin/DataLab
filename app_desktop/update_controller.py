@@ -341,7 +341,10 @@ class UpdateController:
 
     def _close_download_dialog(self) -> None:
         if self._download_dialog is not None:
-            self._download_dialog.close()
+            if hasattr(self._download_dialog, "finish_and_close"):
+                self._download_dialog.finish_and_close()
+            else:
+                self._download_dialog.close()
             self._download_dialog = None
 
     def _release_download_lock(self) -> None:
