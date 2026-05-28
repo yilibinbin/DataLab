@@ -1,11 +1,11 @@
+import contextlib
 import multiprocessing
 import os
 import queue
 import signal
 import threading
 import time
-from collections.abc import Iterator
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, TimeoutError as _FutureTimeout
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,20 @@ def _depth_value(value: int) -> tuple[int, int]:
 def _slow_square(value: int) -> int:
     time.sleep(0.05)
     return value * value
+
+
+def _sleep_then_square(payload: tuple[int, float]) -> int:
+    value, seconds = payload
+    time.sleep(seconds)
+    return value * value
+
+
+def _write_pid_then_sleep(payload: tuple[str, float]) -> int:
+    marker_dir, seconds = payload
+    pid = os.getpid()
+    Path(marker_dir, f"{pid}.pid").write_text(str(pid), encoding="utf-8")
+    time.sleep(seconds)
+    return pid
 
 
 def _killable_echo(payload: dict[str, Any]) -> dict[str, Any]:
@@ -77,6 +91,37 @@ def _wait_for_path(path: Path, timeout_seconds: float = 2.0) -> bool:
     return path.exists()
 
 
+def _marked_worker_pids(marker_dir: Path) -> list[int]:
+    pids: list[int] = []
+    for marker in marker_dir.glob("*.pid"):
+        with contextlib.suppress(ValueError):
+            pids.append(int(marker.read_text(encoding="utf-8").strip()))
+    return pids
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _wait_for_marked_pids_to_exit(
+    marker_dir: Path, *, timeout_seconds: float = 3.0
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        pids = _marked_worker_pids(marker_dir)
+        if pids and all(not _pid_exists(pid) for pid in pids):
+            return True
+        time.sleep(0.02)
+    pids = _marked_worker_pids(marker_dir)
+    return bool(pids) and all(not _pid_exists(pid) for pid in pids)
+
+
 def test_serial_map_preserves_order() -> None:
     executor = ParallelMapExecutor(ParallelConfig(mode=ParallelMode.SERIAL))
 
@@ -92,19 +137,18 @@ def test_process_map_parent_depth_is_set_while_waiting(
     parent_depths: list[int] = []
 
     class ObservingProcessPoolExecutor(ProcessPoolExecutor):
-        def map(self, *args: Any, **kwargs: Any) -> Iterator[Any]:
-            iterator = super().map(*args, **kwargs)
+        def submit(self, *args: Any, **kwargs: Any) -> Any:
+            future = super().submit(*args, **kwargs)
 
-            def observed_iterator() -> Iterator[Any]:
-                while True:
+            class ObservingFuture:
+                def result(self, *result_args: Any, **result_kwargs: Any) -> Any:
                     parent_depths.append(current_parallel_depth())
-                    try:
-                        value = next(iterator)
-                    except StopIteration:
-                        return
-                    yield value
+                    return future.result(*result_args, **result_kwargs)
 
-            return observed_iterator()
+                def cancel(self) -> bool:
+                    return future.cancel()
+
+            return ObservingFuture()
 
     monkeypatch.setattr(
         parallel_backend, "ProcessPoolExecutor", ObservingProcessPoolExecutor
@@ -144,6 +188,83 @@ def test_process_map_preserves_order(monkeypatch: pytest.MonkeyPatch) -> None:
     assert executor.map_pure(
         _square, [3, 1, 2], workload=ParallelWorkload.CPU_FLOAT
     ) == [9, 1, 4]
+
+
+def test_process_map_timeout_does_not_wait_for_long_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATALAB_PARALLEL_DEPTH", raising=False)
+    executor = ParallelMapExecutor(
+        ParallelConfig(mode=ParallelMode.PROCESS, max_workers=2, min_process_tasks=1),
+        worker_budget=LocalWorkerBudget(total=2),
+    )
+    sleep_seconds = 3.0
+    started = time.monotonic()
+
+    with pytest.raises(_FutureTimeout):
+        executor.map_pure(
+            _sleep_then_square,
+            [(2, sleep_seconds), (3, sleep_seconds)],
+            workload=ParallelWorkload.CPU_FLOAT,
+            timeout=0.2,
+        )
+
+    assert time.monotonic() - started < 2.0
+
+
+def test_process_map_timeout_stops_workers_before_releasing_budget(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("DATALAB_PARALLEL_DEPTH", raising=False)
+    marker_dir = tmp_path / "worker-pids"
+    marker_dir.mkdir()
+
+    class ObservingBudget(LocalWorkerBudget):
+        def __init__(self) -> None:
+            super().__init__(total=2)
+            self.live_pids_at_release: list[list[int]] = []
+
+        def release(self, permits: int = 1) -> None:
+            self.live_pids_at_release.append(
+                [
+                    pid
+                    for pid in _marked_worker_pids(marker_dir)
+                    if _pid_exists(pid)
+                ]
+            )
+            super().release(permits)
+
+    start_method = (
+        "forkserver"
+        if "forkserver" in multiprocessing.get_all_start_methods()
+        else "spawn"
+    )
+    timeout = 1.5
+    budget = ObservingBudget()
+    executor = ParallelMapExecutor(
+        ParallelConfig(
+            mode=ParallelMode.PROCESS,
+            max_workers=2,
+            min_process_tasks=1,
+            process_start_method=start_method,
+        ),
+        worker_budget=budget,
+    )
+
+    with pytest.raises(_FutureTimeout):
+        executor.map_pure(
+            _write_pid_then_sleep,
+            [(str(marker_dir), 10.0), (str(marker_dir), 10.0)],
+            workload=ParallelWorkload.CPU_FLOAT,
+            timeout=timeout,
+        )
+
+    pids = _marked_worker_pids(marker_dir)
+    assert len(pids) == 2
+    assert _wait_for_marked_pids_to_exit(marker_dir)
+    assert budget.available == 2
+    assert budget.live_pids_at_release
+    assert all(not live_pids for live_pids in budget.live_pids_at_release)
 
 
 def test_nested_process_map_degrades_to_serial(

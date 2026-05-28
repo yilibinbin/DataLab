@@ -9,7 +9,12 @@ import queue
 import threading
 import time
 import traceback
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import (
+    Future,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    TimeoutError as _FutureTimeout,
+)
 from dataclasses import dataclass, field
 from typing import Any, Callable, Generic, Iterable, Iterator, Sequence, TypeVar, cast
 
@@ -61,6 +66,30 @@ def parallel_depth() -> Iterator[None]:
 
 def _initialize_process_worker_depth(parent_depth: int) -> None:
     initialize_parallel_worker_depth(parent_depth + 1)
+
+
+def _terminate_process_pool_workers(pool: ProcessPoolExecutor) -> None:
+    # Python 3.11 has no public ProcessPoolExecutor terminate/kill API.
+    # Timeout cleanup must stop already-running workers before caller-owned
+    # worker-budget permits are released, so this is deliberately isolated.
+    processes = getattr(pool, "_processes", None)
+    if not processes:
+        return
+    workers = list(processes.values())
+    for process in workers:
+        with contextlib.suppress(Exception):
+            if process.is_alive():
+                process.terminate()
+    for process in workers:
+        with contextlib.suppress(Exception):
+            process.join(timeout=1.0)
+    for process in workers:
+        with contextlib.suppress(Exception):
+            if process.is_alive():
+                process.kill()
+    for process in workers:
+        with contextlib.suppress(Exception):
+            process.join(timeout=1.0)
 
 
 class LocalWorkerBudget:
@@ -321,6 +350,7 @@ class ParallelMapExecutor:
         items: Iterable[T],
         *,
         workload: ParallelWorkload,
+        timeout: float | None = None,
     ) -> list[R]:
         item_list = list(items)
         if not item_list:
@@ -338,7 +368,9 @@ class ParallelMapExecutor:
                 return self._map_thread(func, item_list, workers=workers)
             if mode == ParallelMode.PROCESS:
                 self._assert_picklable_for_process(func, item_list)
-                return self._map_process(func, item_list, workers=workers)
+                return self._map_process(
+                    func, item_list, workers=workers, timeout=timeout
+                )
         finally:
             self.worker_budget.release(workers)
 
@@ -400,18 +432,56 @@ class ParallelMapExecutor:
                 return [future.result() for future in futures]
 
     def _map_process(
-        self, func: Callable[[T], R], items: Sequence[T], *, workers: int
+        self,
+        func: Callable[[T], R],
+        items: Sequence[T],
+        *,
+        workers: int,
+        timeout: float | None = None,
     ) -> list[R]:
         parent_depth = _current_parallel_depth()
         with parallel_depth():
             context = multiprocessing.get_context(self.config.process_start_method)
-            with ProcessPoolExecutor(
+            pool = ProcessPoolExecutor(
                 max_workers=workers,
                 mp_context=context,
                 initializer=_initialize_process_worker_depth,
                 initargs=(parent_depth,),
-            ) as pool:
-                return list(pool.map(func, items))
+            )
+            futures: list[Future[R]] = []
+            shutdown_wait = True
+            try:
+                deadline = (
+                    None
+                    if timeout is None
+                    else time.monotonic() + max(0.0, float(timeout))
+                )
+                futures = [pool.submit(func, item) for item in items]
+                results: list[R] = []
+                for future in futures:
+                    remaining = (
+                        None if deadline is None else deadline - time.monotonic()
+                    )
+                    if remaining is not None and remaining <= 0:
+                        for pending in futures:
+                            pending.cancel()
+                        _terminate_process_pool_workers(pool)
+                        shutdown_wait = False
+                        pool.shutdown(wait=True, cancel_futures=True)
+                        raise _FutureTimeout()
+                    try:
+                        results.append(future.result(timeout=remaining))
+                    except _FutureTimeout:
+                        for pending in futures:
+                            pending.cancel()
+                        _terminate_process_pool_workers(pool)
+                        shutdown_wait = False
+                        pool.shutdown(wait=True, cancel_futures=True)
+                        raise
+                return results
+            finally:
+                if shutdown_wait:
+                    pool.shutdown(wait=True)
 
     def _assert_picklable_for_process(
         self, func: Callable[[T], R], items: Sequence[T]
