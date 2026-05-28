@@ -8,7 +8,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Protocol
 
-from app_desktop.update_dialogs import build_post_update_notice, build_update_message
+from app_desktop.update_dialogs import (
+    build_post_update_notice,
+    build_update_message,
+    build_update_titles,
+)
 from app_desktop.update_installer import launch_installer as launch_platform_installer
 from shared.update_checker import (
     RELEASES_URL,
@@ -137,10 +141,11 @@ class UpdateController:
                 self.state = UpdateState.IDLE
 
     def _handle_result(self, result: UpdateCheckResult, *, manual: bool) -> None:
+        titles = build_update_titles(self._lang())
         if result.status == "unavailable":
             if manual:
                 self.window.warning(
-                    "Update Check Failed",
+                    titles.check_failed,
                     f"Unable to check for updates: {result.error or 'unknown error'}\n\n"
                     f"{RELEASES_URL}",
                 )
@@ -149,7 +154,7 @@ class UpdateController:
         if result.status != "update-available" or result.release is None:
             if manual:
                 self.window.information(
-                    "Up To Date",
+                    titles.up_to_date,
                     f"Version {result.current_version} is already up to date.",
                 )
             return
@@ -160,7 +165,7 @@ class UpdateController:
             if manual:
                 release_url = result.release.html_url or RELEASES_URL
                 self.window.warning(
-                    "Manual Update Required",
+                    titles.manual_update_required,
                     "Automatic installation is unavailable: "
                     f"{exc}\n\n{release_url}",
                 )
@@ -176,7 +181,7 @@ class UpdateController:
             self._lang(),
             was_skipped=was_skipped,
         )
-        choice = self.window.ask_update("Update Available", message, was_skipped=was_skipped)
+        choice = self.window.ask_update(titles.available, message, was_skipped=was_skipped)
         if choice == "skip":
             self._preferences.skip_version(payload.version)
             return
@@ -205,7 +210,10 @@ class UpdateController:
                 launched = self._launch_installer(path, payload.asset)
         except Exception as exc:  # noqa: BLE001 - injected update hooks must not wedge state
             self.state = UpdateState.IDLE
-            self.window.warning("Update Failed", str(exc) or type(exc).__name__)
+            self.window.warning(
+                build_update_titles(self._lang()).update_failed,
+                str(exc) or type(exc).__name__,
+            )
             return
 
         if launched:

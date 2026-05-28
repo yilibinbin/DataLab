@@ -146,6 +146,7 @@ def test_manual_update_available_runs_download_and_launch(tmp_path: Path) -> Non
 
     controller.check_now()
 
+    assert window.questions[0][0] == "发现新版本"
     assert "Installer updater notes" in window.questions[0][1]
     assert launched == [(installer, payload().asset)]
     assert window.exited is True
@@ -237,6 +238,7 @@ def test_manual_payload_resolution_failure_uses_releases_fallback() -> None:
     controller.check_now()
 
     assert len(window.warnings) == 1
+    assert window.warnings[0][0] == "需要手动更新"
     assert "manifest fetch failed" in window.warnings[0][1]
     assert RELEASES_URL in window.warnings[0][1]
     assert window.questions == []
@@ -291,6 +293,7 @@ def test_download_update_payload_error_warns_and_resets_idle() -> None:
 
     controller.check_now()
 
+    assert window.warnings[0][0] == "更新失败"
     assert "bad installer metadata" in window.warnings[0][1]
     assert controller.state is UpdateState.IDLE
     assert window.exited is False
@@ -461,6 +464,7 @@ def test_skipped_version_suppresses_auto_but_manual_prompt_indicates_skipped() -
     manual_window = FakeWindow(choice="later", english=True)
     make_controller(manual_window).check_now()
 
+    assert manual_window.questions[0][0] == "Update Available"
     assert manual_window.questions[0][2] is True
     assert "previously skipped" in manual_window.questions[0][1]
     assert manual_window.exited is False
@@ -480,7 +484,7 @@ def test_build_update_message_contains_release_and_installer_details() -> None:
     assert "Current version: 2.2.0" in message
     assert "2026-05-26T00:00:00Z" in message
     assert "DataLab.pkg" in message
-    assert "10 bytes" in message
+    assert "10 B" in message
     assert "https://github.com/yilibinbin/DataLab/releases/tag/v2.3.0" in message
     assert "Installer updater notes" in message
     assert "DataLab will close" in message
