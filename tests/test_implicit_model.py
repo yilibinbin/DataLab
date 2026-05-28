@@ -122,3 +122,10 @@ def test_quantum_defect_template_uses_constants_not_fit_parameters() -> None:
     assert "R" in template.constants
     assert "c" in template.constants
     assert template.implicit_variable == "delta"
+
+
+def test_quantum_defect_template_builds_model_specification() -> None:
+    spec = build_implicit_model_specification(quantum_defect_template())
+
+    assert spec.variables == ["n"]
+    assert spec.parameters == ["d0", "d2", "d4", "En"]

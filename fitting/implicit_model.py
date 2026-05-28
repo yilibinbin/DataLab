@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Callable, Sequence, cast
 
 from mpmath import mp
 
@@ -14,6 +14,7 @@ from shared.bilingual import _dual_msg
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_CacheKey = tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,7 @@ class ImplicitSolveDiagnostics:
 class ImplicitEvaluationCache:
     def __init__(self) -> None:
         self.diagnostics = ImplicitSolveDiagnostics()
-        self._values: dict[tuple[tuple[str, str], tuple[str, str]], mp.mpf] = {}
+        self._values: dict[_CacheKey, mp.mpf] = {}
 
     def get(
         self,
@@ -67,10 +68,10 @@ class ImplicitEvaluationCache:
     def _key(
         var_tuple: tuple[mp.mpf, ...],
         param_tuple: tuple[mp.mpf, ...],
-    ) -> tuple[tuple[str, str], tuple[str, str]]:
+    ) -> _CacheKey:
         return (
-            tuple((str(idx), mp.nstr(value, n=80)) for idx, value in enumerate(var_tuple)),
-            tuple((str(idx), mp.nstr(value, n=80)) for idx, value in enumerate(param_tuple)),
+            tuple((str(idx), cast(str, mp.nstr(value, n=80))) for idx, value in enumerate(var_tuple)),
+            tuple((str(idx), cast(str, mp.nstr(value, n=80))) for idx, value in enumerate(param_tuple)),
         )
 
 
@@ -232,14 +233,14 @@ def _solve_implicit_value(
 
 
 def _find_root(
-    rhs: MpfCallable | object,
+    rhs: Callable[[mp.mpf], mp.mpf],
     seed: mp.mpf,
     options: ImplicitSolveOptions,
 ) -> mp.mpf:
     try:
         return mp.mpf(
             mp.findroot(
-                lambda value: value - rhs(value),  # type: ignore[operator]
+                lambda value: value - rhs(mp.mpf(value)),
                 seed,
                 tol=mp.mpf(options.tolerance),
                 maxsteps=int(options.max_iterations),
@@ -329,11 +330,11 @@ def _reject_initial_implicit_reference(definition: ImplicitModelDefinition) -> N
 
 
 def _prevalidate_expressions(definition: ImplicitModelDefinition) -> None:
-    dummy_vars = tuple(mp.mpf("1") for _ in definition.x_variables)
+    dummy_vars = tuple(mp.mpf(idx + 2) for idx, _ in enumerate(definition.x_variables))
     dummy_params = tuple(mp.mpf("1") for _ in definition.parameters)
     base_scope = _scope_for(definition, dummy_vars, dummy_params, None)
     implicit_scope = dict(base_scope)
-    implicit_scope[definition.implicit_variable] = mp.mpf("1")
+    implicit_scope[definition.implicit_variable] = mp.mpf("0.5")
     validations = (
         ("initial", definition.solve_options.initial, base_scope),
         ("equation", definition.equation, implicit_scope),
