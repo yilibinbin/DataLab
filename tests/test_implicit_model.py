@@ -97,6 +97,93 @@ def test_root_method_records_solve_attempt_diagnostics() -> None:
     assert diagnostics.max_iterations_used > 0
 
 
+def test_high_precision_cache_key_preserves_values_beyond_80_digits() -> None:
+    with mp.workdps(140):
+        definition = ImplicitModelDefinition(
+            x_variables=("x",),
+            implicit_variable="u",
+            equation="a + x*0",
+            output_expression="u",
+            parameters=("a",),
+            constants={},
+            solve_options=ImplicitSolveOptions(
+                method="fixed_point",
+                initial="0",
+                tolerance="1e-120",
+                max_iterations=20,
+            ),
+        )
+        spec = build_implicit_model_specification(definition)
+        variables = {"x": mp.mpf("1")}
+        first_param = mp.mpf("1." + ("0" * 80) + "1")
+        second_param = mp.mpf("1." + ("0" * 80) + "2")
+
+        first = spec.evaluate(variables, {"a": first_param})
+        second = spec.evaluate(variables, {"a": second_param})
+
+        assert first == first_param
+        assert second == second_param
+        assert first != second
+        diagnostics = getattr(spec, "implicit_diagnostics")
+        assert diagnostics.points_solved == 2
+
+
+def test_low_precision_cache_entry_is_not_reused_at_high_precision() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a/3 + x*0",
+        output_expression="u",
+        parameters=("a",),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="fixed_point",
+            initial="0",
+            tolerance="1e-100",
+            max_iterations=20,
+        ),
+    )
+    spec = build_implicit_model_specification(definition)
+
+    with mp.workdps(30):
+        spec.evaluate({"x": mp.mpf("1")}, {"a": mp.mpf("1")})
+
+    with mp.workdps(120):
+        high_precision_value = spec.evaluate({"x": mp.mpf("1")}, {"a": mp.mpf("1")})
+        expected = mp.mpf("1") / 3
+
+        assert mp.fabs(high_precision_value - expected) < mp.mpf("1e-100")
+
+    diagnostics = getattr(spec, "implicit_diagnostics")
+    assert diagnostics.points_solved == 2
+
+
+def test_numeric_partial_uses_high_precision_step() -> None:
+    with mp.workdps(120):
+        definition = ImplicitModelDefinition(
+            x_variables=("x",),
+            implicit_variable="u",
+            equation="a*a*a + x*0",
+            output_expression="u",
+            parameters=("a",),
+            constants={},
+            solve_options=ImplicitSolveOptions(
+                method="fixed_point",
+                initial="0",
+                tolerance="1e-90",
+                max_iterations=20,
+            ),
+        )
+        spec = build_implicit_model_specification(definition)
+        variables = {"x": mp.mpf("1")}
+        params = {"a": mp.mpf("1.25")}
+        expected = 3 * params["a"] * params["a"]
+
+        assert mp.fabs(spec.partial("a", variables, params) - expected) < mp.mpf(
+            "1e-60"
+        )
+
+
 def test_initial_expression_cannot_reference_implicit_variable() -> None:
     definition = ImplicitModelDefinition(
         x_variables=("x",),

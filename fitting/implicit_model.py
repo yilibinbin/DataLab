@@ -14,7 +14,8 @@ from shared.bilingual import _dual_msg
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_CacheKey = tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]
+_MpfKey = tuple[int, int, int, int]
+_CacheKey = tuple[int, tuple[_MpfKey, ...], tuple[_MpfKey, ...]]
 
 
 @dataclass(frozen=True)
@@ -70,8 +71,9 @@ class ImplicitEvaluationCache:
         param_tuple: tuple[mp.mpf, ...],
     ) -> _CacheKey:
         return (
-            tuple((str(idx), cast(str, mp.nstr(value, n=80))) for idx, value in enumerate(var_tuple)),
-            tuple((str(idx), cast(str, mp.nstr(value, n=80))) for idx, value in enumerate(param_tuple)),
+            int(mp.dps),
+            tuple(cast(_MpfKey, value._mpf_) for value in var_tuple),
+            tuple(cast(_MpfKey, value._mpf_) for value in param_tuple),
         )
 
 
@@ -147,8 +149,10 @@ def _build_numeric_partial(
     ) -> mp.mpf:
         _validate_tuple_lengths(definition, var_tuple, param_tuple, derivative=True)
         base = mp.mpf(param_tuple[parameter_index])
-        scale = mp.fabs(base) + 1
-        step = max(mp.sqrt(tol) * scale, mp.mpf("1e-8") * scale)
+        scale = max(mp.mpf("1"), mp.fabs(base))
+        precision_step = mp.power(mp.eps, mp.mpf(1) / 3) * scale
+        solve_noise_step = mp.sqrt(tol) * scale
+        step = max(precision_step, solve_noise_step)
         plus_params = list(param_tuple)
         minus_params = list(param_tuple)
         plus_params[parameter_index] = base + step
