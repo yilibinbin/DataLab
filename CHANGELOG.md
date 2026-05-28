@@ -6,6 +6,23 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.3.1] — 2026-05-28
+
+### Changed
+- Refined the self-consistent / implicit fitting workflow with a
+  formula-first editor, independent parameter and constants tables, and
+  clearer generic defaults.
+- Moved self-consistent fitting execution through a subprocess boundary
+  so long implicit fits can be cancelled or timed out more reliably.
+
+### Fixed
+- Preserved high-precision implicit parameter values through workspace
+  restore and worker serialization.
+- Preserved draft implicit constants rows in workspace files, including
+  duplicate or incomplete rows that should remain editable.
+- Marked workspaces dirty when persisted implicit fitting controls are
+  changed.
+
 ## [2.3.0] — 2026-05-28
 
 ### Added
