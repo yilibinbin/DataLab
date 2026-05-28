@@ -25,6 +25,30 @@ def test_mac_build_script_has_optional_pkg_packaging() -> None:
     assert "--sign" not in pkgbuild_section
 
 
+def test_mac_pkg_installs_app_to_applications_without_bundle_relocation() -> None:
+    text = (ROOT / "build_mac_data_gui.sh").read_text(encoding="utf-8")
+
+    assert "PKG_COMPONENT_PLIST=" in text
+    assert "BundleIsRelocatable" in text
+    assert "false" in text
+    assert "--component-plist" in text
+    assert "--install-location /Applications" in text
+
+
+def test_mac_build_script_allows_clean_build_root_override() -> None:
+    text = (ROOT / "build_mac_data_gui.sh").read_text(encoding="utf-8")
+
+    assert "DATALAB_MAC_BUILD_ROOT" in text
+
+
+def test_mac_build_script_does_not_preserve_resource_forks_in_release_payload() -> None:
+    text = (ROOT / "build_mac_data_gui.sh").read_text(encoding="utf-8")
+
+    assert 'ditto --norsrc "$STAGED_APP" "$APP_BUNDLE"' in text
+    assert 'ditto --norsrc "$APP_BUNDLE" "$PKG_ROOT/${APP_NAME}.app"' in text
+    assert 'xattr -cr "$PKG_ROOT/${APP_NAME}.app"' in text
+
+
 def test_windows_build_script_has_inno_packaging_hook() -> None:
     text = (ROOT / "build_windows_data_gui.ps1").read_text(encoding="utf-8-sig")
     inno_text = (ROOT / "packaging" / "windows" / "DataLab.iss").read_text(

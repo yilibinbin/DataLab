@@ -10,7 +10,7 @@ set -e
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENTRY_FILE="$PROJECT_ROOT/data_extrapolation_gui.py"
 APP_NAME="DataLab"
-BUILD_ROOT="$PROJECT_ROOT/build/macos_gui_build"
+BUILD_ROOT="${DATALAB_MAC_BUILD_ROOT:-$PROJECT_ROOT/build/macos_gui_build}"
 VENV_PATH="$BUILD_ROOT/venv"
 ICON_SOURCE="$PROJECT_ROOT/DataLab.png"
 ICONSET_DIR="$BUILD_ROOT/app_icon.iconset"
@@ -341,7 +341,8 @@ if [[ -d "$APP_BUNDLE" ]]; then
     if codesign --force --deep --sign - "$STAGED_APP"; then
       echo "[info] Ad-hoc signature applied."
       rm -rf "$APP_BUNDLE"
-      ditto "$STAGED_APP" "$APP_BUNDLE"
+      ditto --norsrc "$STAGED_APP" "$APP_BUNDLE"
+      xattr -cr "$APP_BUNDLE" || true
     else
       echo "[warn] codesign failed; bundle remains unsigned."
     fi
@@ -373,16 +374,39 @@ if [[ "${DATALAB_BUILD_PKG:-0}" == "1" ]]; then
   fi
   PKG_ROOT="$BUILD_ROOT/pkgroot"
   PKG_COMPONENT="$BUILD_ROOT/DataLab-component.pkg"
+  PKG_COMPONENT_PLIST="$BUILD_ROOT/DataLab-components.plist"
   PKG_OUTPUT="$PROJECT_ROOT/dist/DataLab-${APP_VERSION}-macOS.pkg"
-  rm -rf "$PKG_ROOT" "$PKG_COMPONENT" "$PKG_OUTPUT"
-  mkdir -p "$PKG_ROOT/Applications"
-  ditto "$APP_BUNDLE" "$PKG_ROOT/Applications/${APP_NAME}.app"
+  rm -rf "$PKG_ROOT" "$PKG_COMPONENT" "$PKG_COMPONENT_PLIST" "$PKG_OUTPUT"
+  mkdir -p "$PKG_ROOT"
+  ditto --norsrc "$APP_BUNDLE" "$PKG_ROOT/${APP_NAME}.app"
+  xattr -cr "$PKG_ROOT/${APP_NAME}.app" || true
+  cat > "$PKG_COMPONENT_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+  <dict>
+    <key>RootRelativeBundlePath</key>
+    <string>${APP_NAME}.app</string>
+    <key>BundleIsRelocatable</key>
+    <false/>
+    <key>BundleIsVersionChecked</key>
+    <false/>
+    <key>BundleHasStrictIdentifier</key>
+    <true/>
+    <key>BundleOverwriteAction</key>
+    <string>upgrade</string>
+  </dict>
+</array>
+</plist>
+PLIST
 
   PKGBUILD_ARGS=(
     --root "$PKG_ROOT"
+    --component-plist "$PKG_COMPONENT_PLIST"
     --identifier org.datalab.desktop
     --version "$APP_VERSION"
-    --install-location /
+    --install-location /Applications
     "$PKG_COMPONENT"
   )
   pkgbuild "${PKGBUILD_ARGS[@]}"
