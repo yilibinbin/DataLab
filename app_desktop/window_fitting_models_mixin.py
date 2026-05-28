@@ -865,11 +865,7 @@ class WindowFittingModelsMixin:
         elif model_type == "self_consistent":
             implicit_config = self._collect_implicit_config()
             parameter_names = list(implicit_config["parameter_names"])
-            parameter_config = {
-                name: config
-                for name, config in self._collect_parameter_config(allow_empty=True).items()
-                if name in parameter_names
-            }
+            parameter_config = self._collect_implicit_parameter_config(parameter_names)
             constants = dict(implicit_config.get("constants") or {})
             implicit_definition = ImplicitModelDefinition(
                 x_variables=tuple(implicit_config["x_variables"]),
@@ -886,6 +882,7 @@ class WindowFittingModelsMixin:
                 ),
             )
             model_expr = str(implicit_config["output_expression"])
+            job_kwargs["timeout_seconds"] = float(implicit_config["timeout_seconds"])
         elif model_type == "poly":
             job_kwargs["poly_degree"] = self.poly_degree_spin.value()
             model_expr = self._mode_expression_preview("poly")

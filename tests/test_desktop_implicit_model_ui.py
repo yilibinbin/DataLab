@@ -7,7 +7,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QTableWidgetItem  # noqa: E402
 
 from fitting.auto_models import AUTO_MODELS  # noqa: E402
 
@@ -23,6 +23,10 @@ def window(qtbot):
 
 
 def _select_model(win, model_type: str) -> None:
+    if hasattr(win, "mode_combo"):
+        mode_index = win.mode_combo.findData("fitting")
+        assert mode_index >= 0
+        win.mode_combo.setCurrentIndex(mode_index)
     index = win.fit_model_combo.findData(model_type)
     assert index >= 0
     win.fit_model_combo.setCurrentIndex(index)
@@ -33,8 +37,8 @@ def test_implicit_controls_exist_and_method_options(window) -> None:
 
     assert window.fit_model_combo.currentData() == "self_consistent"
     assert window.implicit_variable_edit.text() == "u"
-    assert window.implicit_equation_edit.text() == "a + b*Cos[u] + c*x"
-    assert window.implicit_output_edit.text() == "u"
+    assert window.implicit_equation_edit.toPlainText() == "a + b*Cos[u] + c*x"
+    assert window.implicit_output_edit.toPlainText() == "u"
     assert window.implicit_initial_edit.text() == "0.3"
     assert window.implicit_tolerance_edit.text() == "1e-30"
     assert window.implicit_max_iterations_spin.value() == 80
@@ -45,32 +49,56 @@ def test_implicit_controls_exist_and_method_options(window) -> None:
     assert not window.implicit_model_widget.isHidden()
 
 
+def test_implicit_ui_is_formula_first_and_generic(window) -> None:
+    _select_model(window, "self_consistent")
+
+    assert not window.implicit_model_widget.isHidden()
+    assert hasattr(window, "implicit_equation_edit")
+    assert hasattr(window, "implicit_equation_preview")
+    assert hasattr(window, "implicit_output_edit")
+    assert hasattr(window, "implicit_output_preview")
+    assert window.implicit_equation_edit.minimumHeight() >= 70
+    assert window.implicit_output_edit.minimumHeight() >= 70
+
+    assert window.implicit_variable_edit.text() == "u"
+    assert window.implicit_equation_edit.toPlainText() == "a + b*Cos[u] + c*x"
+    assert window.implicit_output_edit.toPlainText() == "u"
+    assert window.implicit_timeout_spin.value() == 300
+    assert not hasattr(window, "quantum_defect_preset_btn") or not window.quantum_defect_preset_btn.isVisible()
+
+
 def test_default_implicit_config_uses_x_as_variable_not_parameter(window) -> None:
     _select_model(window, "self_consistent")
 
-    config = window._collect_implicit_config()
+    config = window._collect_implicit_config(validate_parameters=False)
 
     assert config["x_variables"] == ("x",)
     assert config["implicit_variable"] == "u"
     assert config["equation"] == "a + b*Cos[u] + c*x"
     assert config["output_expression"] == "u"
+    assert config["timeout_seconds"] == 300
     assert config["parameter_names"] == ("a", "b", "c")
     assert "x" not in config["parameter_names"]
     assert "u" not in config["parameter_names"]
 
 
-def test_quantum_defect_preset_and_parameter_inference(window) -> None:
+def test_explicit_physical_constants_are_visible_not_builtin(window) -> None:
     _select_model(window, "self_consistent")
-    window._apply_quantum_defect_preset()
 
-    config = window._collect_implicit_config()
+    window.implicit_variable_edit.setText("delta")
+    window.implicit_equation_edit.setPlainText("d0 + d2/(n-delta)^2 + d4/(n-delta)^4")
+    window.implicit_output_edit.setPlainText("En - R*c/(n-delta)^2")
+    window._reset_variable_rows(default_var="n", default_column="A")
+    window._reset_implicit_constants_rows({"R": "10973731.568160", "c": "299792458"})
+
+    config = window._collect_implicit_config(validate_parameters=False)
 
     assert config["x_variables"] == ("n",)
     assert config["implicit_variable"] == "delta"
     assert config["equation"] == "d0 + d2/(n-delta)^2 + d4/(n-delta)^4"
     assert config["output_expression"] == "En - R*c/(n-delta)^2"
     assert config["method"] == "fixed_point"
-    assert config["initial"] == "0"
+    assert config["initial"] == "0.3"
     assert config["tolerance"] == "1e-30"
     assert config["max_iterations"] == 80
     assert config["parameter_names"] == ("d0", "d2", "d4", "En")
@@ -83,16 +111,16 @@ def test_builtin_constants_do_not_hide_generic_parameter_names(window) -> None:
     _select_model(window, "self_consistent")
 
     window.implicit_variable_edit.setText("u")
-    window.implicit_equation_edit.setText("K + R*x + c*u")
-    window.implicit_output_edit.setText("u + K + R + c")
-    generic_config = window._collect_implicit_config()
+    window.implicit_equation_edit.setPlainText("K + R*x + c*u")
+    window.implicit_output_edit.setPlainText("u + K + R + c")
+    generic_config = window._collect_implicit_config(validate_parameters=False)
     assert generic_config["parameter_names"] == ("K", "R", "c")
     assert generic_config["constants"] == {}
 
-    window.implicit_equation_edit.setText("d0 + d2/(n-u)^2")
-    window.implicit_output_edit.setText("En + R*c/(n-u)^2")
+    window.implicit_equation_edit.setPlainText("d0 + d2/(n-u)^2")
+    window.implicit_output_edit.setPlainText("En + R*c/(n-u)^2")
     window._reset_variable_rows(default_var="n", default_column="A")
-    physical_config = window._collect_implicit_config()
+    physical_config = window._collect_implicit_config(validate_parameters=False)
     assert "R" in physical_config["parameter_names"]
     assert "c" in physical_config["parameter_names"]
     assert physical_config["constants"] == {}
@@ -102,16 +130,16 @@ def test_implicit_validation_rejects_blank_expressions_and_bad_variable(window) 
     _select_model(window, "self_consistent")
     window._apply_quantum_defect_preset()
 
-    window.implicit_equation_edit.setText("")
+    window.implicit_equation_edit.setPlainText("")
     with pytest.raises(ValueError, match="Implicit equation|隐式方程"):
         window._collect_implicit_config()
 
-    window.implicit_equation_edit.setText("d0")
-    window.implicit_output_edit.setText("")
+    window.implicit_equation_edit.setPlainText("d0")
+    window.implicit_output_edit.setPlainText("")
     with pytest.raises(ValueError, match="Output expression|输出表达式"):
         window._collect_implicit_config()
 
-    window.implicit_output_edit.setText("En")
+    window.implicit_output_edit.setPlainText("En")
     window.implicit_variable_edit.setText("bad-name")
     with pytest.raises(ValueError, match="valid identifier|有效标识符"):
         window._collect_implicit_config()
@@ -120,6 +148,14 @@ def test_implicit_validation_rejects_blank_expressions_and_bad_variable(window) 
 def test_prepare_fit_job_passes_implicit_definition(window) -> None:
     _select_model(window, "self_consistent")
     window._apply_quantum_defect_preset()
+    window._reset_implicit_param_rows(
+        {
+            "d0": {"initial": "0.1"},
+            "d2": {"initial": "0.0"},
+            "d4": {"initial": "0.0"},
+            "En": {"initial": "-0.01"},
+        }
+    )
 
     dataset = (
         ["A", "B"],
@@ -144,6 +180,178 @@ def test_prepare_fit_job_passes_implicit_definition(window) -> None:
     assert job.implicit_definition.parameters == ("d0", "d2", "d4", "En")
     assert job.implicit_definition.constants == {"R": "10973731.568160", "c": "299792458"}
     assert job.implicit_definition.solve_options.method == "fixed_point"
+
+
+def test_implicit_parameter_table_supplies_initial_values_without_constraints(window) -> None:
+    window.show()
+    _select_model(window, "self_consistent")
+
+    window.implicit_variable_edit.setText("u")
+    window.implicit_equation_edit.setPlainText("d0 + d2/(n-u)^2")
+    window.implicit_output_edit.setPlainText("En - K/(n-u)^2")
+    window._reset_variable_rows(default_var="n", default_column="A")
+    if hasattr(window, "_reset_implicit_constants_rows"):
+        window._reset_implicit_constants_rows({})
+
+    assert window.variable_rows[0][0].text() == "n"
+    assert window.variable_rows[0][1].text() == "A"
+    assert window.enable_constraints_checkbox.isVisible()
+    assert not window.enable_constraints_checkbox.isChecked()
+    assert hasattr(window, "implicit_params_table")
+
+    window._reset_implicit_param_rows(
+        {
+            "d0": {"initial": "0.3"},
+            "d2": {"initial": "0.0"},
+            "En": {"initial": "-0.01214"},
+            "K": {"initial": "-0.007"},
+        }
+    )
+
+    table = window.implicit_params_table
+    rows = {
+        table.item(row, 0).text(): table.item(row, 1).text()
+        for row in range(table.rowCount())
+    }
+    assert rows == {"d0": "0.3", "d2": "0.0", "En": "-0.01214", "K": "-0.007"}
+
+    dataset = (
+        ["A", "B"],
+        [(mp.mpf("4"), mp.mpf("-0.0126")), (mp.mpf("5"), mp.mpf("-0.0125"))],
+        [(None, None), (None, None)],
+    )
+    job = window._prepare_fit_job(
+        dataset,
+        generate_latex=False,
+        output_path="",
+        verbose=False,
+        render_plots=False,
+    )
+
+    assert job.parameter_names == ["d0", "d2", "En", "K"]
+    assert job.parameter_config == {
+        "d0": {"initial": "0.3"},
+        "d2": {"initial": "0.0"},
+        "En": {"initial": "-0.01214"},
+        "K": {"initial": "-0.007"},
+    }
+
+
+def test_implicit_parameter_table_preserves_high_precision_text(window) -> None:
+    _select_model(window, "self_consistent")
+    precise = "1.23456789012345678901234567890123456789"
+    tiny = "1e-120"
+    window.implicit_variable_edit.setText("u")
+    window.implicit_equation_edit.setPlainText("a")
+    window.implicit_output_edit.setPlainText("u")
+    window._reset_implicit_param_rows(
+        {
+            "a": {"fixed": precise, "min": tiny, "max": "2"},
+        }
+    )
+
+    assert window._collect_implicit_parameter_config(["a"]) == {
+        "a": {"fixed": precise, "min": tiny, "max": "2"}
+    }
+
+
+def test_implicit_constants_table_excludes_constants_from_parameters(window) -> None:
+    _select_model(window, "self_consistent")
+
+    window.implicit_variable_edit.setText("u")
+    window.implicit_equation_edit.setPlainText("d0")
+    window.implicit_output_edit.setPlainText("En - K/(n-u)^2")
+    window._reset_variable_rows(default_var="n", default_column="A")
+    window._reset_implicit_constants_rows({"K": "-0.007"})
+
+    config = window._collect_implicit_config(validate_parameters=False)
+
+    assert config["constants"] == {"K": "-0.007"}
+    assert config["parameter_names"] == ("d0", "En")
+    assert "K" not in config["parameter_names"]
+
+
+def test_implicit_constants_table_rejects_duplicate_names(window) -> None:
+    _select_model(window, "self_consistent")
+    window._reset_implicit_constants_rows({})
+
+    table = window.implicit_constants_table
+    table.setItem(0, 0, QTableWidgetItem("K"))
+    table.setItem(0, 1, QTableWidgetItem("-0.007"))
+    table.setItem(1, 0, QTableWidgetItem("K"))
+    table.setItem(1, 1, QTableWidgetItem("1.0"))
+
+    with pytest.raises(ValueError, match="Duplicate constant name|常数名称重复"):
+        window._collect_implicit_config(validate_parameters=False)
+
+
+def test_implicit_constants_table_rejects_invalid_numeric_values(window) -> None:
+    _select_model(window, "self_consistent")
+    window._reset_implicit_constants_rows({"K": "not-a-number"})
+
+    with pytest.raises(ValueError, match="Invalid value for constant K|常数 K 的取值无效"):
+        window._collect_implicit_config(validate_parameters=False)
+
+
+def test_implicit_parameter_detection_ignores_global_constraint_rows(window) -> None:
+    _select_model(window, "self_consistent")
+
+    window.implicit_variable_edit.setText("u")
+    window.implicit_equation_edit.setPlainText("d0")
+    window.implicit_output_edit.setPlainText("En - K/(n-u)^2")
+    window._reset_variable_rows(default_var="n", default_column="A")
+
+    window.enable_constraints_checkbox.setChecked(True)
+    window._reset_param_rows()
+    window._add_param_row(default_name="A", init="1.0")
+
+    config = window._collect_implicit_config(validate_parameters=False)
+
+    assert config["parameter_names"] == ("d0", "En", "K")
+    assert "A" not in config["parameter_names"]
+
+    window._refresh_implicit_parameter_rows()
+    table = window.implicit_params_table
+    detected = [
+        table.item(row, 0).text()
+        for row in range(table.rowCount())
+    ]
+    assert detected == ["d0", "En", "K"]
+
+
+def test_implicit_parameter_detection_marks_workspace_dirty(window) -> None:
+    _select_model(window, "self_consistent")
+    window.implicit_equation_edit.setPlainText("d0")
+    window.implicit_output_edit.setPlainText("En - K/(x-u)^2")
+    window._reset_implicit_param_rows({})
+    window._workspace_dirty = False
+
+    window._refresh_implicit_parameter_rows()
+
+    assert window._workspace_dirty is True
+
+
+def test_implicit_persisted_controls_mark_workspace_dirty(window) -> None:
+    _select_model(window, "self_consistent")
+
+    for label, setter in (
+        ("variable", lambda: window.implicit_variable_edit.setText(window.implicit_variable_edit.text() + "_changed")),
+        ("equation", lambda: window.implicit_equation_edit.setPlainText(window.implicit_equation_edit.toPlainText() + " + 0")),
+        ("output", lambda: window.implicit_output_edit.setPlainText(window.implicit_output_edit.toPlainText() + " + 0")),
+        ("initial", lambda: window.implicit_initial_edit.setText(window.implicit_initial_edit.text() + "1")),
+        ("tolerance", lambda: window.implicit_tolerance_edit.setText(window.implicit_tolerance_edit.text() + "1")),
+        (
+            "method",
+            lambda: window.implicit_method_combo.setCurrentIndex(
+                (window.implicit_method_combo.currentIndex() + 1) % window.implicit_method_combo.count()
+            ),
+        ),
+        ("max_iterations", lambda: window.implicit_max_iterations_spin.setValue(window.implicit_max_iterations_spin.value() + 1)),
+        ("timeout", lambda: window.implicit_timeout_spin.setValue(window.implicit_timeout_spin.value() + 1)),
+    ):
+        window._workspace_dirty = False
+        setter()
+        assert window._workspace_dirty is True, label
 
 
 def test_auto_models_do_not_include_self_consistent() -> None:

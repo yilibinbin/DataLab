@@ -19,15 +19,25 @@ def test_workspace_round_trips_implicit_fit_config(qtbot, tmp_path: Path) -> Non
     source._reset_variable_rows(default_var="x", default_column="A")
     source._add_variable_row(default_var="z", default_column="C")
     source.implicit_variable_edit.setText("u")
-    source.implicit_equation_edit.setText("a + b*Cos[u] + c*x + d*z")
-    source.implicit_output_edit.setText("u + z")
+    source.implicit_equation_edit.setPlainText("a + b*Cos[u] + c*x + d*z")
+    source.implicit_output_edit.setPlainText("u + z")
     source.implicit_initial_edit.setText("0.3")
     source.implicit_tolerance_edit.setText("1e-30")
     source.implicit_max_iterations_spin.setValue(123)
+    source.implicit_timeout_spin.setValue(420)
     _set_combo_data(source.implicit_method_combo, "root")
     source.fit_param_edit.setPlainText(
         '{"a":{"initial":0.1},"b":{"initial":0.2},"c":{"initial":0.4},"d":{"initial":0.5}}'
     )
+    source._reset_implicit_param_rows(
+        {
+            "a": {"initial": "0.1"},
+            "b": {"initial": "0.2"},
+            "c": {"initial": "0.4"},
+            "d": {"initial": "0.5"},
+        }
+    )
+    source._reset_implicit_constants_rows({"unit": "1"})
 
     path = tmp_path / "implicit.datalab"
     assert source._save_workspace_to_path(path)
@@ -38,13 +48,21 @@ def test_workspace_round_trips_implicit_fit_config(qtbot, tmp_path: Path) -> Non
 
     assert restored.fit_model_combo.currentData() == "self_consistent"
     assert restored.implicit_variable_edit.text() == "u"
-    assert restored.implicit_equation_edit.text() == "a + b*Cos[u] + c*x + d*z"
-    assert restored.implicit_output_edit.text() == "u + z"
+    assert restored.implicit_equation_edit.toPlainText() == "a + b*Cos[u] + c*x + d*z"
+    assert restored.implicit_output_edit.toPlainText() == "u + z"
     assert restored.implicit_initial_edit.text() == "0.3"
     assert restored.implicit_tolerance_edit.text() == "1e-30"
     assert restored.implicit_max_iterations_spin.value() == 123
+    assert restored.implicit_timeout_spin.value() == 420
     assert restored.implicit_method_combo.currentData() == "root"
     assert '"a"' in restored.fit_param_edit.toPlainText()
+    assert restored._collect_implicit_constants() == {"unit": "1"}
+    assert restored._collect_implicit_parameter_config(["a", "b", "c", "d"]) == {
+        "a": {"initial": "0.1"},
+        "b": {"initial": "0.2"},
+        "c": {"initial": "0.4"},
+        "d": {"initial": "0.5"},
+    }
     assert [(row[0].text(), row[1].text()) for row in restored.variable_rows] == [
         ("x", "A"),
         ("z", "C"),

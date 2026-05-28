@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import tempfile
 from contextlib import redirect_stdout, redirect_stderr, nullcontext
 from pathlib import Path
 
@@ -9,25 +8,13 @@ import mpmath as mp
 from PySide6.QtCore import QThread, Signal
 
 from data_extrapolation_latex_latest import (
-    _dual_msg,
-    apply_formula_to_data,
     detect_used_error_propagation_inputs,
-    format_result_with_uncertainty_latex,
-    format_uncertainty_display_latex,
-    generate_error_propagation_table,
-    generate_latex_table,
-    process_constants_file,
-    process_constants_string,
-    process_data_file,
-    process_data_string,
-    process_uncertainty_data_file,
-    process_uncertainty_string,
     UncertainValue,
 )
-from statistics_utils import compute_statistics, generate_statistics_latex_batches
 
 from fitting.model_selector import AutoFitCancelled
 
+from . import workers_core
 from .workers_core import (
     AutoFitJob,
     CalcJob,
@@ -38,12 +25,7 @@ from .workers_core import (
     FitResultPayload,
     _execute_auto_fit_job,
     _execute_calc_job,
-    _execute_fit_job_payload,
-    _mp_precision_guard,
-    _render_extrapolation_plot_bytes,
     _safe_read_text,
-    _safe_resolve_path,
-    split_extrapolation_result,
 )
 
 
@@ -545,7 +527,13 @@ class FitWorker(QThread):
                     pass
 
     def _run_fit(self) -> FitResultPayload:
-        return _execute_fit_job_payload(self.job)
+        if workers_core._fit_job_requires_process_boundary(self.job):
+            return workers_core._execute_fit_job_payload_subprocess(
+                self.job,
+                timeout_seconds=self.job.timeout_seconds,
+                should_cancel=lambda: self._stop_requested,
+            )
+        return workers_core._execute_fit_job_payload(self.job)
 
 
 class FitBatchWorker(QThread):
@@ -620,7 +608,7 @@ class FitBatchWorker(QThread):
                 elif task.fit_job is not None:
                     try:
                         with stdout_cm, stderr_cm:
-                            payload = _execute_fit_job_payload(task.fit_job)
+                            payload = self._run_fit_task(task.fit_job)
                         captured = logger.captured_text().strip() if logger else ""
                         if logger:
                             logger.consume_buffer()
@@ -635,10 +623,28 @@ class FitBatchWorker(QThread):
                                 captured_log=captured,
                             )
                         )
+                    except InterruptedError:
+                        if logger:
+                            logger.consume_buffer()
+                        if self.capture_output:
+                            try:
+                                self.log_ready.emit(f"[fit-batch] cancelled at task {task.index}")
+                            except Exception:
+                                pass
+                        self.cancelled.emit()
+                        return
                     except Exception as exc:  # noqa: BLE001
                         captured = logger.captured_text().strip() if logger else ""
                         if logger:
                             logger.consume_buffer()
+                        if self._stop_requested:
+                            if self.capture_output:
+                                try:
+                                    self.log_ready.emit(f"[fit-batch] cancelled at task {task.index}")
+                                except Exception:
+                                    pass
+                            self.cancelled.emit()
+                            return
                         results.append(
                             FitBatchResultEntry(index=task.index, kind="error", error=str(exc), captured_log=captured)
                         )
@@ -657,6 +663,15 @@ class FitBatchWorker(QThread):
                 self.cancelled.emit()
                 return
             self.failed.emit(str(exc))
+
+    def _run_fit_task(self, job: FitJob) -> FitResultPayload:
+        if workers_core._fit_job_requires_process_boundary(job):
+            return workers_core._execute_fit_job_payload_subprocess(
+                job,
+                timeout_seconds=job.timeout_seconds,
+                should_cancel=lambda: self._stop_requested,
+            )
+        return workers_core._execute_fit_job_payload(job)
 
 
 __all__ = [

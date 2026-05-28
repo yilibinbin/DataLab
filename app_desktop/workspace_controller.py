@@ -205,6 +205,35 @@ def _param_rows(window: Any) -> list[dict[str, str]]:
     return rows
 
 
+def _implicit_param_rows(window: Any) -> list[dict[str, str]]:
+    table = getattr(window, "implicit_params_table", None)
+    if table is None:
+        return []
+    rows: list[dict[str, str]] = []
+    keys = ("name", "initial", "fixed", "min", "max")
+    for row in range(table.rowCount()):
+        values = {
+            key: table.item(row, col).text().strip() if table.item(row, col) else ""
+            for col, key in enumerate(keys)
+        }
+        if values["name"]:
+            rows.append(values)
+    return rows
+
+
+def _implicit_constants_rows(window: Any) -> list[dict[str, str]]:
+    table = getattr(window, "implicit_constants_table", None)
+    if table is None:
+        return []
+    rows: list[dict[str, str]] = []
+    for row in range(table.rowCount()):
+        name = table.item(row, 0).text().strip() if table.item(row, 0) else ""
+        value = table.item(row, 1).text().strip() if table.item(row, 1) else ""
+        if name or value:
+            rows.append({"name": name, "value": value})
+    return rows
+
+
 def _variable_rows(window: Any) -> list[dict[str, str]]:
     rows = []
     for name, column, _widget in getattr(window, "variable_rows", []) or []:
@@ -217,10 +246,8 @@ def _capture_implicit_config(window: Any, model: str) -> dict[str, Any]:
         return {}
     equation = _text(getattr(window, "implicit_equation_edit", None))
     output_expression = _text(getattr(window, "implicit_output_edit", None))
-    constants = {}
-    if hasattr(window, "_implicit_builtin_constants"):
-        constants = window._implicit_builtin_constants(equation, output_expression)
     return {
+        "schema": 2,
         "x_variables": tuple(
             str(row.get("name") or "")
             for row in _variable_rows(window)
@@ -233,7 +260,9 @@ def _capture_implicit_config(window: Any, model: str) -> dict[str, Any]:
         "initial": _text(getattr(window, "implicit_initial_edit", None)),
         "tolerance": _text(getattr(window, "implicit_tolerance_edit", None)),
         "max_iterations": _value(getattr(window, "implicit_max_iterations_spin", None), 80),
-        "constants": constants,
+        "timeout_seconds": _value(getattr(window, "implicit_timeout_spin", None), 300),
+        "parameters": _implicit_param_rows(window),
+        "constants": _implicit_constants_rows(window),
     }
 
 
@@ -274,9 +303,104 @@ def _restore_param_rows(window: Any, rows: Any) -> None:
         )
 
 
-def _restore_implicit_config(window: Any, config: Any) -> None:
+def _clean_optional_string(value: Any) -> str:
+    return "" if value is None else str(value).strip()
+
+
+def _implicit_rows_to_config(rows: Any) -> dict[str, dict[str, str]]:
+    if isinstance(rows, dict):
+        cleaned: dict[str, dict[str, str]] = {}
+        for raw_name, raw_entry in rows.items():
+            name = _clean_optional_string(raw_name)
+            if not name:
+                continue
+            if isinstance(raw_entry, dict):
+                entry = {
+                    key: _clean_optional_string(raw_entry.get(key))
+                    for key in ("initial", "fixed", "min", "max")
+                    if _clean_optional_string(raw_entry.get(key))
+                }
+            else:
+                initial = _clean_optional_string(raw_entry)
+                entry = {"initial": initial} if initial else {}
+            cleaned[name] = entry
+        return cleaned
+    if not isinstance(rows, list):
+        return {}
+    cleaned = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = _clean_optional_string(row.get("name"))
+        if not name:
+            continue
+        entry = {
+            key: _clean_optional_string(row.get(key))
+            for key in ("initial", "fixed", "min", "max")
+            if _clean_optional_string(row.get(key))
+        }
+        cleaned[name] = entry
+    return cleaned
+
+
+def _implicit_constants_to_rows(constants: Any) -> list[dict[str, str]]:
+    if isinstance(constants, dict):
+        return [
+            {"name": str(name), "value": str(value)}
+            for name, value in constants.items()
+        ]
+    if not isinstance(constants, list):
+        return []
+    rows: list[dict[str, str]] = []
+    for row in constants:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "")
+        value = str(row.get("value") or "")
+        if name or value:
+            rows.append({"name": name, "value": value})
+    return rows
+
+
+def _is_legacy_quantum_defect_implicit(equation: str, output_expression: str) -> bool:
+    return (
+        equation.strip() == "d0 + d2/(n-delta)^2 + d4/(n-delta)^4"
+        and output_expression.strip() == "En - R*c/(n-delta)^2"
+    )
+
+
+def _migrate_old_implicit_config(config: dict[str, Any], fitting: dict[str, Any]) -> dict[str, Any]:
+    migrated = dict(config)
+    if migrated.get("schema") == 2:
+        return migrated
+
+    parameters = _implicit_rows_to_config(migrated.get("parameters"))
+    if not parameters:
+        parameters = _implicit_rows_to_config(migrated.get("parameter_rows"))
+    if not parameters:
+        parameters = _implicit_rows_to_config(fitting.get("parameter_rows"))
+    if not parameters and isinstance(fitting.get("parameters"), list):
+        parameters = _implicit_rows_to_config(fitting.get("parameters"))
+    migrated["parameters"] = parameters
+
+    constants = _implicit_constants_to_rows(migrated.get("constants"))
+    equation = str(migrated.get("equation") or "")
+    output_expression = str(migrated.get("output_expression") or "")
+    if not constants and _is_legacy_quantum_defect_implicit(equation, output_expression):
+        constants = [
+            {"name": "R", "value": "10973731.568160"},
+            {"name": "c", "value": "299792458"},
+        ]
+    migrated["constants"] = constants
+    migrated.setdefault("timeout_seconds", 300)
+    migrated["schema"] = 2
+    return migrated
+
+
+def _restore_implicit_config(window: Any, config: Any, fitting: dict[str, Any] | None = None) -> None:
     if not isinstance(config, dict) or not config:
         return
+    config = _migrate_old_implicit_config(config, fitting or {})
     _set_text(getattr(window, "implicit_variable_edit", None), str(config.get("implicit_variable") or ""))
     _set_text(getattr(window, "implicit_equation_edit", None), str(config.get("equation") or ""))
     _set_text(getattr(window, "implicit_output_edit", None), str(config.get("output_expression") or ""))
@@ -288,9 +412,21 @@ def _restore_implicit_config(window: Any, config: Any) -> None:
             window.implicit_max_iterations_spin.setValue(int(max_iterations))
         except (TypeError, ValueError):
             pass
+    timeout_seconds = config.get("timeout_seconds", 300)
+    if hasattr(window, "implicit_timeout_spin"):
+        try:
+            window.implicit_timeout_spin.setValue(int(timeout_seconds))
+        except (TypeError, ValueError):
+            window.implicit_timeout_spin.setValue(300)
     method = str(config.get("method") or "")
     if method:
         _set_combo_data(getattr(window, "implicit_method_combo", None), method)
+    parameters = _implicit_rows_to_config(config.get("parameters"))
+    if hasattr(window, "_reset_implicit_param_rows"):
+        window._reset_implicit_param_rows(parameters)
+    constants = config.get("constants")
+    if hasattr(window, "_reset_implicit_constants_rows"):
+        window._reset_implicit_constants_rows(_implicit_constants_to_rows(constants))
 
 
 def _capture_config(window: Any) -> dict[str, Any]:
@@ -509,7 +645,7 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
         _restore_param_rows(window, fitting.get("parameters"))
     if hasattr(window, "enable_constraints_checkbox"):
         window.enable_constraints_checkbox.setChecked(bool(fitting.get("constraints_enabled")))
-    _restore_implicit_config(window, fitting.get("implicit"))
+    _restore_implicit_config(window, fitting.get("implicit"), fitting)
 
     snapshot = workspace.get("result_snapshot") or {"present": False}
     if snapshot.get("present"):
