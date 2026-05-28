@@ -55,6 +55,12 @@ from formula_help import (
 from app_desktop.constants_editor import ConstantsEditor
 from app_desktop.formula_preview import update_formula_preview as _render_formula_preview
 from app_desktop.parameter_table import ParameterTable
+from app_desktop.parallel_preferences import (
+    ParallelPreferencesStore,
+    apply_parallel_config_to_widgets,
+    save_current_parallel_config,
+)
+from shared.parallel_config import NestedParallelPolicy, ParallelMode
 from shared.ui_specs import (
     CUSTOM_FORMULA_PARAMS,
     EXTRAPOLATION_METHOD_SPECS,
@@ -1318,6 +1324,110 @@ def build_left_panel(self):
     precision_layout.addWidget(self.uncertainty_digits_spin)
     precision_layout.addStretch()
     options_layout.addLayout(precision_layout)
+
+    parallel_layout = QFormLayout()
+    self.parallel_mode_combo = QComboBox()
+    parallel_mode_items = [
+        ("自动", "Auto", ParallelMode.AUTO.value),
+        ("串行", "Serial", ParallelMode.SERIAL.value),
+        ("线程", "Threads", ParallelMode.THREAD.value),
+        ("进程", "Processes", ParallelMode.PROCESS.value),
+    ]
+    for zh, _en, data in parallel_mode_items:
+        self.parallel_mode_combo.addItem(zh, data)
+    self._register_combo(self.parallel_mode_combo, parallel_mode_items)
+    lbl_parallel_mode = QLabel("并行模式：")
+    self._register_text(lbl_parallel_mode, "并行模式：", "Parallel mode:")
+    parallel_layout.addRow(lbl_parallel_mode, self.parallel_mode_combo)
+
+    worker_row = QHBoxLayout()
+    self.parallel_max_workers_spin = QSpinBox()
+    self.parallel_max_workers_spin.setRange(0, 1024)
+    self.parallel_max_workers_spin.setValue(0)
+    self.parallel_max_workers_spin.setToolTip("0 = auto")
+    self.parallel_reserve_cores_spin = QSpinBox()
+    self.parallel_reserve_cores_spin.setRange(0, 1024)
+    self.parallel_reserve_cores_spin.setValue(1)
+    lbl_parallel_workers = QLabel("最大 workers：")
+    self._register_text(lbl_parallel_workers, "最大 workers：", "Max workers:")
+    lbl_parallel_reserve = QLabel("保留核心：")
+    self._register_text(lbl_parallel_reserve, "保留核心：", "Reserve cores:")
+    worker_row.addWidget(lbl_parallel_workers)
+    worker_row.addWidget(self.parallel_max_workers_spin)
+    worker_row.addSpacing(12)
+    worker_row.addWidget(lbl_parallel_reserve)
+    worker_row.addWidget(self.parallel_reserve_cores_spin)
+    worker_row.addStretch()
+    parallel_layout.addRow(worker_row)
+
+    self.parallel_nested_policy_combo = QComboBox()
+    nested_policy_items = [
+        (
+            "嵌套时串行",
+            "Serial when nested",
+            NestedParallelPolicy.SERIAL_WHEN_NESTED.value,
+        ),
+        ("允许嵌套", "Allow nested", NestedParallelPolicy.ALLOW.value),
+    ]
+    for zh, _en, data in nested_policy_items:
+        self.parallel_nested_policy_combo.addItem(zh, data)
+    self._register_combo(self.parallel_nested_policy_combo, nested_policy_items)
+    lbl_nested_policy = QLabel("嵌套策略：")
+    self._register_text(lbl_nested_policy, "嵌套策略：", "Nested policy:")
+    parallel_layout.addRow(lbl_nested_policy, self.parallel_nested_policy_combo)
+
+    self.parallel_auto_fit_backend_checkbox = QCheckBox("启用新自动拟合后端")
+    self._register_text(
+        self.parallel_auto_fit_backend_checkbox,
+        "启用新自动拟合后端",
+        "Enable new auto-fit backend",
+    )
+    self.parallel_implicit_backend_checkbox = QCheckBox("启用新隐式拟合后端")
+    self._register_text(
+        self.parallel_implicit_backend_checkbox,
+        "启用新隐式拟合后端",
+        "Enable new implicit backend",
+    )
+    parallel_layout.addRow(self.parallel_auto_fit_backend_checkbox)
+    parallel_layout.addRow(self.parallel_implicit_backend_checkbox)
+    options_layout.addLayout(parallel_layout)
+
+    try:
+        from shared.settings_store import SettingsStore
+
+        settings = getattr(self, "_settings_store", None)
+        if settings is None:
+            settings = SettingsStore()
+            self._settings_store = settings
+        apply_parallel_config_to_widgets(
+            self,
+            ParallelPreferencesStore(settings).load(),
+        )
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).debug(
+            "Parallel preferences restore skipped", exc_info=True
+        )
+
+    self.parallel_mode_combo.currentIndexChanged.connect(
+        lambda _index: save_current_parallel_config(self)
+    )
+    self.parallel_max_workers_spin.valueChanged.connect(
+        lambda _value: save_current_parallel_config(self)
+    )
+    self.parallel_reserve_cores_spin.valueChanged.connect(
+        lambda _value: save_current_parallel_config(self)
+    )
+    self.parallel_nested_policy_combo.currentIndexChanged.connect(
+        lambda _index: save_current_parallel_config(self)
+    )
+    self.parallel_auto_fit_backend_checkbox.toggled.connect(
+        lambda _checked: save_current_parallel_config(self)
+    )
+    self.parallel_implicit_backend_checkbox.toggled.connect(
+        lambda _checked: save_current_parallel_config(self)
+    )
 
     self.generate_latex_checkbox = QCheckBox("生成 LaTeX 文件")
     self.generate_latex_checkbox.setChecked(False)

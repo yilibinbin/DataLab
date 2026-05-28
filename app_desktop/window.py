@@ -379,6 +379,9 @@ class ExtrapolationWindow(
         app = QApplication.instance()
         if app:
             app.aboutToQuit.connect(self._cleanup_workers)
+            from shared.parallel_backend import shutdown_global_backend
+
+            app.aboutToQuit.connect(shutdown_global_backend)
 
     def _build_menu(self):
         from . import panels as _panels

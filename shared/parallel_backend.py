@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import atexit
 import multiprocessing
 import os
 import pickle
@@ -132,6 +133,59 @@ class LocalWorkerBudget:
 _GLOBAL_WORKER_BUDGET = LocalWorkerBudget(
     max(1, min(16, (os.cpu_count() or 2) - 1 if (os.cpu_count() or 2) > 2 else 1))
 )
+_GLOBAL_SHUTDOWN_LOCK = threading.Lock()
+_GLOBAL_SHUTDOWN_CALLBACKS: list[Callable[[], None]] = []
+_GLOBAL_ACTIVE_KILLABLE_HANDLES: dict[int, Any] = {}
+
+
+def register_global_shutdown_callback(callback: Callable[[], None]) -> Callable[[], None]:
+    with _GLOBAL_SHUTDOWN_LOCK:
+        _GLOBAL_SHUTDOWN_CALLBACKS.append(callback)
+
+    def unregister() -> None:
+        with _GLOBAL_SHUTDOWN_LOCK:
+            with contextlib.suppress(ValueError):
+                _GLOBAL_SHUTDOWN_CALLBACKS.remove(callback)
+
+    return unregister
+
+
+def _start_and_register_global_killable_handle(handle: Any) -> Callable[[], None]:
+    handle_id = id(handle)
+    with _GLOBAL_SHUTDOWN_LOCK:
+        handle._process.start()
+        _GLOBAL_ACTIVE_KILLABLE_HANDLES[handle_id] = handle
+
+    def unregister() -> None:
+        with _GLOBAL_SHUTDOWN_LOCK:
+            _GLOBAL_ACTIVE_KILLABLE_HANDLES.pop(handle_id, None)
+
+    return unregister
+
+
+def _is_main_process() -> bool:
+    with contextlib.suppress(Exception):
+        return multiprocessing.current_process().name == "MainProcess"
+    return True
+
+
+def shutdown_global_backend() -> None:
+    if not _is_main_process():
+        return
+    with _GLOBAL_SHUTDOWN_LOCK:
+        callbacks = list(_GLOBAL_SHUTDOWN_CALLBACKS)
+        handles = list(_GLOBAL_ACTIVE_KILLABLE_HANDLES.values())
+        _GLOBAL_SHUTDOWN_CALLBACKS.clear()
+        _GLOBAL_ACTIVE_KILLABLE_HANDLES.clear()
+    for handle in handles:
+        with contextlib.suppress(Exception):
+            handle.kill()
+    for callback in callbacks:
+        with contextlib.suppress(Exception):
+            callback()
+
+
+atexit.register(shutdown_global_backend)
 
 
 @dataclass
@@ -156,6 +210,7 @@ class KillableHandle(Generic[R]):
     _process: Any
     _result_queue: Any
     _release_budget: Callable[[], None]
+    _unregister_shutdown: Callable[[], None] | None = None
     _closed: bool = False
     _finalize_lock: threading.Lock = field(
         default_factory=threading.Lock, init=False, repr=False
@@ -252,8 +307,12 @@ class KillableHandle(Generic[R]):
             if self._closed:
                 return
             self._closed = True
+            unregister = self._unregister_shutdown
+            self._unregister_shutdown = None
             self._close_queue()
             self._release_budget()
+            if unregister is not None:
+                unregister()
 
     def _close_queue(self) -> None:
         with contextlib.suppress(Exception):
@@ -323,13 +382,16 @@ class KillableProcessTaskRunner:
                 target=_run_killable_process_task,
                 args=(target, payload, parent_depth, result_queue),
             )
-            process.start()
-            acquired = False
-            return KillableHandle(
+            handle: KillableHandle[R] = KillableHandle(
                 _process=process,
                 _result_queue=result_queue,
                 _release_budget=lambda: self.worker_budget.release(1),
             )
+            handle._unregister_shutdown = _start_and_register_global_killable_handle(
+                handle
+            )
+            acquired = False
+            return handle
         finally:
             if acquired:
                 if result_queue is not None:

@@ -428,7 +428,7 @@ def test_killable_handle_terminate_releases_budget_and_allows_next_task() -> Non
     assert budget.available == 1
 
 
-@pytest.mark.skipif(
+@pytest.mark.skipif(  # type: ignore[untyped-decorator]  # pytest marker is untyped under scoped mypy.
     os.name == "nt",
     reason="Windows process termination does not use SIGTERM handlers",
 )
@@ -602,3 +602,94 @@ def test_killable_runner_child_exception_surfaces_as_runtime_error() -> None:
 
     with pytest.raises(RuntimeError, match="ValueError|bad payload"):
         runner.run_killable(_killable_raise, "x", timeout_seconds=2.0)
+
+
+def test_killable_start_registers_before_concurrent_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    budget = LocalWorkerBudget(total=1)
+    shutdown_thread: threading.Thread | None = None
+
+    class FakeQueue:
+        def close(self) -> None:
+            return None
+
+        def join_thread(self) -> None:
+            return None
+
+    class FakeProcess:
+        exitcode = None
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.alive = False
+
+        def start(self) -> None:
+            nonlocal shutdown_thread
+            self.alive = True
+            shutdown_thread = threading.Thread(
+                target=parallel_backend.shutdown_global_backend
+            )
+            shutdown_thread.start()
+            time.sleep(0.05)
+
+        def is_alive(self) -> bool:
+            return self.alive
+
+        def join(self, timeout: float | None = None) -> None:
+            return None
+
+        def terminate(self) -> None:
+            self.alive = False
+            self.exitcode = -15
+
+        def kill(self) -> None:
+            self.alive = False
+            self.exitcode = -9
+
+    class FakeContext:
+        def Queue(self) -> FakeQueue:  # noqa: N802
+            return FakeQueue()
+
+        def Process(self, *args: object, **kwargs: object) -> FakeProcess:  # noqa: N802
+            return FakeProcess(*args, **kwargs)
+
+    monkeypatch.setattr(
+        multiprocessing,
+        "get_context",
+        lambda method: FakeContext(),
+    )
+
+    runner = parallel_backend.KillableProcessTaskRunner(worker_budget=budget)
+    handle = runner.start_killable(_killable_echo, {"value": 1})
+
+    assert shutdown_thread is not None
+    shutdown_thread.join(timeout=2.0)
+
+    assert not shutdown_thread.is_alive()
+    assert not handle._process.is_alive()
+    assert budget.available == 1
+
+
+def test_global_shutdown_is_noop_in_child_process_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    unregister = parallel_backend.register_global_shutdown_callback(
+        lambda: calls.append("shutdown")
+    )
+
+    class ChildProcess:
+        name = "ForkProcess-1"
+
+    monkeypatch.setattr(
+        multiprocessing,
+        "current_process",
+        lambda: ChildProcess(),
+    )
+
+    try:
+        parallel_backend.shutdown_global_backend()
+    finally:
+        unregister()
+
+    assert calls == []
