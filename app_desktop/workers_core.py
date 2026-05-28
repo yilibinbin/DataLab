@@ -6,13 +6,14 @@ import multiprocessing
 import queue
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 import mpmath as mp
 
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
+from shared.parallel_config import ParallelConfig
 
 from data_extrapolation_latex_latest import (
     _dual_msg,
@@ -47,6 +48,7 @@ from fitting.auto_models import (
     fit_linear_model,
 )
 from fitting.hp_fitter import FitResult
+from fitting.model_selector import AutoFitSummary
 
 # Private-by-convention logger name — matches the rest of DataLab
 # (_logger in sse.py, collaborate.py, mcmc_fitter.py, etc.). The
@@ -232,6 +234,7 @@ class AutoFitJob:
     # legitimate fit time while still stopping runaway dps-80 fits.
     # CLI / batch callers can pass a numeric value to override.
     per_model_timeout_seconds: float | None = None
+    parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
 
 
 def _resolve_timeout_seconds(
@@ -262,7 +265,44 @@ def _execute_auto_fit_job_subprocess(
     job: AutoFitJob,
     should_cancel: Callable[[], bool] | None = None,
     progress_callback: Callable[[Any], None] | None = None,
-):
+) -> AutoFitSummary:
+    """GUI execution path: run auto-fit through the hard-cancel subprocess path."""
+    if job.parallel_config.enable_new_auto_fit_backend:
+        return _execute_auto_fit_job_subprocess_backend_adapter(
+            job,
+            should_cancel=should_cancel,
+            progress_callback=progress_callback,
+        )
+    return _execute_auto_fit_job_subprocess_proven(
+        job,
+        should_cancel=should_cancel,
+        progress_callback=progress_callback,
+    )
+
+
+def _execute_auto_fit_job_subprocess_backend_adapter(
+    job: AutoFitJob,
+    should_cancel: Callable[[], bool] | None = None,
+    progress_callback: Callable[[Any], None] | None = None,
+) -> AutoFitSummary:
+    """Adapter gate for future backend work.
+
+    First-stage behavior intentionally delegates to the proven per-model
+    subprocess orchestrator so progress, timeout, and hard cancellation stay
+    unchanged while callers can opt into the hook.
+    """
+    return _execute_auto_fit_job_subprocess_proven(
+        job,
+        should_cancel=should_cancel,
+        progress_callback=progress_callback,
+    )
+
+
+def _execute_auto_fit_job_subprocess_proven(
+    job: AutoFitJob,
+    should_cancel: Callable[[], bool] | None = None,
+    progress_callback: Callable[[Any], None] | None = None,
+) -> AutoFitSummary:
     """GUI execution path: run each model in its own subprocess.
 
     True immediate cancellation — when ``should_cancel`` returns
