@@ -2,6 +2,14 @@
 
 from typing import NoReturn
 
+from .implicit_model import (
+    ImplicitEvaluationCache,
+    ImplicitModelDefinition,
+    ImplicitSolveDiagnostics,
+    ImplicitSolveOptions,
+    build_implicit_model_specification,
+    quantum_defect_template,
+)
 from .model_parser import ModelSpecification, build_model_specification, infer_parameter_names
 from .constraints import ParameterState, build_parameter_state
 from .hp_fitter import FitResult, fit_custom_model
@@ -27,6 +35,12 @@ except ImportError as exc:  # pragma: no cover - optional dependency guard
 
 __all__ = [
     "ModelSpecification",
+    "ImplicitEvaluationCache",
+    "ImplicitModelDefinition",
+    "ImplicitSolveDiagnostics",
+    "ImplicitSolveOptions",
+    "build_implicit_model_specification",
+    "quantum_defect_template",
     "build_model_specification",
     "infer_parameter_names",
     "ParameterState",
