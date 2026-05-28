@@ -207,6 +207,7 @@ def _solve_implicit_value(
             solved = _find_root(rhs, current, options)
             iterations_used = int(options.max_iterations)
     elif options.method == "root":
+        iterations_used = 1
         solved = _find_root(rhs, seed, options)
     else:
         raise ValueError(

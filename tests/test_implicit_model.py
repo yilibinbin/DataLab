@@ -70,6 +70,33 @@ def test_numeric_partial_matches_analytic_implicit_derivative() -> None:
     )
 
 
+def test_root_method_records_solve_attempt_diagnostics() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*Cos[u] + c*x",
+        output_expression="u",
+        parameters=("a", "b", "c"),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="root",
+            initial="0.4",
+            tolerance="1e-40",
+            max_iterations=80,
+        ),
+    )
+    spec = build_implicit_model_specification(definition)
+    variables = {"x": mp.mpf("0.2")}
+    params = {"a": mp.mpf("0.1"), "b": mp.mpf("0.25"), "c": mp.mpf("0.4")}
+
+    spec.evaluate(variables, params)
+
+    diagnostics = getattr(spec, "implicit_diagnostics")
+    assert diagnostics.points_solved == 1
+    assert diagnostics.root_fallbacks == 0
+    assert diagnostics.max_iterations_used > 0
+
+
 def test_initial_expression_cannot_reference_implicit_variable() -> None:
     definition = ImplicitModelDefinition(
         x_variables=("x",),
