@@ -77,6 +77,7 @@ State variables READ from the host class:
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 from typing import Any
 
@@ -875,11 +876,12 @@ class WindowFittingModelsMixin:
                 f"{implicit_config['equation']}\n"
                 f"{implicit_config['output_expression']}"
             )
-            if "K" in expressions:
+            parameter_set = set(parameter_names)
+            if re.search(r"\bK\b", expressions) and "K" not in parameter_set:
                 constants["K"] = "1.0"
-            if "R" in expressions:
+            if re.search(r"\bR\b", expressions) and "R" not in parameter_set:
                 constants["R"] = "10973731.568160"
-            if "c" in expressions:
+            if re.search(r"\bc\b", expressions) and "c" not in parameter_set:
                 constants["c"] = "299792458"
             implicit_definition = ImplicitModelDefinition(
                 x_variables=tuple(implicit_config["x_variables"]),

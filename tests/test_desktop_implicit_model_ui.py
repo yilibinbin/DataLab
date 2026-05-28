@@ -32,10 +32,10 @@ def test_implicit_controls_exist_and_method_options(window) -> None:
     _select_model(window, "self_consistent")
 
     assert window.fit_model_combo.currentData() == "self_consistent"
-    assert window.implicit_variable_edit.text() == "delta"
-    assert window.implicit_equation_edit.text()
-    assert window.implicit_output_edit.text()
-    assert window.implicit_initial_edit.text() == "0"
+    assert window.implicit_variable_edit.text() == "u"
+    assert window.implicit_equation_edit.text() == "a + b*Cos[u] + c*x"
+    assert window.implicit_output_edit.text() == "u"
+    assert window.implicit_initial_edit.text() == "0.3"
     assert window.implicit_tolerance_edit.text() == "1e-30"
     assert window.implicit_max_iterations_spin.value() == 80
     assert {
@@ -43,6 +43,20 @@ def test_implicit_controls_exist_and_method_options(window) -> None:
         for index in range(window.implicit_method_combo.count())
     } == {"fixed_point", "root"}
     assert not window.implicit_model_widget.isHidden()
+
+
+def test_default_implicit_config_uses_x_as_variable_not_parameter(window) -> None:
+    _select_model(window, "self_consistent")
+
+    config = window._collect_implicit_config()
+
+    assert config["x_variables"] == ("x",)
+    assert config["implicit_variable"] == "u"
+    assert config["equation"] == "a + b*Cos[u] + c*x"
+    assert config["output_expression"] == "u"
+    assert config["parameter_names"] == ("a", "b", "c")
+    assert "x" not in config["parameter_names"]
+    assert "u" not in config["parameter_names"]
 
 
 def test_quantum_defect_preset_and_parameter_inference(window) -> None:
@@ -63,6 +77,23 @@ def test_quantum_defect_preset_and_parameter_inference(window) -> None:
     assert "K" not in config["parameter_names"]
     assert "R" not in config["parameter_names"]
     assert "c" not in config["parameter_names"]
+
+
+def test_physical_r_c_constants_do_not_hide_generic_c_parameter(window) -> None:
+    _select_model(window, "self_consistent")
+
+    window.implicit_variable_edit.setText("u")
+    window.implicit_equation_edit.setText("a + c*x")
+    window.implicit_output_edit.setText("u")
+    generic_config = window._collect_implicit_config()
+    assert generic_config["parameter_names"] == ("a", "c")
+
+    window.implicit_equation_edit.setText("d0 + d2/(n-u)^2")
+    window.implicit_output_edit.setText("En + R*c/(n-u)^2")
+    window._reset_variable_rows(default_var="n", default_column="A")
+    physical_config = window._collect_implicit_config()
+    assert "R" not in physical_config["parameter_names"]
+    assert "c" not in physical_config["parameter_names"]
 
 
 def test_implicit_validation_rejects_blank_expressions_and_bad_variable(window) -> None:

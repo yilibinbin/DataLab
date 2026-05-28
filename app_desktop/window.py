@@ -1050,16 +1050,20 @@ class ExtrapolationWindow(
         initial = self.implicit_initial_edit.text().strip() or "0"
         tolerance = self.implicit_tolerance_edit.text().strip() or "1e-30"
         max_iterations = self.implicit_max_iterations_spin.value()
+        expressions = f"{equation}\n{output_expression}"
+        constant_names = {"K", "R"}
+        if re.search(r"\bR\b", expressions) and re.search(r"\bc\b", expressions):
+            constant_names.add("c")
         reserved = set(x_variables)
         reserved.add(implicit_variable)
-        reserved.update({"K", "R", "c"})
+        reserved.update(constant_names)
         config_keys = [
             name for name in self._collect_parameter_config(allow_empty=True).keys()
             if name not in reserved
         ]
         parameter_names = self._infer_parameter_names(
-            f"{equation}\n{output_expression}",
-            x_variables + [implicit_variable, "K", "R", "c"],
+            expressions,
+            x_variables + [implicit_variable, *sorted(constant_names)],
             config_keys,
         )
         parameter_names = [name for name in parameter_names if name not in reserved]
