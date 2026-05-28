@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import mpmath as mp
+import pytest
 
 from data_extrapolation_latex_latest import ExtrapolationOptions
 
+import app_desktop.workers_core as workers_core
 from app_desktop.workers_core import (
     AutoFitJob,
     CalcJob,
@@ -12,6 +16,7 @@ from app_desktop.workers_core import (
     _execute_calc_job,
     _execute_fit_job_payload,
 )
+from fitting.hp_fitter import FitResult
 from fitting.implicit_model import ImplicitModelDefinition, ImplicitSolveOptions
 
 
@@ -51,25 +56,76 @@ def test_execute_fit_job_payload_poly_recovers_linear_params():
     assert mp.almosteq(fit.params["b1"], mp.mpf("2"), abs_eps=mp.mpf("1e-50"))
 
 
-def test_execute_fit_job_payload_self_consistent_recovers_parameters() -> None:
-    with mp.workdps(100):
-        x_series = [mp.mpf(v) for v in ["0", "0.2", "0.4", "0.6", "0.8"]]
-        y_series = [
-            mp.findroot(
-                lambda value, x=x: value
-                - (
-                    mp.mpf("0.1")
-                    + mp.mpf("0.2") * mp.cos(value)
-                    + mp.mpf("0.4") * x
-                ),
-                mp.mpf("0.3"),
-                tol=mp.mpf("1e-90"),
-            )
-            for x in x_series
-        ]
+def test_execute_fit_job_payload_self_consistent_wires_definition_and_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    x_series = [mp.mpf(v) for v in ["0", "1", "2"]]
+    y_series = [mp.mpf(v) for v in ["0.3", "0.4", "0.5"]]
 
     data_rows = list(zip(x_series, y_series))
     sigma_rows = [(None, None) for _ in data_rows]
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*Cos[u] + c*x",
+        output_expression="u",
+        parameters=("a", "b", "c"),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="root",
+            initial="0.3",
+            tolerance="1e-36",
+        ),
+    )
+    spec = SimpleNamespace(
+        implicit_diagnostics=SimpleNamespace(
+            points_solved=7,
+            root_fallbacks=2,
+            max_iterations_used=5,
+            max_residual="1.0e-42",
+        )
+    )
+    calls: dict[str, object] = {}
+
+    def fake_build_implicit_model_specification(
+        received_definition: ImplicitModelDefinition,
+    ) -> object:
+        calls["definition"] = received_definition
+        return spec
+
+    def fake_fit_custom_model(
+        received_spec: object,
+        state: object,
+        variable_data: dict[str, list[mp.mpf]],
+        target_series: list[mp.mpf],
+        **kwargs: object,
+    ) -> FitResult:
+        calls["spec"] = received_spec
+        calls["free_params"] = tuple(state.free_params)
+        calls["variable_data"] = variable_data
+        calls["target_series"] = target_series
+        calls["kwargs"] = kwargs
+        return FitResult(
+            params={"a": mp.mpf("0.1"), "b": mp.mpf("0.2"), "c": mp.mpf("0.4")},
+            param_errors={},
+            chi2=mp.mpf("0"),
+            reduced_chi2=mp.mpf("0"),
+            aic=mp.mpf("0"),
+            bic=mp.mpf("0"),
+            r2=mp.mpf("1"),
+            rmse=mp.mpf("0"),
+            residuals=[],
+            fitted_curve=list(target_series),
+            covariance=[],
+            details={},
+        )
+
+    monkeypatch.setattr(
+        workers_core,
+        "build_implicit_model_specification",
+        fake_build_implicit_model_specification,
+    )
+    monkeypatch.setattr(workers_core, "fit_custom_model", fake_fit_custom_model)
 
     job = FitJob(
         model_type="self_consistent",
@@ -94,32 +150,64 @@ def test_execute_fit_job_payload_self_consistent_recovers_parameters() -> None:
         precision=30,
         weighted=False,
         label="self-consistent-test",
-        implicit_definition=ImplicitModelDefinition(
-            x_variables=("x",),
-            implicit_variable="u",
-            equation="a + b*Cos[u] + c*x",
-            output_expression="u",
-            parameters=("a", "b", "c"),
-            constants={},
-            solve_options=ImplicitSolveOptions(
-                method="root",
-                initial="0.3",
-                tolerance="1e-36",
-            ),
-        ),
+        implicit_definition=definition,
     )
 
     payload = _execute_fit_job_payload(job)
     fit = payload.fit_result
 
-    assert abs(float(fit.params["a"]) - 0.1) < 1e-3
-    assert abs(float(fit.params["b"]) - 0.2) < 1e-3
-    assert abs(float(fit.params["c"]) - 0.4) < 1e-3
+    assert calls["definition"] is definition
+    assert calls["spec"] is spec
+    assert calls["free_params"] == ("a", "b", "c")
+    assert calls["variable_data"] == {"x": x_series}
+    assert calls["target_series"] == y_series
+    assert calls["kwargs"] == {
+        "precision": 30,
+        "weights": None,
+        "data_sigmas": [None] * len(y_series),
+    }
+    assert {name: float(value) for name, value in fit.params.items()} == {
+        "a": 0.1,
+        "b": 0.2,
+        "c": 0.4,
+    }
+    assert payload.expression == "u"
     details = fit.details
     assert details["implicit_variable"] == "u"
     assert details["equation"] == "a + b*Cos[u] + c*x"
     assert details["output_expression"] == "u"
-    assert details["implicit_diagnostics"]["points_solved"] > 0
+    assert details["implicit_diagnostics"] == {
+        "points_solved": 7,
+        "root_fallbacks": 2,
+        "max_iterations_used": 5,
+        "max_residual": "1.0e-42",
+    }
+
+
+def test_execute_fit_job_payload_self_consistent_requires_definition() -> None:
+    with pytest.raises(ValueError, match="requires an implicit definition"):
+        _execute_fit_job_payload(
+            FitJob(
+                model_type="self_consistent",
+                headers=["x", "u"],
+                data_rows=[],
+                sigma_rows=[],
+                x_series=[],
+                y_series=[],
+                sigma_series=[],
+                weights=None,
+                variable_map={"x": "x"},
+                variable_data={"x": []},
+                target_series=[],
+                target_column="u",
+                model_expr="",
+                parameter_config={"a": {"initial": 0.1}},
+                parameter_names=["a"],
+                precision=30,
+                weighted=False,
+                label="missing-definition-test",
+            )
+        )
 
 
 def test_execute_auto_fit_job_selects_a_model() -> None:
