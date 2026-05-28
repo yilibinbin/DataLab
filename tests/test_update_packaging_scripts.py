@@ -11,6 +11,9 @@ def test_mac_build_script_has_optional_pkg_packaging() -> None:
     assert "pkgbuild" in text
     assert "productbuild" in text
     assert "DataLab-${APP_VERSION}-macOS.pkg" in text
+    assert "read_project_version()" in text
+    assert "CFBundleShortVersionString $APP_VERSION" in text
+    assert "CFBundleVersion $APP_VERSION" in text
     assert "Developer ID Installer" in text
     assert "PRODUCTBUILD_ARGS=(" in text
     assert 'PRODUCTBUILD_ARGS+=(--sign "$DATALAB_MAC_INSTALLER_IDENTITY")' in text

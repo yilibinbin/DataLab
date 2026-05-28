@@ -173,11 +173,44 @@ else
 fi
 
 PYPROJECT_FILE="$PROJECT_ROOT/pyproject.toml"
+read_project_version() {
+  "$PYTHON_BIN" - "$PYPROJECT_FILE" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+pyproject = Path(sys.argv[1])
+try:
+    import tomllib
+except ModuleNotFoundError:
+    in_project = False
+    for line in pyproject.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped == "[project]":
+            in_project = True
+            continue
+        if in_project and stripped.startswith("["):
+            break
+        if in_project and stripped.startswith("version"):
+            print(stripped.split("=", 1)[1].strip().strip('"'))
+            break
+    else:
+        raise SystemExit("project.version not found in pyproject.toml")
+else:
+    metadata = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    print(metadata["project"]["version"])
+PY
+}
+
 if [[ -f "$PYPROJECT_FILE" ]]; then
   echo "[info] Including project metadata: $PYPROJECT_FILE"
   DOCS_DATA_FLAGS+=(--add-data "$PYPROJECT_FILE:.")
+  APP_VERSION="$(read_project_version)"
+  echo "[info] App version: $APP_VERSION"
 else
   echo "[warn] pyproject.toml not found: $PYPROJECT_FILE"
+  APP_VERSION="0.0.0"
 fi
 
 DESKTOP_DOCS_DIR="$PROJECT_ROOT/docs/desktop"
@@ -268,6 +301,12 @@ echo "[3.5/4] Patching macOS document type metadata..."
 if ! "$PLIST_BUDDY" -c "Set :CFBundleIdentifier org.datalab.desktop" "$INFO_PLIST_FILE" 2>/dev/null; then
   "$PLIST_BUDDY" -c "Add :CFBundleIdentifier string org.datalab.desktop" "$INFO_PLIST_FILE"
 fi
+if ! "$PLIST_BUDDY" -c "Set :CFBundleShortVersionString $APP_VERSION" "$INFO_PLIST_FILE" 2>/dev/null; then
+  "$PLIST_BUDDY" -c "Add :CFBundleShortVersionString string $APP_VERSION" "$INFO_PLIST_FILE"
+fi
+if ! "$PLIST_BUDDY" -c "Set :CFBundleVersion $APP_VERSION" "$INFO_PLIST_FILE" 2>/dev/null; then
+  "$PLIST_BUDDY" -c "Add :CFBundleVersion string $APP_VERSION" "$INFO_PLIST_FILE"
+fi
 
 "$PLIST_BUDDY" -c "Add :CFBundleDocumentTypes array" "$INFO_PLIST_FILE"
 "$PLIST_BUDDY" -c "Add :CFBundleDocumentTypes:0 dict" "$INFO_PLIST_FILE"
@@ -332,36 +371,6 @@ if [[ "${DATALAB_BUILD_PKG:-0}" == "1" ]]; then
     echo "[error] productbuild command not found; install Xcode command line tools."
     exit 1
   fi
-  APP_VERSION="$("$PYTHON_BIN" - "$PYPROJECT_FILE" <<'PY'
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-pyproject = Path(sys.argv[1])
-try:
-    import tomllib
-except ModuleNotFoundError:
-    in_project = False
-    for line in pyproject.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if stripped == "[project]":
-            in_project = True
-            continue
-        if in_project and stripped.startswith("["):
-            break
-        if in_project and stripped.startswith("version"):
-            print(stripped.split("=", 1)[1].strip().strip('"'))
-            break
-    else:
-        raise SystemExit("project.version not found in pyproject.toml")
-else:
-    metadata = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    print(metadata["project"]["version"])
-PY
-)"
-  echo "[info] App version: $APP_VERSION"
-
   PKG_ROOT="$BUILD_ROOT/pkgroot"
   PKG_COMPONENT="$BUILD_ROOT/DataLab-component.pkg"
   PKG_OUTPUT="$PROJECT_ROOT/dist/DataLab-${APP_VERSION}-macOS.pkg"
