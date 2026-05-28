@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def _set_combo_data(combo, value: str) -> None:
+    index = combo.findData(value)
+    assert index >= 0
+    combo.setCurrentIndex(index)
+
+
+def test_workspace_round_trips_implicit_fit_config(qtbot, tmp_path: Path) -> None:
+    from app_desktop.window import ExtrapolationWindow
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "self_consistent")
+    source._reset_variable_rows(default_var="x", default_column="A")
+    source._add_variable_row(default_var="z", default_column="C")
+    source.implicit_variable_edit.setText("u")
+    source.implicit_equation_edit.setText("a + b*Cos[u] + c*x + d*z")
+    source.implicit_output_edit.setText("u + z")
+    source.implicit_initial_edit.setText("0.3")
+    source.implicit_tolerance_edit.setText("1e-30")
+    source.implicit_max_iterations_spin.setValue(123)
+    _set_combo_data(source.implicit_method_combo, "root")
+    source.fit_param_edit.setPlainText(
+        '{"a":{"initial":0.1},"b":{"initial":0.2},"c":{"initial":0.4},"d":{"initial":0.5}}'
+    )
+
+    path = tmp_path / "implicit.datalab"
+    assert source._save_workspace_to_path(path)
+
+    restored = ExtrapolationWindow()
+    qtbot.addWidget(restored)
+    assert restored._open_workspace_from_path(path)
+
+    assert restored.fit_model_combo.currentData() == "self_consistent"
+    assert restored.implicit_variable_edit.text() == "u"
+    assert restored.implicit_equation_edit.text() == "a + b*Cos[u] + c*x + d*z"
+    assert restored.implicit_output_edit.text() == "u + z"
+    assert restored.implicit_initial_edit.text() == "0.3"
+    assert restored.implicit_tolerance_edit.text() == "1e-30"
+    assert restored.implicit_max_iterations_spin.value() == 123
+    assert restored.implicit_method_combo.currentData() == "root"
+    assert '"a"' in restored.fit_param_edit.toPlainText()
+    assert [(row[0].text(), row[1].text()) for row in restored.variable_rows] == [
+        ("x", "A"),
+        ("z", "C"),
+    ]

@@ -49,6 +49,15 @@ def _text(obj: Any, default: str = "") -> str:
     return default
 
 
+def _set_text(obj: Any, value: str) -> None:
+    if obj is None:
+        return
+    if hasattr(obj, "setPlainText"):
+        obj.setPlainText(value)
+    elif hasattr(obj, "setText"):
+        obj.setText(value)
+
+
 def _checked(obj: Any, default: bool = False) -> bool:
     return bool(obj.isChecked()) if obj is not None and hasattr(obj, "isChecked") else default
 
@@ -203,7 +212,70 @@ def _variable_rows(window: Any) -> list[dict[str, str]]:
     return rows
 
 
+def _capture_implicit_config(window: Any, model: str) -> dict[str, Any]:
+    if model != "self_consistent" or not hasattr(window, "_collect_implicit_config"):
+        return {}
+    return dict(window._collect_implicit_config())
+
+
+def _restore_variable_rows(window: Any, rows: Any) -> None:
+    if not isinstance(rows, list) or not rows:
+        return
+    cleaned = [
+        {
+            "name": str(row.get("name") or ""),
+            "column": str(row.get("column") or ""),
+        }
+        for row in rows
+        if isinstance(row, dict)
+    ]
+    if not cleaned:
+        return
+    if hasattr(window, "_reset_variable_rows"):
+        first = cleaned[0]
+        window._reset_variable_rows(default_var=first["name"] or "x", default_column=first["column"])
+        for row in cleaned[1:]:
+            if hasattr(window, "_add_variable_row"):
+                window._add_variable_row(default_var=row["name"], default_column=row["column"])
+
+
+def _restore_param_rows(window: Any, rows: Any) -> None:
+    if not isinstance(rows, list):
+        return
+    if hasattr(window, "_reset_param_rows"):
+        window._reset_param_rows()
+    for row in rows:
+        if not isinstance(row, dict) or not hasattr(window, "_add_param_row"):
+            continue
+        window._add_param_row(
+            default_name=str(row.get("name") or ""),
+            init=str(row.get("initial") or ""),
+            min_val=str(row.get("min") or ""),
+            max_val=str(row.get("max") or ""),
+        )
+
+
+def _restore_implicit_config(window: Any, config: Any) -> None:
+    if not isinstance(config, dict) or not config:
+        return
+    _set_text(getattr(window, "implicit_variable_edit", None), str(config.get("implicit_variable") or ""))
+    _set_text(getattr(window, "implicit_equation_edit", None), str(config.get("equation") or ""))
+    _set_text(getattr(window, "implicit_output_edit", None), str(config.get("output_expression") or ""))
+    _set_text(getattr(window, "implicit_initial_edit", None), str(config.get("initial") or ""))
+    _set_text(getattr(window, "implicit_tolerance_edit", None), str(config.get("tolerance") or ""))
+    max_iterations = config.get("max_iterations")
+    if max_iterations is not None and hasattr(window, "implicit_max_iterations_spin"):
+        try:
+            window.implicit_max_iterations_spin.setValue(int(max_iterations))
+        except (TypeError, ValueError):
+            pass
+    method = str(config.get("method") or "")
+    if method:
+        _set_combo_data(getattr(window, "implicit_method_combo", None), method)
+
+
 def _capture_config(window: Any) -> dict[str, Any]:
+    fitting_model = _combo_data(getattr(window, "fit_model_combo", None), "custom")
     return {
         "common": {
             "mpmath_precision": _value(getattr(window, "mpmath_precision_spin", None), 16),
@@ -255,14 +327,16 @@ def _capture_config(window: Any) -> dict[str, Any]:
             "weighted_variance": _checked(getattr(window, "stats_weight_variance_checkbox", None)),
         },
         "fitting": {
-            "model": _combo_data(getattr(window, "fit_model_combo", None), "custom"),
+            "model": fitting_model,
             "expression": _text(getattr(window, "fit_expr_edit", None)),
             "target_column": _text(getattr(window, "fit_target_edit", None), "B"),
             "weighted": _checked(getattr(window, "fit_weighted_checkbox", None)),
             "mcmc_refine": _checked(getattr(window, "fit_mcmc_refine", None)),
             "variables": _variable_rows(window),
             "constraints_enabled": _checked(getattr(window, "enable_constraints_checkbox", None)),
-            "parameters": _param_rows(window),
+            "parameters": _text(getattr(window, "fit_param_edit", None)),
+            "parameter_rows": _param_rows(window),
+            "implicit": _capture_implicit_config(window, fitting_model),
             "poly_degree": _value(getattr(window, "poly_degree_spin", None), 3),
             "inverse_power": {
                 "min": _value(getattr(window, "inverse_min_spin", None), 1),
@@ -407,6 +481,16 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
         window.fit_expr_edit.setPlainText(str(fitting.get("expression") or ""))
     if hasattr(window, "fit_target_edit"):
         window.fit_target_edit.setText(str(fitting.get("target_column") or ""))
+    parameter_text = fitting.get("parameters")
+    if isinstance(parameter_text, str):
+        _set_text(getattr(window, "fit_param_edit", None), parameter_text)
+    _restore_variable_rows(window, fitting.get("variables"))
+    _restore_param_rows(window, fitting.get("parameter_rows"))
+    if not fitting.get("parameter_rows") and isinstance(fitting.get("parameters"), list):
+        _restore_param_rows(window, fitting.get("parameters"))
+    if hasattr(window, "enable_constraints_checkbox"):
+        window.enable_constraints_checkbox.setChecked(bool(fitting.get("constraints_enabled")))
+    _restore_implicit_config(window, fitting.get("implicit"))
 
     snapshot = workspace.get("result_snapshot") or {"present": False}
     if snapshot.get("present"):

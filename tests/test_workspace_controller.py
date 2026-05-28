@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import base64
 
+import mpmath as mp
 from PySide6.QtWidgets import QTableWidgetItem
+
+from fitting.hp_fitter import FitResult
 
 
 PNG_1X1 = base64.b64decode(
@@ -14,6 +17,27 @@ def _set_combo_data(combo, value: str) -> None:
     idx = combo.findData(value)
     assert idx >= 0
     combo.setCurrentIndex(idx)
+
+
+def _sample_fit_result() -> FitResult:
+    return FitResult(
+        params={"a_b": mp.mpf("1.5")},
+        param_errors={"a_b": mp.mpf("0.1")},
+        chi2=mp.mpf("1.0"),
+        reduced_chi2=mp.mpf("1.0"),
+        aic=mp.mpf("1.0"),
+        bic=mp.mpf("1.0"),
+        r2=mp.mpf("0.9"),
+        rmse=mp.mpf("0.01"),
+        residuals=[mp.mpf("0.0")],
+        fitted_curve=[mp.mpf("0.0")],
+        covariance=[[mp.mpf("0.01")]],
+        param_errors_total={"a_b": mp.mpf("0.1")},
+        details={
+            "equation": r"a_b + c% & # \\ x",
+            "output_expression": r"u_out & y",
+        },
+    )
 
 
 def test_workspace_controller_captures_manual_state(qtbot) -> None:
@@ -125,3 +149,53 @@ def test_workspace_save_and_open_round_trip_file(qtbot, tmp_path) -> None:
     assert target._csv_rows == [{"name": "A", "value": "1.0"}]
     assert target._workspace_snapshot_only is True
     assert not target.display_digits_spin.isEnabled()
+
+
+def test_workspace_restore_old_fitting_config_without_implicit(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    source.fit_param_edit.setPlainText('{"A":{"initial":1.0}}')
+    source._reset_variable_rows(default_var="x", default_column="A")
+    bundle = capture_workspace(source, title="old")
+    fitting = bundle.manifest["workspace"]["config"]["fitting"]
+    fitting.pop("implicit", None)
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.fit_param_edit.toPlainText() == '{"A":{"initial":1.0}}'
+    assert target.implicit_variable_edit.text() == "u"
+    assert target.implicit_equation_edit.text() == "a + b*Cos[u] + c*x"
+    assert target.implicit_output_edit.text() == "u"
+    assert [(row[0].text(), row[1].text()) for row in target.variable_rows] == [("x", "A")]
+
+
+def test_fit_latex_report_escapes_implicit_equation_and_output_text() -> None:
+    from app_desktop import fitting_latex_writer as writer
+
+    lines = writer.build_fit_latex_block(
+        headers=["x", "y"],
+        rows=[(mp.mpf("1.0"), mp.mpf("2.0"))],
+        sigma_rows=[(None, None)],
+        fit_result=_sample_fit_result(),
+        expression="u_out",
+        substituted="u_out",
+        image_path=None,
+        use_dcolumn=False,
+        digits=6,
+        latex_group_size=3,
+        target_column="y",
+        variable_pairs=[("x", "x")],
+        caption_text="Fit results",
+        default_uncertainty_digits=1,
+        cleaned_substituted="u_out",
+    )
+
+    text = "\n".join(lines)
+    assert r"Implicit equation: \texttt{a\_b + c\% \& \# \textbackslash{}\textbackslash{} x}\\" in text
+    assert r"Implicit output: \texttt{u\_out \& y}\\" in text

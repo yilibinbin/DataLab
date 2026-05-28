@@ -34,6 +34,16 @@ def latex_escape(text: str) -> str:
     return "".join(mapping.get(ch, ch) for ch in str(text))
 
 
+def _latex_escape_text(value: str) -> str:
+    return (
+        value.replace("\\", r"\textbackslash{}")
+        .replace("&", r"\&")
+        .replace("%", r"\%")
+        .replace("_", r"\_")
+        .replace("#", r"\#")
+    )
+
+
 def build_fit_latex_preamble(*, use_dcolumn: bool, digits: int, latex_group_size: int) -> list[str]:
     group_size = max(1, int(latex_group_size))
     lines = [
@@ -208,6 +218,13 @@ def build_fit_latex_block(
     if batch_index is not None:
         # Always use English for LaTeX output
         lines.append(f"\\subsection*{{Fit Results: Batch {batch_index}}}")
+
+    implicit_equation = str(fit_result.details.get("equation") or "").strip()
+    implicit_output = str(fit_result.details.get("output_expression") or "").strip()
+    if implicit_equation:
+        lines.append(f"Implicit equation: \\texttt{{{_latex_escape_text(implicit_equation)}}}\\\\")
+    if implicit_output:
+        lines.append(f"Implicit output: \\texttt{{{_latex_escape_text(implicit_output)}}}\\\\")
 
     cleaned_expr = (expression or "").strip().replace("**", "^")
     cleaned_sub = cleaned_substituted
