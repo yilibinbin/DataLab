@@ -224,10 +224,15 @@ def _is_running_inside_macos_app_bundle() -> bool:
     macos_dir = executable.parent
     contents_dir = macos_dir.parent
     app_dir = contents_dir.parent
+    info_plist = contents_dir / "Info.plist"
     return (
         macos_dir.name == "MacOS"
         and contents_dir.name == "Contents"
         and app_dir.name.endswith(".app")
+        and app_dir.is_dir()
+        and contents_dir.is_dir()
+        and macos_dir.is_dir()
+        and info_plist.is_file()
     )
 
 
