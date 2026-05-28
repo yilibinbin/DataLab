@@ -6,6 +6,21 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.2.1] — 2026-05-28
+
+### Added
+- Registered `.datalab` workspace files with the desktop app on macOS
+  and Windows installers.
+- Added startup and file-open handling so opening a `.datalab`
+  workspace from the operating system restores the saved workspace
+  directly.
+
+### Fixed
+- Preserved unsaved-work prompts and busy-worker guards when opening a
+  workspace from the operating system.
+- Hardened repeated or unsupported file-open events so failed opens do
+  not block later valid workspace opens.
+
 ## [2.2.0] — 2026-05-26
 
 ### Added
@@ -98,7 +113,8 @@ stack embedded — no external runtime needed.
 - Coverage spans high-precision Mathematica reference values, all four
   modes end-to-end, and every LaTeX output path
 
-[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.2.1...HEAD
+[2.2.1]: https://github.com/yilibinbin/DataLab/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/yilibinbin/DataLab/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/yilibinbin/DataLab/compare/v2.0.2...v2.1.0
 [2.0.2]: https://github.com/yilibinbin/DataLab/compare/v2.0.0...v2.0.2
