@@ -9,7 +9,12 @@ from PySide6.QtWidgets import QApplication, QComboBox, QPushButton, QStyle
 
 from formula_help import get_function_tooltip
 
-from .resources import _apply_system_theme, _detect_windows_light_mode, _locate_icon_file
+from .resources import (
+    _apply_system_theme,
+    _detect_windows_light_mode,
+    _locate_icon_file,
+    should_set_runtime_app_icon,
+)
 
 _LANG_ZH = "zh"
 _LANG_EN = "en"
@@ -364,7 +369,6 @@ class WindowI18nMixin:
         icon = QIcon(str(icon_path))
         self.setWindowIcon(icon)
         app = QApplication.instance()
-        if app:
+        if app and should_set_runtime_app_icon():
             app.setWindowIcon(icon)
         self._window_icon = icon
-

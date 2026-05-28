@@ -217,6 +217,30 @@ def _pil_to_qpixmap(image: Image.Image) -> QPixmap:
     return QPixmap.fromImage(qimage)
 
 
+def _is_running_inside_macos_app_bundle() -> bool:
+    if sys.platform != "darwin":
+        return False
+    executable = Path(sys.executable).resolve()
+    macos_dir = executable.parent
+    contents_dir = macos_dir.parent
+    app_dir = contents_dir.parent
+    return (
+        macos_dir.name == "MacOS"
+        and contents_dir.name == "Contents"
+        and app_dir.name.endswith(".app")
+    )
+
+
+def should_set_runtime_app_icon() -> bool:
+    if (
+        sys.platform == "darwin"
+        and getattr(sys, "frozen", False)
+        and _is_running_inside_macos_app_bundle()
+    ):
+        return False
+    return True
+
+
 __all__ = [
     "ICON_CANDIDATES",
     "PIL_AVAILABLE",
@@ -224,7 +248,9 @@ __all__ = [
     "_compute_default_pdf_dpi",
     "_detect_windows_light_mode",
     "_ensure_default_path_augmented",
+    "_is_running_inside_macos_app_bundle",
     "_locate_icon_file",
     "_pil_to_qpixmap",
     "resolve_resource_path",
+    "should_set_runtime_app_icon",
 ]

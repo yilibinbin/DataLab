@@ -15,6 +15,7 @@ VENV_PATH="$BUILD_ROOT/venv"
 ICON_SOURCE="$PROJECT_ROOT/DataLab.png"
 ICONSET_DIR="$BUILD_ROOT/app_icon.iconset"
 MAC_ICON="$BUILD_ROOT/app_icon.icns"
+MAC_ICON_PLIST_NAME="$(basename "$MAC_ICON" .icns)"
 DEPLOY_TARGET="$(/usr/bin/sw_vers -productVersion | awk -F. '{print $1"."$2}')"
 export MACOSX_DEPLOYMENT_TARGET="$DEPLOY_TARGET"
 
@@ -255,6 +256,12 @@ if [[ ! -f "$INFO_PLIST_FILE" ]]; then
   exit 1
 fi
 
+if [[ -f "$MAC_ICON" ]]; then
+  if ! "$PLIST_BUDDY" -c "Set :CFBundleIconFile $MAC_ICON_PLIST_NAME" "$INFO_PLIST_FILE" 2>/dev/null; then
+    "$PLIST_BUDDY" -c "Add :CFBundleIconFile string $MAC_ICON_PLIST_NAME" "$INFO_PLIST_FILE"
+  fi
+fi
+
 echo "[3.5/4] Patching macOS document type metadata..."
 "$PLIST_BUDDY" -c "Delete :CFBundleDocumentTypes" "$INFO_PLIST_FILE" 2>/dev/null || true
 "$PLIST_BUDDY" -c "Delete :UTExportedTypeDeclarations" "$INFO_PLIST_FILE" 2>/dev/null || true
@@ -305,6 +312,10 @@ if [[ -d "$APP_BUNDLE" ]]; then
   rm -rf "$STAGING_DIR"
 else
   echo "[error] 未找到生成的 .app，无法签名。"
+fi
+
+if [[ -f "$MAC_ICON" && -d "$APP_BUNDLE" ]]; then
+  python "$PROJECT_ROOT/tools/inspect_macos_bundle_icon.py" "$APP_BUNDLE"
 fi
 
 if [[ "${DATALAB_BUILD_PKG:-0}" == "1" ]]; then
