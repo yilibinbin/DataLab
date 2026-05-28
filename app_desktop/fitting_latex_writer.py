@@ -35,13 +35,7 @@ def latex_escape(text: str) -> str:
 
 
 def _latex_escape_text(value: str) -> str:
-    return (
-        value.replace("\\", r"\textbackslash{}")
-        .replace("&", r"\&")
-        .replace("%", r"\%")
-        .replace("_", r"\_")
-        .replace("#", r"\#")
-    )
+    return latex_escape(value)
 
 
 def build_fit_latex_preamble(*, use_dcolumn: bool, digits: int, latex_group_size: int) -> list[str]:

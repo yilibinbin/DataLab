@@ -213,9 +213,22 @@ def _variable_rows(window: Any) -> list[dict[str, str]]:
 
 
 def _capture_implicit_config(window: Any, model: str) -> dict[str, Any]:
-    if model != "self_consistent" or not hasattr(window, "_collect_implicit_config"):
+    if model != "self_consistent":
         return {}
-    return dict(window._collect_implicit_config())
+    return {
+        "x_variables": tuple(
+            str(row.get("name") or "")
+            for row in _variable_rows(window)
+            if str(row.get("name") or "").strip()
+        ),
+        "implicit_variable": _text(getattr(window, "implicit_variable_edit", None)),
+        "equation": _text(getattr(window, "implicit_equation_edit", None)),
+        "output_expression": _text(getattr(window, "implicit_output_edit", None)),
+        "method": _combo_data(getattr(window, "implicit_method_combo", None), "fixed_point"),
+        "initial": _text(getattr(window, "implicit_initial_edit", None)),
+        "tolerance": _text(getattr(window, "implicit_tolerance_edit", None)),
+        "max_iterations": _value(getattr(window, "implicit_max_iterations_spin", None), 80),
+    }
 
 
 def _restore_variable_rows(window: Any, rows: Any) -> None:

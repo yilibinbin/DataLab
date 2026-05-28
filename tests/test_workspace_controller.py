@@ -175,6 +175,26 @@ def test_workspace_restore_old_fitting_config_without_implicit(qtbot) -> None:
     assert [(row[0].text(), row[1].text()) for row in target.variable_rows] == [("x", "A")]
 
 
+def test_workspace_capture_preserves_incomplete_implicit_config(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "self_consistent")
+    source.implicit_variable_edit.setText("bad-name")
+    source.implicit_equation_edit.setText("")
+    source.implicit_output_edit.setText("u")
+
+    bundle = capture_workspace(source, title="draft")
+    implicit = bundle.manifest["workspace"]["config"]["fitting"]["implicit"]
+
+    assert implicit["implicit_variable"] == "bad-name"
+    assert implicit["equation"] == ""
+    assert implicit["output_expression"] == "u"
+
+
 def test_fit_latex_report_escapes_implicit_equation_and_output_text() -> None:
     from app_desktop import fitting_latex_writer as writer
 
@@ -199,3 +219,32 @@ def test_fit_latex_report_escapes_implicit_equation_and_output_text() -> None:
     text = "\n".join(lines)
     assert r"Implicit equation: \texttt{a\_b + c\% \& \# \textbackslash{}\textbackslash{} x}\\" in text
     assert r"Implicit output: \texttt{u\_out \& y}\\" in text
+
+
+def test_fit_latex_report_escapes_quantum_defect_special_chars() -> None:
+    from app_desktop import fitting_latex_writer as writer
+
+    fit_result = _sample_fit_result()
+    fit_result.details["equation"] = r"d0 + d2/(n-delta)^2 + {d4} ~ $bad"
+    fit_result.details["output_expression"] = r"En - K/(n-delta)^2"
+
+    lines = writer.build_fit_latex_block(
+        headers=["x", "y"],
+        rows=[(mp.mpf("1.0"), mp.mpf("2.0"))],
+        sigma_rows=[(None, None)],
+        fit_result=fit_result,
+        expression="u",
+        substituted="u",
+        image_path=None,
+        use_dcolumn=False,
+        digits=6,
+        target_column="y",
+        variable_pairs=[("x", "x")],
+        cleaned_substituted="u",
+    )
+
+    text = "\n".join(lines)
+    assert r"(n-delta)\textasciicircum{}2" in text
+    assert r"\{d4\}" in text
+    assert r"\textasciitilde{}" in text
+    assert r"\$bad" in text
