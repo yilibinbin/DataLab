@@ -217,6 +217,32 @@ def test_numeric_partial_uses_high_precision_step() -> None:
         )
 
 
+def test_repeated_evaluate_and_partial_reuse_implicit_solve_cache() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*Cos[u] + c*x",
+        output_expression="u",
+        parameters=("a", "b", "c"),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="root",
+            initial="0.3",
+            tolerance="1e-30",
+        ),
+    )
+    spec = build_implicit_model_specification(definition)
+    variables = {"x": mp.mpf("0.2")}
+    params = {"a": mp.mpf("0.1"), "b": mp.mpf("0.2"), "c": mp.mpf("0.4")}
+
+    for _ in range(3):
+        spec.evaluate(variables, params)
+        spec.partial("a", variables, params)
+
+    diagnostics = getattr(spec, "implicit_diagnostics")
+    assert diagnostics.points_solved <= 12
+
+
 def test_initial_expression_cannot_reference_implicit_variable() -> None:
     definition = ImplicitModelDefinition(
         x_variables=("x",),

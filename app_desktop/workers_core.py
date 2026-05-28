@@ -9,12 +9,6 @@ from typing import Any, Callable
 
 import mpmath as mp
 
-# Private-by-convention logger name — matches the rest of DataLab
-# (_logger in sse.py, collaborate.py, mcmc_fitter.py, etc.). The
-# leading underscore prevents ``from app_desktop.workers_core import
-# logger`` from accidentally exposing the handle as a public API.
-_logger = logging.getLogger(__name__)
-
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 
 from data_extrapolation_latex_latest import (
@@ -34,7 +28,9 @@ from data_extrapolation_latex_latest import (
 from statistics_utils import compute_statistics, generate_statistics_latex_batches
 
 from fitting import (
+    ImplicitModelDefinition,
     auto_fit_dataset,
+    build_implicit_model_specification,
     build_model_specification,
     build_parameter_state,
     fit_custom_model,
@@ -47,6 +43,12 @@ from fitting.auto_models import (
     fit_linear_model,
 )
 from fitting.hp_fitter import FitResult
+
+# Private-by-convention logger name — matches the rest of DataLab
+# (_logger in sse.py, collaborate.py, mcmc_fitter.py, etc.). The
+# leading underscore prevents ``from app_desktop.workers_core import
+# logger`` from accidentally exposing the handle as a public API.
+_logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -517,7 +519,12 @@ def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
             }
             with _pg(precision):
                 if detail_evaluator is not None:
-                    evaluator = lambda x, _e=detail_evaluator, _p=new_params: _e(_p, x)
+                    def evaluator(
+                        x,
+                        _e=detail_evaluator,
+                        _p=new_params,
+                    ):
+                        return _e(_p, x)
                 else:
                     evaluator = build_linear_evaluator(definition, new_params)
                 residuals_sq = 0.0
@@ -1310,6 +1317,7 @@ class FitJob:
     weighted: bool = False
     label: str = ""
     is_multidim: bool = False
+    implicit_definition: ImplicitModelDefinition | None = None
 
 
 @dataclass
@@ -1387,6 +1395,40 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
             )
             expression = fit_result.details.get("expression", expression)
             logs.append(f"{definition.label} 完成。")
+        elif model_type == "self_consistent":
+            if job.implicit_definition is None:
+                raise ValueError(
+                    _dual_msg(
+                        "自洽隐式模型缺少定义。",
+                        "Self-consistent fit model requires an implicit definition.",
+                    )
+                )
+            spec = build_implicit_model_specification(job.implicit_definition)
+            state = build_parameter_state(
+                job.parameter_config or {},
+                list(job.implicit_definition.parameters),
+            )
+            fit_result = fit_custom_model(
+                spec,
+                state,
+                job.variable_data,
+                job.target_series,
+                precision=job.precision,
+                weights=job.weights,
+                data_sigmas=job.sigma_series,
+            )
+            diagnostics = getattr(spec, "implicit_diagnostics")
+            fit_result.details["implicit_diagnostics"] = {
+                "points_solved": int(diagnostics.points_solved),
+                "root_fallbacks": int(diagnostics.root_fallbacks),
+                "max_iterations_used": int(diagnostics.max_iterations_used),
+                "max_residual": str(diagnostics.max_residual),
+            }
+            fit_result.details["implicit_variable"] = job.implicit_definition.implicit_variable
+            fit_result.details["equation"] = job.implicit_definition.equation
+            fit_result.details["output_expression"] = job.implicit_definition.output_expression
+            expression = job.implicit_definition.output_expression
+            logs.append("self_consistent 拟合完成。")
         elif model_type in {"power_limit", "pade", "custom"}:
             expr = job.template_expr if model_type in {"power_limit", "pade"} else job.model_expr
             params = job.template_params if model_type in {"power_limit", "pade"} else job.parameter_config
