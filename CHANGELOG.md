@@ -6,6 +6,26 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-05-28
+
+### Added
+- Added a general self-consistent / implicit fitting model for user
+  defined variables, implicit equations, and output expressions.
+- Added a quantum-defect implicit-model preset built on the general
+  self-consistent fitting mechanism.
+- Preserved self-consistent fitting setup and results in `.datalab`
+  workspace files and fitting reports.
+
+### Changed
+- Improved update dialogs with localized platform-specific release
+  messages and visible download progress including transfer speed.
+
+### Fixed
+- Preserved the native macOS application icon path so packaged Dock
+  icons keep the expected rounded app appearance.
+- Kept generic implicit-model parameter inference independent from the
+  quantum-defect preset constants.
+
 ## [2.2.1] — 2026-05-28
 
 ### Added
@@ -113,7 +133,8 @@ stack embedded — no external runtime needed.
 - Coverage spans high-precision Mathematica reference values, all four
   modes end-to-end, and every LaTeX output path
 
-[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.2.1...HEAD
+[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/yilibinbin/DataLab/compare/v2.2.1...v2.3.0
 [2.2.1]: https://github.com/yilibinbin/DataLab/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/yilibinbin/DataLab/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/yilibinbin/DataLab/compare/v2.0.2...v2.1.0
