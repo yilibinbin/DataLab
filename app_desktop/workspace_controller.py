@@ -215,6 +215,11 @@ def _variable_rows(window: Any) -> list[dict[str, str]]:
 def _capture_implicit_config(window: Any, model: str) -> dict[str, Any]:
     if model != "self_consistent":
         return {}
+    equation = _text(getattr(window, "implicit_equation_edit", None))
+    output_expression = _text(getattr(window, "implicit_output_edit", None))
+    constants = {}
+    if hasattr(window, "_implicit_builtin_constants"):
+        constants = window._implicit_builtin_constants(equation, output_expression)
     return {
         "x_variables": tuple(
             str(row.get("name") or "")
@@ -222,12 +227,13 @@ def _capture_implicit_config(window: Any, model: str) -> dict[str, Any]:
             if str(row.get("name") or "").strip()
         ),
         "implicit_variable": _text(getattr(window, "implicit_variable_edit", None)),
-        "equation": _text(getattr(window, "implicit_equation_edit", None)),
-        "output_expression": _text(getattr(window, "implicit_output_edit", None)),
+        "equation": equation,
+        "output_expression": output_expression,
         "method": _combo_data(getattr(window, "implicit_method_combo", None), "fixed_point"),
         "initial": _text(getattr(window, "implicit_initial_edit", None)),
         "tolerance": _text(getattr(window, "implicit_tolerance_edit", None)),
         "max_iterations": _value(getattr(window, "implicit_max_iterations_spin", None), 80),
+        "constants": constants,
     }
 
 

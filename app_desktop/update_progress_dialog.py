@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QDialog, QLabel, QProgressBar, QVBoxLayout, QWidget
 
 from shared.update_payload import DownloadProgress, InstallerAsset
@@ -23,6 +24,12 @@ class UpdateProgressDialog(QDialog):
         layout.addWidget(self._bar)
 
         self.update_progress(DownloadProgress(0, asset.size_bytes, 0.0))
+
+    def reject(self) -> None:
+        return
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt naming
+        event.ignore()
 
     def update_progress(self, progress: DownloadProgress) -> None:
         percent = int(progress.fraction * 100)

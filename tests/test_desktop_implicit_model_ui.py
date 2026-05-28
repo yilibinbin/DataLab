@@ -68,32 +68,34 @@ def test_quantum_defect_preset_and_parameter_inference(window) -> None:
     assert config["x_variables"] == ("n",)
     assert config["implicit_variable"] == "delta"
     assert config["equation"] == "d0 + d2/(n-delta)^2 + d4/(n-delta)^4"
-    assert config["output_expression"] == "En - K/(n-delta)^2"
+    assert config["output_expression"] == "En - R*c/(n-delta)^2"
     assert config["method"] == "fixed_point"
     assert config["initial"] == "0"
     assert config["tolerance"] == "1e-30"
     assert config["max_iterations"] == 80
     assert config["parameter_names"] == ("d0", "d2", "d4", "En")
-    assert "K" not in config["parameter_names"]
     assert "R" not in config["parameter_names"]
     assert "c" not in config["parameter_names"]
+    assert config["constants"] == {"R": "10973731.568160", "c": "299792458"}
 
 
-def test_physical_r_c_constants_do_not_hide_generic_c_parameter(window) -> None:
+def test_builtin_constants_do_not_hide_generic_parameter_names(window) -> None:
     _select_model(window, "self_consistent")
 
     window.implicit_variable_edit.setText("u")
-    window.implicit_equation_edit.setText("a + c*x")
-    window.implicit_output_edit.setText("u")
+    window.implicit_equation_edit.setText("K + R*x + c*u")
+    window.implicit_output_edit.setText("u + K + R + c")
     generic_config = window._collect_implicit_config()
-    assert generic_config["parameter_names"] == ("a", "c")
+    assert generic_config["parameter_names"] == ("K", "R", "c")
+    assert generic_config["constants"] == {}
 
     window.implicit_equation_edit.setText("d0 + d2/(n-u)^2")
     window.implicit_output_edit.setText("En + R*c/(n-u)^2")
     window._reset_variable_rows(default_var="n", default_column="A")
     physical_config = window._collect_implicit_config()
-    assert "R" not in physical_config["parameter_names"]
-    assert "c" not in physical_config["parameter_names"]
+    assert "R" in physical_config["parameter_names"]
+    assert "c" in physical_config["parameter_names"]
+    assert physical_config["constants"] == {}
 
 
 def test_implicit_validation_rejects_blank_expressions_and_bad_variable(window) -> None:
@@ -135,12 +137,12 @@ def test_prepare_fit_job_passes_implicit_definition(window) -> None:
 
     assert job.model_type == "self_consistent"
     assert job.parameter_names == ["d0", "d2", "d4", "En"]
-    assert job.model_expr == "En - K/(n-delta)^2"
+    assert job.model_expr == "En - R*c/(n-delta)^2"
     assert job.implicit_definition is not None
     assert job.implicit_definition.x_variables == ("n",)
     assert job.implicit_definition.implicit_variable == "delta"
     assert job.implicit_definition.parameters == ("d0", "d2", "d4", "En")
-    assert job.implicit_definition.constants == {"K": "1.0"}
+    assert job.implicit_definition.constants == {"R": "10973731.568160", "c": "299792458"}
     assert job.implicit_definition.solve_options.method == "fixed_point"
 
 

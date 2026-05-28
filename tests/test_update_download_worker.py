@@ -50,6 +50,23 @@ def test_worker_emits_progress_and_finished(qtbot: Any, tmp_path: Path) -> None:
     assert finished_paths == [tmp_path / "DataLab-test.pkg"]
 
 
+def test_worker_accepts_legacy_one_argument_downloader(tmp_path: Path) -> None:
+    finished_paths: list[Path] = []
+    errors: list[str] = []
+
+    def downloader(asset: InstallerAsset) -> Path:
+        return tmp_path / asset.name
+
+    worker = UpdateDownloadWorker(_asset(), downloader)
+    worker.finished.connect(finished_paths.append)
+    worker.failed.connect(errors.append)
+
+    worker.run()
+
+    assert finished_paths == [tmp_path / "DataLab-test.pkg"]
+    assert errors == []
+
+
 def test_worker_emits_failed(qtbot: Any) -> None:
     errors: list[str] = []
 

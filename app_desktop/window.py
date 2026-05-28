@@ -977,8 +977,8 @@ class ExtrapolationWindow(
             hint = self._tr("该模型要求 x>0。", "This model requires x>0.")
         elif mode == "self_consistent":
             hint = self._tr(
-                "K 作为常量处理，默认值为 1.0；不会作为自由拟合参数。",
-                "K is treated as a constant with default value 1.0, not as a free fit parameter.",
+                "通用自洽模型中的符号默认都是变量或参数；量子亏损预设会内置物理常量。",
+                "Symbols in generic self-consistent models are variables or parameters by default; the quantum-defect preset supplies physical constants.",
             )
         self.fit_model_hint.setVisible(bool(hint))
         if hint:
@@ -1015,7 +1015,7 @@ class ExtrapolationWindow(
         if hasattr(self, "implicit_equation_edit"):
             self.implicit_equation_edit.setText("d0 + d2/(n-delta)^2 + d4/(n-delta)^4")
         if hasattr(self, "implicit_output_edit"):
-            self.implicit_output_edit.setText("En - K/(n-delta)^2")
+            self.implicit_output_edit.setText("En - R*c/(n-delta)^2")
         if hasattr(self, "implicit_initial_edit"):
             self.implicit_initial_edit.setText("0")
         if hasattr(self, "implicit_tolerance_edit"):
@@ -1030,6 +1030,16 @@ class ExtrapolationWindow(
             self._reset_variable_rows(default_var="n", default_column="A")
         if hasattr(self, "fit_target_edit"):
             self.fit_target_edit.setText("B")
+
+    def _implicit_builtin_constants(self, equation: str, output_expression: str) -> dict[str, str]:
+        quantum_equation = "d0 + d2/(n-delta)^2 + d4/(n-delta)^4"
+        if equation != quantum_equation:
+            return {}
+        if output_expression == "En - R*c/(n-delta)^2":
+            return {"R": "10973731.568160", "c": "299792458"}
+        if output_expression == "En - K/(n-delta)^2":
+            return {"K": "1.0"}
+        return {}
 
     def _collect_implicit_config(self) -> dict[str, object]:
         x_variables = [
@@ -1051,9 +1061,8 @@ class ExtrapolationWindow(
         tolerance = self.implicit_tolerance_edit.text().strip() or "1e-30"
         max_iterations = self.implicit_max_iterations_spin.value()
         expressions = f"{equation}\n{output_expression}"
-        constant_names = {"K", "R"}
-        if re.search(r"\bR\b", expressions) and re.search(r"\bc\b", expressions):
-            constant_names.add("c")
+        constants = self._implicit_builtin_constants(equation, output_expression)
+        constant_names = set(constants)
         reserved = set(x_variables)
         reserved.add(implicit_variable)
         reserved.update(constant_names)
@@ -1077,6 +1086,7 @@ class ExtrapolationWindow(
             "tolerance": tolerance,
             "max_iterations": max_iterations,
             "parameter_names": tuple(parameter_names),
+            "constants": constants,
         }
 
     def _apply_model_template(self, template: str):
