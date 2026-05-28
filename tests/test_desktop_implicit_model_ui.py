@@ -7,7 +7,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QTableWidgetItem  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from fitting.auto_models import AUTO_MODELS  # noqa: E402
 
@@ -195,8 +195,8 @@ def test_implicit_parameter_table_supplies_initial_values_without_constraints(wi
 
     assert window.variable_rows[0][0].text() == "n"
     assert window.variable_rows[0][1].text() == "A"
-    assert window.enable_constraints_checkbox.isVisible()
-    assert not window.enable_constraints_checkbox.isChecked()
+    assert not hasattr(window, "enable_constraints_checkbox")
+    assert not window.implicit_constraints_checkbox.isChecked()
     assert hasattr(window, "implicit_params_table")
 
     window._reset_implicit_param_rows(
@@ -237,6 +237,30 @@ def test_implicit_parameter_table_supplies_initial_values_without_constraints(wi
     }
 
 
+def test_implicit_parameter_table_remains_visible_when_constraints_disabled(window) -> None:
+    window.show()
+    _select_model(window, "self_consistent")
+
+    assert window.implicit_params_table.isVisible()
+    window.implicit_constraints_checkbox.setChecked(False)
+
+    assert window.implicit_params_table.isVisible()
+    assert window.implicit_param_refresh_btn.isVisible()
+
+
+def test_implicit_constraints_checkbox_is_above_constants(window) -> None:
+    window.show()
+    _select_model(window, "self_consistent")
+
+    implicit_layout = window.implicit_model_widget.layout()
+    constraint_index = implicit_layout.indexOf(window.implicit_constraints_checkbox)
+    constants_index = implicit_layout.indexOf(window.implicit_constants_editor)
+
+    assert constraint_index >= 0
+    assert constants_index >= 0
+    assert constraint_index < constants_index
+
+
 def test_implicit_parameter_table_preserves_high_precision_text(window) -> None:
     _select_model(window, "self_consistent")
     precise = "1.23456789012345678901234567890123456789"
@@ -244,6 +268,7 @@ def test_implicit_parameter_table_preserves_high_precision_text(window) -> None:
     window.implicit_variable_edit.setText("u")
     window.implicit_equation_edit.setPlainText("a")
     window.implicit_output_edit.setPlainText("u")
+    window.implicit_constraints_checkbox.setChecked(True)
     window._reset_implicit_param_rows(
         {
             "a": {"fixed": precise, "min": tiny, "max": "2"},
@@ -275,11 +300,9 @@ def test_implicit_constants_table_rejects_duplicate_names(window) -> None:
     _select_model(window, "self_consistent")
     window._reset_implicit_constants_rows({})
 
-    table = window.implicit_constants_table
-    table.setItem(0, 0, QTableWidgetItem("K"))
-    table.setItem(0, 1, QTableWidgetItem("-0.007"))
-    table.setItem(1, 0, QTableWidgetItem("K"))
-    table.setItem(1, 1, QTableWidgetItem("1.0"))
+    window.implicit_constants_editor.set_rows(
+        [{"name": "K", "value": "-0.007"}, {"name": "K", "value": "1.0"}]
+    )
 
     with pytest.raises(ValueError, match="Duplicate constant name|常数名称重复"):
         window._collect_implicit_config(validate_parameters=False)
@@ -293,7 +316,15 @@ def test_implicit_constants_table_rejects_invalid_numeric_values(window) -> None
         window._collect_implicit_config(validate_parameters=False)
 
 
-def test_implicit_parameter_detection_ignores_global_constraint_rows(window) -> None:
+def test_implicit_constants_reject_uncertainty_notation(window) -> None:
+    _select_model(window, "self_consistent")
+    window._reset_implicit_constants_rows({"K": "1.23(4)"})
+
+    with pytest.raises(ValueError, match="Invalid value for constant K|常数 K 的取值无效"):
+        window._collect_implicit_config(validate_parameters=False)
+
+
+def test_implicit_parameter_detection_ignores_custom_parameter_table(window) -> None:
     _select_model(window, "self_consistent")
 
     window.implicit_variable_edit.setText("u")
@@ -301,9 +332,8 @@ def test_implicit_parameter_detection_ignores_global_constraint_rows(window) -> 
     window.implicit_output_edit.setPlainText("En - K/(n-u)^2")
     window._reset_variable_rows(default_var="n", default_column="A")
 
-    window.enable_constraints_checkbox.setChecked(True)
-    window._reset_param_rows()
-    window._add_param_row(default_name="A", init="1.0")
+    window.custom_constraints_checkbox.setChecked(True)
+    window._reset_custom_param_rows({"A": {"initial": "1.0"}})
 
     config = window._collect_implicit_config(validate_parameters=False)
 

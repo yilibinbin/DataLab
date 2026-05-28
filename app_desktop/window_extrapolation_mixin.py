@@ -73,8 +73,8 @@ class WindowExtrapolationMixin:
         self._reset_csv_data()
 
         data_path, manual_content = self._active_data_source()
-        from app_desktop.panels import _serialize_constants_table
-        manual_constants_content = _serialize_constants_table(self).strip() if hasattr(self, "constants_table") else ""
+        constants_editor = getattr(self, "error_constants_editor", None)
+        manual_constants_content = constants_editor.text().strip() if constants_editor is not None else ""
         use_file_mode = getattr(self, "use_file_checkbox", None).isChecked() if hasattr(self, "use_file_checkbox") else False
 
         if data_path:
@@ -230,7 +230,7 @@ class WindowExtrapolationMixin:
                     use_dcolumn=use_dcolumn,
                     verbose=verbose,
                     render_plots=generate_plots,
-                    constants_enabled=self.constants_checkbox.isChecked() if hasattr(self, "constants_checkbox") else False,
+                    constants_enabled=constants_editor.isChecked() if constants_editor is not None else False,
                     use_constants_file=self.use_constants_file_checkbox.isChecked() if hasattr(self, "use_constants_file_checkbox") else False,
                     formula=self.formula_edit.toPlainText().strip() if mode == "error" else None,
                     error_propagation_method=error_method,
@@ -696,4 +696,3 @@ class WindowExtrapolationMixin:
     def _render_extrapolation_plot(self, row_values: tuple[mp.mpf, ...], value: mp.mpf, sigma: mp.mpf, idx: int) -> bytes | None:
         """Render a simple per-row extrapolation trend plot with error bar."""
         return _render_extrapolation_plot_bytes(row_values, value, sigma, idx, is_en=self._is_en())
-

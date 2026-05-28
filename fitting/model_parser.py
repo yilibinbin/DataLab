@@ -48,6 +48,17 @@ MpfCallable = Callable[
 ]
 
 
+def reserved_expression_names() -> set[str]:
+    """Return expression-engine names that user variables/constants must not shadow."""
+    return {name.lower() for name in _ALLOWED_FUNCTIONS} | {
+        name.lower() for name in _ALLOWED_CONSTANTS
+    }
+
+
+def is_reserved_expression_name(name: str) -> bool:
+    return name.lower() in reserved_expression_names()
+
+
 @dataclass
 class ModelSpecification:
     """Container that stores callable evaluation hooks."""
@@ -55,6 +66,7 @@ class ModelSpecification:
     expression: str
     variables: list[str]
     parameters: list[str]
+    constants: dict[str, str]
     evaluate_func: MpfCallable
     gradient_funcs: dict[str, MpfCallable]
 
@@ -72,7 +84,15 @@ class ModelSpecification:
         return mp.mpf(grad(var_tuple, param_tuple))
 
 
-def infer_parameter_names(expression: str, variable_names: Sequence[str], config_keys: Sequence[str] | None = None) -> list[str]:
+def infer_parameter_names(
+    expression: str,
+    variable_names: Sequence[str] | None = None,
+    config_keys: Sequence[str] | None = None,
+    *,
+    variables: Sequence[str] | None = None,
+    known_parameters: Sequence[str] | None = None,
+    constants: Sequence[str] | None = None,
+) -> list[str]:
     """Infer fitting parameter names from a custom expression.
 
     This helper is used by the desktop GUI to auto-fill missing parameter names.
@@ -80,33 +100,52 @@ def infer_parameter_names(expression: str, variable_names: Sequence[str], config
     `Gamma`, etc. won't be misclassified as a fit parameter.
     """
 
-    ordered = list(config_keys or [])
+    if variable_names is None:
+        if variables is None:
+            raise TypeError("infer_parameter_names() missing required argument: 'variable_names'")
+        variable_names = variables
+    if config_keys is None:
+        config_keys = known_parameters
+
+    variable_list = list(variable_names)
+    constant_list = list(constants or [])
+    reserved = {name.lower() for name in variable_list}
+    reserved |= {name.lower() for name in constant_list}
+    reserved |= reserved_expression_names()
+
+    ordered: list[str] = []
+    for name in config_keys or []:
+        if name.lower() not in reserved and name not in ordered:
+            ordered.append(name)
     if not expression:
         return ordered
 
     candidates = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expression)
-    reserved = {name.lower() for name in variable_names}
-    reserved |= {name.lower() for name in _ALLOWED_FUNCTIONS}
-    reserved |= {name.lower() for name in _ALLOWED_CONSTANTS}
 
     for token in candidates:
         token_lower = token.lower()
         if token_lower in reserved:
             continue
-        if token in variable_names:
-            continue
         if token not in ordered:
             ordered.append(token)
 
-    return ordered if ordered else list(variable_names)
+    return ordered if ordered else variable_list
+
+
+def _constant_values(constants: dict[str, str]) -> dict[str, mp.mpf]:
+    return {name: mp.mpf(value) for name, value in constants.items()}
 
 
 def _build_safe_eval_callable(
-    expression: str, variable_names: list[str], parameter_names: list[str]
+    expression: str,
+    variable_names: list[str],
+    parameter_names: list[str],
+    constants: dict[str, str],
 ) -> MpfCallable:
     all_names = list(variable_names) + list(parameter_names)
     var_count = len(variable_names)
     param_count = len(parameter_names)
+    constant_scope = _constant_values(constants)
 
     def _call(
         var_tuple: tuple[mp.mpf, ...], param_tuple: tuple[mp.mpf, ...]
@@ -120,6 +159,7 @@ def _build_safe_eval_callable(
             )
         values = tuple(var_tuple) + tuple(param_tuple)
         scope = {name: value for name, value in zip(all_names, values)}
+        scope.update(constant_scope)
         return mp.mpf(safe_eval(expression, scope))
 
     return _call
@@ -131,11 +171,15 @@ def _build_numeric_gradient_callable(
     parameter_names: list[str],
     *,
     parameter_index: int,
+    constants: dict[str, str],
 ) -> MpfCallable:
-    all_names = list(variable_names) + list(parameter_names)
+    constant_names = list(constants)
+    all_names = list(variable_names) + constant_names + list(parameter_names)
     var_count = len(variable_names)
+    constant_count = len(constant_names)
     param_count = len(parameter_names)
-    deriv_index = var_count + int(parameter_index)
+    constant_values = [mp.mpf(constants[name]) for name in constant_names]
+    deriv_index = var_count + constant_count + int(parameter_index)
 
     def _call(
         var_tuple: tuple[mp.mpf, ...], param_tuple: tuple[mp.mpf, ...]
@@ -147,13 +191,18 @@ def _build_numeric_gradient_callable(
                     "Model derivative received mismatched argument counts.",
                 )
             )
-        values = list(tuple(var_tuple) + tuple(param_tuple))
+        values = list(tuple(var_tuple) + tuple(constant_values) + tuple(param_tuple))
         return mp.mpf(numerical_partial_derivative(expression, all_names, values, deriv_index))
 
     return _call
 
 
-def build_model_specification(expression: str, variable_names: Sequence[str], parameter_names: Sequence[str]) -> ModelSpecification:
+def build_model_specification(
+    expression: str,
+    variable_names: Sequence[str],
+    parameter_names: Sequence[str],
+    constants: dict[str, str] | None = None,
+) -> ModelSpecification:
     """Build mp-ready callables for a custom model expression.
 
     NOTE: Parsing and allowed function/constant registry MUST match
@@ -166,10 +215,11 @@ def build_model_specification(expression: str, variable_names: Sequence[str], pa
 
     var_names = list(variable_names)
     param_names = list(parameter_names)
+    constant_map = dict(constants or {})
     if not param_names:
         raise ValueError(_dual_msg("至少需要一个参数以执行拟合。", "Need at least one parameter to fit."))
 
-    all_names = var_names + param_names
+    all_names = var_names + param_names + list(constant_map)
     duplicates = sorted({name for name in all_names if all_names.count(name) > 1})
     if duplicates:
         joined = ", ".join(duplicates)
@@ -179,19 +229,33 @@ def build_model_specification(expression: str, variable_names: Sequence[str], pa
                 f"Duplicate variable/parameter names: {joined}",
             )
         )
+    reserved_constants = sorted(name for name in constant_map if is_reserved_expression_name(name))
+    if reserved_constants:
+        joined = ", ".join(reserved_constants)
+        raise ValueError(
+            _dual_msg(
+                f"常数名称不能使用表达式保留名: {joined}",
+                f"Reserved expression names cannot be used as constants: {joined}",
+            )
+        )
 
-    evaluate_func = _build_safe_eval_callable(clean_expr, var_names, param_names)
+    evaluate_func = _build_safe_eval_callable(clean_expr, var_names, param_names, constant_map)
 
     gradient_funcs: dict[str, MpfCallable] = {}
     for idx, name in enumerate(param_names):
         gradient_funcs[name] = _build_numeric_gradient_callable(
-            clean_expr, var_names, param_names, parameter_index=idx
+            clean_expr,
+            var_names,
+            param_names,
+            parameter_index=idx,
+            constants=constant_map,
         )
 
     return ModelSpecification(
         expression=clean_expr,
         variables=var_names,
         parameters=param_names,
+        constants=constant_map,
         evaluate_func=evaluate_func,
         gradient_funcs=gradient_funcs,
     )

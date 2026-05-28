@@ -140,6 +140,7 @@ def task_from_custom_entry(
         params={
             "expression": spec.expression,
             "variable_names": list(spec.variables),
+            "constants": dict(getattr(spec, "constants", {}) or {}),
             "parameter_state": _serialize_parameter_state(state),
         },
     )
@@ -324,10 +325,11 @@ def _rebuild_task_callable(task: ModelTask, x_series: list, y_series: list,
     if task.kind == "custom":
         expression = task.params["expression"]
         variable_names = list(task.params["variable_names"])
+        constants = dict(task.params.get("constants") or {})
         param_state_dict = task.params["parameter_state"]
         parameter_names = list(param_state_dict.keys())
         spec = build_model_specification(
-            expression, variable_names, parameter_names,
+            expression, variable_names, parameter_names, constants,
         )
         state = build_parameter_state(param_state_dict, parameter_names)
         return fit_custom_model(

@@ -52,6 +52,9 @@ from formula_help import (
     get_method_name,
     get_method_parameters,
 )
+from app_desktop.constants_editor import ConstantsEditor
+from app_desktop.formula_preview import update_formula_preview as _render_formula_preview
+from app_desktop.parameter_table import ParameterTable
 from shared.ui_specs import (
     CUSTOM_FORMULA_PARAMS,
     EXTRAPOLATION_METHOD_SPECS,
@@ -768,12 +771,7 @@ def build_left_panel(self):
     self.formula_edit.textChanged.connect(lambda: _update_formula_preview(self, self.formula_edit, self.error_formula_preview))
 
     func_btn_row = QHBoxLayout()
-    self.constants_checkbox = QCheckBox("启用常数设置")
-    self.constants_checkbox.setChecked(False)
-    self.constants_checkbox.toggled.connect(self._toggle_constants_options)
-    self._register_text(self.constants_checkbox, "启用常数设置", "Enable constants")
     error_layout.setSpacing(4)
-    func_btn_row.addWidget(self.constants_checkbox)
     func_btn_row.addStretch()
     func_help_btn = QPushButton("函数支持")
     func_help_btn.setFlat(True)
@@ -816,60 +814,13 @@ def build_left_panel(self):
     self.constants_file_row.setVisible(False)
     const_wrapper_layout.addWidget(self.constants_file_row)
 
-    # Constants table (Name | Value) — same style as data table.
-    # Also supports a text-view toggle so users can paste a whole
-    # block of "NAME VALUE" lines at once (matches the data area's
-    # existing "文本视图" button).
-    const_table_toolbar = QHBoxLayout()
-    const_add_row_btn = QPushButton(self._tr("+ 行", "+ Row"))
-    self._register_text(const_add_row_btn, "+ 行", "+ Row")
-    const_add_row_btn.clicked.connect(lambda: self.constants_table.setRowCount(self.constants_table.rowCount() + 1))
-    const_clear_btn = QPushButton(self._tr("清除", "Clear"))
-    self._register_text(const_clear_btn, "清除", "Clear")
-    const_clear_btn.clicked.connect(lambda: _clear_constants_table(self))
-    self._constants_view_toggle = QPushButton(self._tr("文本视图", "Text View"))
-    self._register_text(self._constants_view_toggle, "文本视图", "Text View")
-    self._constants_view_toggle.clicked.connect(
-        lambda: _toggle_constants_view(self)
-    )
-    const_table_toolbar.addWidget(const_add_row_btn)
-    const_table_toolbar.addWidget(const_clear_btn)
-    const_table_toolbar.addWidget(self._constants_view_toggle)
-    const_table_toolbar.addStretch()
-    const_toolbar_w = QWidget()
-    const_toolbar_w.setLayout(const_table_toolbar)
-    const_wrapper_layout.addWidget(const_toolbar_w)
-
-    # Stacked widget: table view (0) / text view (1) — mirrors
-    # self._data_stack for the main data-input area. The text view
-    # accepts the free-form format parsed by ``_process_constants_lines``:
-    # one ``name value`` entry per line; ``#`` comments and blank lines
-    # are preserved in the edit buffer but stripped by the downstream parser.
-    self._constants_stack = QStackedWidget()
-
-    self.constants_table = QTableWidget(4, 2)
-    self.constants_table.setHorizontalHeaderLabels(["Name", "Value"])
-    _apply_equal_column_stretch(self.constants_table)
-    self.constants_table.setMinimumHeight(160)
-    self.constants_table.setStyleSheet(_get_table_style())
-    self._constants_stack.addWidget(self.constants_table)
-
-    # Plain-text editor for bulk paste. Previously set to ``None`` in
-    # baseline; now a real QPlainTextEdit so paste workflows like
-    # "paste 20 constants from a spreadsheet" work without having to
-    # click through each row individually.
-    self.manual_constants_edit = QPlainTextEdit()
-    self.manual_constants_edit.setMinimumHeight(160)
-    self.manual_constants_edit.setPlaceholderText(
-        self._tr(
-            "# 每行一个常数：名称 值\n# 允许空行与以 # 开头的注释\nALPHA 7.2973525693(11)[-3]",
-            "# One constant per line: name value\n# Blank lines and lines starting with # are allowed\nALPHA 7.2973525693(11)[-3]",
-        )
-    )
-    self._constants_stack.addWidget(self.manual_constants_edit)
-
-    self._constants_stack.setCurrentIndex(_STACK_PAGE_TABLE)  # table view by default
-    const_wrapper_layout.addWidget(self._constants_stack)
+    self.error_constants_editor = ConstantsEditor(min_rows=4, checked=False)
+    self._register_text(self.error_constants_editor.checkbox, "启用常数设置", "Enable constants")
+    _apply_equal_column_stretch(self.error_constants_editor.table_view)
+    self.error_constants_editor.table_view.setStyleSheet(_get_table_style())
+    self.error_constants_editor.table_view.setMinimumHeight(160)
+    self.error_constants_editor.text_view.setMinimumHeight(160)
+    const_wrapper_layout.addWidget(self.error_constants_editor)
     error_layout.addWidget(self.constants_widget)
 
     # Error propagation method (Taylor vs Monte Carlo)
@@ -942,7 +893,6 @@ def build_left_panel(self):
     self.error_mc_widget.hide()
 
     self.left_layout.addWidget(self.error_box)
-    self._toggle_constants_options(self.constants_checkbox.isChecked())
     self._on_constants_source_toggle(self.use_constants_file_checkbox.isChecked())
     self._update_error_propagation_controls()
 
@@ -1138,7 +1088,7 @@ def build_left_panel(self):
     self.fit_formula_preview.setWordWrap(True)
     self.fit_formula_preview.setStyleSheet("color: var(--muted, #8b949e); font-family: serif; font-size: 16px; padding: 4px 8px;")
     fit_layout.addWidget(self.fit_formula_preview)
-    self.fit_expr_edit.textChanged.connect(lambda: _update_formula_preview(self, self.fit_expr_edit, self.fit_formula_preview))
+    self.fit_expr_edit.textChanged.connect(lambda: _update_formula_preview(self, self.fit_expr_edit, self.fit_formula_preview, lhs="y"))
     fit_expr_hint_row = QHBoxLayout()
     fit_expr_hint_row.setContentsMargins(0, 0, 0, 0)
     fit_expr_hint_row.setSpacing(6)
@@ -1151,9 +1101,35 @@ def build_left_panel(self):
     fit_expr_hint_row.addWidget(self.fit_func_help_btn)
     fit_expr_hint_row.addStretch()
     fit_layout.addLayout(fit_expr_hint_row)
-    # Hidden legacy JSON param edit retained only to satisfy references; no GUI display.
-    self.fit_param_edit = QPlainTextEdit()
-    self.fit_param_edit.hide()
+    self.custom_constants_editor = ConstantsEditor(min_rows=3, checked=False, numeric_mode="mpmath")
+    self._register_text(self.custom_constants_editor.checkbox, "启用常数设置", "Enable constants")
+    _apply_equal_column_stretch(self.custom_constants_editor.table_view)
+    self.custom_constants_editor.table_view.setStyleSheet(_get_table_style())
+    self.custom_constants_editor.table_view.setMinimumHeight(120)
+    custom_param_header = QHBoxLayout()
+    lbl_custom_params = QLabel("参数列表：")
+    self._register_text(lbl_custom_params, "参数列表：", "Parameters:")
+    custom_param_header.addWidget(lbl_custom_params)
+    custom_param_header.addStretch()
+    self.custom_param_refresh_btn = QPushButton("识别参数")
+    self._register_text(self.custom_param_refresh_btn, "识别参数", "Detect")
+    self.custom_param_refresh_btn.clicked.connect(self._refresh_custom_parameter_rows)
+    custom_param_header.addWidget(self.custom_param_refresh_btn)
+    custom_param_header_widget = QWidget()
+    custom_param_header_widget.setLayout(custom_param_header)
+    self.custom_param_header_widget = custom_param_header_widget
+    fit_layout.addWidget(custom_param_header_widget)
+    self.custom_constraints_checkbox = QCheckBox("启用参数约束")
+    self.custom_constraints_checkbox.setChecked(False)
+    self._register_text(self.custom_constraints_checkbox, "启用参数约束", "Enable parameter constraints")
+    fit_layout.addWidget(self.custom_constraints_checkbox)
+    self.custom_params_table = ParameterTable()
+    self.custom_params_table.table_view.setMinimumHeight(150)
+    self.custom_params_table.table_view.setStyleSheet(_get_table_style())
+    _apply_equal_column_stretch(self.custom_params_table.table_view)
+    self.custom_constraints_checkbox.toggled.connect(self.custom_params_table.set_constraints_enabled)
+    fit_layout.addWidget(self.custom_params_table)
+    fit_layout.addWidget(self.custom_constants_editor)
 
     self.implicit_model_widget = QGroupBox("自洽隐式模型")
     self._register_title(self.implicit_model_widget, "自洽隐式模型", "Self-consistent / implicit")
@@ -1194,48 +1170,24 @@ def build_left_panel(self):
     implicit_param_header.addWidget(self.implicit_param_refresh_btn)
     implicit_layout.addLayout(implicit_param_header)
 
-    self.implicit_params_table = QTableWidget(0, 5)
-    self.implicit_params_table.setHorizontalHeaderLabels(["Name", "Init", "Fixed", "Min", "Max"])
-    self.implicit_params_table.setMinimumHeight(150)
-    self.implicit_params_table.setStyleSheet(_get_table_style())
-    _apply_equal_column_stretch(self.implicit_params_table)
+    self.implicit_params_table = ParameterTable()
+    self.implicit_params_table.table_view.setMinimumHeight(150)
+    self.implicit_params_table.table_view.setStyleSheet(_get_table_style())
+    _apply_equal_column_stretch(self.implicit_params_table.table_view)
     implicit_layout.addWidget(self.implicit_params_table)
 
-    implicit_constants_header = QHBoxLayout()
-    lbl_implicit_constants = QLabel("常数列表：")
-    self._register_text(lbl_implicit_constants, "常数列表：", "Constants:")
-    implicit_constants_header.addWidget(lbl_implicit_constants)
-    implicit_constants_header.addStretch()
-    self.implicit_constants_add_btn = QPushButton("+")
-    self.implicit_constants_add_btn.setFixedWidth(28)
-    self.implicit_constants_remove_btn = QPushButton("-")
-    self.implicit_constants_remove_btn.setFixedWidth(28)
-    implicit_constants_header.addWidget(self.implicit_constants_add_btn)
-    implicit_constants_header.addWidget(self.implicit_constants_remove_btn)
-    implicit_layout.addLayout(implicit_constants_header)
+    self.implicit_constraints_checkbox = QCheckBox("启用参数约束")
+    self.implicit_constraints_checkbox.setChecked(False)
+    self._register_text(self.implicit_constraints_checkbox, "启用参数约束", "Enable parameter constraints")
+    self.implicit_constraints_checkbox.toggled.connect(self.implicit_params_table.set_constraints_enabled)
+    implicit_layout.addWidget(self.implicit_constraints_checkbox)
 
-    self.implicit_constants_table = QTableWidget(3, 2)
-    self.implicit_constants_table.setHorizontalHeaderLabels(["Name", "Value"])
-    self.implicit_constants_table.setMinimumHeight(120)
-    self.implicit_constants_table.setStyleSheet(_get_table_style())
-    _apply_equal_column_stretch(self.implicit_constants_table)
-    implicit_layout.addWidget(self.implicit_constants_table)
-
-    def _add_implicit_constant_row() -> None:
-        self.implicit_constants_table.insertRow(self.implicit_constants_table.rowCount())
-        if hasattr(self, "_mark_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
-            self._mark_workspace_dirty()
-
-    def _remove_implicit_constant_row() -> None:
-        row_count = self.implicit_constants_table.rowCount()
-        if row_count <= 0:
-            return
-        self.implicit_constants_table.removeRow(row_count - 1)
-        if hasattr(self, "_mark_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
-            self._mark_workspace_dirty()
-
-    self.implicit_constants_add_btn.clicked.connect(_add_implicit_constant_row)
-    self.implicit_constants_remove_btn.clicked.connect(_remove_implicit_constant_row)
+    self.implicit_constants_editor = ConstantsEditor(min_rows=3, checked=True, numeric_mode="mpmath")
+    self._register_text(self.implicit_constants_editor.checkbox, "启用常数设置", "Enable constants")
+    _apply_equal_column_stretch(self.implicit_constants_editor.table_view)
+    self.implicit_constants_editor.table_view.setStyleSheet(_get_table_style())
+    self.implicit_constants_editor.table_view.setMinimumHeight(120)
+    implicit_layout.addWidget(self.implicit_constants_editor)
 
     implicit_basic_layout = QFormLayout()
     self.implicit_variable_edit = QLineEdit("u")
@@ -1278,51 +1230,13 @@ def build_left_panel(self):
     self._register_text(lbl_implicit_timeout, "最长运行秒数：", "Max runtime (s):")
     implicit_solver_layout.addRow(lbl_implicit_timeout, self.implicit_timeout_spin)
     implicit_layout.addLayout(implicit_solver_layout)
-    self.implicit_equation_edit.textChanged.connect(lambda: _update_formula_preview(self, self.implicit_equation_edit, self.implicit_equation_preview))
-    self.implicit_output_edit.textChanged.connect(lambda: _update_formula_preview(self, self.implicit_output_edit, self.implicit_output_preview))
-    _update_formula_preview(self, self.implicit_equation_edit, self.implicit_equation_preview)
-    _update_formula_preview(self, self.implicit_output_edit, self.implicit_output_preview)
+    self.implicit_equation_edit.textChanged.connect(lambda: _update_formula_preview(self, self.implicit_equation_edit, self.implicit_equation_preview, lhs=lambda: self.implicit_variable_edit.text()))
+    self.implicit_variable_edit.textChanged.connect(lambda: _update_formula_preview(self, self.implicit_equation_edit, self.implicit_equation_preview, lhs=lambda: self.implicit_variable_edit.text()))
+    self.implicit_output_edit.textChanged.connect(lambda: _update_formula_preview(self, self.implicit_output_edit, self.implicit_output_preview, lhs="y"))
+    _update_formula_preview(self, self.implicit_equation_edit, self.implicit_equation_preview, lhs=lambda: self.implicit_variable_edit.text())
+    _update_formula_preview(self, self.implicit_output_edit, self.implicit_output_preview, lhs="y")
     fit_layout.addWidget(self.implicit_model_widget)
     self.implicit_model_widget.hide()
-
-    constraint_header = QHBoxLayout()
-    self.enable_constraints_checkbox = QCheckBox("启用参数约束")
-    self.enable_constraints_checkbox.setChecked(False)
-    self._register_text(self.enable_constraints_checkbox, "启用参数约束", "Enable parameter constraints")
-    self.enable_constraints_checkbox.toggled.connect(self._on_constraints_toggle)
-    constraint_header.addWidget(self.enable_constraints_checkbox)
-    constraint_header.addStretch()
-    fit_layout.addLayout(constraint_header)
-
-    param_header = QHBoxLayout()
-    lbl_param_rows = QLabel("参数列表：")
-    self._register_text(lbl_param_rows, "参数列表：", "Parameter list:")
-    param_header.addWidget(lbl_param_rows)
-    param_header.addStretch()
-    self.add_param_btn = QPushButton("+")
-    self.add_param_btn.setFixedWidth(28)
-    self.add_param_btn.setToolTip(self._tr("添加参数行", "Add parameter row"))
-    self.add_param_btn.clicked.connect(self._add_param_row)
-    param_header.addWidget(self.add_param_btn)
-    self.remove_param_btn = QPushButton("-")
-    self.remove_param_btn.setFixedWidth(28)
-    self.remove_param_btn.setToolTip(self._tr("删除最后一行参数", "Remove last parameter row"))
-    self.remove_param_btn.clicked.connect(self._remove_param_row)
-    param_header.addWidget(self.remove_param_btn)
-    param_header_widget = QWidget()
-    param_header_widget.setLayout(param_header)
-    param_header_widget.setVisible(True)
-    self.param_header_widget = param_header_widget
-    fit_layout.addWidget(param_header_widget)
-
-    self.param_rows_layout = QVBoxLayout()
-    self.param_rows: list[tuple[QLineEdit, QLineEdit, QLineEdit, QLineEdit, QWidget]] = []
-    param_rows_container = QWidget()
-    param_rows_container.setLayout(self.param_rows_layout)
-    param_rows_container.setVisible(True)
-    self.param_rows_container = param_rows_container
-    fit_layout.addWidget(param_rows_container)
-    self._reset_param_rows()
 
     var_header = QHBoxLayout()
     lbl_varmap = QLabel("变量映射：")
@@ -1975,30 +1889,14 @@ def _update_data_summary(self):
     self._data_summary_label.setText(f"{data_rows} × {cols}")
 
 
-def _formula_to_display(expr: str) -> str:
-    """Convert Mathematica-style formula to a more readable display string."""
-    import re as _re
-    if not expr or not expr.strip():
-        return ""
-    t = expr.strip()
-    # Basic conversions for display
-    t = _re.sub(r'\bSin\[([^\]]+)\]', r'sin(\1)', t, flags=_re.IGNORECASE)
-    t = _re.sub(r'\bCos\[([^\]]+)\]', r'cos(\1)', t, flags=_re.IGNORECASE)
-    t = _re.sub(r'\bTan\[([^\]]+)\]', r'tan(\1)', t, flags=_re.IGNORECASE)
-    t = _re.sub(r'\bLog\[([^\]]+)\]', r'ln(\1)', t, flags=_re.IGNORECASE)
-    t = _re.sub(r'\bExp\[([^\]]+)\]', r'e^(\1)', t, flags=_re.IGNORECASE)
-    t = _re.sub(r'\bSqrt\[([^\]]+)\]', r'√(\1)', t, flags=_re.IGNORECASE)
-    t = _re.sub(r'\bAbs\[([^\]]+)\]', r'|\1|', t, flags=_re.IGNORECASE)
-    t = _re.sub(r'\bPi\b', 'π', t, flags=_re.IGNORECASE)
-    t = t.replace('**', '^').replace('*', '·')
-    return t
-
-
-def _update_formula_preview(self, edit_widget, label_widget):
-    """Update the formula preview label with converted display text."""
-    text = edit_widget.toPlainText().strip()
-    display = _formula_to_display(text)
-    label_widget.setText(display if display else "")
+def _update_formula_preview(self, edit_widget, label_widget, lhs=None):
+    """Update the formula preview label through the shared renderer."""
+    if hasattr(edit_widget, "toPlainText"):
+        text = edit_widget.toPlainText().strip()
+    else:
+        text = edit_widget.text().strip()
+    left_hand_side = lhs() if callable(lhs) else lhs
+    _render_formula_preview(label_widget, text, lhs=left_hand_side)
 
 
 def _clear_table(self):
@@ -2009,103 +1907,6 @@ def _clear_table(self):
     table.setHorizontalHeaderLabels(["A", "B", "C"])
     table.clearContents()
     _apply_equal_column_stretch(table)
-
-
-def _clear_constants_table(self):
-    """Clear the constants table."""
-    self.constants_table.setRowCount(4)
-    self.constants_table.clearContents()
-
-
-def _serialize_constants_table(self) -> str:
-    """Return the constants input as text digestible by ``_process_constants_lines``.
-
-    If the text-view page is active, the edit buffer is returned verbatim so
-    that comments and blank lines the user typed survive into the downstream
-    parser (which ignores them). Otherwise, the QTableWidget is serialized
-    into one ``Name\\tValue`` line per populated row.
-    """
-    stack = getattr(self, "_constants_stack", None)
-    edit = getattr(self, "manual_constants_edit", None)
-    if stack is not None and edit is not None and stack.currentIndex() == _STACK_PAGE_TEXT:
-        return edit.toPlainText()
-
-    table = self.constants_table
-    lines = []
-    for r in range(table.rowCount()):
-        name_item = table.item(r, 0)
-        val_item = table.item(r, 1)
-        name = (name_item.text().strip() if name_item else "")
-        val = (val_item.text().strip() if val_item else "")
-        if name or val:
-            lines.append(f"{name}\t{val}")
-    return "\n".join(lines)
-
-
-def _serialize_constants_table_as_text(self) -> str:
-    """Render the constants table as the free-form text format.
-
-    Produces ``name value`` pairs separated by a single space, one per line.
-    Used when switching from table view to text view to seed the edit buffer
-    from whatever the user has entered in the table.
-    """
-    table = self.constants_table
-    lines = []
-    for r in range(table.rowCount()):
-        name_item = table.item(r, 0)
-        val_item = table.item(r, 1)
-        name = (name_item.text().strip() if name_item else "")
-        val = (val_item.text().strip() if val_item else "")
-        if name or val:
-            lines.append(f"{name} {val}".strip())
-    return "\n".join(lines)
-
-
-def _load_text_into_constants_table(self, text: str) -> None:
-    """Parse the free-form text buffer and populate the constants QTableWidget.
-
-    Shares the line-tokenizer with ``_process_constants_lines`` in
-    ``datalab_latex/latex_tables_error_propagation.py`` via
-    ``shared.parsing.parse_name_value_pairs``. Lines that don't split into
-    exactly two tokens are dropped here; the downstream parser still warns
-    when ``verbose=True``.
-    """
-    from shared.parsing import parse_name_value_pairs
-
-    pairs = parse_name_value_pairs(text or "")
-    table = self.constants_table
-    table.setRowCount(max(len(pairs), 4))
-    table.clearContents()
-    for r, (name, val) in enumerate(pairs):
-        table.setItem(r, 0, QTableWidgetItem(name))
-        table.setItem(r, 1, QTableWidgetItem(val))
-
-
-def _toggle_constants_view(self) -> None:
-    """Switch the constants input between table view and text view.
-
-    Mirrors ``_toggle_data_view`` for the main data-input area so users
-    get a consistent interaction model. Table → Text seeds the edit
-    buffer from the table only when the buffer is empty (preserves any
-    comments / freeform text the user has typed). Text → Table parses
-    the buffer through ``_load_text_into_constants_table``.
-    """
-    stack = self._constants_stack
-    if stack.currentIndex() == _STACK_PAGE_TABLE:
-        # Table → Text: seed the edit buffer with the current table contents
-        # only when the buffer is empty. Guarding BEFORE serialization avoids
-        # the unnecessary table walk when the user has already typed into
-        # the text view — and guarantees their comments are never clobbered.
-        if not self.manual_constants_edit.toPlainText().strip():
-            self.manual_constants_edit.setPlainText(
-                _serialize_constants_table_as_text(self)
-            )
-        stack.setCurrentIndex(_STACK_PAGE_TEXT)
-    else:
-        # Text → Table: parse the buffer into table rows.
-        _load_text_into_constants_table(self, self.manual_constants_edit.toPlainText())
-        stack.setCurrentIndex(_STACK_PAGE_TABLE)
-    self._constants_view_toggle.setText(_view_toggle_label(self, stack.currentIndex()))
 
 
 class _TablePasteFilter(QObject):

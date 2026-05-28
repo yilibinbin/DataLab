@@ -427,7 +427,6 @@ class ExtrapolationWindow(
             getattr(self, "data_file_edit", None),
             getattr(self, "manual_data_edit", None),
             getattr(self, "constants_file_edit", None),
-            getattr(self, "manual_constants_edit", None),
             getattr(self, "custom_formula_edit", None),
             getattr(self, "formula_edit", None),
             getattr(self, "fit_expr_edit", None),
@@ -449,10 +448,20 @@ class ExtrapolationWindow(
             signal = getattr(widget, "textChanged", None)
             if signal is not None:
                 signal.connect(self._mark_workspace_dirty)
-        for table_name in ("manual_table", "constants_table", "implicit_params_table", "implicit_constants_table"):
+        for table_name in ("manual_table",):
             table = getattr(self, table_name, None)
             if table is not None:
                 table.itemChanged.connect(self._mark_workspace_dirty)
+        for parameter_table_name in ("custom_params_table", "implicit_params_table"):
+            table = getattr(self, parameter_table_name, None)
+            signal = getattr(table, "changed", None)
+            if signal is not None:
+                signal.connect(self._mark_workspace_dirty)
+        for editor_name in ("error_constants_editor", "custom_constants_editor", "implicit_constants_editor"):
+            editor = getattr(self, editor_name, None)
+            signal = getattr(editor, "changed", None)
+            if signal is not None:
+                signal.connect(self._mark_workspace_dirty)
         for combo_name in (
             "mode_combo",
             "method_combo",
@@ -469,7 +478,6 @@ class ExtrapolationWindow(
                 combo.currentIndexChanged.connect(self._mark_workspace_dirty)
         for check_name in (
             "use_file_checkbox",
-            "constants_checkbox",
             "use_constants_file_checkbox",
             "generate_latex_checkbox",
             "generate_plots_checkbox",
@@ -479,7 +487,8 @@ class ExtrapolationWindow(
             "caption_checkbox",
             "fit_weighted_checkbox",
             "fit_mcmc_refine",
-            "enable_constraints_checkbox",
+            "custom_constraints_checkbox",
+            "implicit_constraints_checkbox",
             "stats_sample_checkbox",
             "stats_weight_variance_checkbox",
             "log_x_checkbox",
@@ -858,14 +867,8 @@ class ExtrapolationWindow(
     def _on_constants_source_toggle(self, checked: bool):
         if hasattr(self, "constants_file_row"):
             self.constants_file_row.setVisible(checked)
-        # Hide the whole stack (table + text-view pages) when the file
-        # source is selected, and the per-view toggle button with it.
-        if hasattr(self, "_constants_stack"):
-            self._constants_stack.setVisible(not checked)
-        elif hasattr(self, "constants_table"):
-            self.constants_table.setVisible(not checked)
-        if hasattr(self, "_constants_view_toggle"):
-            self._constants_view_toggle.setVisible(not checked)
+        if hasattr(self, "error_constants_editor"):
+            self.error_constants_editor.set_inputs_visible(not checked)
         if hasattr(self, "constants_hint_btn"):
             hint_text = self._tr(
                 "常数文件示例：ALPHA 7.2973525693(11)[-3]",
@@ -927,32 +930,20 @@ class ExtrapolationWindow(
             self.fit_expr_edit.setReadOnly(mode != "custom")
             if mode != "custom":
                 self.fit_expr_edit.setPlainText(self._mode_expression_preview(mode))
-        if hasattr(self, "fit_param_edit"):
-            self.fit_param_edit.setVisible(False)
-            self.fit_param_edit.setReadOnly(True)
         if hasattr(self, "fit_func_help_btn"):
             self.fit_func_help_btn.setVisible(mode == "custom")
+        if hasattr(self, "custom_constants_editor"):
+            self.custom_constants_editor.setVisible(mode == "custom")
+        for name in ("custom_param_header_widget", "custom_params_table", "custom_constraints_checkbox"):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setVisible(mode == "custom")
         if hasattr(self, "add_variable_btn"):
             self.add_variable_btn.setVisible(mode in {"custom", "self_consistent"})
         if hasattr(self, "remove_variable_btn"):
             self.remove_variable_btn.setVisible(mode in {"custom", "self_consistent"})
             if mode not in {"custom", "self_consistent"}:
                 self._reset_variable_rows(default_var="x", default_column="A")
-        # 参数约束仅对自由参数模型生效，其它模型隐藏以避免误导
-        show_params = mode in {"custom", "self_consistent"}
-        if not show_params and hasattr(self, "enable_constraints_checkbox"):
-            self.enable_constraints_checkbox.setChecked(False)
-        if hasattr(self, "enable_constraints_checkbox"):
-            self.enable_constraints_checkbox.setVisible(show_params)
-        if hasattr(self, "add_param_btn"):
-            self.add_param_btn.setVisible(show_params and self.enable_constraints_checkbox.isChecked())
-        if hasattr(self, "remove_param_btn"):
-            self.remove_param_btn.setVisible(show_params and self.enable_constraints_checkbox.isChecked())
-        if hasattr(self, "param_header_widget"):
-            self.param_header_widget.setVisible(show_params and self.enable_constraints_checkbox.isChecked())
-        if hasattr(self, "param_rows_container"):
-            self.param_rows_container.setVisible(show_params and self.enable_constraints_checkbox.isChecked())
-
     def _refresh_mode_expression(self, mode: str | None = None):
         mode = mode or (self.fit_model_combo.currentData() if hasattr(self, "fit_model_combo") else None)
         if mode and mode != "custom" and hasattr(self, "fit_expr_edit"):
@@ -1052,62 +1043,47 @@ class ExtrapolationWindow(
             return {"K": "1.0"}
         return {}
 
-    def _reset_implicit_param_rows(self, config: dict[str, object] | None = None):
+    def _reset_implicit_param_rows(self, config: dict[str, object] | list[dict[str, object]] | None = None):
         table = getattr(self, "implicit_params_table", None)
         if table is None:
             return
-        config = config or {}
         table.blockSignals(True)
         try:
-            table.setRowCount(0)
-            for row, name in enumerate(config):
-                entry = config.get(name)
-                if not isinstance(entry, dict):
-                    entry = {"initial": entry}
-                table.insertRow(row)
-                values = [
-                    str(name),
-                    "" if entry.get("initial") is None else str(entry.get("initial")),
-                    "" if entry.get("fixed") is None else str(entry.get("fixed")),
-                    "" if entry.get("min") is None else str(entry.get("min")),
-                    "" if entry.get("max") is None else str(entry.get("max")),
-                ]
-                for col, value in enumerate(values):
-                    table.setItem(row, col, QTableWidgetItem(value))
+            table.set_rows(config or {})
         finally:
             table.blockSignals(False)
 
+    def _reset_custom_param_rows(self, config: dict[str, object] | list[dict[str, object]] | None = None):
+        table = getattr(self, "custom_params_table", None)
+        if table is None:
+            return
+        table.blockSignals(True)
+        try:
+            table.set_rows(config or [])
+        finally:
+            table.blockSignals(False)
+
+    def _collect_custom_parameter_config(self, allow_empty: bool = False) -> dict[str, dict[str, str]]:
+        table = getattr(self, "custom_params_table", None)
+        if table is None:
+            if allow_empty:
+                return {}
+            raise ValueError(self._tr("请在参数列表中添加参数。", "Please add at least one parameter."))
+        try:
+            config = table.parameter_config(validate=True)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        if not config and not allow_empty:
+            raise ValueError(self._tr("请在参数列表中添加参数。", "Please add at least one parameter."))
+        return config
+
     def _collect_implicit_parameter_config(self, parameter_names: Sequence[str]) -> dict[str, dict[str, str]]:
         table = getattr(self, "implicit_params_table", None)
-        allowed = set(parameter_names)
         collected: dict[str, dict[str, str]] = {}
         if table is not None:
-            for row in range(table.rowCount()):
-                name_item = table.item(row, 0)
-                name = name_item.text().strip() if name_item else ""
-                if not name or name not in allowed:
-                    continue
-                init_text = table.item(row, 1).text().strip() if table.item(row, 1) else ""
-                fixed_text = table.item(row, 2).text().strip() if table.item(row, 2) else ""
-                min_text = table.item(row, 3).text().strip() if table.item(row, 3) else ""
-                max_text = table.item(row, 4).text().strip() if table.item(row, 4) else ""
-                entry: dict[str, str] = {}
-                for key, text in (
-                    ("initial", init_text),
-                    ("fixed", fixed_text),
-                    ("min", min_text),
-                    ("max", max_text),
-                ):
-                    if not text:
-                        continue
-                    try:
-                        mp.mpf(text)
-                    except ValueError as exc:
-                        raise ValueError(self._tr(f"参数 {name} 的 {key} 无效。", f"Invalid {key} for parameter {name}.")) from exc
-                    entry[key] = text
-                if "initial" not in entry and "fixed" not in entry:
-                    raise ValueError(self._tr(f"参数 {name} 需要初值或固定值。", f"Parameter {name} needs an initial or fixed value."))
-                collected[name] = entry
+            collected = table.parameter_config(validate=True)
+            allowed = set(parameter_names)
+            collected = {name: value for name, value in collected.items() if name in allowed}
         missing = [name for name in parameter_names if name not in collected]
         if missing:
             joined = ", ".join(missing)
@@ -1118,89 +1094,46 @@ class ExtrapolationWindow(
         config = self._collect_implicit_config(validate_parameters=False)
         parameter_names = tuple(config["parameter_names"])
         table = getattr(self, "implicit_params_table", None)
-        before: list[tuple[str, str, str, str, str]] = []
-        preserved: dict[str, dict[str, str]] = {}
+        before = table.rows() if table is not None else []
         if table is not None:
-            for row in range(table.rowCount()):
-                name_item = table.item(row, 0)
-                name = name_item.text().strip() if name_item else ""
-                before.append(tuple(
-                    table.item(row, col).text().strip() if table.item(row, col) else ""
-                    for col in range(table.columnCount())
-                ))
-                if not name:
-                    continue
-                preserved[name] = {
-                    "initial": table.item(row, 1).text().strip() if table.item(row, 1) else "",
-                    "fixed": table.item(row, 2).text().strip() if table.item(row, 2) else "",
-                    "min": table.item(row, 3).text().strip() if table.item(row, 3) else "",
-                    "max": table.item(row, 4).text().strip() if table.item(row, 4) else "",
-                }
-        self._reset_implicit_param_rows({
-            name: preserved.get(name, {"initial": "", "fixed": "", "min": "", "max": ""})
-            for name in parameter_names
-        })
+            table.set_detected_names(parameter_names)
+        after = table.rows() if table is not None else []
+        if after != before and hasattr(self, "_mark_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
+            self._mark_workspace_dirty()
+
+    def _refresh_custom_parameter_rows(self):
+        model_expr = self.fit_expr_edit.toPlainText().strip()
+        variable_names = [
+            var_edit.text().strip()
+            for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
+            if var_edit.text().strip()
+        ] or ["x"]
+        constants = self._collect_custom_constants()
+        parameter_names = self._infer_parameter_names(
+            model_expr,
+            variable_names,
+            [],
+            constants=sorted(constants),
+        )
+        table = getattr(self, "custom_params_table", None)
         if table is not None:
-            after = [
-                tuple(
-                    table.item(row, col).text().strip() if table.item(row, col) else ""
-                    for col in range(table.columnCount())
-                )
-                for row in range(table.rowCount())
-            ]
-            if after != before and hasattr(self, "_mark_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
+            before = table.rows()
+            table.set_detected_names(parameter_names)
+            if table.rows() != before and hasattr(self, "_mark_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
                 self._mark_workspace_dirty()
 
     def _reset_implicit_constants_rows(self, config: dict[str, object] | list[dict[str, object]] | None = None):
-        table = getattr(self, "implicit_constants_table", None)
-        if table is None:
+        editor = getattr(self, "implicit_constants_editor", None)
+        if editor is None:
             return
-        if isinstance(config, dict):
-            rows = [{"name": name, "value": value} for name, value in config.items()]
-        elif isinstance(config, list):
-            rows = [
-                {"name": str(row.get("name") or ""), "value": str(row.get("value") or "")}
-                for row in config
-                if isinstance(row, dict)
-            ]
-        else:
-            rows = []
-        table.blockSignals(True)
-        try:
-            table.clearContents()
-            table.setRowCount(max(3, len(rows)))
-            for row, values in enumerate(rows):
-                table.setItem(row, 0, QTableWidgetItem(values["name"]))
-                table.setItem(row, 1, QTableWidgetItem(values["value"]))
-        finally:
-            table.blockSignals(False)
+        editor.set_rows(config)
+        editor.setChecked(True)
 
     def _collect_implicit_constants(self) -> dict[str, str]:
-        table = getattr(self, "implicit_constants_table", None)
-        if table is None:
+        editor = getattr(self, "implicit_constants_editor", None)
+        if editor is None or not editor.isChecked():
             return {}
-        constants: dict[str, str] = {}
-        for row in range(table.rowCount()):
-            name_item = table.item(row, 0)
-            value_item = table.item(row, 1)
-            name = name_item.text().strip() if name_item else ""
-            value = value_item.text().strip() if value_item else ""
-            if not name and not value:
-                continue
-            if not name:
-                raise ValueError(self._tr("常数名称不能为空。", "Constant name cannot be empty."))
-            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
-                raise ValueError(self._tr(f"常数名称无效：{name}", f"Invalid constant name: {name}"))
-            if not value:
-                raise ValueError(self._tr(f"常数 {name} 缺少取值。", f"Constant {name} needs a value."))
-            if name in constants:
-                raise ValueError(self._tr(f"常数名称重复：{name}", f"Duplicate constant name: {name}"))
-            try:
-                mp.mpf(value)
-            except (ValueError, TypeError) as exc:
-                raise ValueError(self._tr(f"常数 {name} 的取值无效。", f"Invalid value for constant {name}.")) from exc
-            constants[name] = value
-        return constants
+        return editor.constants_dict(validate=True)
 
     def _collect_implicit_config(self, validate_parameters: bool = True) -> dict[str, object]:
         x_variables = [
@@ -1225,15 +1158,12 @@ class ExtrapolationWindow(
         expressions = f"{equation}\n{output_expression}"
         constants = self._collect_implicit_constants()
         constant_names = set(constants)
-        reserved = set(x_variables)
-        reserved.add(implicit_variable)
-        reserved.update(constant_names)
         parameter_names = self._infer_parameter_names(
             expressions,
-            x_variables + [implicit_variable, *sorted(constant_names)],
+            x_variables + [implicit_variable],
             [],
+            constants=sorted(constant_names),
         )
-        parameter_names = [name for name in parameter_names if name not in reserved]
         if validate_parameters:
             self._collect_implicit_parameter_config(parameter_names)
         return {
@@ -1260,7 +1190,8 @@ class ExtrapolationWindow(
             return
         expr, params = payload
         self.fit_expr_edit.setPlainText(expr)
-        self.fit_param_edit.setPlainText(json.dumps(params, ensure_ascii=False, indent=2))
+        if hasattr(self, "custom_params_table"):
+            self.custom_params_table.set_rows(params)
 
     def _power_limit_template(self) -> tuple[str, dict[str, object]]:
         return (

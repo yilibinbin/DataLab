@@ -107,8 +107,8 @@ class WindowI18nMixin:
     def _update_placeholders_language(self):
         if hasattr(self, "formula_edit"):
             self.formula_edit.setPlaceholderText(self._tr("公式（使用列名或 x1, x2 …）", "Formula (use column names or x1, x2 …)"))
-        if hasattr(self, "manual_constants_edit") and self.manual_constants_edit is not None:
-            self.manual_constants_edit.setPlaceholderText(
+        if hasattr(self, "error_constants_editor") and self.error_constants_editor is not None:
+            self.error_constants_editor.text_view.setPlaceholderText(
                 self._tr(
                     "# 每行一个常数：名称 值\n# 允许空行与以 # 开头的注释\nALPHA 7.2973525693(11)[-3]",
                     "# One constant per line: name value\n# Blank lines and lines starting with # are allowed\nALPHA 7.2973525693(11)[-3]",
@@ -129,16 +129,6 @@ class WindowI18nMixin:
             self.fit_expr_edit.setPlaceholderText(
                 self._tr("自定义模型表达式，例如 A*x**(-p) + C", "Custom model expression, e.g., A*x**(-p) + C")
             )
-        if hasattr(self, "fit_param_edit"):
-            placeholder_zh = (
-                "{\n  \"A\": {\"initial\": 1.0},\n  \"p\": {\"initial\": 1.0, \"min\": 0.1},\n"
-                "  \"C\": {\"initial\": 0.0}\n}\n# 参数配置（JSON）"
-            )
-            placeholder_en = (
-                "{\n  \"A\": {\"initial\": 1.0},\n  \"p\": {\"initial\": 1.0, \"min\": 0.1},\n"
-                "  \"C\": {\"initial\": 0.0}\n}\n# Parameter config (JSON)"
-            )
-            self.fit_param_edit.setPlaceholderText(self._tr(placeholder_zh, placeholder_en))
         if hasattr(self, "func_help_btn"):
             lang = "en" if self._is_en() else "zh"
             self.func_help_btn.setToolTip(get_function_tooltip(lang))
@@ -176,13 +166,16 @@ class WindowI18nMixin:
             )
         if hasattr(self, "constants_hint_btn") and hasattr(self, "use_constants_file_checkbox"):
             checked = self.use_constants_file_checkbox.isChecked()
+            constants_placeholder = "ALPHA 7.2973525693(11)[-3]"
+            if hasattr(self, "error_constants_editor") and self.error_constants_editor is not None:
+                constants_placeholder = self.error_constants_editor.text_view.placeholderText()
             hint_text = (
                 self._tr(
                     "常数文件示例：ALPHA 7.2973525693(11)[-3]",
                     "Constants file example: ALPHA 7.2973525693(11)[-3]",
                 )
                 if checked
-                else (self.manual_constants_edit.placeholderText() if hasattr(self, "manual_constants_edit") and self.manual_constants_edit is not None else "ALPHA 7.2973525693(11)[-3]")
+                else constants_placeholder
             )
             self.constants_hint_btn.setToolTip(hint_text)
 

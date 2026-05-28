@@ -1,0 +1,198 @@
+from __future__ import annotations
+
+import re
+from collections.abc import Iterable, Sequence
+from typing import Any
+
+import mpmath as mp
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+
+
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_COLUMNS = ("name", "initial", "fixed", "min", "max")
+_HEADERS = ("Name", "Init", "Fixed", "Min", "Max")
+
+
+class ParameterTable(QWidget):
+    """Reusable fitting-parameter table with draft-preserving row APIs."""
+
+    changed = Signal()
+
+    def __init__(self, parent: QWidget | None = None, *, min_rows: int = 0) -> None:
+        super().__init__(parent)
+        self._constraints_enabled = False
+        self._syncing = False
+        self._min_rows = max(0, int(min_rows))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.table_view = QTableWidget(self._min_rows, len(_COLUMNS))
+        self.table_view.setHorizontalHeaderLabels(list(_HEADERS))
+        self.table_view.itemChanged.connect(self._emit_changed)
+        layout.addWidget(self.table_view)
+        self.set_constraints_enabled(False)
+
+    def set_constraints_enabled(self, enabled: bool) -> None:
+        self._constraints_enabled = bool(enabled)
+        for column in range(2, len(_COLUMNS)):
+            self.table_view.setColumnHidden(column, not self._constraints_enabled)
+        self._emit_changed()
+
+    def constraints_enabled(self) -> bool:
+        return self._constraints_enabled
+
+    def rows(self) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        for row_index in range(self.table_view.rowCount()):
+            row = {
+                key: self._cell_text(row_index, column)
+                for column, key in enumerate(_COLUMNS)
+            }
+            if any(row.values()):
+                rows.append(row)
+        return rows
+
+    def set_rows(self, rows: Iterable[dict[str, Any]] | dict[str, Any] | None) -> None:
+        if isinstance(rows, dict):
+            clean_rows = []
+            for name, value in rows.items():
+                if isinstance(value, dict):
+                    row_values = value
+                else:
+                    row_values = {"initial": value}
+                clean_rows.append(
+                    {
+                        "name": str(name),
+                        "initial": self._string_value(row_values.get("initial")),
+                        "fixed": self._string_value(row_values.get("fixed")),
+                        "min": self._string_value(row_values.get("min")),
+                        "max": self._string_value(row_values.get("max")),
+                    }
+                )
+        elif rows is None:
+            clean_rows = []
+        else:
+            clean_rows = [
+                {
+                    "name": self._string_value(row.get("name")),
+                    "initial": self._string_value(row.get("initial")),
+                    "fixed": self._string_value(row.get("fixed")),
+                    "min": self._string_value(row.get("min")),
+                    "max": self._string_value(row.get("max")),
+                }
+                for row in rows
+                if isinstance(row, dict)
+            ]
+        self._set_table_rows(clean_rows)
+
+    def set_names(self, names: Sequence[str], *, preserve: bool = True) -> None:
+        if preserve:
+            self.set_detected_names(names)
+        else:
+            self.set_rows([{"name": name, "initial": ""} for name in names])
+
+    def set_detected_names(self, names: Sequence[str]) -> None:
+        existing = {row["name"]: row for row in self.rows() if row["name"]}
+        seen: set[str] = set()
+        detected_rows: list[dict[str, str]] = []
+        for raw_name in names:
+            name = str(raw_name).strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            detected_rows.append(
+                existing.get(
+                    name,
+                    {"name": name, "initial": "", "fixed": "", "min": "", "max": ""},
+                )
+            )
+        self.set_rows(detected_rows)
+
+    def parameter_config(self, *, validate: bool = True) -> dict[str, dict[str, str]]:
+        config: dict[str, dict[str, str]] = {}
+        for row in self.rows():
+            name = row["name"].strip()
+            values = {key: row[key].strip() for key in _COLUMNS if key != "name"}
+            if not name and not any(values.values()):
+                continue
+            if not validate and not name:
+                continue
+            if not name:
+                raise ValueError("Parameter name cannot be empty.")
+            if not _IDENTIFIER_RE.fullmatch(name):
+                raise ValueError(f"Invalid parameter name: {name}")
+            if name in config:
+                raise ValueError(f"Duplicate parameter name: {name}")
+            active_values = {"initial": values["initial"]}
+            if self._constraints_enabled:
+                active_values.update(
+                    {
+                        "fixed": values["fixed"],
+                        "min": values["min"],
+                        "max": values["max"],
+                    }
+                )
+            if not validate:
+                draft_entry = {key: value for key, value in active_values.items() if value}
+                if draft_entry:
+                    config[name] = draft_entry
+                continue
+            has_initial = bool(active_values.get("initial"))
+            has_fixed = bool(active_values.get("fixed"))
+            if not has_initial and not has_fixed:
+                raise ValueError(f"Parameter {name} needs an initial or fixed value.")
+            validated_entry: dict[str, str] = {}
+            for key, value in active_values.items():
+                if not value:
+                    continue
+                try:
+                    mp.mpf(value)
+                except Exception as exc:  # noqa: BLE001
+                    raise ValueError(f"Invalid {key} for parameter {name}.") from exc
+                validated_entry[key] = value
+            config[name] = validated_entry
+        return config
+
+    def rowCount(self) -> int:  # noqa: N802 - compatibility with QTableWidget tests
+        return self.table_view.rowCount()
+
+    def columnCount(self) -> int:  # noqa: N802
+        return self.table_view.columnCount()
+
+    def item(self, row: int, column: int) -> QTableWidgetItem | None:
+        return self.table_view.item(row, column)
+
+    def setItem(self, row: int, column: int, item: QTableWidgetItem) -> None:  # noqa: N802
+        self.table_view.setItem(row, column, item)
+
+    def blockSignals(self, block: bool) -> bool:  # noqa: N802
+        previous = bool(super().blockSignals(block))
+        self.table_view.blockSignals(block)
+        return previous
+
+    def _set_table_rows(self, rows: list[dict[str, str]]) -> None:
+        self._syncing = True
+        try:
+            self.table_view.clearContents()
+            self.table_view.setRowCount(max(self._min_rows, len(rows)))
+            for row_index, row in enumerate(rows):
+                for column, key in enumerate(_COLUMNS):
+                    self.table_view.setItem(row_index, column, QTableWidgetItem(row.get(key, "")))
+        finally:
+            self._syncing = False
+        self._emit_changed()
+
+    def _cell_text(self, row: int, column: int) -> str:
+        item = self.table_view.item(row, column)
+        return item.text().strip() if item else ""
+
+    @staticmethod
+    def _string_value(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value)
+
+    def _emit_changed(self, *_args: object) -> None:
+        if not self._syncing:
+            self.changed.emit()

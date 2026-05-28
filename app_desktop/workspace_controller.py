@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,9 +44,9 @@ def _text(obj: Any, default: str = "") -> str:
     if obj is None:
         return default
     if hasattr(obj, "toPlainText"):
-        return obj.toPlainText()
+        return str(obj.toPlainText())
     if hasattr(obj, "text"):
-        return obj.text()
+        return str(obj.text())
     return default
 
 
@@ -135,17 +136,20 @@ def _newline_kind(text: str) -> str:
 
 def _capture_data_section(window: Any, *, constants: bool = False) -> tuple[dict[str, Any], dict[str, bytes]]:
     attachments: dict[str, bytes] = {}
+    table: QTableWidget | None
+    text_edit: Any | None
+    stack: Any | None
     if constants:
-        enabled = _checked(getattr(window, "constants_checkbox", None))
-        if not enabled:
-            return {"enabled": False}, {}
+        editor = getattr(window, "error_constants_editor", None)
+        enabled = _checked(editor)
         use_file = _checked(getattr(window, "use_constants_file_checkbox", None))
         path_text = _text(getattr(window, "constants_file_edit", None)).strip()
-        table = getattr(window, "constants_table", None)
-        text_edit = getattr(window, "manual_constants_edit", None)
-        stack = getattr(window, "_constants_stack", None)
+        table = None
+        text_edit = None
+        stack = None
         section_name = "constants"
     else:
+        editor = None
         enabled = True
         use_file = _checked(getattr(window, "use_file_checkbox", None))
         path_text = _text(getattr(window, "data_file_edit", None)).strip()
@@ -157,22 +161,37 @@ def _capture_data_section(window: Any, *, constants: bool = False) -> tuple[dict
     raw_path = None
     source_path = path_text or None
     source_kind = "file" if use_file else ("manual_text" if stack is not None and stack.currentIndex() == 1 else "manual_table")
+    if constants and editor is not None and not use_file:
+        source_kind = "manual_text" if editor.using_text_view() else "manual_table"
+    canonical: dict[str, Any]
     if use_file and path_text:
         raw = Path(path_text).read_bytes()
         decoded_text, encoding = _decode_bytes(raw)
         raw_path = f"attachments/sources/{section_name}.bin"
         attachments[raw_path] = raw
         canonical = {"rows": []}
+    elif constants and editor is not None:
+        rows = editor.rows()
+        canonical = {"headers": ["Name", "Value"], "rows": [[row["name"], row["value"]] for row in rows]}
+        decoded_text = editor.raw_text()
+        encoding = "utf-8"
+        raw = decoded_text.encode("utf-8")
     elif source_kind == "manual_text":
         decoded_text = _text(text_edit)
         encoding = "utf-8"
         canonical = {"rows": [line.split() for line in decoded_text.splitlines() if line.strip()]}
         raw = decoded_text.encode("utf-8")
     else:
-        canonical = _table_to_canonical(table)
-        decoded_text = _canonical_to_text(canonical)
-        encoding = "utf-8"
-        raw = decoded_text.encode("utf-8")
+        if table is None:
+            canonical = {"rows": []}
+            decoded_text = ""
+            encoding = "utf-8"
+            raw = b""
+        else:
+            canonical = _table_to_canonical(table)
+            decoded_text = _canonical_to_text(canonical)
+            encoding = "utf-8"
+            raw = decoded_text.encode("utf-8")
 
     section = {
         "enabled": enabled,
@@ -191,63 +210,73 @@ def _capture_data_section(window: Any, *, constants: bool = False) -> tuple[dict
     return section, attachments
 
 
-def _param_rows(window: Any) -> list[dict[str, str]]:
-    rows = []
-    for name, initial, minimum, maximum, _widget in getattr(window, "param_rows", []) or []:
-        rows.append(
-            {
-                "name": _text(name),
-                "initial": _text(initial),
-                "min": _text(minimum),
-                "max": _text(maximum),
-            }
-        )
+def _coerce_string_rows(raw_rows: Any, keys: tuple[str, ...]) -> list[dict[str, str]]:
+    if not isinstance(raw_rows, list):
+        return []
+    rows: list[dict[str, str]] = []
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, dict):
+            continue
+        rows.append({key: str(raw_row.get(key) or "") for key in keys})
     return rows
+
+
+def _param_rows(window: Any) -> list[dict[str, str]]:
+    table = getattr(window, "custom_params_table", None)
+    if table is not None and hasattr(table, "rows"):
+        return _coerce_string_rows(
+            table.rows(),
+            ("name", "initial", "fixed", "min", "max"),
+        )
+    return []
 
 
 def _implicit_param_rows(window: Any) -> list[dict[str, str]]:
     table = getattr(window, "implicit_params_table", None)
-    if table is None:
-        return []
-    rows: list[dict[str, str]] = []
-    keys = ("name", "initial", "fixed", "min", "max")
-    for row in range(table.rowCount()):
-        values = {
-            key: table.item(row, col).text().strip() if table.item(row, col) else ""
-            for col, key in enumerate(keys)
+    if table is not None and hasattr(table, "rows"):
+        return _coerce_string_rows(
+            table.rows(),
+            ("name", "initial", "fixed", "min", "max"),
+        )
+    return []
+
+
+def _constants_editor_state(editor: Any) -> dict[str, Any]:
+    if editor is None:
+        return {
+            "enabled": False,
+            "view": "table",
+            "rows": [],
+            "text": "",
         }
-        if values["name"]:
-            rows.append(values)
-    return rows
+    return {
+        "enabled": _checked(editor),
+        "view": "text" if editor.using_text_view() else "table",
+        "rows": _coerce_string_rows(editor.rows(), ("name", "value")),
+        "text": str(editor.raw_text()),
+    }
 
 
 def _implicit_constants_rows(window: Any) -> list[dict[str, str]]:
-    table = getattr(window, "implicit_constants_table", None)
-    if table is None:
+    editor = getattr(window, "implicit_constants_editor", None)
+    if editor is None:
         return []
-    rows: list[dict[str, str]] = []
-    for row in range(table.rowCount()):
-        name = table.item(row, 0).text().strip() if table.item(row, 0) else ""
-        value = table.item(row, 1).text().strip() if table.item(row, 1) else ""
-        if name or value:
-            rows.append({"name": name, "value": value})
-    return rows
+    return _coerce_string_rows(editor.rows(), ("name", "value"))
 
 
 def _variable_rows(window: Any) -> list[dict[str, str]]:
-    rows = []
+    rows: list[dict[str, str]] = []
     for name, column, _widget in getattr(window, "variable_rows", []) or []:
         rows.append({"name": _text(name), "column": _text(column)})
     return rows
 
 
 def _capture_implicit_config(window: Any, model: str) -> dict[str, Any]:
-    if model != "self_consistent":
-        return {}
     equation = _text(getattr(window, "implicit_equation_edit", None))
     output_expression = _text(getattr(window, "implicit_output_edit", None))
     return {
         "schema": 2,
+        "active": model == "self_consistent",
         "x_variables": tuple(
             str(row.get("name") or "")
             for row in _variable_rows(window)
@@ -261,8 +290,19 @@ def _capture_implicit_config(window: Any, model: str) -> dict[str, Any]:
         "tolerance": _text(getattr(window, "implicit_tolerance_edit", None)),
         "max_iterations": _value(getattr(window, "implicit_max_iterations_spin", None), 80),
         "timeout_seconds": _value(getattr(window, "implicit_timeout_spin", None), 300),
+        "constraints_enabled": _checked(getattr(window, "implicit_constraints_checkbox", None)),
         "parameters": _implicit_param_rows(window),
         "constants": _implicit_constants_rows(window),
+        "constants_enabled": _checked(getattr(window, "implicit_constants_editor", None)),
+        "constants_view": "text"
+        if getattr(window, "implicit_constants_editor", None) is not None
+        and window.implicit_constants_editor.using_text_view()
+        else "table",
+        "constants_text": (
+            window.implicit_constants_editor.raw_text()
+            if getattr(window, "implicit_constants_editor", None) is not None
+            else ""
+        ),
     }
 
 
@@ -290,17 +330,27 @@ def _restore_variable_rows(window: Any, rows: Any) -> None:
 def _restore_param_rows(window: Any, rows: Any) -> None:
     if not isinstance(rows, list):
         return
-    if hasattr(window, "_reset_param_rows"):
-        window._reset_param_rows()
-    for row in rows:
-        if not isinstance(row, dict) or not hasattr(window, "_add_param_row"):
-            continue
-        window._add_param_row(
-            default_name=str(row.get("name") or ""),
-            init=str(row.get("initial") or ""),
-            min_val=str(row.get("min") or ""),
-            max_val=str(row.get("max") or ""),
-        )
+    table = getattr(window, "custom_params_table", None)
+    if table is not None and hasattr(table, "set_rows"):
+        table.set_rows(rows)
+
+
+def _restore_constants_editor_state(editor: Any, state: Any) -> None:
+    if editor is None or not isinstance(state, dict):
+        return
+    rows = state.get("rows")
+    if rows is None:
+        rows = state.get("constants")
+    use_text_view = str(state.get("view") or "table") == "text"
+    text = state.get("text")
+    editor.set_rows(rows)
+    if text is not None:
+        if hasattr(editor, "set_raw_text"):
+            editor.set_raw_text(str(text))
+        else:
+            editor.set_text(str(text))
+    editor.setChecked(bool(state.get("enabled")))
+    editor.use_text_view(use_text_view)
 
 
 def _clean_optional_string(value: Any) -> str:
@@ -341,6 +391,23 @@ def _implicit_rows_to_config(rows: Any) -> dict[str, dict[str, str]]:
         }
         cleaned[name] = entry
     return cleaned
+
+
+def _parameter_rows_have_constraints(rows: Any) -> bool:
+    if isinstance(rows, dict):
+        rows = [
+            {"name": name, **entry}
+            for name, entry in rows.items()
+            if isinstance(entry, dict)
+        ]
+    if not isinstance(rows, list):
+        return False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if any(_clean_optional_string(row.get(key)) for key in ("fixed", "min", "max")):
+            return True
+    return False
 
 
 def _implicit_constants_to_rows(constants: Any) -> list[dict[str, str]]:
@@ -400,6 +467,7 @@ def _migrate_old_implicit_config(config: dict[str, Any], fitting: dict[str, Any]
 def _restore_implicit_config(window: Any, config: Any, fitting: dict[str, Any] | None = None) -> None:
     if not isinstance(config, dict) or not config:
         return
+    had_constraints_flag = "constraints_enabled" in config
     config = _migrate_old_implicit_config(config, fitting or {})
     _set_text(getattr(window, "implicit_variable_edit", None), str(config.get("implicit_variable") or ""))
     _set_text(getattr(window, "implicit_equation_edit", None), str(config.get("equation") or ""))
@@ -421,12 +489,48 @@ def _restore_implicit_config(window: Any, config: Any, fitting: dict[str, Any] |
     method = str(config.get("method") or "")
     if method:
         _set_combo_data(getattr(window, "implicit_method_combo", None), method)
-    parameters = _implicit_rows_to_config(config.get("parameters"))
+    raw_parameters = config.get("parameters")
+    restore_parameters: Any = (
+        raw_parameters
+        if config.get("schema") == 2 and isinstance(raw_parameters, list)
+        else _implicit_rows_to_config(raw_parameters)
+    )
+    constraints_enabled = (
+        bool(config.get("constraints_enabled"))
+        if had_constraints_flag
+        else _parameter_rows_have_constraints(restore_parameters)
+    )
+    if hasattr(window, "implicit_constraints_checkbox"):
+        window.implicit_constraints_checkbox.setChecked(constraints_enabled)
     if hasattr(window, "_reset_implicit_param_rows"):
-        window._reset_implicit_param_rows(parameters)
+        window._reset_implicit_param_rows(restore_parameters)
     constants = config.get("constants")
-    if hasattr(window, "_reset_implicit_constants_rows"):
+    editor = getattr(window, "implicit_constants_editor", None)
+    if editor is not None:
+        use_text_view = str(config.get("constants_view") or "table") == "text"
+        editor.set_rows(_implicit_constants_to_rows(constants))
+        if "constants_text" in config:
+            if hasattr(editor, "set_raw_text"):
+                editor.set_raw_text(str(config.get("constants_text") or ""))
+            else:
+                editor.set_text(str(config.get("constants_text") or ""))
+        editor.setChecked(bool(config.get("constants_enabled", bool(_implicit_constants_to_rows(constants)))))
+        editor.use_text_view(use_text_view)
+    elif hasattr(window, "_reset_implicit_constants_rows"):
         window._reset_implicit_constants_rows(_implicit_constants_to_rows(constants))
+
+
+def _legacy_parameter_text_rows(parameter_text: Any) -> list[dict[str, str]]:
+    if not isinstance(parameter_text, str) or not parameter_text.strip():
+        return []
+    try:
+        payload = json.loads(parameter_text)
+    except json.JSONDecodeError:
+        return []
+    return [
+        {"name": name, **entry}
+        for name, entry in _implicit_rows_to_config(payload).items()
+    ]
 
 
 def _capture_config(window: Any) -> dict[str, Any]:
@@ -488,9 +592,9 @@ def _capture_config(window: Any) -> dict[str, Any]:
             "weighted": _checked(getattr(window, "fit_weighted_checkbox", None)),
             "mcmc_refine": _checked(getattr(window, "fit_mcmc_refine", None)),
             "variables": _variable_rows(window),
-            "constraints_enabled": _checked(getattr(window, "enable_constraints_checkbox", None)),
-            "parameters": _text(getattr(window, "fit_param_edit", None)),
+            "constraints_enabled": _checked(getattr(window, "custom_constraints_checkbox", None)),
             "parameter_rows": _param_rows(window),
+            "custom_constants": _constants_editor_state(getattr(window, "custom_constants_editor", None)),
             "implicit": _capture_implicit_config(window, fitting_model),
             "poly_degree": _value(getattr(window, "poly_degree_spin", None), 3),
             "inverse_power": {
@@ -511,9 +615,11 @@ def _capture_config(window: Any) -> dict[str, Any]:
 
 def _capture_ui(window: Any) -> dict[str, Any]:
     cursor = window.latex_edit.textCursor() if hasattr(window, "latex_edit") else None
+    tabs = getattr(window, "tabs", None)
+    result_tabs = getattr(window, "result_tabs", None)
     return {
-        "main_tab": getattr(window, "tabs", None).currentIndex() if hasattr(window, "tabs") else 0,
-        "result_subtab": getattr(window, "result_tabs", None).currentIndex() if hasattr(window, "result_tabs") else 0,
+        "main_tab": tabs.currentIndex() if tabs is not None else 0,
+        "result_subtab": result_tabs.currentIndex() if result_tabs is not None else 0,
         "selected_plot_index": max(0, _value(getattr(window, "image_page_spin", None), 1) - 1),
         "plot_zoom": getattr(window, "result_plot_zoom", 1.0),
         "latex_editor": {
@@ -594,16 +700,16 @@ def capture_workspace(window: Any, *, title: str = "Untitled") -> WorkspaceBundl
 
 def _restore_data_section(window: Any, section: dict[str, Any], *, constants: bool = False) -> None:
     if constants:
-        if hasattr(window, "constants_checkbox"):
-            window.constants_checkbox.setChecked(bool(section.get("enabled")))
-        if not section.get("enabled"):
-            return
+        editor = getattr(window, "error_constants_editor", None)
+        if editor is not None:
+            editor.setChecked(bool(section.get("enabled")))
         use_file_checkbox = getattr(window, "use_constants_file_checkbox", None)
         file_edit = getattr(window, "constants_file_edit", None)
-        table = getattr(window, "constants_table", None)
-        text_edit = getattr(window, "manual_constants_edit", None)
-        stack = getattr(window, "_constants_stack", None)
+        table = None
+        text_edit = None
+        stack = None
     else:
+        editor = None
         use_file_checkbox = getattr(window, "use_file_checkbox", None)
         file_edit = getattr(window, "data_file_edit", None)
         table = getattr(window, "manual_table", None)
@@ -617,6 +723,19 @@ def _restore_data_section(window: Any, section: dict[str, Any], *, constants: bo
     if stack is not None:
         stack.setCurrentIndex(1 if source_kind == "manual_text" else 0)
     canonical = section.get("canonical_table") or {}
+    if constants and editor is not None:
+        rows = []
+        if isinstance(canonical, dict):
+            for row in canonical.get("rows") or []:
+                if isinstance(row, list) and len(row) >= 2:
+                    rows.append({"name": str(row[0]), "value": str(row[1])})
+        editor.set_rows(rows)
+        if hasattr(editor, "set_raw_text"):
+            editor.set_raw_text(str(section.get("decoded_text") or ""))
+        else:
+            editor.set_text(str(section.get("decoded_text") or ""))
+        editor.use_text_view(source_kind == "manual_text")
+        return
     if table is not None and isinstance(canonical, dict):
         _set_table_from_canonical(table, canonical)
     if text_edit is not None:
@@ -636,15 +755,14 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
         window.fit_expr_edit.setPlainText(str(fitting.get("expression") or ""))
     if hasattr(window, "fit_target_edit"):
         window.fit_target_edit.setText(str(fitting.get("target_column") or ""))
-    parameter_text = fitting.get("parameters")
-    if isinstance(parameter_text, str):
-        _set_text(getattr(window, "fit_param_edit", None), parameter_text)
     _restore_variable_rows(window, fitting.get("variables"))
-    _restore_param_rows(window, fitting.get("parameter_rows"))
-    if not fitting.get("parameter_rows") and isinstance(fitting.get("parameters"), list):
+    parameter_rows = fitting.get("parameter_rows") or _legacy_parameter_text_rows(fitting.get("parameters"))
+    _restore_param_rows(window, parameter_rows)
+    if not parameter_rows and isinstance(fitting.get("parameters"), list):
         _restore_param_rows(window, fitting.get("parameters"))
-    if hasattr(window, "enable_constraints_checkbox"):
-        window.enable_constraints_checkbox.setChecked(bool(fitting.get("constraints_enabled")))
+    if hasattr(window, "custom_constraints_checkbox"):
+        window.custom_constraints_checkbox.setChecked(bool(fitting.get("constraints_enabled")))
+    _restore_constants_editor_state(getattr(window, "custom_constants_editor", None), fitting.get("custom_constants"))
     _restore_implicit_config(window, fitting.get("implicit"), fitting)
 
     snapshot = workspace.get("result_snapshot") or {"present": False}

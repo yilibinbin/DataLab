@@ -1323,6 +1323,7 @@ class FitJob:
     is_multidim: bool = False
     implicit_definition: ImplicitModelDefinition | None = None
     timeout_seconds: float | None = None
+    custom_constants: dict[str, str] | None = None
 
 
 @dataclass
@@ -1485,6 +1486,7 @@ def _serialize_fit_job(job: FitJob) -> dict[str, Any]:
         "is_multidim": job.is_multidim,
         "implicit_definition": _serialize_implicit_definition(job.implicit_definition),
         "timeout_seconds": job.timeout_seconds,
+        "custom_constants": dict(job.custom_constants or {}),
     }
 
 
@@ -1534,6 +1536,7 @@ def _deserialize_fit_job(payload: dict[str, Any]) -> FitJob:
             is_multidim=bool(payload.get("is_multidim", False)),
             implicit_definition=_deserialize_implicit_definition(payload.get("implicit_definition")),
             timeout_seconds=payload.get("timeout_seconds"),
+            custom_constants=dict(payload.get("custom_constants") or {}),
         )
 
 
@@ -1806,7 +1809,12 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
                 seen.add(name)
             if not parameter_names:
                 parameter_names = param_keys
-            spec = build_model_specification(expr, var_names, parameter_names)
+            spec = build_model_specification(
+                expr,
+                var_names,
+                parameter_names,
+                job.custom_constants if model_type == "custom" else None,
+            )
             state = build_parameter_state(params or {}, parameter_names)
             fit_result = fit_custom_model(
                 spec,

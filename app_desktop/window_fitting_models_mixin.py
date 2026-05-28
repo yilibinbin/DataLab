@@ -37,8 +37,8 @@ for canonical history):
 
 Methods provided by sibling mixins (resolved via Python MRO):
 - ``self._tr`` — bilingual (host class)
-- ``self._collect_parameter_config``, ``self._infer_parameter_names``
-  — Params + Formatters mixins
+- ``self._collect_custom_parameter_config``, ``self._infer_parameter_names``
+  — parameter table + Formatters helpers
 - ``self._build_substituted_expression`` — Formatters mixin
 - ``self._format_fit_display`` — Formatters mixin
 - ``self._build_fit_csv_rows`` — Formatters mixin
@@ -68,7 +68,7 @@ State variables OWNED:
 
 State variables READ from the host class:
 - ``self.fit_target_edit``, ``self.fit_expr_edit``,
-  ``self.fit_param_edit``, ``self.fit_model_combo`` (UI inputs)
+  ``self.custom_params_table``, ``self.fit_model_combo`` (UI inputs)
 - ``self.fit_weighted_checkbox``, ``self.fit_mcmc_refine``,
   ``self.verbose_checkbox`` (checkboxes)
 - ``self.poly_degree_spin``, ``self.pade_m_spin``, ``self.pade_n_spin``
@@ -76,9 +76,9 @@ State variables READ from the host class:
 """
 from __future__ import annotations
 
-import json
+from collections.abc import Sequence
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, TypedDict, cast
 
 import mpmath as mp
 
@@ -112,7 +112,63 @@ from .workers_core import (
 from .workers_qt import AutoFitWorker, FitBatchWorker, FitWorker
 
 
+class CustomFitConfig(TypedDict):
+    expression: str
+    variable_names: tuple[str, ...]
+    parameter_config: dict[str, dict[str, str]]
+    parameter_names: list[str]
+    constants: dict[str, str]
+
+
 class WindowFittingModelsMixin:
+    def _collect_custom_constants(self) -> dict[str, str]:
+        host = cast(Any, self)
+        editor = getattr(host, "custom_constants_editor", None)
+        if editor is None or not editor.isChecked():
+            return {}
+        return cast("dict[str, str]", editor.constants_dict(validate=True))
+
+    def _collect_custom_fit_config(
+        self,
+        validate_parameters: bool = True,
+        *,
+        variable_names: Sequence[str] | None = None,
+    ) -> CustomFitConfig:
+        host = cast(Any, self)
+        model_expr = host.fit_expr_edit.toPlainText().strip()
+        constants = self._collect_custom_constants()
+        if variable_names is None:
+            variable_names = [
+                var_edit.text().strip()
+                for var_edit, _col_edit, *_ in getattr(host, "variable_rows", [])
+                if var_edit.text().strip()
+            ] or ["x"]
+        table = getattr(host, "custom_params_table", None)
+        if table is None:
+            raise ValueError(host._tr("请在参数列表中添加参数。", "Please add at least one parameter."))
+        try:
+            parameter_config = cast(
+                "dict[str, dict[str, str]]",
+                table.parameter_config(validate=validate_parameters),
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        if validate_parameters and not parameter_config:
+            raise ValueError(host._tr("请在参数列表中添加参数。", "Please add at least one parameter."))
+        parameter_names = host._infer_parameter_names(
+            model_expr,
+            list(variable_names),
+            list(parameter_config.keys()),
+            constants=sorted(constants),
+        )
+        return {
+            "expression": model_expr,
+            "variable_names": tuple(variable_names),
+            "parameter_config": parameter_config,
+            "parameter_names": list(parameter_names),
+            "constants": constants,
+        }
+
     def _execute_custom_fit(
         self,
         dataset: tuple[list[str], list[tuple[mp.mpf, ...]], list[tuple[mp.mpf | None, ...]]],
@@ -142,11 +198,14 @@ class WindowFittingModelsMixin:
                 var: self._column_series(headers, data_rows, column)
                 for var, column in variable_map.items()
             }
-            model_expr = self.fit_expr_edit.toPlainText().strip()
-            parameter_config = self._collect_parameter_config(allow_empty=False)
-            parameter_names = self._infer_parameter_names(
-                model_expr, list(variable_map.keys()), list(parameter_config.keys())
+            custom_config = self._collect_custom_fit_config(
+                validate_parameters=True,
+                variable_names=list(variable_map.keys()),
             )
+            model_expr = str(custom_config["expression"])
+            constants = custom_config["constants"]
+            parameter_config = custom_config["parameter_config"]
+            parameter_names = custom_config["parameter_names"]
             precision = self._read_precision()
             if verbose:
                 self._append_log(f"[fit] custom model: expr={model_expr} target={target_column} variables={variable_map}")
@@ -155,7 +214,10 @@ class WindowFittingModelsMixin:
             with _mp_precision_guard(precision):
                 self._set_fit_output_precision(precision)
                 model_spec = build_model_specification(
-                    model_expr, list(variable_map.keys()), parameter_names
+                    model_expr,
+                    list(variable_map.keys()),
+                    parameter_names,
+                    constants,
                 )
                 parameter_state = build_parameter_state(parameter_config, parameter_names)
                 fit_result = fit_custom_model(
@@ -788,33 +850,17 @@ class WindowFittingModelsMixin:
         self._current_precision = precision
         self._set_fit_output_precision(precision)
         custom_entries: list[tuple[str, Any, Any]] = []
-        parameter_config: dict[str, object] = {}
-        param_text = self.fit_param_edit.toPlainText().strip()
-        if param_text:
-            try:
-                parameter_config = json.loads(param_text)
-                if not isinstance(parameter_config, dict):
-                    warning = self._tr(
-                        "参数配置必须是 JSON 对象（键值对），已忽略该配置。",
-                        "Parameter config must be a JSON object (key-value pairs); ignoring it.",
-                    )
-                    QMessageBox.warning(self, self._tr("参数错误", "Parameter error"), warning)
-                    self._append_log(warning)
-                    parameter_config = {}
-            except json.JSONDecodeError as exc:
-                warning = self._tr(
-                    "参数配置格式有误，请检查 JSON 格式。",
-                    "Parameter configuration JSON is invalid. Please fix the format.",
-                )
-                QMessageBox.warning(self, self._tr("参数错误", "Parameter error"), warning)
-                self._append_log(f"{warning} ({exc})")
-                parameter_config = {}
+        parameter_config: dict[str, dict[str, str]] = {}
         model_expr = self.fit_expr_edit.toPlainText().strip()
         if model_expr:
-            parameter_names = self._infer_parameter_names(
-                model_expr, ["x"], list(parameter_config.keys())
+            custom_config = self._collect_custom_fit_config(
+                validate_parameters=False,
+                variable_names=["x"],
             )
-            spec = build_model_specification(model_expr, ["x"], parameter_names)
+            constants = custom_config["constants"]
+            parameter_config = custom_config["parameter_config"]
+            parameter_names = custom_config["parameter_names"]
+            spec = build_model_specification(model_expr, ["x"], parameter_names, constants)
             state = build_parameter_state(parameter_config, parameter_names)
             custom_entries.append(("自定义模型", spec, state))
         custom_entries.extend(self._default_auto_custom_entries())
@@ -851,17 +897,29 @@ class WindowFittingModelsMixin:
         target_series = self._column_series(headers, data_rows, target_column)
         model_type = self.fit_model_combo.currentData()
         model_expr = self.fit_expr_edit.toPlainText().strip()
-        parameter_config: dict = {}
+        parameter_config: dict[str, dict[str, str]] = {}
         parameter_names: list[str] = []
         template_expr: str | None = None
-        template_params: dict | None = None
+        template_params: dict[str, object] | None = None
         implicit_definition: ImplicitModelDefinition | None = None
         label = self._localize_label(self.fit_model_combo.currentText())
         is_multidim = len(variable_map) > 1
-        job_kwargs: dict[str, object] = {}
+        custom_constants: dict[str, str] | None = None
+        timeout_seconds: float | None = None
+        poly_degree = 0
+        inverse_min = 1
+        inverse_max = 3
+        pade_m = 1
+        pade_n = 1
+        auto_identifier: str | None = None
         if model_type == "custom":
-            parameter_config = self._collect_parameter_config(allow_empty=False)
-            parameter_names = self._infer_parameter_names(model_expr, list(variable_map.keys()), list(parameter_config.keys()))
+            custom_config = self._collect_custom_fit_config(
+                validate_parameters=True,
+                variable_names=list(variable_map.keys()),
+            )
+            custom_constants = custom_config["constants"]
+            parameter_config = custom_config["parameter_config"]
+            parameter_names = custom_config["parameter_names"]
         elif model_type == "self_consistent":
             implicit_config = self._collect_implicit_config()
             parameter_names = list(implicit_config["parameter_names"])
@@ -882,19 +940,17 @@ class WindowFittingModelsMixin:
                 ),
             )
             model_expr = str(implicit_config["output_expression"])
-            job_kwargs["timeout_seconds"] = float(implicit_config["timeout_seconds"])
+            timeout_seconds = float(implicit_config["timeout_seconds"])
         elif model_type == "poly":
-            job_kwargs["poly_degree"] = self.poly_degree_spin.value()
+            poly_degree = self.poly_degree_spin.value()
             model_expr = self._mode_expression_preview("poly")
         elif model_type == "inverse":
-            inv_min, inv_max = self._inverse_power_range()
-            job_kwargs["inverse_min"] = inv_min
-            job_kwargs["inverse_max"] = inv_max
+            inverse_min, inverse_max = self._inverse_power_range()
             model_expr = self._mode_expression_preview("inverse")
         elif model_type == "pade":
-            job_kwargs["pade_m"] = self.pade_m_spin.value()
-            job_kwargs["pade_n"] = self.pade_n_spin.value()
-            payload = self._pade_template(self.pade_m_spin.value(), self.pade_n_spin.value())
+            pade_m = self.pade_m_spin.value()
+            pade_n = self.pade_n_spin.value()
+            payload = self._pade_template(pade_m, pade_n)
             if payload:
                 template_expr, template_params = payload
                 model_expr = template_expr
@@ -902,12 +958,17 @@ class WindowFittingModelsMixin:
             template_expr, template_params = self._power_limit_template()
             model_expr = template_expr
         elif model_type in {"log_poly", "exp_combo"}:
-            job_kwargs["auto_identifier"] = "M4B" if model_type == "log_poly" else "M7B"
+            auto_identifier = "M4B" if model_type == "log_poly" else "M7B"
             model_expr = self._mode_expression_preview(model_type)
         else:
             # fallback to custom
-            parameter_config = self._collect_parameter_config(allow_empty=False)
-            parameter_names = self._infer_parameter_names(model_expr, list(variable_map.keys()), list(parameter_config.keys()))
+            custom_config = self._collect_custom_fit_config(
+                validate_parameters=True,
+                variable_names=list(variable_map.keys()),
+            )
+            custom_constants = custom_config["constants"]
+            parameter_config = custom_config["parameter_config"]
+            parameter_names = custom_config["parameter_names"]
         return FitJob(
             model_type=model_type,
             headers=headers,
@@ -926,6 +987,12 @@ class WindowFittingModelsMixin:
             parameter_names=parameter_names,
             template_expr=template_expr,
             template_params=template_params,
+            poly_degree=poly_degree,
+            inverse_min=inverse_min,
+            inverse_max=inverse_max,
+            pade_m=pade_m,
+            pade_n=pade_n,
+            auto_identifier=auto_identifier,
             precision=precision,
             generate_latex=generate_latex,
             output_path=output_path,
@@ -938,7 +1005,8 @@ class WindowFittingModelsMixin:
             label=label,
             is_multidim=is_multidim,
             implicit_definition=implicit_definition,
-            **job_kwargs,
+            timeout_seconds=timeout_seconds,
+            custom_constants=custom_constants,
         )
 
     def _execute_fit_async(self, job: FitJob):

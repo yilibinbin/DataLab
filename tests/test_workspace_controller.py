@@ -53,9 +53,8 @@ def test_workspace_controller_captures_manual_state(qtbot) -> None:
     win.manual_table.setHorizontalHeaderLabels(["x", "y"])
     win.manual_table.setItem(0, 0, QTableWidgetItem("1"))
     win.manual_table.setItem(0, 1, QTableWidgetItem("2"))
-    win.constants_checkbox.setChecked(True)
-    win.constants_table.setItem(0, 0, QTableWidgetItem("ALPHA"))
-    win.constants_table.setItem(0, 1, QTableWidgetItem("7.29e-3"))
+    win.error_constants_editor.setChecked(True)
+    win.error_constants_editor.set_rows([{"name": "ALPHA", "value": "7.29e-3"}])
     win.fit_expr_edit.setPlainText("A*x + B")
     win.fit_target_edit.setText("y")
     win.result_edit.setPlainText("Fit complete")
@@ -78,6 +77,63 @@ def test_workspace_controller_captures_manual_state(qtbot) -> None:
     assert workspace["result_snapshot"]["result_of_hash"] == compute_workspace_hash(workspace)
     assert workspace["result_snapshot"]["plots"][0]["sha256"] == sha256_bytes(PNG_1X1)
     assert bundle.attachments["attachments/plots/plot-001.png"] == PNG_1X1
+
+
+def test_workspace_preserves_raw_constants_text_view_draft(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    raw_text = "# note\nALPHA 1\n\nBETA 2\n"
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.error_constants_editor.setChecked(True)
+    source.error_constants_editor.set_text(raw_text)
+    source.error_constants_editor.use_text_view(True)
+
+    bundle = capture_workspace(source, title="raw constants")
+    assert bundle.manifest["workspace"]["constants"]["decoded_text"] == raw_text
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.error_constants_editor.using_text_view()
+    assert target.error_constants_editor.raw_text() == raw_text
+    assert target.error_constants_editor.rows() == [
+        {"name": "ALPHA", "value": "1"},
+        {"name": "BETA", "value": "2"},
+    ]
+
+
+def test_workspace_preserves_disabled_error_constants_draft(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    raw_text = "# inactive draft\nBETA = 2\n"
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.error_constants_editor.setChecked(True)
+    source.error_constants_editor.set_text(raw_text)
+    source.error_constants_editor.set_rows([{"name": "ALPHA", "value": "1"}])
+    source.error_constants_editor.use_text_view(False)
+    source.error_constants_editor.setChecked(False)
+
+    bundle = capture_workspace(source, title="disabled constants")
+    constants = bundle.manifest["workspace"]["constants"]
+
+    assert constants["enabled"] is False
+    assert constants["active_view"] == "table"
+    assert constants["decoded_text"] == raw_text
+    assert constants["canonical_table"]["rows"] == [["ALPHA", "1"]]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.error_constants_editor.isChecked() is False
+    assert target.error_constants_editor.using_text_view() is False
+    assert target.error_constants_editor.raw_text() == raw_text
+    assert target.error_constants_editor.rows() == [{"name": "ALPHA", "value": "1"}]
 
 
 def test_workspace_controller_restores_snapshot_without_live_payloads(qtbot) -> None:
@@ -158,7 +214,7 @@ def test_workspace_restore_old_fitting_config_without_implicit(qtbot) -> None:
     source = ExtrapolationWindow()
     qtbot.addWidget(source)
     _set_combo_data(source.mode_combo, "fitting")
-    source.fit_param_edit.setPlainText('{"A":{"initial":1.0}}')
+    source.custom_params_table.set_rows([{"name": "A", "initial": "1.0"}])
     source._reset_variable_rows(default_var="x", default_column="A")
     bundle = capture_workspace(source, title="old")
     fitting = bundle.manifest["workspace"]["config"]["fitting"]
@@ -168,11 +224,139 @@ def test_workspace_restore_old_fitting_config_without_implicit(qtbot) -> None:
     qtbot.addWidget(target)
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
-    assert target.fit_param_edit.toPlainText() == '{"A":{"initial":1.0}}'
+    assert target.custom_params_table.rows() == [{"name": "A", "initial": "1.0", "fixed": "", "min": "", "max": ""}]
     assert target.implicit_variable_edit.text() == "u"
     assert target.implicit_equation_edit.toPlainText() == "a + b*Cos[u] + c*x"
     assert target.implicit_output_edit.toPlainText() == "u"
     assert [(row[0].text(), row[1].text()) for row in target.variable_rows] == [("x", "A")]
+
+
+def test_custom_fit_config_uses_parameter_table_and_constants_editor(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+
+    win = ExtrapolationWindow()
+    qtbot.addWidget(win)
+    _set_combo_data(win.mode_combo, "fitting")
+    _set_combo_data(win.fit_model_combo, "custom")
+    win.fit_expr_edit.setPlainText("A*x + B + K")
+    win.custom_constants_editor.setChecked(True)
+    win.custom_constants_editor.set_rows([{"name": "K", "value": "1"}])
+    win.custom_params_table.set_rows(
+        [
+            {"name": "A", "initial": "2"},
+            {"name": "B", "fixed": "3"},
+        ]
+    )
+    win.custom_constraints_checkbox.setChecked(True)
+
+    config = win._collect_custom_fit_config(validate_parameters=True)
+
+    assert config["parameter_names"] == ["A", "B"]
+    assert config["parameter_config"] == {
+        "A": {"initial": "2"},
+        "B": {"fixed": "3"},
+    }
+    assert config["constants"] == {"K": "1"}
+
+
+def test_workspace_preserves_custom_fit_parameters_and_constants(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "custom")
+    source.fit_expr_edit.setPlainText("A*x + K")
+    source.custom_constraints_checkbox.setChecked(True)
+    source.custom_params_table.set_rows([{"name": "A", "initial": "2", "min": "0"}])
+    source.custom_constants_editor.setChecked(True)
+    source.custom_constants_editor.set_text("# draft\nK = 1\n")
+    source.custom_constants_editor.use_text_view(True)
+
+    bundle = capture_workspace(source, title="custom constants")
+    fitting = bundle.manifest["workspace"]["config"]["fitting"]
+
+    assert fitting["custom_constants"] == {
+        "enabled": True,
+        "view": "text",
+        "rows": [{"name": "K", "value": "1"}],
+        "text": "# draft\nK = 1\n",
+    }
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.fit_expr_edit.toPlainText() == "A*x + K"
+    assert target.custom_constraints_checkbox.isChecked() is True
+    assert target.custom_params_table.rows() == [
+        {"name": "A", "initial": "2", "fixed": "", "min": "0", "max": ""}
+    ]
+    assert target.custom_constants_editor.isChecked() is True
+    assert target.custom_constants_editor.using_text_view() is True
+    assert target.custom_constants_editor.raw_text() == "# draft\nK = 1\n"
+    assert target.custom_constants_editor.rows() == [{"name": "K", "value": "1"}]
+
+
+def test_workspace_preserves_custom_constants_table_rows(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "custom")
+    source.custom_constants_editor.setChecked(True)
+    source.custom_constants_editor.set_rows([{"name": "K", "value": "1"}])
+
+    bundle = capture_workspace(source, title="custom constants table")
+    fitting = bundle.manifest["workspace"]["config"]["fitting"]
+
+    assert fitting["custom_constants"]["view"] == "table"
+    assert fitting["custom_constants"]["rows"] == [{"name": "K", "value": "1"}]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.custom_constants_editor.isChecked() is True
+    assert target.custom_constants_editor.using_text_view() is False
+    assert target.custom_constants_editor.rows() == [{"name": "K", "value": "1"}]
+
+
+def test_workspace_preserves_custom_constants_table_view_raw_text_draft(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    raw_text = "# inactive custom draft\nK = 2\n"
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "custom")
+    source.custom_constants_editor.setChecked(True)
+    source.custom_constants_editor.set_text(raw_text)
+    source.custom_constants_editor.set_rows([{"name": "K", "value": "1"}])
+    source.custom_constants_editor.use_text_view(False)
+
+    bundle = capture_workspace(source, title="custom constants table raw text")
+    fitting = bundle.manifest["workspace"]["config"]["fitting"]
+
+    assert fitting["custom_constants"] == {
+        "enabled": True,
+        "view": "table",
+        "rows": [{"name": "K", "value": "1"}],
+        "text": raw_text,
+    }
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.custom_constants_editor.isChecked() is True
+    assert target.custom_constants_editor.using_text_view() is False
+    assert target.custom_constants_editor.rows() == [{"name": "K", "value": "1"}]
+    assert target.custom_constants_editor.raw_text() == raw_text
 
 
 def test_workspace_capture_preserves_incomplete_implicit_config(qtbot) -> None:
@@ -203,8 +387,7 @@ def test_workspace_capture_preserves_incomplete_implicit_constants(qtbot) -> Non
     qtbot.addWidget(source)
     _set_combo_data(source.mode_combo, "fitting")
     _set_combo_data(source.fit_model_combo, "self_consistent")
-    source.implicit_constants_table.setItem(0, 0, QTableWidgetItem("K"))
-    source.implicit_constants_table.setItem(0, 1, QTableWidgetItem(""))
+    source.implicit_constants_editor.set_rows([{"name": "K", "value": ""}])
 
     bundle = capture_workspace(source, title="draft")
     implicit = bundle.manifest["workspace"]["config"]["fitting"]["implicit"]
@@ -215,8 +398,7 @@ def test_workspace_capture_preserves_incomplete_implicit_constants(qtbot) -> Non
     qtbot.addWidget(target)
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
-    assert target.implicit_constants_table.item(0, 0).text() == "K"
-    assert target.implicit_constants_table.item(0, 1).text() == ""
+    assert target.implicit_constants_editor.rows()[0] == {"name": "K", "value": ""}
 
 
 def test_workspace_capture_preserves_draft_implicit_constant_rows(qtbot) -> None:
@@ -227,12 +409,13 @@ def test_workspace_capture_preserves_draft_implicit_constant_rows(qtbot) -> None
     qtbot.addWidget(source)
     _set_combo_data(source.mode_combo, "fitting")
     _set_combo_data(source.fit_model_combo, "self_consistent")
-    source.implicit_constants_table.setItem(0, 0, QTableWidgetItem("K"))
-    source.implicit_constants_table.setItem(0, 1, QTableWidgetItem("1"))
-    source.implicit_constants_table.setItem(1, 0, QTableWidgetItem("K"))
-    source.implicit_constants_table.setItem(1, 1, QTableWidgetItem("2"))
-    source.implicit_constants_table.setItem(2, 0, QTableWidgetItem(""))
-    source.implicit_constants_table.setItem(2, 1, QTableWidgetItem("3"))
+    source.implicit_constants_editor.set_rows(
+        [
+            {"name": "K", "value": "1"},
+            {"name": "K", "value": "2"},
+            {"name": "", "value": "3"},
+        ]
+    )
 
     bundle = capture_workspace(source, title="draft")
     implicit = bundle.manifest["workspace"]["config"]["fitting"]["implicit"]
@@ -247,12 +430,134 @@ def test_workspace_capture_preserves_draft_implicit_constant_rows(qtbot) -> None
     qtbot.addWidget(target)
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
-    assert target.implicit_constants_table.item(0, 0).text() == "K"
-    assert target.implicit_constants_table.item(0, 1).text() == "1"
-    assert target.implicit_constants_table.item(1, 0).text() == "K"
-    assert target.implicit_constants_table.item(1, 1).text() == "2"
-    assert target.implicit_constants_table.item(2, 0).text() == ""
-    assert target.implicit_constants_table.item(2, 1).text() == "3"
+    assert target.implicit_constants_editor.rows() == [
+        {"name": "K", "value": "1"},
+        {"name": "K", "value": "2"},
+        {"name": "", "value": "3"},
+    ]
+
+
+def test_workspace_preserves_implicit_constants_enabled_view_and_text_draft(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "self_consistent")
+    source.implicit_constants_editor.setChecked(True)
+    source.implicit_constants_editor.set_text("# keep formatting\nK = 1\n")
+    source.implicit_constants_editor.use_text_view(True)
+
+    bundle = capture_workspace(source, title="implicit constants draft")
+    implicit = bundle.manifest["workspace"]["config"]["fitting"]["implicit"]
+
+    assert implicit["constants_enabled"] is True
+    assert implicit["constants_view"] == "text"
+    assert implicit["constants"] == [{"name": "K", "value": "1"}]
+    assert implicit["constants_text"] == "# keep formatting\nK = 1\n"
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.implicit_constants_editor.isChecked() is True
+    assert target.implicit_constants_editor.using_text_view() is True
+    assert target.implicit_constants_editor.raw_text() == "# keep formatting\nK = 1\n"
+    assert target.implicit_constants_editor.rows() == [{"name": "K", "value": "1"}]
+
+
+def test_workspace_preserves_implicit_constants_table_view_raw_text_draft(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    raw_text = "# inactive implicit draft\nK = 2\n"
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "self_consistent")
+    source.implicit_constants_editor.setChecked(True)
+    source.implicit_constants_editor.set_text(raw_text)
+    source.implicit_constants_editor.set_rows([{"name": "K", "value": "1"}])
+    source.implicit_constants_editor.use_text_view(False)
+
+    bundle = capture_workspace(source, title="implicit constants table raw text")
+    implicit = bundle.manifest["workspace"]["config"]["fitting"]["implicit"]
+
+    assert implicit["constants_enabled"] is True
+    assert implicit["constants_view"] == "table"
+    assert implicit["constants"] == [{"name": "K", "value": "1"}]
+    assert implicit["constants_text"] == raw_text
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.implicit_constants_editor.isChecked() is True
+    assert target.implicit_constants_editor.using_text_view() is False
+    assert target.implicit_constants_editor.rows() == [{"name": "K", "value": "1"}]
+    assert target.implicit_constants_editor.raw_text() == raw_text
+
+
+def test_workspace_preserves_implicit_draft_after_switching_back_to_custom(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "self_consistent")
+    source.implicit_variable_edit.setText("delta")
+    source.implicit_equation_edit.setPlainText("d0 + d2/(n-delta)^2")
+    source.implicit_output_edit.setPlainText("En - K/(n-delta)^2")
+    source.implicit_constraints_checkbox.setChecked(True)
+    source.implicit_params_table.set_rows(
+        [
+            {"name": "d0", "initial": "0.3"},
+            {"name": "d2", "fixed": "0.01"},
+        ]
+    )
+    source.implicit_constants_editor.setChecked(True)
+    source.implicit_constants_editor.set_text("# draft constant\nK = 0.007\n")
+    source.implicit_constants_editor.use_text_view(True)
+    _set_combo_data(source.fit_model_combo, "custom")
+
+    bundle = capture_workspace(source, title="implicit draft while custom active")
+    fitting = bundle.manifest["workspace"]["config"]["fitting"]
+    implicit = fitting["implicit"]
+
+    assert fitting["model"] == "custom"
+    assert implicit["active"] is False
+    assert implicit["implicit_variable"] == "delta"
+    assert implicit["equation"] == "d0 + d2/(n-delta)^2"
+    assert implicit["output_expression"] == "En - K/(n-delta)^2"
+    assert implicit["constraints_enabled"] is True
+    assert implicit["parameters"] == [
+        {"name": "d0", "initial": "0.3", "fixed": "", "min": "", "max": ""},
+        {"name": "d2", "initial": "", "fixed": "0.01", "min": "", "max": ""},
+    ]
+    assert implicit["constants_enabled"] is True
+    assert implicit["constants_view"] == "text"
+    assert implicit["constants"] == [{"name": "K", "value": "0.007"}]
+    assert implicit["constants_text"] == "# draft constant\nK = 0.007\n"
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.fit_model_combo.currentData() == "custom"
+    _set_combo_data(target.fit_model_combo, "self_consistent")
+    assert target.implicit_variable_edit.text() == "delta"
+    assert target.implicit_equation_edit.toPlainText() == "d0 + d2/(n-delta)^2"
+    assert target.implicit_output_edit.toPlainText() == "En - K/(n-delta)^2"
+    assert target.implicit_constraints_checkbox.isChecked() is True
+    assert target.implicit_params_table.rows() == [
+        {"name": "d0", "initial": "0.3", "fixed": "", "min": "", "max": ""},
+        {"name": "d2", "initial": "", "fixed": "0.01", "min": "", "max": ""},
+    ]
+    assert target.implicit_constants_editor.isChecked() is True
+    assert target.implicit_constants_editor.using_text_view() is True
+    assert target.implicit_constants_editor.raw_text() == "# draft constant\nK = 0.007\n"
 
 
 def test_workspace_preserves_implicit_parameters_and_constants(qtbot) -> None:
@@ -306,6 +611,62 @@ def test_workspace_preserves_implicit_parameters_and_constants(qtbot) -> None:
         "En": {"initial": "-0.0121425"},
         "K": {"initial": "-0.007"},
     }
+
+
+def test_workspace_restore_schema2_respects_explicit_disabled_implicit_constraints(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "self_consistent")
+    bundle = capture_workspace(source, title="implicit disabled constraints")
+    implicit = bundle.manifest["workspace"]["config"]["fitting"]["implicit"]
+    implicit["constraints_enabled"] = False
+    implicit["parameters"] = [
+        {"name": "A", "initial": "1", "fixed": "2", "min": "0", "max": "3"},
+        {"name": "", "initial": "", "fixed": "", "min": "draft", "max": ""},
+    ]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.implicit_constraints_checkbox.isChecked() is False
+    assert target.implicit_params_table.rows() == [
+        {"name": "A", "initial": "1", "fixed": "2", "min": "0", "max": "3"},
+        {"name": "", "initial": "", "fixed": "", "min": "draft", "max": ""},
+    ]
+
+
+def test_workspace_restore_schema2_preserves_implicit_parameter_draft_rows(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "self_consistent")
+    bundle = capture_workspace(source, title="implicit parameter drafts")
+    implicit = bundle.manifest["workspace"]["config"]["fitting"]["implicit"]
+    implicit["constraints_enabled"] = True
+    implicit["parameters"] = [
+        {"name": "A", "initial": "1", "fixed": "", "min": "", "max": ""},
+        {"name": "A", "initial": "2", "fixed": "", "min": "", "max": ""},
+        {"name": "", "initial": "3", "fixed": "", "min": "", "max": ""},
+    ]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.implicit_constraints_checkbox.isChecked() is True
+    assert target.implicit_params_table.rows() == [
+        {"name": "A", "initial": "1", "fixed": "", "min": "", "max": ""},
+        {"name": "A", "initial": "2", "fixed": "", "min": "", "max": ""},
+        {"name": "", "initial": "3", "fixed": "", "min": "", "max": ""},
+    ]
 
 
 def test_workspace_restore_old_implicit_builtin_constants(qtbot) -> None:

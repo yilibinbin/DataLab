@@ -69,9 +69,18 @@ class WindowFittingFormattersMixin:
         return re.sub(r"[A-Za-z_][A-Za-z0-9_]*", repl, expression)
 
     def _infer_parameter_names(
-        self, expression: str, variable_names: list[str], config_keys: list[str]
+        self,
+        expression: str,
+        variable_names: list[str],
+        config_keys: list[str],
+        constants: list[str] | None = None,
     ) -> list[str]:
-        return infer_parameter_names(expression, variable_names, config_keys)
+        return infer_parameter_names(
+            expression,
+            variable_names,
+            config_keys,
+            constants=constants,
+        )
 
     def _format_fit_result_text(
         self, fit_result: FitResult, expression: str | None, substituted: str | None

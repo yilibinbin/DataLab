@@ -41,7 +41,6 @@ from __future__ import annotations
 import time
 from typing import Any
 
-import pytest
 from mpmath import mp
 
 
@@ -94,6 +93,44 @@ def _make_custom_task(label: str, expression: str, params: dict) -> Any:
             "parameter_state": params,
         },
     )
+
+
+def test_custom_entry_task_serializes_model_constants() -> None:
+    from fitting.constraints import build_parameter_state
+    from fitting.model_parser import build_model_specification
+    from app_desktop.auto_fit_subprocess import task_from_custom_entry
+
+    spec = build_model_specification("A*x + K", ["x"], ["A"], {"K": "1"})
+    state = build_parameter_state({"A": {"initial": "1"}}, ["A"])
+
+    task = task_from_custom_entry("with constant", spec, state)
+
+    assert task.params["constants"] == {"K": "1"}
+
+
+def test_rebuilt_custom_task_callable_injects_constants() -> None:
+    from app_desktop.auto_fit_subprocess import _rebuild_task_callable
+
+    task = _make_custom_task(
+        "with constant",
+        "A*x + K",
+        {"A": {"initial": "1"}},
+    )
+    task.params["constants"] = {"K": "1"}
+    x_data = [mp.mpf("0"), mp.mpf("1"), mp.mpf("2")]
+    y_data = [mp.mpf("1"), mp.mpf("3"), mp.mpf("5")]
+
+    fit = _rebuild_task_callable(
+        task,
+        x_data,
+        y_data,
+        [None] * len(x_data),
+        None,
+        50,
+    )
+
+    assert set(fit.params) == {"A"}
+    assert mp.almosteq(fit.params["A"], mp.mpf("2"), abs_eps=mp.mpf("1e-20"))
 
 
 # ---------------------------------------------------------------- happy path
@@ -198,7 +235,6 @@ def test_orchestrator_kills_subprocess_immediately_on_cancel() -> None:
     generous bound to avoid flake on slow CI.
     """
     Orchestrator, _, _ = _import_orchestrator()
-    data = _linear_data()
 
     # A custom model with a deliberately slow-evaluating expression.
     # The trick: the orchestrator can't peek inside the subprocess'
@@ -278,7 +314,6 @@ def test_orchestrator_kills_subprocess_after_per_model_timeout() -> None:
     via ``Process.kill()`` and recorded as a timeout failure. Other
     models still run."""
     Orchestrator, _, _ = _import_orchestrator()
-    data = _linear_data()
 
     # Pathological custom + a fast linear fallback.
     slow = _make_custom_task(

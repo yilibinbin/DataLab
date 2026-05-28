@@ -109,6 +109,7 @@ def build_implicit_model_specification(
         expression=definition.output_expression.strip(),
         variables=x_names,
         parameters=param_names,
+        constants=dict(definition.constants),
         evaluate_func=_evaluate,
         gradient_funcs=gradient_funcs,
     )
