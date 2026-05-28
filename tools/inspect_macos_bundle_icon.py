@@ -23,6 +23,9 @@ def inspect_bundle(app_path: Path) -> list[str]:
     except Exception as exc:
         return [f"could not read Info.plist: {plist_path}: {exc}"]
 
+    if not isinstance(data, dict):
+        return ["Info.plist root is not a dictionary"]
+
     icon_name = str(data.get("CFBundleIconFile") or "").strip()
     if not icon_name:
         issues.append("missing CFBundleIconFile in Contents/Info.plist")

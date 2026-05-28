@@ -101,9 +101,7 @@ def test_inspect_bundle_reports_missing_icon_resource(tmp_path: Path) -> None:
     app_path = tmp_path / "DataLab.app"
     _write_info_plist(app_path, icon_name="icon")
 
-    assert inspect_bundle(app_path) == [
-        "missing icon resource: Contents/Resources/icon.icns"
-    ]
+    assert inspect_bundle(app_path) == ["missing icon resource: Contents/Resources/icon.icns"]
 
 
 def test_inspect_bundle_reports_missing_icon_metadata(tmp_path: Path) -> None:
@@ -112,9 +110,16 @@ def test_inspect_bundle_reports_missing_icon_metadata(tmp_path: Path) -> None:
     plist_path.parent.mkdir(parents=True, exist_ok=True)
     plist_path.write_bytes(plistlib.dumps({"CFBundleName": "DataLab"}))
 
-    assert inspect_bundle(app_path) == [
-        "missing CFBundleIconFile in Contents/Info.plist"
-    ]
+    assert inspect_bundle(app_path) == ["missing CFBundleIconFile in Contents/Info.plist"]
+
+
+def test_inspect_bundle_reports_non_dict_plist_root(tmp_path: Path) -> None:
+    app_path = tmp_path / "DataLab.app"
+    plist_path = app_path / "Contents" / "Info.plist"
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    plist_path.write_bytes(plistlib.dumps(["CFBundleIconFile", "icon"]))
+
+    assert inspect_bundle(app_path) == ["Info.plist root is not a dictionary"]
 
 
 def test_build_script_sets_icon_file_from_actual_basename() -> None:
