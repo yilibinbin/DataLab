@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import warnings
 from dataclasses import dataclass, field
 from typing import Callable, Sequence, cast
 
@@ -116,9 +117,38 @@ def build_implicit_model_specification(
     return spec
 
 
-def quantum_defect_template() -> ImplicitModelDefinition:
-    """Return the default quantum-defect self-consistent model template."""
+def default_implicit_template() -> ImplicitModelDefinition:
+    """Return the generic default self-consistent model template."""
 
+    return ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*Cos[u] + c*x",
+        output_expression="u",
+        parameters=("a", "b", "c"),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="fixed_point",
+            initial="0.3",
+            tolerance="1e-16",
+            max_iterations=80,
+        ),
+    )
+
+
+def quantum_defect_template() -> ImplicitModelDefinition:
+    """Return the legacy physical quantum-defect template.
+
+    Deprecated for GUI defaults; use `default_implicit_template()` for the
+    generic self-consistent example.
+    """
+
+    warnings.warn(
+        "quantum_defect_template() is deprecated; use default_implicit_template() "
+        "for the generic implicit model default.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return ImplicitModelDefinition(
         x_variables=("n",),
         implicit_variable="delta",

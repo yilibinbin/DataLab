@@ -23,7 +23,7 @@ _NON_SOURCE_DIR_NAMES = frozenset({
     "__pycache__", ".git", ".venv", "venv", "env", ".env",
     "build", "dist", "site-packages", "node_modules",
     ".mypy_cache", ".pytest_cache", ".ruff_cache",
-    "htmlcov",
+    "htmlcov", ".worktrees",
 })
 
 

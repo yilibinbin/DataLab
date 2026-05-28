@@ -170,8 +170,8 @@ def test_workspace_restore_old_fitting_config_without_implicit(qtbot) -> None:
 
     assert target.fit_param_edit.toPlainText() == '{"A":{"initial":1.0}}'
     assert target.implicit_variable_edit.text() == "u"
-    assert target.implicit_equation_edit.text() == "a + b*Cos[u] + c*x"
-    assert target.implicit_output_edit.text() == "u"
+    assert target.implicit_equation_edit.toPlainText() == "a + b*Cos[u] + c*x"
+    assert target.implicit_output_edit.toPlainText() == "u"
     assert [(row[0].text(), row[1].text()) for row in target.variable_rows] == [("x", "A")]
 
 
@@ -184,8 +184,8 @@ def test_workspace_capture_preserves_incomplete_implicit_config(qtbot) -> None:
     _set_combo_data(source.mode_combo, "fitting")
     _set_combo_data(source.fit_model_combo, "self_consistent")
     source.implicit_variable_edit.setText("bad-name")
-    source.implicit_equation_edit.setText("")
-    source.implicit_output_edit.setText("u")
+    source.implicit_equation_edit.setPlainText("")
+    source.implicit_output_edit.setPlainText("u")
 
     bundle = capture_workspace(source, title="draft")
     implicit = bundle.manifest["workspace"]["config"]["fitting"]["implicit"]
@@ -193,6 +193,150 @@ def test_workspace_capture_preserves_incomplete_implicit_config(qtbot) -> None:
     assert implicit["implicit_variable"] == "bad-name"
     assert implicit["equation"] == ""
     assert implicit["output_expression"] == "u"
+
+
+def test_workspace_capture_preserves_incomplete_implicit_constants(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "self_consistent")
+    source.implicit_constants_table.setItem(0, 0, QTableWidgetItem("K"))
+    source.implicit_constants_table.setItem(0, 1, QTableWidgetItem(""))
+
+    bundle = capture_workspace(source, title="draft")
+    implicit = bundle.manifest["workspace"]["config"]["fitting"]["implicit"]
+
+    assert implicit["constants"] == {"K": ""}
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.implicit_constants_table.item(0, 0).text() == "K"
+    assert target.implicit_constants_table.item(0, 1).text() == ""
+
+
+def test_workspace_preserves_implicit_parameters_and_constants(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "self_consistent")
+    source._reset_variable_rows(default_var="n", default_column="A")
+    source.fit_target_edit.setText("B")
+    source.implicit_variable_edit.setText("delta")
+    source.implicit_equation_edit.setPlainText("d0")
+    source.implicit_output_edit.setPlainText("En - K/(n-delta)^2")
+    source.implicit_timeout_spin.setValue(420)
+    source._reset_implicit_param_rows(
+        {
+            "d0": {"initial": "0.32"},
+            "En": {"initial": "-0.0121425"},
+            "K": {"initial": "-0.007"},
+        }
+    )
+    source._reset_implicit_constants_rows({"unit": "1"})
+
+    bundle = capture_workspace(source, title="implicit")
+    implicit = bundle.manifest["workspace"]["config"]["fitting"]["implicit"]
+    assert implicit["schema"] == 2
+    assert implicit["parameters"] == [
+        {"name": "d0", "initial": "0.32", "fixed": "", "min": "", "max": ""},
+        {"name": "En", "initial": "-0.0121425", "fixed": "", "min": "", "max": ""},
+        {"name": "K", "initial": "-0.007", "fixed": "", "min": "", "max": ""},
+    ]
+    assert implicit["constants"] == {"unit": "1"}
+
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.fit_model_combo.currentData() == "self_consistent"
+    assert target.variable_rows[0][0].text() == "n"
+    assert target.variable_rows[0][1].text() == "A"
+    assert target.implicit_variable_edit.text() == "delta"
+    assert target.implicit_equation_edit.toPlainText() == "d0"
+    assert target.implicit_output_edit.toPlainText() == "En - K/(n-delta)^2"
+    assert target.implicit_timeout_spin.value() == 420
+    assert target._collect_implicit_constants() == {"unit": "1"}
+    assert target._collect_implicit_parameter_config(["d0", "En", "K"]) == {
+        "d0": {"initial": "0.32"},
+        "En": {"initial": "-0.0121425"},
+        "K": {"initial": "-0.007"},
+    }
+
+
+def test_workspace_restore_old_implicit_builtin_constants(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "self_consistent")
+    bundle = capture_workspace(source, title="legacy")
+    fitting = bundle.manifest["workspace"]["config"]["fitting"]
+    fitting["implicit"] = {
+        "x_variables": ("n",),
+        "implicit_variable": "delta",
+        "equation": "d0 + d2/(n-delta)^2 + d4/(n-delta)^4",
+        "output_expression": "En - R*c/(n-delta)^2",
+        "method": "fixed_point",
+        "initial": "0",
+        "tolerance": "1e-30",
+        "max_iterations": 80,
+    }
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.implicit_equation_edit.toPlainText() == "d0 + d2/(n-delta)^2 + d4/(n-delta)^4"
+    assert target.implicit_output_edit.toPlainText() == "En - R*c/(n-delta)^2"
+    assert target.implicit_timeout_spin.value() == 300
+    assert target._collect_implicit_constants() == {"R": "10973731.568160", "c": "299792458"}
+
+
+def test_workspace_restore_old_implicit_parameter_zero_values(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    for legacy_parameters in (
+        {"d0": {"initial": 0.0}, "K": {"fixed": 0}},
+        [{"name": "d0", "initial": 0.0}, {"name": "K", "fixed": 0}],
+    ):
+        source = ExtrapolationWindow()
+        qtbot.addWidget(source)
+        _set_combo_data(source.mode_combo, "fitting")
+        _set_combo_data(source.fit_model_combo, "self_consistent")
+        bundle = capture_workspace(source, title="legacy")
+        fitting = bundle.manifest["workspace"]["config"]["fitting"]
+        fitting["implicit"] = {
+            "x_variables": ("n",),
+            "implicit_variable": "delta",
+            "equation": "d0",
+            "output_expression": "En - K/(n-delta)^2",
+            "method": "fixed_point",
+            "initial": "0",
+            "tolerance": "1e-30",
+            "max_iterations": 80,
+            "parameters": legacy_parameters,
+        }
+
+        target = ExtrapolationWindow()
+        qtbot.addWidget(target)
+        restore_workspace(target, bundle.manifest, bundle.attachments)
+
+        assert target._collect_implicit_parameter_config(["d0", "K"]) == {
+            "d0": {"initial": "0.0"},
+            "K": {"fixed": "0"},
+        }
 
 
 def test_fit_latex_report_escapes_implicit_equation_and_output_text() -> None:

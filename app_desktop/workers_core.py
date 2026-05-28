@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import io
 import logging
+import multiprocessing
+import queue
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +32,7 @@ from statistics_utils import compute_statistics, generate_statistics_latex_batch
 
 from fitting import (
     ImplicitModelDefinition,
+    ImplicitSolveOptions,
     auto_fit_dataset,
     build_implicit_model_specification,
     build_model_specification,
@@ -1318,6 +1322,7 @@ class FitJob:
     label: str = ""
     is_multidim: bool = False
     implicit_definition: ImplicitModelDefinition | None = None
+    timeout_seconds: float | None = None
 
 
 @dataclass
@@ -1353,6 +1358,364 @@ class AutoFitRenderResult:
     fit_result: FitResult | None
     expression: str | None
     substituted: str | None
+
+
+_FIT_SUBPROCESS_POLL_INTERVAL = 0.05
+_FIT_SUBPROCESS_TIMEOUT_SLACK = 0.05
+
+
+def _fit_job_requires_process_boundary(job: FitJob) -> bool:
+    return job.model_type == "self_consistent"
+
+
+def _mp_to_string(value: Any, keep_digits: int) -> str:
+    try:
+        return mp.nstr(mp.mpf(value), keep_digits)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _serialize_optional_mpf(value: Any, keep_digits: int) -> str | None:
+    if value is None:
+        return None
+    return _mp_to_string(value, keep_digits)
+
+
+def _serialize_mpf_sequence(values: list[Any] | tuple[Any, ...], keep_digits: int) -> list[str | None]:
+    return [_serialize_optional_mpf(value, keep_digits) for value in values]
+
+
+def _deserialize_mpf_sequence(values: list[str | None]) -> list[mp.mpf | None]:
+    return [mp.mpf(value) if value is not None else None for value in values]
+
+
+def _serialize_mp_tree(value: Any, keep_digits: int) -> Any:
+    if value is None:
+        return None
+    if hasattr(value, "_mpf_"):
+        return _mp_to_string(value, keep_digits)
+    if isinstance(value, dict):
+        return {key: _serialize_mp_tree(item, keep_digits) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_serialize_mp_tree(item, keep_digits) for item in value]
+    if isinstance(value, list):
+        return [_serialize_mp_tree(item, keep_digits) for item in value]
+    return value
+
+
+def _serialize_implicit_definition(definition: ImplicitModelDefinition | None) -> dict[str, Any] | None:
+    if definition is None:
+        return None
+    solve_options = definition.solve_options
+    return {
+        "x_variables": list(definition.x_variables),
+        "implicit_variable": definition.implicit_variable,
+        "equation": definition.equation,
+        "output_expression": definition.output_expression,
+        "parameters": list(definition.parameters),
+        "constants": dict(definition.constants),
+        "solve_options": {
+            "method": solve_options.method,
+            "initial": solve_options.initial,
+            "tolerance": solve_options.tolerance,
+            "max_iterations": solve_options.max_iterations,
+        },
+    }
+
+
+def _deserialize_implicit_definition(payload: dict[str, Any] | None) -> ImplicitModelDefinition | None:
+    if payload is None:
+        return None
+    solve_payload = payload.get("solve_options") or {}
+    return ImplicitModelDefinition(
+        x_variables=tuple(payload["x_variables"]),
+        implicit_variable=str(payload["implicit_variable"]),
+        equation=str(payload["equation"]),
+        output_expression=str(payload["output_expression"]),
+        parameters=tuple(payload["parameters"]),
+        constants=dict(payload.get("constants") or {}),
+        solve_options=ImplicitSolveOptions(
+            method=str(solve_payload.get("method", "fixed_point")),
+            initial=str(solve_payload.get("initial", "0")),
+            tolerance=str(solve_payload.get("tolerance", "1e-30")),
+            max_iterations=int(solve_payload.get("max_iterations", 80)),
+        ),
+    )
+
+
+def _serialize_fit_job(job: FitJob) -> dict[str, Any]:
+    keep_digits = max(int(job.precision) + 10, 30)
+    return {
+        "model_type": job.model_type,
+        "headers": list(job.headers),
+        "data_rows": [_serialize_mpf_sequence(row, keep_digits) for row in job.data_rows],
+        "sigma_rows": [_serialize_mpf_sequence(row, keep_digits) for row in job.sigma_rows],
+        "x_series": _serialize_mpf_sequence(job.x_series, keep_digits),
+        "y_series": _serialize_mpf_sequence(job.y_series, keep_digits),
+        "sigma_series": _serialize_mpf_sequence(job.sigma_series, keep_digits),
+        "weights": _serialize_mpf_sequence(job.weights, keep_digits) if job.weights is not None else None,
+        "variable_map": dict(job.variable_map),
+        "variable_data": {
+            key: _serialize_mpf_sequence(values, keep_digits)
+            for key, values in job.variable_data.items()
+        },
+        "target_series": _serialize_mpf_sequence(job.target_series, keep_digits),
+        "target_column": job.target_column,
+        "model_expr": job.model_expr,
+        "parameter_config": _serialize_mp_tree(job.parameter_config, keep_digits),
+        "parameter_names": list(job.parameter_names),
+        "template_expr": job.template_expr,
+        "template_params": _serialize_mp_tree(job.template_params, keep_digits),
+        "poly_degree": job.poly_degree,
+        "inverse_min": job.inverse_min,
+        "inverse_max": job.inverse_max,
+        "pade_m": job.pade_m,
+        "pade_n": job.pade_n,
+        "auto_identifier": job.auto_identifier,
+        "precision": job.precision,
+        "generate_latex": job.generate_latex,
+        "output_path": job.output_path,
+        "use_dcolumn": job.use_dcolumn,
+        "caption": job.caption,
+        "verbose": job.verbose,
+        "render_plots": job.render_plots,
+        "latex_digits": job.latex_digits,
+        "weighted": job.weighted,
+        "label": job.label,
+        "is_multidim": job.is_multidim,
+        "implicit_definition": _serialize_implicit_definition(job.implicit_definition),
+        "timeout_seconds": job.timeout_seconds,
+    }
+
+
+def _deserialize_fit_job(payload: dict[str, Any]) -> FitJob:
+    precision = int(payload.get("precision", 80))
+    with _mp_precision_guard(precision):
+        return FitJob(
+            model_type=payload["model_type"],
+            headers=list(payload["headers"]),
+            data_rows=[tuple(value for value in _deserialize_mpf_sequence(row)) for row in payload["data_rows"]],
+            sigma_rows=[tuple(value for value in _deserialize_mpf_sequence(row)) for row in payload["sigma_rows"]],
+            x_series=[mp.mpf(value) for value in payload["x_series"]],
+            y_series=[mp.mpf(value) for value in payload["y_series"]],
+            sigma_series=[mp.mpf(value) if value is not None else None for value in payload["sigma_series"]],
+            weights=(
+                [mp.mpf(value) for value in payload["weights"]]
+                if payload.get("weights") is not None else None
+            ),
+            variable_map=dict(payload["variable_map"]),
+            variable_data={
+                key: [mp.mpf(value) for value in values]
+                for key, values in payload["variable_data"].items()
+            },
+            target_series=[mp.mpf(value) for value in payload["target_series"]],
+            target_column=payload["target_column"],
+            model_expr=payload["model_expr"],
+            parameter_config=dict(payload.get("parameter_config") or {}),
+            parameter_names=list(payload["parameter_names"]),
+            template_expr=payload.get("template_expr"),
+            template_params=payload.get("template_params"),
+            poly_degree=int(payload.get("poly_degree", 0)),
+            inverse_min=int(payload.get("inverse_min", 1)),
+            inverse_max=int(payload.get("inverse_max", 3)),
+            pade_m=int(payload.get("pade_m", 1)),
+            pade_n=int(payload.get("pade_n", 1)),
+            auto_identifier=payload.get("auto_identifier"),
+            precision=precision,
+            generate_latex=bool(payload.get("generate_latex", False)),
+            output_path=str(payload.get("output_path", "")),
+            use_dcolumn=bool(payload.get("use_dcolumn", True)),
+            caption=payload.get("caption"),
+            verbose=bool(payload.get("verbose", False)),
+            render_plots=bool(payload.get("render_plots", True)),
+            latex_digits=int(payload.get("latex_digits", 16)),
+            weighted=bool(payload.get("weighted", False)),
+            label=str(payload.get("label", "")),
+            is_multidim=bool(payload.get("is_multidim", False)),
+            implicit_definition=_deserialize_implicit_definition(payload.get("implicit_definition")),
+            timeout_seconds=payload.get("timeout_seconds"),
+        )
+
+
+def _serialize_fit_result(result: FitResult, keep_digits: int) -> dict[str, Any]:
+    return {
+        "params": {key: _mp_to_string(value, keep_digits) for key, value in result.params.items()},
+        "param_errors": {key: _mp_to_string(value, keep_digits) for key, value in result.param_errors.items()},
+        "chi2": _mp_to_string(result.chi2, keep_digits),
+        "reduced_chi2": _mp_to_string(result.reduced_chi2, keep_digits),
+        "aic": _mp_to_string(result.aic, keep_digits),
+        "bic": _mp_to_string(result.bic, keep_digits),
+        "r2": _mp_to_string(result.r2, keep_digits),
+        "rmse": _mp_to_string(result.rmse, keep_digits),
+        "residuals": [_mp_to_string(value, keep_digits) for value in result.residuals],
+        "fitted_curve": [_mp_to_string(value, keep_digits) for value in result.fitted_curve],
+        "covariance": [
+            [_mp_to_string(value, keep_digits) for value in row]
+            for row in result.covariance
+        ],
+        "param_errors_stat": {
+            key: _mp_to_string(value, keep_digits)
+            for key, value in result.param_errors_stat.items()
+        },
+        "param_errors_sys": {
+            key: _mp_to_string(value, keep_digits)
+            for key, value in result.param_errors_sys.items()
+        },
+        "param_errors_total": {
+            key: _mp_to_string(value, keep_digits)
+            for key, value in result.param_errors_total.items()
+        },
+        "details": _serialize_mp_tree(result.details, keep_digits),
+    }
+
+
+def _deserialize_fit_result(payload: dict[str, Any]) -> FitResult:
+    return FitResult(
+        params={key: mp.mpf(value) for key, value in payload["params"].items()},
+        param_errors={key: mp.mpf(value) for key, value in payload["param_errors"].items()},
+        chi2=mp.mpf(payload["chi2"]),
+        reduced_chi2=mp.mpf(payload["reduced_chi2"]),
+        aic=mp.mpf(payload["aic"]),
+        bic=mp.mpf(payload["bic"]),
+        r2=mp.mpf(payload["r2"]),
+        rmse=mp.mpf(payload["rmse"]),
+        residuals=[mp.mpf(value) for value in payload["residuals"]],
+        fitted_curve=[mp.mpf(value) for value in payload["fitted_curve"]],
+        covariance=[[mp.mpf(value) for value in row] for row in payload["covariance"]],
+        param_errors_stat={
+            key: mp.mpf(value) for key, value in payload["param_errors_stat"].items()
+        },
+        param_errors_sys={
+            key: mp.mpf(value) for key, value in payload["param_errors_sys"].items()
+        },
+        param_errors_total={
+            key: mp.mpf(value) for key, value in payload["param_errors_total"].items()
+        },
+        details=dict(payload.get("details") or {}),
+    )
+
+
+def _serialize_fit_result_payload(payload: FitResultPayload) -> dict[str, Any]:
+    keep_digits = max(int(payload.job.precision) + 10, 30)
+    return {
+        "job": _serialize_fit_job(payload.job),
+        "fit_result": _serialize_fit_result(payload.fit_result, keep_digits),
+        "expression": payload.expression,
+        "logs": list(payload.logs),
+        "warnings": list(payload.warnings),
+    }
+
+
+def _deserialize_fit_result_payload(payload: dict[str, Any]) -> FitResultPayload:
+    precision = int(payload["job"].get("precision", 80))
+    with _mp_precision_guard(precision):
+        return FitResultPayload(
+            job=_deserialize_fit_job(payload["job"]),
+            fit_result=_deserialize_fit_result(payload["fit_result"]),
+            expression=str(payload["expression"]),
+            logs=list(payload.get("logs") or []),
+            warnings=list(payload.get("warnings") or []),
+        )
+
+
+def _fit_job_subprocess_entry(result_queue, job_payload: dict[str, Any]) -> None:
+    try:
+        with _mp_precision_guard(int(job_payload["precision"])):
+            job = _deserialize_fit_job(job_payload)
+            payload = _execute_fit_job_payload(job)
+        result_queue.put({"ok": True, "payload": _serialize_fit_result_payload(payload)})
+    except BaseException as exc:  # noqa: BLE001
+        try:
+            result_queue.put({"ok": False, "error": str(exc)})
+        except Exception:
+            pass
+
+
+def _terminate_fit_subprocess(proc: multiprocessing.Process) -> None:
+    if not proc.is_alive():
+        proc.join(timeout=0.2)
+        return
+    try:
+        proc.terminate()
+        proc.join(timeout=1.0)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(timeout=1.0)
+    except Exception:
+        try:
+            proc.kill()
+            proc.join(timeout=1.0)
+        except Exception:
+            pass
+
+
+def _execute_fit_job_payload_subprocess(
+    job: FitJob,
+    timeout_seconds: float | None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> FitResultPayload:
+    ctx = multiprocessing.get_context("spawn")
+    result_queue = ctx.Queue()
+    job_payload = _serialize_fit_job(job)
+    proc = ctx.Process(
+        target=_fit_job_subprocess_entry,
+        args=(result_queue, job_payload),
+        name=f"datalab-fit-{job.model_type}",
+    )
+    proc.start()
+
+    timeout = timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None
+    deadline = (
+        time.monotonic() + timeout + _FIT_SUBPROCESS_TIMEOUT_SLACK
+        if timeout is not None else None
+    )
+    try:
+        while True:
+            if should_cancel is not None and should_cancel():
+                _terminate_fit_subprocess(proc)
+                raise InterruptedError(_dual_msg("自洽隐式拟合已取消。", "Self-consistent fit cancelled."))
+
+            try:
+                payload = result_queue.get(timeout=_FIT_SUBPROCESS_POLL_INTERVAL)
+                proc.join(timeout=1.0)
+                if isinstance(payload, dict) and payload.get("ok"):
+                    with _mp_precision_guard(job.precision):
+                        return _deserialize_fit_result_payload(payload["payload"])
+                error = payload.get("error", "unknown error") if isinstance(payload, dict) else str(payload)
+                raise RuntimeError(error)
+            except queue.Empty:
+                pass
+
+            if deadline is not None and time.monotonic() > deadline:
+                _terminate_fit_subprocess(proc)
+                raise TimeoutError(_dual_msg(
+                    f"自洽隐式拟合超过 {timeout:.0f}s 仍未完成，已停止。",
+                    f"Self-consistent fit exceeded {timeout:.0f}s and was stopped.",
+                ))
+
+            if not proc.is_alive():
+                proc.join(timeout=0.2)
+                try:
+                    payload = result_queue.get(timeout=0.2)
+                    if isinstance(payload, dict) and payload.get("ok"):
+                        with _mp_precision_guard(job.precision):
+                            return _deserialize_fit_result_payload(payload["payload"])
+                    error = payload.get("error", "unknown error") if isinstance(payload, dict) else str(payload)
+                    raise RuntimeError(error)
+                except queue.Empty:
+                    pass
+                raise RuntimeError(_dual_msg(
+                    "自洽隐式拟合子进程退出但未返回结果。",
+                    "Self-consistent fit subprocess exited without returning a result.",
+                ))
+    finally:
+        if proc.is_alive():
+            _terminate_fit_subprocess(proc)
+        try:
+            result_queue.close()
+            result_queue.join_thread()
+        except Exception:
+            pass
 
 
 def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:

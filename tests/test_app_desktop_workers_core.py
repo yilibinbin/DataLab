@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 from types import SimpleNamespace
 
 import mpmath as mp
@@ -11,13 +12,65 @@ import app_desktop.workers_core as workers_core
 from app_desktop.workers_core import (
     AutoFitJob,
     CalcJob,
+    FitBatchTask,
     FitJob,
+    _deserialize_fit_job,
     _execute_auto_fit_job,
     _execute_calc_job,
     _execute_fit_job_payload,
+    _execute_fit_job_payload_subprocess,
+    _fit_job_requires_process_boundary,
+    _serialize_fit_job,
 )
+from app_desktop.workers_qt import FitBatchWorker
 from fitting.hp_fitter import FitResult
 from fitting.implicit_model import ImplicitModelDefinition, ImplicitSolveOptions
+
+
+def _small_self_consistent_fit_job(*, precision: int = 50) -> FitJob:
+    x_series = [mp.mpf(v) for v in ["0", "1", "2", "3"]]
+    y_series = [mp.mpf("1") + mp.mpf("2") * x for x in x_series]
+    data_rows = list(zip(x_series, y_series))
+    sigma_rows = [(None, None) for _ in data_rows]
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*x",
+        output_expression="u",
+        parameters=("a", "b"),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="root",
+            initial="1",
+            tolerance="1e-30",
+            max_iterations=50,
+        ),
+    )
+    return FitJob(
+        model_type="self_consistent",
+        headers=["x", "u"],
+        data_rows=data_rows,
+        sigma_rows=sigma_rows,
+        x_series=x_series,
+        y_series=y_series,
+        sigma_series=[None] * len(y_series),
+        weights=None,
+        variable_map={"x": "x"},
+        variable_data={"x": x_series},
+        target_series=y_series,
+        target_column="u",
+        model_expr="u",
+        parameter_config={
+            "a": {"initial": "0.8"},
+            "b": {"initial": "1.8"},
+        },
+        parameter_names=["a", "b"],
+        precision=precision,
+        weighted=False,
+        label="small-self-consistent",
+        implicit_definition=definition,
+        timeout_seconds=10.0,
+    )
 
 
 def test_execute_fit_job_payload_poly_recovers_linear_params():
@@ -208,6 +261,155 @@ def test_execute_fit_job_payload_self_consistent_requires_definition() -> None:
                 label="missing-definition-test",
             )
         )
+
+
+def test_self_consistent_fit_job_is_marked_for_process_boundary() -> None:
+    job = _small_self_consistent_fit_job()
+    assert _fit_job_requires_process_boundary(job) is True
+
+    direct_job = FitJob(
+        model_type="poly",
+        headers=["x", "y"],
+        data_rows=[],
+        sigma_rows=[],
+        x_series=[],
+        y_series=[],
+        sigma_series=[],
+        weights=None,
+        variable_map={},
+        variable_data={},
+        target_series=[],
+        target_column="y",
+        model_expr="",
+        parameter_config={},
+        parameter_names=[],
+    )
+    assert _fit_job_requires_process_boundary(direct_job) is False
+
+
+def test_self_consistent_fit_job_payload_is_spawn_picklable() -> None:
+    payload = _serialize_fit_job(_small_self_consistent_fit_job())
+    roundtrip = pickle.loads(pickle.dumps(payload))
+    restored = _deserialize_fit_job(roundtrip)
+
+    assert restored.model_type == "self_consistent"
+    assert restored.implicit_definition is not None
+    assert restored.implicit_definition.equation == "a + b*x"
+    assert restored.implicit_definition.solve_options.method == "root"
+    assert restored.timeout_seconds == 10.0
+
+
+def test_self_consistent_fit_job_serialization_preserves_high_precision_values() -> None:
+    with mp.workdps(100):
+        precise = mp.mpf("1.234567890123456789012345678901234567890123456789")
+        job = _small_self_consistent_fit_job(precision=80)
+        job.x_series[0] = precise
+        row = list(job.data_rows[0])
+        row[0] = precise
+        job.data_rows[0] = tuple(row)
+        job.variable_data["x"][0] = precise
+
+        payload = _serialize_fit_job(job)
+
+    with mp.workdps(15):
+        restored = _deserialize_fit_job(payload)
+
+    with mp.workdps(100):
+        assert mp.almosteq(restored.x_series[0], precise, abs_eps=mp.mpf("1e-70"))
+        assert mp.almosteq(restored.data_rows[0][0], precise, abs_eps=mp.mpf("1e-70"))
+        assert mp.almosteq(restored.variable_data["x"][0], precise, abs_eps=mp.mpf("1e-70"))
+
+
+def test_self_consistent_fit_result_deserialization_preserves_high_precision_values() -> None:
+    with mp.workdps(100):
+        precise = mp.mpf("2.34567890123456789012345678901234567890123456789")
+        job = _small_self_consistent_fit_job(precision=80)
+        fit = FitResult(
+            params={"a": precise},
+            param_errors={"a": mp.mpf("1e-40")},
+            chi2=precise,
+            reduced_chi2=mp.mpf("0"),
+            aic=mp.mpf("0"),
+            bic=mp.mpf("0"),
+            r2=mp.mpf("1"),
+            rmse=mp.mpf("0"),
+            residuals=[precise],
+            fitted_curve=[precise],
+            covariance=[[precise]],
+            details={"metric": precise},
+        )
+        result_payload = workers_core._serialize_fit_result_payload(
+            workers_core.FitResultPayload(
+                job=job,
+                fit_result=fit,
+                expression="u",
+                logs=[],
+                warnings=[],
+            )
+        )
+
+    with mp.workdps(15):
+        restored = workers_core._deserialize_fit_result_payload(result_payload)
+
+    with mp.workdps(100):
+        assert mp.almosteq(restored.fit_result.params["a"], precise, abs_eps=mp.mpf("1e-70"))
+        assert mp.almosteq(restored.fit_result.chi2, precise, abs_eps=mp.mpf("1e-70"))
+        assert mp.almosteq(restored.fit_result.residuals[0], precise, abs_eps=mp.mpf("1e-70"))
+        assert mp.almosteq(restored.fit_result.fitted_curve[0], precise, abs_eps=mp.mpf("1e-70"))
+        assert mp.almosteq(restored.fit_result.covariance[0][0], precise, abs_eps=mp.mpf("1e-70"))
+
+
+def test_self_consistent_subprocess_executes_real_fit_roundtrip() -> None:
+    job = _small_self_consistent_fit_job()
+
+    payload = _execute_fit_job_payload_subprocess(job, timeout_seconds=10.0)
+    fit = payload.fit_result
+
+    assert mp.almosteq(fit.params["a"], mp.mpf("1"), abs_eps=mp.mpf("1e-20"))
+    assert mp.almosteq(fit.params["b"], mp.mpf("2"), abs_eps=mp.mpf("1e-20"))
+    assert payload.job.model_type == "self_consistent"
+    assert payload.expression == "u"
+
+
+def test_fit_batch_worker_routes_self_consistent_fit_through_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _small_self_consistent_fit_job()
+    calls: dict[str, object] = {}
+
+    def fake_subprocess(received_job, *, timeout_seconds, should_cancel):
+        calls["job"] = received_job
+        calls["timeout_seconds"] = timeout_seconds
+        calls["should_cancel"] = should_cancel
+        return SimpleNamespace(fit_result=None, logs=[], warnings=[])
+
+    monkeypatch.setattr(workers_core, "_execute_fit_job_payload_subprocess", fake_subprocess)
+
+    worker = FitBatchWorker([], capture_output=False)
+    payload = worker._run_fit_task(job)
+
+    assert payload.fit_result is None
+    assert calls["job"] is job
+    assert calls["timeout_seconds"] == 10.0
+    assert callable(calls["should_cancel"])
+
+
+def test_fit_batch_worker_emits_cancelled_when_self_consistent_subprocess_interrupts(
+    monkeypatch: pytest.MonkeyPatch,
+    qtbot,
+) -> None:
+    job = _small_self_consistent_fit_job()
+
+    def fake_subprocess(received_job, *, timeout_seconds, should_cancel):
+        raise InterruptedError("cancelled")
+
+    monkeypatch.setattr(workers_core, "_execute_fit_job_payload_subprocess", fake_subprocess)
+
+    worker = FitBatchWorker([FitBatchTask(index=0, fit_job=job)], capture_output=False)
+    with qtbot.waitSignal(worker.cancelled, timeout=3000):
+        worker.start()
+
+    assert worker.wait(3000)
 
 
 def test_execute_auto_fit_job_selects_a_model() -> None:

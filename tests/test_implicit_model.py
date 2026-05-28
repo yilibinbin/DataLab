@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+
 import pytest
 from mpmath import mp
 
+from fitting.constraints import build_parameter_state
+from fitting.hp_fitter import fit_custom_model
 from fitting.implicit_model import (
     ImplicitModelDefinition,
     ImplicitSolveOptions,
     build_implicit_model_specification,
+    default_implicit_template,
     quantum_defect_template,
 )
 
@@ -287,18 +293,147 @@ def test_equation_output_and_initial_are_prevalidated() -> None:
         build_implicit_model_specification(definition)
 
 
-def test_quantum_defect_template_uses_constants_not_fit_parameters() -> None:
-    template = quantum_defect_template()
+def _scaled_rydberg_definition() -> ImplicitModelDefinition:
+    return ImplicitModelDefinition(
+        x_variables=("n",),
+        implicit_variable="delta",
+        equation="d0",
+        output_expression="En - K/(n-delta)^2",
+        parameters=("d0", "En", "K"),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="fixed_point",
+            initial="0",
+            tolerance="1e-16",
+            max_iterations=20,
+        ),
+    )
+
+
+def _fit_scaled_rydberg_dataset(
+    xs: list[mp.mpf],
+    ys: list[mp.mpf],
+):
+    definition = _scaled_rydberg_definition()
+    spec = build_implicit_model_specification(definition)
+    state = build_parameter_state(
+        {
+            "d0": {"initial": 0.32},
+            "En": {"initial": -0.0121425},
+            "K": {"initial": -0.007},
+        },
+        ["d0", "En", "K"],
+    )
+    return fit_custom_model(spec, state, {"n": xs}, ys, precision=40)
+
+
+def test_generic_implicit_model_fits_small_scaled_dataset() -> None:
+    expected_params = {
+        "d0": mp.mpf("0.3220446"),
+        "En": mp.mpf("-0.01214252"),
+        "K": mp.mpf("-0.00699766"),
+    }
+    xs = [mp.mpf(i) for i in range(4, 10)]
+    ys = [
+        expected_params["En"] - expected_params["K"] / (n - expected_params["d0"]) ** 2
+        for n in xs
+    ]
+
+    result = _fit_scaled_rydberg_dataset(xs, ys)
+
+    assert mp.fabs(result.params["d0"] - expected_params["d0"]) < mp.mpf("1e-7")
+    assert mp.fabs(result.params["En"] - expected_params["En"]) < mp.mpf("1e-9")
+    assert mp.fabs(result.params["K"] - expected_params["K"]) < mp.mpf("1e-9")
+    assert result.rmse < mp.mpf("1e-12")
+
+
+@pytest.mark.slow
+def test_generic_implicit_model_fits_rydberg_like_scaled_dataset_quickly(
+    record_property: Callable[[str, object], None],
+) -> None:
+    xs = [mp.mpf(i) for i in range(4, 39)]
+    ys = [
+        mp.mpf(v)
+        for v in [
+            "-0.01162447187",
+            "-0.01182402355",
+            "-0.01192631926",
+            "-0.01198592815",
+            "-0.01202377388",
+            "-0.01204932984",
+            "-0.01206740907",
+            "-0.01208067377",
+            "-0.0120906960",
+            "-0.0120984536",
+            "-0.0121045811",
+            "-0.0121095054",
+            "-0.0121135218",
+            "-0.0121168404",
+            "-0.0121196138",
+            "-0.0121219550",
+            "-0.0121239491",
+            "-0.0121256614",
+            "-0.0121271423",
+            "-0.0121284318",
+            "-0.0121295613",
+            "-0.012130556",
+            "-0.012131437",
+            "-0.012132220",
+            "-0.012132920",
+            "-0.012133547",
+            "-0.012134113",
+            "-0.012134623",
+            "-0.012135085",
+            "-0.012135505",
+            "-0.012135888",
+            "-0.01213624",
+            "-0.01213656",
+            "-0.0121367",
+            "-0.01215",
+        ]
+    ]
+    started = time.perf_counter()
+    result = _fit_scaled_rydberg_dataset(xs, ys)
+    elapsed = time.perf_counter() - started
+    record_property("elapsed_seconds", f"{elapsed:.2f}")
+
+    assert mp.fabs(result.params["d0"] - mp.mpf("0.3220446")) < mp.mpf("1e-6")
+    assert mp.fabs(result.params["En"] - mp.mpf("-0.01214252")) < mp.mpf("1e-8")
+    assert mp.fabs(result.params["K"] - mp.mpf("-0.00699766")) < mp.mpf("1e-8")
+    assert result.rmse < mp.mpf("3e-6")
+
+
+def test_default_implicit_template_is_generic_not_physical_units() -> None:
+    template = default_implicit_template()
 
     assert "R" not in template.parameters
-    assert "c" not in template.parameters
-    assert "R" in template.constants
-    assert "c" in template.constants
+    assert "R" not in template.constants
+    assert "c" not in template.constants
+    assert template.x_variables == ("x",)
+    assert template.implicit_variable == "u"
+    assert template.equation == "a + b*Cos[u] + c*x"
+    assert template.output_expression == "u"
+    assert template.parameters == ("a", "b", "c")
+
+
+def test_default_implicit_template_builds_model_specification() -> None:
+    spec = build_implicit_model_specification(default_implicit_template())
+
+    assert spec.variables == ["x"]
+    assert spec.parameters == ["a", "b", "c"]
+
+
+def test_quantum_defect_template_preserves_legacy_physical_template() -> None:
+    with pytest.warns(DeprecationWarning, match="default_implicit_template"):
+        template = quantum_defect_template()
+
+    assert template.x_variables == ("n",)
     assert template.implicit_variable == "delta"
-
-
-def test_quantum_defect_template_builds_model_specification() -> None:
-    spec = build_implicit_model_specification(quantum_defect_template())
-
-    assert spec.variables == ["n"]
-    assert spec.parameters == ["d0", "d2", "d4", "En"]
+    assert template.equation == "d0 + d2/(n-delta)^2 + d4/(n-delta)^4"
+    assert template.output_expression == "En - R*c/(n-delta)^2"
+    assert template.parameters == ("d0", "d2", "d4", "En")
+    assert template.constants == {"R": "10973731.568160", "c": "299792458"}
+    assert template.solve_options.method == "fixed_point"
+    assert template.solve_options.initial == "0"
+    assert template.solve_options.tolerance == "1e-30"
+    assert template.solve_options.max_iterations == 80

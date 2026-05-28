@@ -68,6 +68,7 @@ from PySide6.QtWidgets import (
     QTextBrowser,
     QListWidget,
     QListWidgetItem,
+    QTableWidgetItem,
 )
 
 try:
@@ -443,7 +444,7 @@ class ExtrapolationWindow(
             signal = getattr(widget, "textChanged", None)
             if signal is not None:
                 signal.connect(self._mark_workspace_dirty)
-        for table_name in ("manual_table", "constants_table"):
+        for table_name in ("manual_table", "constants_table", "implicit_params_table", "implicit_constants_table"):
             table = getattr(self, table_name, None)
             if table is not None:
                 table.itemChanged.connect(self._mark_workspace_dirty)
@@ -977,8 +978,8 @@ class ExtrapolationWindow(
             hint = self._tr("该模型要求 x>0。", "This model requires x>0.")
         elif mode == "self_consistent":
             hint = self._tr(
-                "通用自洽模型中的符号默认都是变量或参数；量子亏损预设会内置物理常量。",
-                "Symbols in generic self-consistent models are variables or parameters by default; the quantum-defect preset supplies physical constants.",
+                "通用自洽模型中的符号默认都是变量或参数；常量请在表达式中显式处理。",
+                "Symbols in generic self-consistent models are variables or parameters by default; handle constants explicitly in the expression.",
             )
         self.fit_model_hint.setVisible(bool(hint))
         if hint:
@@ -1005,7 +1006,7 @@ class ExtrapolationWindow(
             if definition:
                 return " + ".join([f"{name}*({text})" for name, text in zip(definition.parameter_names, definition.basis_texts)])
         if mode == "self_consistent" and hasattr(self, "implicit_output_edit"):
-            return self.implicit_output_edit.text().strip()
+            return self.implicit_output_edit.toPlainText().strip()
         if mode == "custom":
             return self.fit_expr_edit.toPlainText()
 
@@ -1013,9 +1014,9 @@ class ExtrapolationWindow(
         if hasattr(self, "implicit_variable_edit"):
             self.implicit_variable_edit.setText("delta")
         if hasattr(self, "implicit_equation_edit"):
-            self.implicit_equation_edit.setText("d0 + d2/(n-delta)^2 + d4/(n-delta)^4")
+            self.implicit_equation_edit.setPlainText("d0 + d2/(n-delta)^2 + d4/(n-delta)^4")
         if hasattr(self, "implicit_output_edit"):
-            self.implicit_output_edit.setText("En - R*c/(n-delta)^2")
+            self.implicit_output_edit.setPlainText("En - R*c/(n-delta)^2")
         if hasattr(self, "implicit_initial_edit"):
             self.implicit_initial_edit.setText("0")
         if hasattr(self, "implicit_tolerance_edit"):
@@ -1028,6 +1029,8 @@ class ExtrapolationWindow(
                 self.implicit_method_combo.setCurrentIndex(index)
         if hasattr(self, "_reset_variable_rows"):
             self._reset_variable_rows(default_var="n", default_column="A")
+        if hasattr(self, "_reset_implicit_constants_rows"):
+            self._reset_implicit_constants_rows({"R": "10973731.568160", "c": "299792458"})
         if hasattr(self, "fit_target_edit"):
             self.fit_target_edit.setText("B")
 
@@ -1041,15 +1044,156 @@ class ExtrapolationWindow(
             return {"K": "1.0"}
         return {}
 
-    def _collect_implicit_config(self) -> dict[str, object]:
+    def _reset_implicit_param_rows(self, config: dict[str, object] | None = None):
+        table = getattr(self, "implicit_params_table", None)
+        if table is None:
+            return
+        config = config or {}
+        table.blockSignals(True)
+        try:
+            table.setRowCount(0)
+            for row, name in enumerate(config):
+                entry = config.get(name)
+                if not isinstance(entry, dict):
+                    entry = {"initial": entry}
+                table.insertRow(row)
+                values = [
+                    str(name),
+                    "" if entry.get("initial") is None else str(entry.get("initial")),
+                    "" if entry.get("fixed") is None else str(entry.get("fixed")),
+                    "" if entry.get("min") is None else str(entry.get("min")),
+                    "" if entry.get("max") is None else str(entry.get("max")),
+                ]
+                for col, value in enumerate(values):
+                    table.setItem(row, col, QTableWidgetItem(value))
+        finally:
+            table.blockSignals(False)
+
+    def _collect_implicit_parameter_config(self, parameter_names: Sequence[str]) -> dict[str, dict[str, str]]:
+        table = getattr(self, "implicit_params_table", None)
+        allowed = set(parameter_names)
+        collected: dict[str, dict[str, str]] = {}
+        if table is not None:
+            for row in range(table.rowCount()):
+                name_item = table.item(row, 0)
+                name = name_item.text().strip() if name_item else ""
+                if not name or name not in allowed:
+                    continue
+                init_text = table.item(row, 1).text().strip() if table.item(row, 1) else ""
+                fixed_text = table.item(row, 2).text().strip() if table.item(row, 2) else ""
+                min_text = table.item(row, 3).text().strip() if table.item(row, 3) else ""
+                max_text = table.item(row, 4).text().strip() if table.item(row, 4) else ""
+                entry: dict[str, str] = {}
+                for key, text in (
+                    ("initial", init_text),
+                    ("fixed", fixed_text),
+                    ("min", min_text),
+                    ("max", max_text),
+                ):
+                    if not text:
+                        continue
+                    try:
+                        mp.mpf(text)
+                    except ValueError as exc:
+                        raise ValueError(self._tr(f"参数 {name} 的 {key} 无效。", f"Invalid {key} for parameter {name}.")) from exc
+                    entry[key] = text
+                if "initial" not in entry and "fixed" not in entry:
+                    raise ValueError(self._tr(f"参数 {name} 需要初值或固定值。", f"Parameter {name} needs an initial or fixed value."))
+                collected[name] = entry
+        missing = [name for name in parameter_names if name not in collected]
+        if missing:
+            joined = ", ".join(missing)
+            raise ValueError(self._tr(f"隐式参数缺少初值或固定值：{joined}", f"Implicit parameters need initial or fixed values: {joined}"))
+        return collected
+
+    def _refresh_implicit_parameter_rows(self):
+        config = self._collect_implicit_config(validate_parameters=False)
+        parameter_names = tuple(config["parameter_names"])
+        table = getattr(self, "implicit_params_table", None)
+        before: list[tuple[str, str, str, str, str]] = []
+        preserved: dict[str, dict[str, str]] = {}
+        if table is not None:
+            for row in range(table.rowCount()):
+                name_item = table.item(row, 0)
+                name = name_item.text().strip() if name_item else ""
+                before.append(tuple(
+                    table.item(row, col).text().strip() if table.item(row, col) else ""
+                    for col in range(table.columnCount())
+                ))
+                if not name:
+                    continue
+                preserved[name] = {
+                    "initial": table.item(row, 1).text().strip() if table.item(row, 1) else "",
+                    "fixed": table.item(row, 2).text().strip() if table.item(row, 2) else "",
+                    "min": table.item(row, 3).text().strip() if table.item(row, 3) else "",
+                    "max": table.item(row, 4).text().strip() if table.item(row, 4) else "",
+                }
+        self._reset_implicit_param_rows({
+            name: preserved.get(name, {"initial": "", "fixed": "", "min": "", "max": ""})
+            for name in parameter_names
+        })
+        if table is not None:
+            after = [
+                tuple(
+                    table.item(row, col).text().strip() if table.item(row, col) else ""
+                    for col in range(table.columnCount())
+                )
+                for row in range(table.rowCount())
+            ]
+            if after != before and hasattr(self, "_mark_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
+                self._mark_workspace_dirty()
+
+    def _reset_implicit_constants_rows(self, config: dict[str, object] | None = None):
+        table = getattr(self, "implicit_constants_table", None)
+        if table is None:
+            return
+        constants = config or {}
+        table.blockSignals(True)
+        try:
+            table.clearContents()
+            table.setRowCount(max(3, len(constants)))
+            for row, (name, value) in enumerate(constants.items()):
+                table.setItem(row, 0, QTableWidgetItem(str(name)))
+                table.setItem(row, 1, QTableWidgetItem(str(value)))
+        finally:
+            table.blockSignals(False)
+
+    def _collect_implicit_constants(self) -> dict[str, str]:
+        table = getattr(self, "implicit_constants_table", None)
+        if table is None:
+            return {}
+        constants: dict[str, str] = {}
+        for row in range(table.rowCount()):
+            name_item = table.item(row, 0)
+            value_item = table.item(row, 1)
+            name = name_item.text().strip() if name_item else ""
+            value = value_item.text().strip() if value_item else ""
+            if not name and not value:
+                continue
+            if not name:
+                raise ValueError(self._tr("常数名称不能为空。", "Constant name cannot be empty."))
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+                raise ValueError(self._tr(f"常数名称无效：{name}", f"Invalid constant name: {name}"))
+            if not value:
+                raise ValueError(self._tr(f"常数 {name} 缺少取值。", f"Constant {name} needs a value."))
+            if name in constants:
+                raise ValueError(self._tr(f"常数名称重复：{name}", f"Duplicate constant name: {name}"))
+            try:
+                mp.mpf(value)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(self._tr(f"常数 {name} 的取值无效。", f"Invalid value for constant {name}.")) from exc
+            constants[name] = value
+        return constants
+
+    def _collect_implicit_config(self, validate_parameters: bool = True) -> dict[str, object]:
         x_variables = [
             var_edit.text().strip()
             for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
             if var_edit.text().strip()
         ] or ["n"]
         implicit_variable = self.implicit_variable_edit.text().strip()
-        equation = self.implicit_equation_edit.text().strip()
-        output_expression = self.implicit_output_edit.text().strip()
+        equation = self.implicit_equation_edit.toPlainText().strip()
+        output_expression = self.implicit_output_edit.toPlainText().strip()
         if not equation:
             raise ValueError(self._tr("隐式方程不能为空。", "Implicit equation cannot be empty."))
         if not output_expression:
@@ -1060,22 +1204,21 @@ class ExtrapolationWindow(
         initial = self.implicit_initial_edit.text().strip() or "0"
         tolerance = self.implicit_tolerance_edit.text().strip() or "1e-30"
         max_iterations = self.implicit_max_iterations_spin.value()
+        timeout_seconds = self.implicit_timeout_spin.value()
         expressions = f"{equation}\n{output_expression}"
-        constants = self._implicit_builtin_constants(equation, output_expression)
+        constants = self._collect_implicit_constants()
         constant_names = set(constants)
         reserved = set(x_variables)
         reserved.add(implicit_variable)
         reserved.update(constant_names)
-        config_keys = [
-            name for name in self._collect_parameter_config(allow_empty=True).keys()
-            if name not in reserved
-        ]
         parameter_names = self._infer_parameter_names(
             expressions,
             x_variables + [implicit_variable, *sorted(constant_names)],
-            config_keys,
+            [],
         )
         parameter_names = [name for name in parameter_names if name not in reserved]
+        if validate_parameters:
+            self._collect_implicit_parameter_config(parameter_names)
         return {
             "x_variables": tuple(x_variables),
             "implicit_variable": implicit_variable,
@@ -1085,6 +1228,7 @@ class ExtrapolationWindow(
             "initial": initial,
             "tolerance": tolerance,
             "max_iterations": max_iterations,
+            "timeout_seconds": timeout_seconds,
             "parameter_names": tuple(parameter_names),
             "constants": constants,
         }
