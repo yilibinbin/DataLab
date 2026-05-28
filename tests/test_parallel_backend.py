@@ -1,8 +1,12 @@
+import multiprocessing
 import os
+import queue
+import signal
 import threading
 import time
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -29,6 +33,48 @@ def _depth_value(value: int) -> tuple[int, int]:
 def _slow_square(value: int) -> int:
     time.sleep(0.05)
     return value * value
+
+
+def _killable_echo(payload: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, "payload": payload}
+
+
+def _killable_depth_payload(payload: object) -> dict[str, Any]:
+    return {
+        "payload": payload,
+        "env_depth": os.environ.get("DATALAB_PARALLEL_DEPTH"),
+        "current_depth": current_parallel_depth(),
+    }
+
+
+def _killable_sleep(seconds: float) -> str:
+    time.sleep(seconds)
+    return "finished"
+
+
+def _killable_ignore_sigterm_and_sleep(payload: tuple[str, float]) -> str:
+    ready_path, seconds = payload
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    Path(ready_path).write_text("ready", encoding="utf-8")
+    time.sleep(seconds)
+    return "finished"
+
+
+def _killable_object_payload(payload: object) -> object:
+    return payload
+
+
+def _killable_raise(payload: object) -> object:
+    raise ValueError(f"bad payload: {payload!r}")
+
+
+def _wait_for_path(path: Path, timeout_seconds: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if path.exists():
+            return True
+        time.sleep(0.02)
+    return path.exists()
 
 
 def test_serial_map_preserves_order() -> None:
@@ -205,3 +251,233 @@ def test_local_worker_budget_shared_permit_behavior() -> None:
     assert not budget.try_acquire(1)
     budget.release(1)
     assert budget.try_acquire(1)
+
+
+def test_killable_runner_returns_payload() -> None:
+    runner = parallel_backend.KillableProcessTaskRunner(
+        worker_budget=LocalWorkerBudget(total=1)
+    )
+
+    result = runner.run_killable(
+        _killable_echo,
+        {"value": 42},
+        timeout_seconds=2.0,
+    )
+
+    assert result == {"ok": True, "payload": {"value": 42}}
+
+
+def test_killable_runner_timeout_terminates_child() -> None:
+    runner = parallel_backend.KillableProcessTaskRunner(
+        worker_budget=LocalWorkerBudget(total=1)
+    )
+    started = time.monotonic()
+
+    with pytest.raises(TimeoutError):
+        runner.run_killable(_killable_sleep, 5.0, timeout_seconds=0.1)
+
+    assert time.monotonic() - started < 3.0
+
+
+def test_killable_handle_kill_releases_budget_and_allows_next_task() -> None:
+    budget = LocalWorkerBudget(total=1)
+    runner = parallel_backend.KillableProcessTaskRunner(worker_budget=budget)
+    handle = runner.start_killable(_killable_sleep, 5.0)
+
+    handle.kill()
+    handle.kill()
+
+    assert budget.available == 1
+    second = runner.start_killable(_killable_echo, {"value": 2})
+    assert second.wait(timeout_seconds=2.0) == {"ok": True, "payload": {"value": 2}}
+    assert budget.available == 1
+
+
+def test_killable_handle_terminate_releases_budget_and_allows_next_task() -> None:
+    budget = LocalWorkerBudget(total=1)
+    runner = parallel_backend.KillableProcessTaskRunner(worker_budget=budget)
+    handle = runner.start_killable(_killable_sleep, 5.0)
+
+    handle.terminate()
+    handle.terminate()
+
+    assert budget.available == 1
+    second = runner.start_killable(_killable_echo, {"value": 3})
+    assert second.wait(timeout_seconds=2.0) == {"ok": True, "payload": {"value": 3}}
+    assert budget.available == 1
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows process termination does not use SIGTERM handlers",
+)
+def test_killable_handle_terminate_kills_sigterm_resistant_child(
+    tmp_path: Path,
+) -> None:
+    budget = LocalWorkerBudget(total=1)
+    runner = parallel_backend.KillableProcessTaskRunner(worker_budget=budget)
+    ready_path = tmp_path / "sigterm-ready"
+    handle = runner.start_killable(
+        _killable_ignore_sigterm_and_sleep, (str(ready_path), 5.0)
+    )
+    assert _wait_for_path(ready_path)
+
+    handle.terminate()
+
+    assert not handle._process.is_alive()
+    assert budget.available == 1
+    second = runner.start_killable(_killable_echo, {"value": 4})
+    assert second.wait(timeout_seconds=2.0) == {"ok": True, "payload": {"value": 4}}
+    assert budget.available == 1
+
+
+def test_killable_handle_wait_and_kill_concurrent_finalization_is_safe() -> None:
+    budget = LocalWorkerBudget(total=1)
+    runner = parallel_backend.KillableProcessTaskRunner(worker_budget=budget)
+    handle = runner.start_killable(_killable_sleep, 5.0)
+    errors: list[BaseException] = []
+
+    def wait_for_handle() -> None:
+        try:
+            handle.wait(timeout_seconds=10.0)
+        except (RuntimeError, TimeoutError, InterruptedError) as exc:
+            errors.append(exc)
+
+    waiter = threading.Thread(target=wait_for_handle)
+    waiter.start()
+    time.sleep(0.1)
+
+    handle.kill()
+    waiter.join(timeout=3.0)
+
+    assert not waiter.is_alive()
+    assert not handle._process.is_alive()
+    assert budget.available == 1
+    assert all(
+        isinstance(exc, RuntimeError | TimeoutError | InterruptedError)
+        for exc in errors
+    )
+
+
+def test_killable_handle_wait_drains_queue_after_process_exit() -> None:
+    budget = LocalWorkerBudget(total=1)
+    assert budget.try_acquire(1)
+
+    class ExitedProcess:
+        exitcode = 0
+
+        def is_alive(self) -> bool:
+            return False
+
+        def join(self, timeout: float | None = None) -> None:
+            return None
+
+        def terminate(self) -> None:
+            raise AssertionError("terminate should not run for an exited process")
+
+        def kill(self) -> None:
+            raise AssertionError("kill should not run for an exited process")
+
+    class DelayedQueue:
+        closed = False
+        joined = False
+        calls = 0
+
+        def get(self, timeout: float | None = None) -> tuple[str, int]:
+            self.calls += 1
+            if self.calls == 1:
+                raise queue.Empty
+            assert timeout == pytest.approx(0.2)
+            return ("ok", 123)
+
+        def close(self) -> None:
+            self.closed = True
+
+        def join_thread(self) -> None:
+            self.joined = True
+
+    delayed_queue = DelayedQueue()
+    handle = parallel_backend.KillableHandle[int](
+        _process=ExitedProcess(),
+        _result_queue=delayed_queue,
+        _release_budget=lambda: budget.release(1),
+    )
+
+    assert handle.wait(timeout_seconds=1.0) == 123
+    assert delayed_queue.calls == 2
+    assert delayed_queue.closed
+    assert delayed_queue.joined
+    assert budget.available == 1
+
+
+def test_killable_runner_child_sees_parallel_depth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATALAB_PARALLEL_DEPTH", raising=False)
+    runner = parallel_backend.KillableProcessTaskRunner(
+        worker_budget=LocalWorkerBudget(total=1)
+    )
+
+    result = runner.run_killable(
+        _killable_depth_payload,
+        "marker",
+        timeout_seconds=2.0,
+    )
+
+    assert result["payload"] == "marker"
+    assert result["env_depth"] == "1" or result["current_depth"] >= 1
+
+
+def test_killable_runner_unpicklable_target_raises_parent_type_error() -> None:
+    runner = parallel_backend.KillableProcessTaskRunner(
+        worker_budget=LocalWorkerBudget(total=1)
+    )
+
+    with pytest.raises(TypeError, match="picklable"):
+        runner.run_killable(lambda payload: payload, 1, timeout_seconds=1.0)
+
+
+def test_killable_runner_unpicklable_payload_raises_parent_type_error() -> None:
+    runner = parallel_backend.KillableProcessTaskRunner(
+        worker_budget=LocalWorkerBudget(total=1)
+    )
+
+    with pytest.raises(TypeError, match="picklable"):
+        runner.run_killable(
+            _killable_object_payload, threading.Lock(), timeout_seconds=1.0
+        )
+
+
+def test_killable_runner_uses_worker_budget_before_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    budget = LocalWorkerBudget(total=1)
+    assert budget.try_acquire(1)
+
+    class FailingContext:
+        def Process(self, *args: object, **kwargs: object) -> object:
+            raise AssertionError("process should not start without budget")
+
+        def Queue(self) -> object:
+            raise AssertionError("queue should not start without budget")
+
+    monkeypatch.setattr(
+        multiprocessing,
+        "get_context",
+        lambda method: FailingContext(),
+    )
+    runner = parallel_backend.KillableProcessTaskRunner(worker_budget=budget)
+
+    with pytest.raises(RuntimeError, match="worker budget|budget"):
+        runner.run_killable(_killable_echo, {"value": 1}, timeout_seconds=1.0)
+
+    budget.release(1)
+
+
+def test_killable_runner_child_exception_surfaces_as_runtime_error() -> None:
+    runner = parallel_backend.KillableProcessTaskRunner(
+        worker_budget=LocalWorkerBudget(total=1)
+    )
+
+    with pytest.raises(RuntimeError, match="ValueError|bad payload"):
+        runner.run_killable(_killable_raise, "x", timeout_seconds=2.0)

@@ -5,10 +5,13 @@ import contextvars
 import multiprocessing
 import os
 import pickle
+import queue
 import threading
+import time
+import traceback
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from dataclasses import dataclass
-from typing import Callable, Generic, Iterable, Iterator, Sequence, TypeVar
+from dataclasses import dataclass, field
+from typing import Any, Callable, Generic, Iterable, Iterator, Sequence, TypeVar, cast
 
 from shared.parallel_config import (
     ParallelConfig,
@@ -119,16 +122,187 @@ class MapHandle(Generic[R]):
 
 @dataclass
 class KillableHandle(Generic[R]):
-    """API placeholder for Task 3 subprocess timeout/terminate/kill work."""
+    """Hard-kill subprocess handle for one isolated task."""
+
+    _process: Any
+    _result_queue: Any
+    _release_budget: Callable[[], None]
+    _closed: bool = False
+    _finalize_lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False
+    )
 
     def wait(self, timeout_seconds: float | None = None) -> R:
-        raise NotImplementedError("KillableHandle is implemented in Task 3")
+        deadline = (
+            None
+            if timeout_seconds is None
+            else time.monotonic() + max(0.0, float(timeout_seconds))
+        )
+        try:
+            while True:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    self.terminate()
+                    if self._process.is_alive():
+                        self.kill()
+                    raise TimeoutError("Killable process task timed out")
+
+                poll_timeout = 0.05 if remaining is None else min(0.05, remaining)
+                try:
+                    status, payload = self._result_queue.get(timeout=poll_timeout)
+                except queue.Empty:
+                    if not self._process.is_alive():
+                        self._process.join(timeout=0.5)
+                        try:
+                            status, payload = self._result_queue.get(timeout=0.2)
+                        except queue.Empty:
+                            raise RuntimeError(
+                                "Killable process task exited without returning "
+                                f"a result (exitcode={self._process.exitcode})"
+                            ) from None
+                        except Exception as exc:
+                            raise RuntimeError(
+                                "Killable process task wait was interrupted by result "
+                                "queue closure"
+                            ) from exc
+                        return self._handle_result(status, payload)
+                    continue
+                except Exception as exc:
+                    raise RuntimeError(
+                        "Killable process task wait was interrupted by result "
+                        "queue closure"
+                    ) from exc
+
+                self._process.join(timeout=1.0)
+                return self._handle_result(status, payload)
+        finally:
+            self._ensure_stopped()
+            self._finalize_if_process_dead()
 
     def terminate(self) -> None:
-        raise NotImplementedError("KillableHandle is implemented in Task 3")
+        if self._process.is_alive():
+            self._process.terminate()
+            self._process.join(timeout=1.0)
+            if self._process.is_alive():
+                self._process.kill()
+                self._process.join(timeout=1.0)
+        self._finalize_if_process_dead()
 
     def kill(self) -> None:
-        raise NotImplementedError("KillableHandle is implemented in Task 3")
+        if self._process.is_alive():
+            self._process.kill()
+            self._process.join(timeout=1.0)
+        self._finalize_if_process_dead()
+
+    def _handle_result(self, status: object, payload: object) -> R:
+        if status == "ok":
+            return cast(R, payload)
+        raise RuntimeError(f"Killable process task failed: {payload}")
+
+    def _ensure_stopped(self) -> None:
+        if self._process.is_alive():
+            self._process.terminate()
+            self._process.join(timeout=1.0)
+            if self._process.is_alive():
+                self._process.kill()
+                self._process.join(timeout=1.0)
+
+    def _finalize_if_process_dead(self) -> None:
+        if self._process.is_alive():
+            return
+        with self._finalize_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._close_queue()
+            self._release_budget()
+
+    def _close_queue(self) -> None:
+        with contextlib.suppress(Exception):
+            self._result_queue.close()
+        with contextlib.suppress(Exception):
+            self._result_queue.join_thread()
+
+
+def _run_killable_process_task(
+    target: Callable[[T], R],
+    payload: T,
+    parent_depth: int,
+    result_queue: Any,
+) -> None:
+    _initialize_process_worker_depth(parent_depth)
+    try:
+        result = target(payload)
+        pickle.dumps(result)
+        result_queue.put(("ok", result))
+    except BaseException as exc:
+        message = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        result_queue.put(("error", message))
+
+
+class KillableProcessTaskRunner:
+    def __init__(
+        self,
+        *,
+        worker_budget: LocalWorkerBudget | None = None,
+        process_start_method: str = "spawn",
+    ):
+        self.worker_budget = worker_budget or _GLOBAL_WORKER_BUDGET
+        self.process_start_method = process_start_method
+
+    def run_killable(
+        self,
+        target: Callable[[T], R],
+        payload: T,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> R:
+        handle = self.start_killable(target, payload)
+        return handle.wait(timeout_seconds=timeout_seconds)
+
+    def start_killable(
+        self,
+        target: Callable[[T], R],
+        payload: T,
+    ) -> KillableHandle[R]:
+        self._assert_picklable(target, payload)
+        if not self.worker_budget.try_acquire(1):
+            raise RuntimeError("Cannot start killable process task: worker budget exhausted")
+
+        acquired = True
+        result_queue = None
+        try:
+            context = cast(Any, multiprocessing.get_context(self.process_start_method))
+            result_queue = context.Queue()
+            parent_depth = _current_parallel_depth()
+            process = context.Process(
+                target=_run_killable_process_task,
+                args=(target, payload, parent_depth, result_queue),
+            )
+            process.start()
+            acquired = False
+            return KillableHandle(
+                _process=process,
+                _result_queue=result_queue,
+                _release_budget=lambda: self.worker_budget.release(1),
+            )
+        finally:
+            if acquired:
+                if result_queue is not None:
+                    with contextlib.suppress(Exception):
+                        result_queue.close()
+                    with contextlib.suppress(Exception):
+                        result_queue.join_thread()
+                self.worker_budget.release(1)
+
+    def _assert_picklable(self, target: Callable[[T], R], payload: T) -> None:
+        try:
+            pickle.dumps(target)
+            pickle.dumps(payload)
+        except Exception as exc:
+            raise TypeError(
+                "Killable process task requires a picklable callable and payload"
+            ) from exc
 
 
 class ParallelMapExecutor:
