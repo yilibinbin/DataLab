@@ -15,7 +15,7 @@ from shared.bilingual import _dual_msg
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MpfKey = tuple[int, int, int, int]
-_CacheKey = tuple[int, tuple[_MpfKey, ...], tuple[_MpfKey, ...]]
+_CacheKey = tuple[int, int, tuple[_MpfKey, ...], tuple[_MpfKey, ...]]
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,7 @@ class ImplicitEvaluationCache:
     ) -> _CacheKey:
         return (
             int(mp.dps),
+            int(mp.prec),
             tuple(cast(_MpfKey, value._mpf_) for value in var_tuple),
             tuple(cast(_MpfKey, value._mpf_) for value in param_tuple),
         )

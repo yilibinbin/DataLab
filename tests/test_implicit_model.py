@@ -158,6 +158,39 @@ def test_low_precision_cache_entry_is_not_reused_at_high_precision() -> None:
     assert diagnostics.points_solved == 2
 
 
+def test_same_dps_different_workprec_contexts_do_not_share_cache() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a/3 + x*0",
+        output_expression="u",
+        parameters=("a",),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="fixed_point",
+            initial="0",
+            tolerance="1e-100",
+            max_iterations=20,
+        ),
+    )
+    spec = build_implicit_model_specification(definition)
+    variables = {"x": mp.mpf("1")}
+    params = {"a": mp.mpf("1")}
+
+    with mp.workprec(334):
+        assert int(mp.dps) == 100
+        assert int(mp.prec) == 334
+        spec.evaluate(variables, params)
+
+    with mp.workprec(337):
+        assert int(mp.dps) == 100
+        assert int(mp.prec) == 337
+        spec.evaluate(variables, params)
+
+    diagnostics = getattr(spec, "implicit_diagnostics")
+    assert diagnostics.points_solved == 2
+
+
 def test_numeric_partial_uses_high_precision_step() -> None:
     with mp.workdps(120):
         definition = ImplicitModelDefinition(
