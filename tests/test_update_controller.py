@@ -160,6 +160,94 @@ def test_manual_update_available_runs_download_and_launch(tmp_path: Path) -> Non
     ]
 
 
+def test_qt_window_update_download_runs_in_worker_thread(
+    monkeypatch,
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    from PySide6.QtWidgets import QWidget
+
+    from app_desktop.update_controller import UpdateController, UpdateState
+    from shared.update_payload import DownloadProgress
+
+    class QtFakeWindow(QWidget):
+        def __init__(self) -> None:
+            super().__init__()
+            self.questions: list[tuple[str, str, bool]] = []
+            self.warnings: list[tuple[str, str]] = []
+            self.exited = False
+
+        def is_english(self) -> bool:
+            return True
+
+        def ask_update(self, title: str, message: str, *, was_skipped: bool = False) -> str:
+            self.questions.append((title, message, was_skipped))
+            return "update"
+
+        def warning(self, title: str, message: str) -> None:
+            self.warnings.append((title, message))
+
+        def information(self, title: str, message: str) -> None:
+            raise AssertionError("information dialog not expected")
+
+        def exit_for_update(self) -> None:
+            self.exited = True
+
+    class FakeLock:
+        def __enter__(self) -> FakeLock:
+            calls.append("lock-enter")
+            return self
+
+        def __exit__(self, *_: object) -> bool:
+            calls.append("lock-exit")
+            return False
+
+    window = QtFakeWindow()
+    qtbot.addWidget(window)
+    prefs = FakePreferences()
+    installer = tmp_path / "DataLab.pkg"
+    installer.write_bytes(b"installer")
+    calls: list[str] = []
+    progress_events: list[DownloadProgress] = []
+    launched: list[Path] = []
+    monkeypatch.setattr("app_desktop.update_controller.UpdateCacheLock", FakeLock)
+
+    def download_installer(asset: InstallerAsset, *, progress_callback=None) -> Path:
+        calls.append("download")
+        assert progress_callback is not None
+        progress = DownloadProgress(asset.size_bytes, asset.size_bytes, 1.0)
+        progress_events.append(progress)
+        progress_callback(progress)
+        return installer
+
+    controller = UpdateController(
+        window,
+        preferences=prefs,
+        check_for_updates=lambda: UpdateCheckResult(
+            status="update-available",
+            current_version="2.2.0",
+            latest_version="2.3.0",
+            release=release(),
+        ),
+        resolve_payload=lambda _release, current_version: payload(),
+        download_installer=download_installer,
+        launch_installer=lambda path, asset: launched.append(path) or True,
+        now=lambda: datetime(2026, 5, 26, tzinfo=timezone.utc),
+    )
+
+    controller.check_now()
+    qtbot.waitUntil(lambda: window.exited, timeout=3000)
+
+    assert calls[0] == "lock-enter"
+    assert "download" in calls
+    assert calls[-1] == "lock-exit"
+    assert progress_events[-1].fraction == 1.0
+    assert launched == [installer]
+    assert window.warnings == []
+    assert prefs.cached
+    assert controller.state is UpdateState.LAUNCHING
+
+
 def test_auto_offline_failure_is_quiet_and_marks_checked() -> None:
     from app_desktop.update_controller import UpdateController
 

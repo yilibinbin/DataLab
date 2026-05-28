@@ -14,6 +14,7 @@ import re
 import tempfile
 import time
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -49,6 +50,25 @@ class InstallerAsset:
     url: str
     sha256: str
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class DownloadProgress:
+    downloaded_bytes: int
+    total_bytes: int
+    elapsed_seconds: float
+
+    @property
+    def fraction(self) -> float:
+        if self.total_bytes <= 0:
+            return 0.0
+        return min(1.0, max(0.0, self.downloaded_bytes / self.total_bytes))
+
+    @property
+    def bytes_per_second(self) -> float:
+        if self.elapsed_seconds <= 0:
+            return 0.0
+        return self.downloaded_bytes / self.elapsed_seconds
 
 
 @dataclass(frozen=True)
@@ -240,6 +260,8 @@ def _safe_target_path(cache_dir: Path, name: str) -> Path:
 def download_and_verify_installer(
     asset: InstallerAsset,
     timeout: float = DEFAULT_DOWNLOAD_TIMEOUT,
+    *,
+    progress_callback: Callable[[DownloadProgress], None] | None = None,
 ) -> Path:
     if asset.size_bytes <= 0 or asset.size_bytes > MAX_INSTALLER_BYTES:
         raise UpdatePayloadError("size_bytes is outside the allowed range")
@@ -252,6 +274,7 @@ def download_and_verify_installer(
 
     try:
         bytes_written = 0
+        started_at = time.monotonic()
         with _urlopen(request, timeout) as response:
             with partial.open("wb") as file:
                 while True:
@@ -267,6 +290,14 @@ def download_and_verify_installer(
                         raise UpdatePayloadError("installer exceeds maximum size")
                     bytes_written = next_size
                     file.write(chunk)
+                    if progress_callback is not None:
+                        progress_callback(
+                            DownloadProgress(
+                                downloaded_bytes=bytes_written,
+                                total_bytes=asset.size_bytes,
+                                elapsed_seconds=max(time.monotonic() - started_at, 0.0),
+                            )
+                        )
 
         if bytes_written != asset.size_bytes:
             raise UpdatePayloadError(f"size mismatch: expected {asset.size_bytes}, got {bytes_written}")

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from app_desktop.update_dialogs import (
     build_post_update_notice,
@@ -78,6 +78,11 @@ class UpdateController:
     launch_installer: Callable[[Path, InstallerAsset], bool] | None = None
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
     state: UpdateState = UpdateState.IDLE
+    _download_thread: Any | None = field(default=None, init=False, repr=False)
+    _download_worker: Any | None = field(default=None, init=False, repr=False)
+    _download_bridge: Any | None = field(default=None, init=False, repr=False)
+    _download_dialog: Any | None = field(default=None, init=False, repr=False)
+    _download_lock: UpdateCacheLock | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.preferences is None:
@@ -196,17 +201,37 @@ class UpdateController:
 
     def _download_and_launch(self, payload: UpdatePayload) -> None:
         self.state = UpdateState.DOWNLOADING
+        if not self._qt_application_is_running():
+            self._download_and_launch_blocking(payload)
+            return
+
+        try:
+            lock = UpdateCacheLock()
+            lock.__enter__()
+        except Exception as exc:  # noqa: BLE001 - injected update hooks must not wedge state
+            self.state = UpdateState.IDLE
+            self.window.warning(
+                build_update_titles(self._lang()).update_failed,
+                str(exc) or type(exc).__name__,
+            )
+            return
+
+        try:
+            self._start_download_worker(payload, lock)
+        except Exception as exc:  # noqa: BLE001 - injected update hooks must not wedge state
+            lock.__exit__(None, None, None)
+            self.state = UpdateState.IDLE
+            self.window.warning(
+                build_update_titles(self._lang()).update_failed,
+                str(exc) or type(exc).__name__,
+            )
+            return
+
+    def _download_and_launch_blocking(self, payload: UpdatePayload) -> None:
         try:
             with UpdateCacheLock():
                 path = self.download_installer(payload.asset)
-                self._preferences.cache_release_notes(
-                    version=payload.version,
-                    notes=payload.notes,
-                    url=payload.release_url,
-                    published_at=payload.published_at,
-                )
-                self.state = UpdateState.LAUNCHING
-                launched = self._launch_installer(path, payload.asset)
+                launched = self._cache_launch_result(path, payload)
         except Exception as exc:  # noqa: BLE001 - injected update hooks must not wedge state
             self.state = UpdateState.IDLE
             self.window.warning(
@@ -219,6 +244,107 @@ class UpdateController:
             self.window.exit_for_update()
         else:
             self.state = UpdateState.IDLE
+
+    def _start_download_worker(self, payload: UpdatePayload, lock: UpdateCacheLock) -> None:
+        from PySide6.QtCore import QObject, QThread, Slot
+        from PySide6.QtWidgets import QWidget
+
+        from app_desktop.update_download_worker import UpdateDownloadWorker
+        from app_desktop.update_progress_dialog import UpdateProgressDialog
+
+        controller = self
+
+        class DownloadCompletionBridge(QObject):
+            @Slot(Path)
+            def finished(self, path: Path) -> None:
+                controller._download_finished(path, payload)
+
+            @Slot(str)
+            def failed(self, error: str) -> None:
+                controller._download_failed(error)
+
+        parent = self.window if isinstance(self.window, QWidget) else None
+        dialog = UpdateProgressDialog(payload.asset, self._lang(), parent)
+        thread = QThread()
+        worker = UpdateDownloadWorker(payload.asset, self.download_installer)
+        bridge = DownloadCompletionBridge()
+        worker.moveToThread(thread)
+
+        self._download_lock = lock
+        self._download_dialog = dialog
+        self._download_thread = thread
+        self._download_worker = worker
+        self._download_bridge = bridge
+
+        worker.progress.connect(dialog.update_progress)
+        worker.finished.connect(bridge.finished)
+        worker.failed.connect(bridge.failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._download_thread_finished)
+        thread.started.connect(worker.run)
+
+        dialog.show()
+        thread.start()
+
+    def _download_finished(self, path: Path, payload: UpdatePayload) -> None:
+        self._close_download_dialog()
+        self._release_download_lock()
+        try:
+            launched = self._cache_launch_result(path, payload)
+        except Exception as exc:  # noqa: BLE001 - launcher errors should show as update failure
+            self.state = UpdateState.IDLE
+            self.window.warning(
+                build_update_titles(self._lang()).update_failed,
+                str(exc) or type(exc).__name__,
+            )
+            return
+        if launched:
+            self.window.exit_for_update()
+        else:
+            self.state = UpdateState.IDLE
+
+    def _download_failed(self, error: str) -> None:
+        self._close_download_dialog()
+        self._release_download_lock()
+        self.state = UpdateState.IDLE
+        self.window.warning(
+            build_update_titles(self._lang()).update_failed,
+            error or "download failed",
+        )
+
+    def _cache_launch_result(self, path: Path, payload: UpdatePayload) -> bool:
+        self._preferences.cache_release_notes(
+            version=payload.version,
+            notes=payload.notes,
+            url=payload.release_url,
+            published_at=payload.published_at,
+        )
+        self.state = UpdateState.LAUNCHING
+        return self._launch_installer(path, payload.asset)
+
+    def _close_download_dialog(self) -> None:
+        if self._download_dialog is not None:
+            self._download_dialog.close()
+            self._download_dialog = None
+
+    def _release_download_lock(self) -> None:
+        if self._download_lock is not None:
+            self._download_lock.__exit__(None, None, None)
+            self._download_lock = None
+
+    def _download_thread_finished(self) -> None:
+        self._download_thread = None
+        self._download_worker = None
+        self._download_bridge = None
+
+    def _qt_application_is_running(self) -> bool:
+        try:
+            from PySide6.QtWidgets import QApplication, QWidget
+        except ImportError:
+            return False
+        return QApplication.instance() is not None and isinstance(self.window, QWidget)
 
     def _launch_platform(self, path: Path, asset: InstallerAsset) -> bool:
         launch_platform_installer(
