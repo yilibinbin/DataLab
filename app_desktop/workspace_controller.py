@@ -221,17 +221,17 @@ def _implicit_param_rows(window: Any) -> list[dict[str, str]]:
     return rows
 
 
-def _implicit_constants_rows(window: Any) -> dict[str, str]:
+def _implicit_constants_rows(window: Any) -> list[dict[str, str]]:
     table = getattr(window, "implicit_constants_table", None)
     if table is None:
-        return {}
-    constants: dict[str, str] = {}
+        return []
+    rows: list[dict[str, str]] = []
     for row in range(table.rowCount()):
         name = table.item(row, 0).text().strip() if table.item(row, 0) else ""
         value = table.item(row, 1).text().strip() if table.item(row, 1) else ""
-        if name:
-            constants[name] = value
-    return constants
+        if name or value:
+            rows.append({"name": name, "value": value})
+    return rows
 
 
 def _variable_rows(window: Any) -> list[dict[str, str]]:
@@ -343,6 +343,25 @@ def _implicit_rows_to_config(rows: Any) -> dict[str, dict[str, str]]:
     return cleaned
 
 
+def _implicit_constants_to_rows(constants: Any) -> list[dict[str, str]]:
+    if isinstance(constants, dict):
+        return [
+            {"name": str(name), "value": str(value)}
+            for name, value in constants.items()
+        ]
+    if not isinstance(constants, list):
+        return []
+    rows: list[dict[str, str]] = []
+    for row in constants:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "")
+        value = str(row.get("value") or "")
+        if name or value:
+            rows.append({"name": name, "value": value})
+    return rows
+
+
 def _is_legacy_quantum_defect_implicit(equation: str, output_expression: str) -> bool:
     return (
         equation.strip() == "d0 + d2/(n-delta)^2 + d4/(n-delta)^4"
@@ -364,13 +383,14 @@ def _migrate_old_implicit_config(config: dict[str, Any], fitting: dict[str, Any]
         parameters = _implicit_rows_to_config(fitting.get("parameters"))
     migrated["parameters"] = parameters
 
-    constants = migrated.get("constants")
-    if not isinstance(constants, dict):
-        constants = {}
+    constants = _implicit_constants_to_rows(migrated.get("constants"))
     equation = str(migrated.get("equation") or "")
     output_expression = str(migrated.get("output_expression") or "")
     if not constants and _is_legacy_quantum_defect_implicit(equation, output_expression):
-        constants = {"R": "10973731.568160", "c": "299792458"}
+        constants = [
+            {"name": "R", "value": "10973731.568160"},
+            {"name": "c", "value": "299792458"},
+        ]
     migrated["constants"] = constants
     migrated.setdefault("timeout_seconds", 300)
     migrated["schema"] = 2
@@ -406,7 +426,7 @@ def _restore_implicit_config(window: Any, config: Any, fitting: dict[str, Any] |
         window._reset_implicit_param_rows(parameters)
     constants = config.get("constants")
     if hasattr(window, "_reset_implicit_constants_rows"):
-        window._reset_implicit_constants_rows(constants if isinstance(constants, dict) else {})
+        window._reset_implicit_constants_rows(_implicit_constants_to_rows(constants))
 
 
 def _capture_config(window: Any) -> dict[str, Any]:

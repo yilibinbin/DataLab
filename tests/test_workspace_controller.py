@@ -209,7 +209,7 @@ def test_workspace_capture_preserves_incomplete_implicit_constants(qtbot) -> Non
     bundle = capture_workspace(source, title="draft")
     implicit = bundle.manifest["workspace"]["config"]["fitting"]["implicit"]
 
-    assert implicit["constants"] == {"K": ""}
+    assert implicit["constants"] == [{"name": "K", "value": ""}]
 
     target = ExtrapolationWindow()
     qtbot.addWidget(target)
@@ -217,6 +217,42 @@ def test_workspace_capture_preserves_incomplete_implicit_constants(qtbot) -> Non
 
     assert target.implicit_constants_table.item(0, 0).text() == "K"
     assert target.implicit_constants_table.item(0, 1).text() == ""
+
+
+def test_workspace_capture_preserves_draft_implicit_constant_rows(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "self_consistent")
+    source.implicit_constants_table.setItem(0, 0, QTableWidgetItem("K"))
+    source.implicit_constants_table.setItem(0, 1, QTableWidgetItem("1"))
+    source.implicit_constants_table.setItem(1, 0, QTableWidgetItem("K"))
+    source.implicit_constants_table.setItem(1, 1, QTableWidgetItem("2"))
+    source.implicit_constants_table.setItem(2, 0, QTableWidgetItem(""))
+    source.implicit_constants_table.setItem(2, 1, QTableWidgetItem("3"))
+
+    bundle = capture_workspace(source, title="draft")
+    implicit = bundle.manifest["workspace"]["config"]["fitting"]["implicit"]
+
+    assert implicit["constants"] == [
+        {"name": "K", "value": "1"},
+        {"name": "K", "value": "2"},
+        {"name": "", "value": "3"},
+    ]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.implicit_constants_table.item(0, 0).text() == "K"
+    assert target.implicit_constants_table.item(0, 1).text() == "1"
+    assert target.implicit_constants_table.item(1, 0).text() == "K"
+    assert target.implicit_constants_table.item(1, 1).text() == "2"
+    assert target.implicit_constants_table.item(2, 0).text() == ""
+    assert target.implicit_constants_table.item(2, 1).text() == "3"
 
 
 def test_workspace_preserves_implicit_parameters_and_constants(qtbot) -> None:
@@ -253,7 +289,7 @@ def test_workspace_preserves_implicit_parameters_and_constants(qtbot) -> None:
         {"name": "En", "initial": "-0.0121425", "fixed": "", "min": "", "max": ""},
         {"name": "K", "initial": "-0.007", "fixed": "", "min": "", "max": ""},
     ]
-    assert implicit["constants"] == {"unit": "1"}
+    assert implicit["constants"] == [{"name": "unit", "value": "1"}]
 
     restore_workspace(target, bundle.manifest, bundle.attachments)
 

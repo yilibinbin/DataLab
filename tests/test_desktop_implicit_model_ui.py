@@ -331,5 +331,28 @@ def test_implicit_parameter_detection_marks_workspace_dirty(window) -> None:
     assert window._workspace_dirty is True
 
 
+def test_implicit_persisted_controls_mark_workspace_dirty(window) -> None:
+    _select_model(window, "self_consistent")
+
+    for label, setter in (
+        ("variable", lambda: window.implicit_variable_edit.setText(window.implicit_variable_edit.text() + "_changed")),
+        ("equation", lambda: window.implicit_equation_edit.setPlainText(window.implicit_equation_edit.toPlainText() + " + 0")),
+        ("output", lambda: window.implicit_output_edit.setPlainText(window.implicit_output_edit.toPlainText() + " + 0")),
+        ("initial", lambda: window.implicit_initial_edit.setText(window.implicit_initial_edit.text() + "1")),
+        ("tolerance", lambda: window.implicit_tolerance_edit.setText(window.implicit_tolerance_edit.text() + "1")),
+        (
+            "method",
+            lambda: window.implicit_method_combo.setCurrentIndex(
+                (window.implicit_method_combo.currentIndex() + 1) % window.implicit_method_combo.count()
+            ),
+        ),
+        ("max_iterations", lambda: window.implicit_max_iterations_spin.setValue(window.implicit_max_iterations_spin.value() + 1)),
+        ("timeout", lambda: window.implicit_timeout_spin.setValue(window.implicit_timeout_spin.value() + 1)),
+    ):
+        window._workspace_dirty = False
+        setter()
+        assert window._workspace_dirty is True, label
+
+
 def test_auto_models_do_not_include_self_consistent() -> None:
     assert "self_consistent" not in {definition.identifier for definition in AUTO_MODELS}

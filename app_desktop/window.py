@@ -432,6 +432,11 @@ class ExtrapolationWindow(
             getattr(self, "formula_edit", None),
             getattr(self, "fit_expr_edit", None),
             getattr(self, "fit_target_edit", None),
+            getattr(self, "implicit_variable_edit", None),
+            getattr(self, "implicit_equation_edit", None),
+            getattr(self, "implicit_output_edit", None),
+            getattr(self, "implicit_initial_edit", None),
+            getattr(self, "implicit_tolerance_edit", None),
             getattr(self, "stats_value_column_edit", None),
             getattr(self, "stats_sigma_column_edit", None),
             getattr(self, "output_file_edit", None),
@@ -456,6 +461,7 @@ class ExtrapolationWindow(
             "error_method_combo",
             "stats_mode_combo",
             "fit_model_combo",
+            "implicit_method_combo",
             "latex_engine_combo",
         ):
             combo = getattr(self, combo_name, None)
@@ -498,6 +504,8 @@ class ExtrapolationWindow(
             "pade_m_spin",
             "pade_n_spin",
             "poly_degree_spin",
+            "implicit_max_iterations_spin",
+            "implicit_timeout_spin",
         ):
             spin = getattr(self, spin_name, None)
             if spin is not None:
@@ -1143,18 +1151,27 @@ class ExtrapolationWindow(
             if after != before and hasattr(self, "_mark_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
                 self._mark_workspace_dirty()
 
-    def _reset_implicit_constants_rows(self, config: dict[str, object] | None = None):
+    def _reset_implicit_constants_rows(self, config: dict[str, object] | list[dict[str, object]] | None = None):
         table = getattr(self, "implicit_constants_table", None)
         if table is None:
             return
-        constants = config or {}
+        if isinstance(config, dict):
+            rows = [{"name": name, "value": value} for name, value in config.items()]
+        elif isinstance(config, list):
+            rows = [
+                {"name": str(row.get("name") or ""), "value": str(row.get("value") or "")}
+                for row in config
+                if isinstance(row, dict)
+            ]
+        else:
+            rows = []
         table.blockSignals(True)
         try:
             table.clearContents()
-            table.setRowCount(max(3, len(constants)))
-            for row, (name, value) in enumerate(constants.items()):
-                table.setItem(row, 0, QTableWidgetItem(str(name)))
-                table.setItem(row, 1, QTableWidgetItem(str(value)))
+            table.setRowCount(max(3, len(rows)))
+            for row, values in enumerate(rows):
+                table.setItem(row, 0, QTableWidgetItem(values["name"]))
+                table.setItem(row, 1, QTableWidgetItem(values["value"]))
         finally:
             table.blockSignals(False)
 
