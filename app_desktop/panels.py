@@ -5,6 +5,7 @@ window instance as the first argument (named `self`) and populate widgets on it.
 It acts like a function-based mixin extracted from `window.py` to reduce file
 size while keeping behavior unchanged.
 """
+# ruff: noqa: F401, E741
 
 from __future__ import annotations
 
@@ -998,6 +999,7 @@ def build_left_panel(self):
     self.fit_model_combo = QComboBox()
     self.fit_model_combo.addItem("自定义模型（非线性）", "custom")
     self.fit_model_combo.addItem("自动模型选择", "auto")
+    self.fit_model_combo.addItem("自洽隐式模型", "self_consistent")
     self.fit_model_combo.addItem("多项式拟合", "poly")
     self.fit_model_combo.addItem("1/x^p 展开", "inverse")
     self.fit_model_combo.addItem("Padé 拟合", "pade")
@@ -1007,6 +1009,7 @@ def build_left_panel(self):
     fit_items = [
         ("自定义模型（非线性）", "Custom (nonlinear)", "custom"),
         ("自动模型选择", "Auto select", "auto"),
+        ("自洽隐式模型", "Self-consistent / implicit", "self_consistent"),
         ("多项式拟合", "Polynomial", "poly"),
         ("1/x^p 展开", "1/x^p series", "inverse"),
         ("Padé 拟合", "Padé", "pade"),
@@ -1151,6 +1154,53 @@ def build_left_panel(self):
     # Hidden legacy JSON param edit retained only to satisfy references; no GUI display.
     self.fit_param_edit = QPlainTextEdit()
     self.fit_param_edit.hide()
+
+    self.implicit_model_widget = QGroupBox("自洽隐式模型")
+    self._register_title(self.implicit_model_widget, "自洽隐式模型", "Self-consistent / implicit")
+    implicit_layout = QFormLayout(self.implicit_model_widget)
+    self.implicit_variable_edit = QLineEdit("delta")
+    lbl_implicit_var = QLabel("隐式变量：")
+    self._register_text(lbl_implicit_var, "隐式变量：", "Implicit variable:")
+    implicit_layout.addRow(lbl_implicit_var, self.implicit_variable_edit)
+    self.implicit_equation_edit = QLineEdit("d0 + d2/(n-delta)^2 + d4/(n-delta)^4")
+    lbl_implicit_eq = QLabel("自洽方程：")
+    self._register_text(lbl_implicit_eq, "自洽方程：", "Self-consistent equation:")
+    implicit_layout.addRow(lbl_implicit_eq, self.implicit_equation_edit)
+    self.implicit_output_edit = QLineEdit("En - K/(n-delta)^2")
+    lbl_implicit_output = QLabel("输出表达式：")
+    self._register_text(lbl_implicit_output, "输出表达式：", "Output expression:")
+    implicit_layout.addRow(lbl_implicit_output, self.implicit_output_edit)
+    self.implicit_initial_edit = QLineEdit("0")
+    lbl_implicit_initial = QLabel("初始值：")
+    self._register_text(lbl_implicit_initial, "初始值：", "Initial:")
+    implicit_layout.addRow(lbl_implicit_initial, self.implicit_initial_edit)
+    self.implicit_tolerance_edit = QLineEdit("1e-30")
+    lbl_implicit_tol = QLabel("求解容差：")
+    self._register_text(lbl_implicit_tol, "求解容差：", "Tolerance:")
+    implicit_layout.addRow(lbl_implicit_tol, self.implicit_tolerance_edit)
+    self.implicit_max_iterations_spin = QSpinBox()
+    self.implicit_max_iterations_spin.setRange(1, 10000)
+    self.implicit_max_iterations_spin.setValue(80)
+    lbl_implicit_iter = QLabel("最大迭代：")
+    self._register_text(lbl_implicit_iter, "最大迭代：", "Max iterations:")
+    implicit_layout.addRow(lbl_implicit_iter, self.implicit_max_iterations_spin)
+    self.implicit_method_combo = QComboBox()
+    implicit_method_items = [
+        ("固定点", "Fixed point", "fixed_point"),
+        ("求根", "Root", "root"),
+    ]
+    for zh, en, data in implicit_method_items:
+        self.implicit_method_combo.addItem(zh, data)
+    self._register_combo(self.implicit_method_combo, implicit_method_items)
+    lbl_implicit_method = QLabel("求解方法：")
+    self._register_text(lbl_implicit_method, "求解方法：", "Method:")
+    implicit_layout.addRow(lbl_implicit_method, self.implicit_method_combo)
+    self.quantum_defect_preset_btn = QPushButton("量子亏损预设")
+    self._register_text(self.quantum_defect_preset_btn, "量子亏损预设", "Quantum-defect preset")
+    self.quantum_defect_preset_btn.clicked.connect(self._apply_quantum_defect_preset)
+    implicit_layout.addRow("", self.quantum_defect_preset_btn)
+    fit_layout.addWidget(self.implicit_model_widget)
+    self.implicit_model_widget.hide()
 
     constraint_header = QHBoxLayout()
     self.enable_constraints_checkbox = QCheckBox("启用参数约束")

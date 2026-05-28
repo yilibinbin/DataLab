@@ -86,6 +86,8 @@ from PySide6.QtWidgets import QMessageBox
 
 from data_extrapolation_latex_latest import _dual_msg
 from fitting import (
+    ImplicitModelDefinition,
+    ImplicitSolveOptions,
     auto_fit_dataset,
     build_model_specification,
     build_parameter_state,
@@ -640,7 +642,6 @@ class WindowFittingModelsMixin:
         comparison_rows: list[tuple[str, float, float, float]] = []
         detail_lines: list[str] = []
         used_labels: set[str] = set()
-        extra_model_map = {definition.identifier: definition for definition in extra_models}
         for entry in summary.results:
             raw_label = entry.label or ""
             lbl = self._localize_label(raw_label)
@@ -854,12 +855,47 @@ class WindowFittingModelsMixin:
         parameter_names: list[str] = []
         template_expr: str | None = None
         template_params: dict | None = None
+        implicit_definition: ImplicitModelDefinition | None = None
         label = self._localize_label(self.fit_model_combo.currentText())
         is_multidim = len(variable_map) > 1
         job_kwargs: dict[str, object] = {}
         if model_type == "custom":
             parameter_config = self._collect_parameter_config(allow_empty=False)
             parameter_names = self._infer_parameter_names(model_expr, list(variable_map.keys()), list(parameter_config.keys()))
+        elif model_type == "self_consistent":
+            implicit_config = self._collect_implicit_config()
+            parameter_names = list(implicit_config["parameter_names"])
+            parameter_config = {
+                name: config
+                for name, config in self._collect_parameter_config(allow_empty=True).items()
+                if name in parameter_names
+            }
+            constants: dict[str, str] = {}
+            expressions = (
+                f"{implicit_config['equation']}\n"
+                f"{implicit_config['output_expression']}"
+            )
+            if "K" in expressions:
+                constants["K"] = "1.0"
+            if "R" in expressions:
+                constants["R"] = "10973731.568160"
+            if "c" in expressions:
+                constants["c"] = "299792458"
+            implicit_definition = ImplicitModelDefinition(
+                x_variables=tuple(implicit_config["x_variables"]),
+                implicit_variable=str(implicit_config["implicit_variable"]),
+                equation=str(implicit_config["equation"]),
+                output_expression=str(implicit_config["output_expression"]),
+                parameters=tuple(parameter_names),
+                constants=constants,
+                solve_options=ImplicitSolveOptions(
+                    method=str(implicit_config["method"]),
+                    initial=str(implicit_config["initial"]),
+                    tolerance=str(implicit_config["tolerance"]),
+                    max_iterations=int(implicit_config["max_iterations"]),
+                ),
+            )
+            model_expr = str(implicit_config["output_expression"])
         elif model_type == "poly":
             job_kwargs["poly_degree"] = self.poly_degree_spin.value()
             model_expr = self._mode_expression_preview("poly")
@@ -914,6 +950,7 @@ class WindowFittingModelsMixin:
             weighted=self.fit_weighted_checkbox.isChecked(),
             label=label,
             is_multidim=is_multidim,
+            implicit_definition=implicit_definition,
             **job_kwargs,
         )
 

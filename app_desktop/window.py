@@ -5,6 +5,7 @@ Modern PySide6 GUI for the extrapolation & error propagation utilities.
 The interface mirrors the previous Tk layout but adopts Qt widgets, GPU-backed
 rendering, and higher-DPI PDF previews.
 """
+# ruff: noqa: F401, E402
 
 from __future__ import annotations
 
@@ -107,6 +108,8 @@ from fitting import (
     fit_custom_model,
     auto_fit_dataset,
     infer_parameter_names,
+    ModelSpecification,
+    ParameterState,
     render_fitting_overview,
     summarize_auto_results,
     sample_mp_function,
@@ -906,7 +909,9 @@ class ExtrapolationWindow(
             self.inverse_power_widget.setVisible(mode == "inverse")
         if hasattr(self, "pade_widget"):
             self.pade_widget.setVisible(mode == "pade")
-        show_expr = mode != "auto"
+        if hasattr(self, "implicit_model_widget"):
+            self.implicit_model_widget.setVisible(mode == "self_consistent")
+        show_expr = mode not in {"auto", "self_consistent"}
         self.fit_expr_edit.setVisible(show_expr)
         if show_expr:
             self.fit_expr_edit.setEnabled(True)
@@ -919,13 +924,13 @@ class ExtrapolationWindow(
         if hasattr(self, "fit_func_help_btn"):
             self.fit_func_help_btn.setVisible(mode == "custom")
         if hasattr(self, "add_variable_btn"):
-            self.add_variable_btn.setVisible(mode == "custom")
+            self.add_variable_btn.setVisible(mode in {"custom", "self_consistent"})
         if hasattr(self, "remove_variable_btn"):
-            self.remove_variable_btn.setVisible(mode == "custom")
-            if mode != "custom":
+            self.remove_variable_btn.setVisible(mode in {"custom", "self_consistent"})
+            if mode not in {"custom", "self_consistent"}:
                 self._reset_variable_rows(default_var="x", default_column="A")
-        # 参数约束仅对自定义模型生效，其它模型隐藏以避免误导
-        show_params = mode == "custom"
+        # 参数约束仅对自由参数模型生效，其它模型隐藏以避免误导
+        show_params = mode in {"custom", "self_consistent"}
         if not show_params and hasattr(self, "enable_constraints_checkbox"):
             self.enable_constraints_checkbox.setChecked(False)
         if hasattr(self, "enable_constraints_checkbox"):
@@ -970,6 +975,11 @@ class ExtrapolationWindow(
         hint = ""
         if mode in {"log_poly", "exp_combo"}:
             hint = self._tr("该模型要求 x>0。", "This model requires x>0.")
+        elif mode == "self_consistent":
+            hint = self._tr(
+                "K 作为常量处理，默认值为 1.0；不会作为自由拟合参数。",
+                "K is treated as a constant with default value 1.0, not as a free fit parameter.",
+            )
         self.fit_model_hint.setVisible(bool(hint))
         if hint:
             self.fit_model_hint.setText(hint)
@@ -994,8 +1004,76 @@ class ExtrapolationWindow(
             definition = self._auto_model_map.get("M4B" if mode == "log_poly" else "M7B")
             if definition:
                 return " + ".join([f"{name}*({text})" for name, text in zip(definition.parameter_names, definition.basis_texts)])
+        if mode == "self_consistent" and hasattr(self, "implicit_output_edit"):
+            return self.implicit_output_edit.text().strip()
         if mode == "custom":
             return self.fit_expr_edit.toPlainText()
+
+    def _apply_quantum_defect_preset(self):
+        if hasattr(self, "implicit_variable_edit"):
+            self.implicit_variable_edit.setText("delta")
+        if hasattr(self, "implicit_equation_edit"):
+            self.implicit_equation_edit.setText("d0 + d2/(n-delta)^2 + d4/(n-delta)^4")
+        if hasattr(self, "implicit_output_edit"):
+            self.implicit_output_edit.setText("En - K/(n-delta)^2")
+        if hasattr(self, "implicit_initial_edit"):
+            self.implicit_initial_edit.setText("0")
+        if hasattr(self, "implicit_tolerance_edit"):
+            self.implicit_tolerance_edit.setText("1e-30")
+        if hasattr(self, "implicit_max_iterations_spin"):
+            self.implicit_max_iterations_spin.setValue(80)
+        if hasattr(self, "implicit_method_combo"):
+            index = self.implicit_method_combo.findData("fixed_point")
+            if index >= 0:
+                self.implicit_method_combo.setCurrentIndex(index)
+        if hasattr(self, "_reset_variable_rows"):
+            self._reset_variable_rows(default_var="n", default_column="A")
+        if hasattr(self, "fit_target_edit"):
+            self.fit_target_edit.setText("B")
+
+    def _collect_implicit_config(self) -> dict[str, object]:
+        x_variables = [
+            var_edit.text().strip()
+            for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
+            if var_edit.text().strip()
+        ] or ["n"]
+        implicit_variable = self.implicit_variable_edit.text().strip()
+        equation = self.implicit_equation_edit.text().strip()
+        output_expression = self.implicit_output_edit.text().strip()
+        if not equation:
+            raise ValueError(self._tr("隐式方程不能为空。", "Implicit equation cannot be empty."))
+        if not output_expression:
+            raise ValueError(self._tr("输出表达式不能为空。", "Output expression cannot be empty."))
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", implicit_variable):
+            raise ValueError(self._tr("隐式变量必须是有效标识符。", "Implicit variable must be a valid identifier."))
+        method = self.implicit_method_combo.currentData() or "fixed_point"
+        initial = self.implicit_initial_edit.text().strip() or "0"
+        tolerance = self.implicit_tolerance_edit.text().strip() or "1e-30"
+        max_iterations = self.implicit_max_iterations_spin.value()
+        reserved = set(x_variables)
+        reserved.add(implicit_variable)
+        reserved.update({"K", "R", "c"})
+        config_keys = [
+            name for name in self._collect_parameter_config(allow_empty=True).keys()
+            if name not in reserved
+        ]
+        parameter_names = self._infer_parameter_names(
+            f"{equation}\n{output_expression}",
+            x_variables + [implicit_variable, "K", "R", "c"],
+            config_keys,
+        )
+        parameter_names = [name for name in parameter_names if name not in reserved]
+        return {
+            "x_variables": tuple(x_variables),
+            "implicit_variable": implicit_variable,
+            "equation": equation,
+            "output_expression": output_expression,
+            "method": str(method),
+            "initial": initial,
+            "tolerance": tolerance,
+            "max_iterations": max_iterations,
+            "parameter_names": tuple(parameter_names),
+        }
 
     def _apply_model_template(self, template: str):
         payload = None
