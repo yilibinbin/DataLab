@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Literal
 
 from app_desktop.update_controller import UpdateController
 from shared.update_checker import ReleaseInfo, UpdateCheckResult
@@ -161,8 +161,8 @@ def test_manual_update_available_runs_download_and_launch(tmp_path: Path) -> Non
 
 
 def test_qt_window_update_download_runs_in_worker_thread(
-    monkeypatch,
-    qtbot,
+    monkeypatch: Any,
+    qtbot: Any,
     tmp_path: Path,
 ) -> None:
     from PySide6.QtWidgets import QWidget
@@ -198,27 +198,56 @@ def test_qt_window_update_download_runs_in_worker_thread(
             calls.append("lock-enter")
             return self
 
-        def __exit__(self, *_: object) -> bool:
+        def __exit__(self, *_: object) -> Literal[False]:
             calls.append("lock-exit")
             return False
 
     window = QtFakeWindow()
     qtbot.addWidget(window)
-    prefs = FakePreferences()
     installer = tmp_path / "DataLab.pkg"
     installer.write_bytes(b"installer")
     calls: list[str] = []
+
+    class TrackingPreferences(FakePreferences):
+        def cache_release_notes(
+            self,
+            *,
+            version: str,
+            notes: str,
+            url: str,
+            published_at: str,
+        ) -> None:
+            calls.append("cache")
+            super().cache_release_notes(
+                version=version,
+                notes=notes,
+                url=url,
+                published_at=published_at,
+            )
+
+    prefs = TrackingPreferences()
     progress_events: list[DownloadProgress] = []
     launched: list[Path] = []
     monkeypatch.setattr("app_desktop.update_controller.UpdateCacheLock", FakeLock)
 
-    def download_installer(asset: InstallerAsset, *, progress_callback=None) -> Path:
+    def download_installer(
+        asset: InstallerAsset,
+        *,
+        progress_callback: Callable[[DownloadProgress], None] | None = None,
+    ) -> Path:
         calls.append("download")
         assert progress_callback is not None
         progress = DownloadProgress(asset.size_bytes, asset.size_bytes, 1.0)
         progress_events.append(progress)
         progress_callback(progress)
         return installer
+
+    def launch_installer(path: Path, asset: InstallerAsset) -> bool:
+        calls.append("launch")
+        launched.append(path)
+        assert controller._download_thread is not None
+        assert not controller._download_thread.isRunning()
+        return True
 
     controller = UpdateController(
         window,
@@ -231,7 +260,7 @@ def test_qt_window_update_download_runs_in_worker_thread(
         ),
         resolve_payload=lambda _release, current_version: payload(),
         download_installer=download_installer,
-        launch_installer=lambda path, asset: launched.append(path) or True,
+        launch_installer=launch_installer,
         now=lambda: datetime(2026, 5, 26, tzinfo=timezone.utc),
     )
 
@@ -240,6 +269,8 @@ def test_qt_window_update_download_runs_in_worker_thread(
 
     assert calls[0] == "lock-enter"
     assert "download" in calls
+    assert calls.index("cache") < calls.index("launch")
+    assert calls.index("launch") < calls.index("lock-exit")
     assert calls[-1] == "lock-exit"
     assert progress_events[-1].fraction == 1.0
     assert launched == [installer]
@@ -512,7 +543,7 @@ def test_launch_false_resets_idle_without_exit_or_warning(tmp_path: Path) -> Non
     assert window.exited is False
 
 
-def test_startup_update_notice_uses_cached_release_notes_once(monkeypatch) -> None:
+def test_startup_update_notice_uses_cached_release_notes_once(monkeypatch: Any) -> None:
     from app_desktop import update_controller
 
     prefs = FakePreferences()
@@ -541,7 +572,7 @@ def test_startup_update_notice_uses_cached_release_notes_once(monkeypatch) -> No
     assert prefs.last_seen_versions == ["2.3.0", "2.3.0"]
 
 
-def test_startup_update_notice_ignores_cache_for_other_version(monkeypatch) -> None:
+def test_startup_update_notice_ignores_cache_for_other_version(monkeypatch: Any) -> None:
     from app_desktop import update_controller
 
     prefs = FakePreferences()

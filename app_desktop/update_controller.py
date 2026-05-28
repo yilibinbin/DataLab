@@ -255,13 +255,26 @@ class UpdateController:
         controller = self
 
         class DownloadCompletionBridge(QObject):
+            def __init__(self) -> None:
+                super().__init__()
+                self.path: Path | None = None
+                self.error: str | None = None
+
             @Slot(Path)
             def finished(self, path: Path) -> None:
-                controller._download_finished(path, payload)
+                self.path = path
 
             @Slot(str)
             def failed(self, error: str) -> None:
-                controller._download_failed(error)
+                self.error = error
+
+            @Slot()
+            def thread_finished(self) -> None:
+                if self.error is not None:
+                    controller._download_failed(self.error)
+                    return
+                if self.path is not None:
+                    controller._download_finished(self.path, payload)
 
         parent = self.window if isinstance(self.window, QWidget) else None
         dialog = UpdateProgressDialog(payload.asset, self._lang(), parent)
@@ -281,6 +294,7 @@ class UpdateController:
         worker.failed.connect(bridge.failed)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
+        thread.finished.connect(bridge.thread_finished)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(self._download_thread_finished)
         thread.started.connect(worker.run)
@@ -290,7 +304,6 @@ class UpdateController:
 
     def _download_finished(self, path: Path, payload: UpdatePayload) -> None:
         self._close_download_dialog()
-        self._release_download_lock()
         try:
             launched = self._cache_launch_result(path, payload)
         except Exception as exc:  # noqa: BLE001 - launcher errors should show as update failure
@@ -300,6 +313,8 @@ class UpdateController:
                 str(exc) or type(exc).__name__,
             )
             return
+        finally:
+            self._release_download_lock()
         if launched:
             self.window.exit_for_update()
         else:
