@@ -141,13 +141,13 @@ class UpdateController:
                 self.state = UpdateState.IDLE
 
     def _handle_result(self, result: UpdateCheckResult, *, manual: bool) -> None:
-        titles = build_update_titles(self._lang())
+        lang = self._lang()
+        titles = build_update_titles(lang)
         if result.status == "unavailable":
             if manual:
                 self.window.warning(
                     titles.check_failed,
-                    f"Unable to check for updates: {result.error or 'unknown error'}\n\n"
-                    f"{RELEASES_URL}",
+                    self._check_failed_message(result.error, lang),
                 )
             return
 
@@ -155,7 +155,7 @@ class UpdateController:
             if manual:
                 self.window.information(
                     titles.up_to_date,
-                    f"Version {result.current_version} is already up to date.",
+                    self._up_to_date_message(result.current_version, lang),
                 )
             return
 
@@ -166,8 +166,7 @@ class UpdateController:
                 release_url = result.release.html_url or RELEASES_URL
                 self.window.warning(
                     titles.manual_update_required,
-                    "Automatic installation is unavailable: "
-                    f"{exc}\n\n{release_url}",
+                    self._manual_update_required_message(exc, release_url, lang),
                 )
             return
 
@@ -234,6 +233,29 @@ class UpdateController:
         if self.launch_installer is None:
             return self._launch_platform(path, asset)
         return self.launch_installer(path, asset)
+
+    def _check_failed_message(self, error: str | None, lang: str) -> str:
+        if lang == "en":
+            return (
+                f"Unable to check for updates: {error or 'unknown error'}\n\n"
+                f"{RELEASES_URL}"
+            )
+        return f"无法检查更新：{error or '未知错误'}\n\n{RELEASES_URL}"
+
+    def _up_to_date_message(self, current_version: str, lang: str) -> str:
+        if lang == "en":
+            return f"Version {current_version} is already up to date."
+        return f"版本 {current_version} 已是最新版本。"
+
+    def _manual_update_required_message(
+        self,
+        error: Exception,
+        release_url: str,
+        lang: str,
+    ) -> str:
+        if lang == "en":
+            return f"Automatic installation is unavailable: {error}\n\n{release_url}"
+        return f"自动安装不可用：{error}\n\n{release_url}"
 
     def _lang(self) -> str:
         return "en" if self.window.is_english() else "zh"

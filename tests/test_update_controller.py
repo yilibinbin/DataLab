@@ -215,6 +215,48 @@ def test_auto_payload_resolution_oserror_is_quiet_and_returns_idle() -> None:
     assert controller.state is UpdateState.IDLE
 
 
+def test_manual_update_check_failure_uses_chinese_body() -> None:
+    from app_desktop.update_controller import UpdateController
+    from shared.update_checker import RELEASES_URL
+
+    window = FakeWindow()
+    controller = UpdateController(
+        window,
+        preferences=FakePreferences(),
+        check_for_updates=lambda: UpdateCheckResult(
+            status="unavailable",
+            current_version="2.2.0",
+            error="offline",
+        ),
+        now=lambda: datetime(2026, 5, 26, tzinfo=timezone.utc),
+    )
+
+    controller.check_now()
+
+    assert len(window.warnings) == 1
+    assert window.warnings[0][0] == "检查更新失败"
+    assert window.warnings[0][1] == f"无法检查更新：offline\n\n{RELEASES_URL}"
+
+
+def test_manual_up_to_date_uses_chinese_body() -> None:
+    window = FakeWindow()
+    controller = UpdateController(
+        window,
+        preferences=FakePreferences(),
+        check_for_updates=lambda: UpdateCheckResult(
+            status="up-to-date",
+            current_version="2.3.0",
+            latest_version="2.3.0",
+        ),
+        now=lambda: datetime(2026, 5, 26, tzinfo=timezone.utc),
+    )
+
+    controller.check_now()
+
+    assert len(window.infos) == 1
+    assert window.infos[0] == ("已是最新版本", "版本 2.3.0 已是最新版本。")
+
+
 def test_manual_payload_resolution_failure_uses_releases_fallback() -> None:
     from app_desktop.update_controller import UpdateController
     from shared.update_checker import RELEASES_URL
@@ -239,6 +281,7 @@ def test_manual_payload_resolution_failure_uses_releases_fallback() -> None:
 
     assert len(window.warnings) == 1
     assert window.warnings[0][0] == "需要手动更新"
+    assert "自动安装不可用：manifest fetch failed" in window.warnings[0][1]
     assert "manifest fetch failed" in window.warnings[0][1]
     assert RELEASES_URL in window.warnings[0][1]
     assert window.questions == []
