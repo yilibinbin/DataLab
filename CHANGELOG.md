@@ -6,6 +6,26 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.3.2] — 2026-05-29
+
+### Added
+- Added rendered formula previews for custom formulas, error
+  propagation, custom fitting, and self-consistent fitting editors.
+- Added shared custom and self-consistent fitting parameter and
+  constants editors with automatic parameter detection.
+
+### Changed
+- Unified constants and parameter editing across fitting workflows so
+  table and text drafts, constraints, and workspace state use shared
+  components.
+
+### Fixed
+- Preserved custom and self-consistent fitting parameter and constants
+  drafts in workspace files, including disabled editors and inactive
+  text-view drafts.
+- Passed custom fitting constants through manual, worker, and auto-fit
+  subprocess execution paths.
+
 ## [2.3.1] — 2026-05-28
 
 ### Changed
