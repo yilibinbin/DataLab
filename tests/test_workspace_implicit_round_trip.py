@@ -27,14 +27,19 @@ def test_workspace_round_trips_implicit_fit_config(qtbot, tmp_path: Path) -> Non
     source.implicit_timeout_spin.setValue(420)
     _set_combo_data(source.implicit_method_combo, "root")
     source._reset_implicit_param_rows(
-        {
-            "a": {"initial": "0.1"},
-            "b": {"initial": "0.2"},
-            "c": {"initial": "0.4"},
-            "d": {"initial": "0.5"},
-        }
+        [
+            {"name": "a", "initial": "0.1"},
+            {"name": "b", "initial": "0.2"},
+            {"name": "c", "initial": "0.4"},
+            {"name": "d", "initial": "0.5"},
+            {"name": "old", "initial": "9"},
+        ]
     )
+    source.implicit_params_table.mark_orphans({"a", "b", "c", "d"})
     source._reset_implicit_constants_rows({"unit": "1"})
+    source.implicit_constants_editor.use_text_view(True)
+    source.implicit_constants_editor.set_raw_text("unit 1\n")
+    source.implicit_constants_editor.setChecked(False)
 
     path = tmp_path / "implicit.datalab"
     assert source._save_workspace_to_path(path)
@@ -52,7 +57,14 @@ def test_workspace_round_trips_implicit_fit_config(qtbot, tmp_path: Path) -> Non
     assert restored.implicit_max_iterations_spin.value() == 123
     assert restored.implicit_timeout_spin.value() == 420
     assert restored.implicit_method_combo.currentData() == "root"
-    assert restored._collect_implicit_constants() == {"unit": "1"}
+    assert not restored.implicit_constants_editor.isChecked()
+    assert restored.implicit_constants_editor.using_text_view()
+    assert restored.implicit_constants_editor.raw_text() == "unit 1\n"
+    assert restored.implicit_constants_editor.constants_dict(validate=False) == {"unit": "1"}
+    assert restored._collect_implicit_constants() == {}
+    assert restored.implicit_params_table.orphan_names() == {"old"}
+    assert {"name": "old", "initial": "9", "fixed": "", "min": "", "max": ""} in restored.implicit_params_table.rows()
+    assert {"name": "old", "initial": "9", "fixed": "", "min": "", "max": ""} not in restored.implicit_params_table.compute_rows()
     assert restored._collect_implicit_parameter_config(["a", "b", "c", "d"]) == {
         "a": {"initial": "0.1"},
         "b": {"initial": "0.2"},

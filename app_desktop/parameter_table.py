@@ -24,6 +24,7 @@ class ParameterTable(QWidget):
         self._constraints_enabled = False
         self._syncing = False
         self._min_rows = max(0, int(min_rows))
+        self._orphan_names: set[str] = set()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -52,6 +53,56 @@ class ParameterTable(QWidget):
             if any(row.values()):
                 rows.append(row)
         return rows
+
+    def compute_rows(self) -> list[dict[str, str]]:
+        return [
+            row
+            for row in self.rows()
+            if not row["name"].strip() or row["name"].strip() not in self._orphan_names
+        ]
+
+    def orphan_names(self) -> set[str]:
+        existing = {row["name"].strip() for row in self.rows() if row["name"].strip()}
+        self._orphan_names.intersection_update(existing)
+        return set(self._orphan_names)
+
+    def mark_orphans(self, active_names: Iterable[str]) -> None:
+        active = {str(name).strip() for name in active_names if str(name).strip()}
+        self._orphan_names = {
+            row["name"].strip()
+            for row in self.rows()
+            if row["name"].strip() and row["name"].strip() not in active
+        }
+        self._emit_changed()
+
+    def add_parameter_row(self, row: dict[str, Any] | None = None) -> None:
+        row_values = row or {}
+        row_index = self.table_view.rowCount()
+        self.table_view.insertRow(row_index)
+        for column, key in enumerate(_COLUMNS):
+            self.table_view.setItem(row_index, column, QTableWidgetItem(self._string_value(row_values.get(key))))
+        name = self._string_value(row_values.get("name")).strip()
+        if name:
+            self._orphan_names.discard(name)
+        self._emit_changed()
+
+    def delete_rows(self, rows: Iterable[int]) -> None:
+        for row_index in sorted({int(row) for row in rows}, reverse=True):
+            if row_index < 0 or row_index >= self.table_view.rowCount():
+                continue
+            name = self._cell_text(row_index, 0)
+            self.table_view.removeRow(row_index)
+            if name:
+                self._orphan_names.discard(name)
+        self._emit_changed()
+
+    def clear_empty_rows(self) -> None:
+        empty_rows = [
+            row_index
+            for row_index in range(self.table_view.rowCount())
+            if not any(self._cell_text(row_index, column) for column in range(len(_COLUMNS)))
+        ]
+        self.delete_rows(empty_rows)
 
     def set_rows(self, rows: Iterable[dict[str, Any]] | dict[str, Any] | None) -> None:
         if isinstance(rows, dict):
@@ -85,6 +136,7 @@ class ParameterTable(QWidget):
                 if isinstance(row, dict)
             ]
         self._set_table_rows(clean_rows)
+        self.orphan_names()
 
     def set_names(self, names: Sequence[str], *, preserve: bool = True) -> None:
         if preserve:
@@ -107,11 +159,17 @@ class ParameterTable(QWidget):
                     {"name": name, "initial": "", "fixed": "", "min": "", "max": ""},
                 )
             )
-        self.set_rows(detected_rows)
+        orphan_rows = [
+            row
+            for row in self.rows()
+            if row["name"] and row["name"] not in seen
+        ]
+        self._set_table_rows(detected_rows + orphan_rows)
+        self.mark_orphans(seen)
 
     def parameter_config(self, *, validate: bool = True) -> dict[str, dict[str, str]]:
         config: dict[str, dict[str, str]] = {}
-        for row in self.rows():
+        for row in self.compute_rows():
             name = row["name"].strip()
             values = {key: row[key].strip() for key in _COLUMNS if key != "name"}
             if not name and not any(values.values()):

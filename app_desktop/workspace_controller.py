@@ -240,6 +240,13 @@ def _param_rows(window: Any) -> list[dict[str, str]]:
     return []
 
 
+def _param_orphans(window: Any) -> list[str]:
+    table = getattr(window, "custom_params_table", None)
+    if table is not None and hasattr(table, "orphan_names"):
+        return sorted(str(name) for name in table.orphan_names())
+    return []
+
+
 def _implicit_param_rows(window: Any) -> list[dict[str, str]]:
     table = getattr(window, "implicit_params_table", None)
     if table is not None and hasattr(table, "rows"):
@@ -247,6 +254,13 @@ def _implicit_param_rows(window: Any) -> list[dict[str, str]]:
             table.rows(),
             ("name", "initial", "fixed", "min", "max"),
         )
+    return []
+
+
+def _implicit_param_orphans(window: Any) -> list[str]:
+    table = getattr(window, "implicit_params_table", None)
+    if table is not None and hasattr(table, "orphan_names"):
+        return sorted(str(name) for name in table.orphan_names())
     return []
 
 
@@ -301,6 +315,7 @@ def _capture_implicit_config(window: Any, model: str) -> dict[str, Any]:
         "timeout_seconds": _value(getattr(window, "implicit_timeout_spin", None), 300),
         "constraints_enabled": _checked(getattr(window, "implicit_constraints_checkbox", None)),
         "parameters": _implicit_param_rows(window),
+        "parameter_orphans": _implicit_param_orphans(window),
         "constants": _implicit_constants_rows(window),
         "constants_enabled": _checked(getattr(window, "implicit_constants_editor", None)),
         "constants_view": "text"
@@ -336,12 +351,19 @@ def _restore_variable_rows(window: Any, rows: Any) -> None:
                 window._add_variable_row(default_var=row["name"], default_column=row["column"])
 
 
-def _restore_param_rows(window: Any, rows: Any) -> None:
+def _restore_param_rows(window: Any, rows: Any, orphan_names: Any = None) -> None:
     if not isinstance(rows, list):
         return
     table = getattr(window, "custom_params_table", None)
     if table is not None and hasattr(table, "set_rows"):
         table.set_rows(rows)
+        if isinstance(orphan_names, list) and hasattr(table, "mark_orphans"):
+            active = [
+                str(row.get("name") or "")
+                for row in rows
+                if isinstance(row, dict) and str(row.get("name") or "") not in set(map(str, orphan_names))
+            ]
+            table.mark_orphans(active)
 
 
 def _restore_constants_editor_state(editor: Any, state: Any) -> None:
@@ -513,6 +535,16 @@ def _restore_implicit_config(window: Any, config: Any, fitting: dict[str, Any] |
         window.implicit_constraints_checkbox.setChecked(constraints_enabled)
     if hasattr(window, "_reset_implicit_param_rows"):
         window._reset_implicit_param_rows(restore_parameters)
+        table = getattr(window, "implicit_params_table", None)
+        orphan_names = config.get("parameter_orphans")
+        if isinstance(orphan_names, list) and table is not None and hasattr(table, "mark_orphans"):
+            orphan_set = set(map(str, orphan_names))
+            active = [
+                str(row.get("name") or "")
+                for row in table.rows()
+                if isinstance(row, dict) and str(row.get("name") or "") not in orphan_set
+            ]
+            table.mark_orphans(active)
     constants = config.get("constants")
     editor = getattr(window, "implicit_constants_editor", None)
     if editor is not None:
@@ -605,6 +637,7 @@ def _capture_config(window: Any) -> dict[str, Any]:
             "variables": _variable_rows(window),
             "constraints_enabled": _checked(getattr(window, "custom_constraints_checkbox", None)),
             "parameter_rows": _param_rows(window),
+            "parameter_orphans": _param_orphans(window),
             "custom_constants": _constants_editor_state(getattr(window, "custom_constants_editor", None)),
             "implicit": _capture_implicit_config(window, fitting_model),
             "poly_degree": _value(getattr(window, "poly_degree_spin", None), 3),
@@ -804,7 +837,7 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
         window.fit_target_edit.setText(str(fitting.get("target_column") or ""))
     _restore_variable_rows(window, fitting.get("variables"))
     parameter_rows = fitting.get("parameter_rows") or _legacy_parameter_text_rows(fitting.get("parameters"))
-    _restore_param_rows(window, parameter_rows)
+    _restore_param_rows(window, parameter_rows, fitting.get("parameter_orphans"))
     if not parameter_rows and isinstance(fitting.get("parameters"), list):
         _restore_param_rows(window, fitting.get("parameters"))
     if hasattr(window, "custom_constraints_checkbox"):
