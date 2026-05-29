@@ -915,9 +915,9 @@ class ExtrapolationWindow(
             return
         mode = self.fit_model_combo.currentData()
         if hasattr(self, "poly_degree_widget"):
-            self.poly_degree_widget.setVisible(mode == "poly")
+            self.poly_degree_widget.setVisible(mode == "polynomial")
         if hasattr(self, "inverse_power_widget"):
-            self.inverse_power_widget.setVisible(mode == "inverse")
+            self.inverse_power_widget.setVisible(mode == "inverse_power")
         if hasattr(self, "pade_widget"):
             self.pade_widget.setVisible(mode == "pade")
         if hasattr(self, "implicit_model_widget"):
@@ -963,7 +963,7 @@ class ExtrapolationWindow(
         mode = self.fit_model_combo.currentData()
         if mode in {"power_limit", "pade"}:
             self._apply_model_template(mode)
-        elif mode in {"poly", "inverse"}:
+        elif mode in {"polynomial", "inverse_power"}:
             self._refresh_mode_expression(mode)
         self._update_model_hint()
 
@@ -989,11 +989,11 @@ class ExtrapolationWindow(
             payload = self._pade_template(self.pade_m_spin.value(), self.pade_n_spin.value())
             if payload:
                 return payload[0]
-        if mode == "poly":
+        if mode == "polynomial":
             degree = self.poly_degree_spin.value()
             terms = [f"b{i}*x^{i}" if i > 0 else "b0" for i in range(degree + 1)]
             return " + ".join(terms)
-        if mode == "inverse":
+        if mode == "inverse_power":
             p_min, p_max = self._inverse_power_range()
             parts = [f"A{p}/x^{p}" for p in range(p_min, p_max + 1)]
             return " + ".join(parts) if parts else "A0"

@@ -59,3 +59,36 @@ def test_saving_after_old_auto_fit_migration_strips_obsolete_fields(qtbot):
 
     assert fitting.get("model") != "auto"
     assert "auto_fit" not in fitting
+
+
+def test_opening_old_poly_inverse_workspace_maps_to_supported_model_values(qtbot):
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    QApplication.instance() or QApplication([])
+    win = ExtrapolationWindow()
+    qtbot.addWidget(win)
+
+    manifest = {
+        "schema_version": "1.0",
+        "config": {
+            "fitting": {
+                "model": "poly",
+            }
+        },
+        "data": {"input": {"canonical_table": {"headers": ["A", "B"], "rows": [["1", "2"]]}}},
+    }
+
+    restore_workspace(win, manifest, {})
+
+    assert win.fit_model_combo.currentData() == "polynomial"
+    assert getattr(win, "_workspace_degraded", False) is False
+    saved = capture_workspace(win, title="migrated-poly").manifest
+    assert saved["config"]["fitting"]["model"] == "polynomial"
+
+    manifest["config"]["fitting"]["model"] = "inverse"
+    restore_workspace(win, manifest, {})
+
+    assert win.fit_model_combo.currentData() == "inverse_power"
+    saved = capture_workspace(win, title="migrated-inverse").manifest
+    assert saved["config"]["fitting"]["model"] == "inverse_power"

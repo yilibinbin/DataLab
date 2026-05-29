@@ -210,8 +210,8 @@ class WindowFittingResidualsMixin:
             # Validate log-scale selection against current data to avoid log(<=0) failures
             safe_log_scale = self._sanitize_log_scale(log_scale if log_scale is not None else self._current_log_scale(), job.x_series, job.y_series)
             if show_curves:
-                if job.model_type in {"poly", "inverse"}:
-                    if job.model_type == "poly":
+                if job.model_type in {"polynomial", "inverse_power"}:
+                    if job.model_type == "polynomial":
                         definition = build_polynomial_definition(job.poly_degree)
                     else:
                         definition = build_inverse_series_definition(job.inverse_min, job.inverse_max)

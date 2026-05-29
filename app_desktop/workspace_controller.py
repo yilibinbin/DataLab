@@ -30,6 +30,15 @@ def _combo_data(combo: QComboBox | None, default: str = "") -> str:
     return str(data if data is not None else combo.currentText())
 
 
+def _normalize_fitting_model(value: Any) -> str:
+    model = str(value or "custom")
+    aliases = {
+        "poly": "polynomial",
+        "inverse": "inverse_power",
+    }
+    return aliases.get(model, model)
+
+
 def _set_combo_data(combo: QComboBox | None, value: str) -> None:
     if combo is None:
         return
@@ -534,7 +543,7 @@ def _legacy_parameter_text_rows(parameter_text: Any) -> list[dict[str, str]]:
 
 
 def _capture_config(window: Any) -> dict[str, Any]:
-    fitting_model = _combo_data(getattr(window, "fit_model_combo", None), "custom")
+    fitting_model = _normalize_fitting_model(_combo_data(getattr(window, "fit_model_combo", None), "custom"))
     if fitting_model == "auto":
         fitting_model = "custom"
     return {
@@ -787,7 +796,8 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
     config = workspace.get("config") or {}
     fitting = config.get("fitting") or {}
     degraded = _degrade_obsolete_auto_fit_config(window, fitting)
-    _set_combo_data(getattr(window, "fit_model_combo", None), str(fitting.get("model") or "custom"))
+    fitting["model"] = _normalize_fitting_model(fitting.get("model") or "custom")
+    _set_combo_data(getattr(window, "fit_model_combo", None), str(fitting["model"]))
     if hasattr(window, "fit_expr_edit"):
         window.fit_expr_edit.setPlainText(str(fitting.get("expression") or ""))
     if hasattr(window, "fit_target_edit"):

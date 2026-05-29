@@ -664,12 +664,12 @@ class WindowFittingModelsMixin:
             )
             model_expr = str(implicit_config["output_expression"])
             timeout_seconds = float(implicit_config["timeout_seconds"])
-        elif model_type == "poly":
+        elif model_type == "polynomial":
             poly_degree = self.poly_degree_spin.value()
-            model_expr = self._mode_expression_preview("poly")
-        elif model_type == "inverse":
+            model_expr = self._mode_expression_preview("polynomial")
+        elif model_type == "inverse_power":
             inverse_min, inverse_max = self._inverse_power_range()
-            model_expr = self._mode_expression_preview("inverse")
+            model_expr = self._mode_expression_preview("inverse_power")
         elif model_type == "pade":
             pade_m = self.pade_m_spin.value()
             pade_n = self.pade_n_spin.value()

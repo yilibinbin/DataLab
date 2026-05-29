@@ -26,8 +26,8 @@ def test_fitting_model_combo_contains_only_supported_explicit_models(qtbot):
     assert values == [
         "custom",
         "self_consistent",
-        "poly",
-        "inverse",
+        "polynomial",
+        "inverse_power",
         "pade",
         "power_limit",
     ]

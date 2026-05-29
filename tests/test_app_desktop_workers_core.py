@@ -96,7 +96,7 @@ def test_execute_fit_job_payload_poly_recovers_linear_params():
     sigma_rows = [(None, None) for _ in data_rows]
 
     job = FitJob(
-        model_type="poly",
+        model_type="polynomial",
         headers=["x", "y"],
         data_rows=data_rows,
         sigma_rows=sigma_rows,
@@ -283,7 +283,7 @@ def test_self_consistent_fit_job_is_marked_for_process_boundary() -> None:
     assert _fit_job_requires_process_boundary(job) is True
 
     direct_job = FitJob(
-        model_type="poly",
+        model_type="polynomial",
         headers=["x", "y"],
         data_rows=[],
         sigma_rows=[],

@@ -955,15 +955,15 @@ def build_left_panel(self):
     self.fit_model_combo = QComboBox()
     self.fit_model_combo.addItem("自定义模型（非线性）", "custom")
     self.fit_model_combo.addItem("自洽隐式模型", "self_consistent")
-    self.fit_model_combo.addItem("多项式拟合", "poly")
-    self.fit_model_combo.addItem("1/x^p 展开", "inverse")
+    self.fit_model_combo.addItem("多项式拟合", "polynomial")
+    self.fit_model_combo.addItem("1/x^p 展开", "inverse_power")
     self.fit_model_combo.addItem("Padé 拟合", "pade")
     self.fit_model_combo.addItem("幂律极限拟合", "power_limit")
     fit_items = [
         ("自定义模型（非线性）", "Custom (nonlinear)", "custom"),
         ("自洽隐式模型", "Self-consistent / implicit", "self_consistent"),
-        ("多项式拟合", "Polynomial", "poly"),
-        ("1/x^p 展开", "1/x^p series", "inverse"),
+        ("多项式拟合", "Polynomial", "polynomial"),
+        ("1/x^p 展开", "1/x^p series", "inverse_power"),
         ("Padé 拟合", "Padé", "pade"),
         ("幂律极限拟合", "Power limit", "power_limit"),
     ]

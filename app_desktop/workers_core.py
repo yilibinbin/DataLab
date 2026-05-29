@@ -1329,8 +1329,8 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
         model_type = job.model_type
         fit_result: FitResult | None = None
         expression = job.model_expr
-        if model_type in {"poly", "inverse"}:
-            if model_type == "poly":
+        if model_type in {"polynomial", "inverse_power"}:
+            if model_type == "polynomial":
                 definition = build_polynomial_definition(job.poly_degree)
             else:
                 definition = build_inverse_series_definition(job.inverse_min, job.inverse_max)
