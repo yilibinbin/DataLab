@@ -135,6 +135,8 @@ def test_desktop_parallel_controls_exist_and_save_current_config(window: Any) ->
     assert window.parallel_mode_combo.findData(ParallelMode.PROCESS.value) >= 0
     assert window.parallel_max_workers_spin.minimum() == 0
     assert window.parallel_nested_policy_combo.findData(NestedParallelPolicy.ALLOW.value) >= 0
+    assert not hasattr(window, "parallel_auto_fit_backend_checkbox")
+    assert hasattr(window, "parallel_implicit_backend_checkbox")
 
     window.parallel_mode_combo.setCurrentIndex(
         window.parallel_mode_combo.findData(ParallelMode.THREAD.value)
@@ -144,7 +146,6 @@ def test_desktop_parallel_controls_exist_and_save_current_config(window: Any) ->
     window.parallel_nested_policy_combo.setCurrentIndex(
         window.parallel_nested_policy_combo.findData(NestedParallelPolicy.ALLOW.value)
     )
-    window.parallel_auto_fit_backend_checkbox.setChecked(True)
     window.parallel_implicit_backend_checkbox.setChecked(False)
 
     config = window._current_parallel_config()
@@ -153,7 +154,7 @@ def test_desktop_parallel_controls_exist_and_save_current_config(window: Any) ->
     assert config.max_workers == 3
     assert config.reserve_cores == 2
     assert config.nested_policy == NestedParallelPolicy.ALLOW
-    assert config.enable_new_auto_fit_backend is True
+    assert config.enable_new_auto_fit_backend is ParallelConfig().enable_new_auto_fit_backend
     assert config.enable_new_implicit_backend is False
 
 
@@ -162,11 +163,9 @@ def test_prepare_jobs_receive_current_parallel_config(window: Any) -> None:
         window.parallel_mode_combo.findData(ParallelMode.SERIAL.value)
     )
     window.parallel_max_workers_spin.setValue(5)
-    window.parallel_auto_fit_backend_checkbox.setChecked(True)
     window.parallel_implicit_backend_checkbox.setChecked(False)
-    window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("poly"))
+    window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("polynomial"))
 
-    auto_job = window._prepare_auto_fit_job(_dataset(), verbose=False)
     fit_job = window._prepare_fit_job(
         _dataset(),
         generate_latex=False,
@@ -175,11 +174,9 @@ def test_prepare_jobs_receive_current_parallel_config(window: Any) -> None:
         render_plots=False,
     )
 
-    assert auto_job.parallel_config.mode == ParallelMode.SERIAL
-    assert auto_job.parallel_config.max_workers == 5
-    assert auto_job.parallel_config.enable_new_auto_fit_backend is True
     assert fit_job.parallel_config.mode == ParallelMode.SERIAL
     assert fit_job.parallel_config.max_workers == 5
+    assert fit_job.parallel_config.enable_new_auto_fit_backend is ParallelConfig().enable_new_auto_fit_backend
     assert fit_job.parallel_config.enable_new_implicit_backend is False
 
 
