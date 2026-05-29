@@ -40,14 +40,15 @@ class _FakeQSettings:
         return QSettings.Status.NoError
 
 
-def test_parallel_preferences_round_trip_all_public_desktop_fields() -> None:
+def test_parallel_preferences_round_trip_all_public_desktop_fields_and_drops_legacy_implicit_flag() -> None:
     from app_desktop.parallel_preferences import (
         ParallelPreferencesStore,
         parallel_preferences_keys,
     )
     from shared.settings_store import SettingsStore
 
-    settings = SettingsStore(store=_FakeQSettings())
+    fake_store = _FakeQSettings()
+    settings = SettingsStore(store=fake_store)
     prefs = ParallelPreferencesStore(settings)
     config = ParallelConfig(
         mode=ParallelMode.PROCESS,
@@ -56,6 +57,10 @@ def test_parallel_preferences_round_trip_all_public_desktop_fields() -> None:
         nested_policy=NestedParallelPolicy.ALLOW,
         enable_new_auto_fit_backend=True,
         enable_new_implicit_backend=False,
+    )
+    settings.save_bool(
+        "Preferences/Parallel/EnableNewImplicitBackend",
+        False,
     )
 
     prefs.save(config)
@@ -66,14 +71,18 @@ def test_parallel_preferences_round_trip_all_public_desktop_fields() -> None:
     assert restored.reserve_cores == 2
     assert restored.nested_policy == NestedParallelPolicy.ALLOW
     assert restored.enable_new_auto_fit_backend is True
-    assert restored.enable_new_implicit_backend is False
+    assert restored.enable_new_implicit_backend is True
+    assert "Preferences/Parallel/EnableNewImplicitBackend" not in fake_store._data
+    assert settings.load_bool(
+        "Preferences/Parallel/EnableNewImplicitBackend",
+        True,
+    ) is True
     assert parallel_preferences_keys() == (
         "Preferences/Parallel/Mode",
         "Preferences/Parallel/MaxWorkers",
         "Preferences/Parallel/ReserveCores",
         "Preferences/Parallel/NestedPolicy",
         "Preferences/Parallel/EnableNewAutoFitBackend",
-        "Preferences/Parallel/EnableNewImplicitBackend",
     )
 
 
@@ -136,7 +145,7 @@ def test_desktop_parallel_controls_exist_and_save_current_config(window: Any) ->
     assert window.parallel_max_workers_spin.minimum() == 0
     assert window.parallel_nested_policy_combo.findData(NestedParallelPolicy.ALLOW.value) >= 0
     assert not hasattr(window, "parallel_auto_fit_backend_checkbox")
-    assert hasattr(window, "parallel_implicit_backend_checkbox")
+    assert not hasattr(window, "parallel_implicit_backend_checkbox")
 
     window.parallel_mode_combo.setCurrentIndex(
         window.parallel_mode_combo.findData(ParallelMode.THREAD.value)
@@ -146,8 +155,6 @@ def test_desktop_parallel_controls_exist_and_save_current_config(window: Any) ->
     window.parallel_nested_policy_combo.setCurrentIndex(
         window.parallel_nested_policy_combo.findData(NestedParallelPolicy.ALLOW.value)
     )
-    window.parallel_implicit_backend_checkbox.setChecked(False)
-
     config = window._current_parallel_config()
 
     assert config.mode == ParallelMode.THREAD
@@ -155,7 +162,7 @@ def test_desktop_parallel_controls_exist_and_save_current_config(window: Any) ->
     assert config.reserve_cores == 2
     assert config.nested_policy == NestedParallelPolicy.ALLOW
     assert config.enable_new_auto_fit_backend is ParallelConfig().enable_new_auto_fit_backend
-    assert config.enable_new_implicit_backend is False
+    assert config.enable_new_implicit_backend is True
 
 
 def test_prepare_jobs_receive_current_parallel_config(window: Any) -> None:
@@ -163,7 +170,6 @@ def test_prepare_jobs_receive_current_parallel_config(window: Any) -> None:
         window.parallel_mode_combo.findData(ParallelMode.SERIAL.value)
     )
     window.parallel_max_workers_spin.setValue(5)
-    window.parallel_implicit_backend_checkbox.setChecked(False)
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("polynomial"))
 
     fit_job = window._prepare_fit_job(
@@ -177,7 +183,7 @@ def test_prepare_jobs_receive_current_parallel_config(window: Any) -> None:
     assert fit_job.parallel_config.mode == ParallelMode.SERIAL
     assert fit_job.parallel_config.max_workers == 5
     assert fit_job.parallel_config.enable_new_auto_fit_backend is ParallelConfig().enable_new_auto_fit_backend
-    assert fit_job.parallel_config.enable_new_implicit_backend is False
+    assert fit_job.parallel_config.enable_new_implicit_backend is True
 
 
 def test_current_parallel_config_defaults_when_controls_are_absent() -> None:

@@ -910,7 +910,6 @@ def _serialize_parallel_config(config: ParallelConfig) -> dict[str, Any]:
         "nested_policy": config.nested_policy,
         "process_start_method": config.process_start_method,
         "enable_new_auto_fit_backend": config.enable_new_auto_fit_backend,
-        "enable_new_implicit_backend": config.enable_new_implicit_backend,
     }
 
 
@@ -928,7 +927,7 @@ def _deserialize_parallel_config(payload: dict[str, Any] | None) -> ParallelConf
         ),
         process_start_method=str(payload.get("process_start_method", "spawn")),
         enable_new_auto_fit_backend=bool(payload.get("enable_new_auto_fit_backend", False)),
-        enable_new_implicit_backend=bool(payload.get("enable_new_implicit_backend", True)),
+        enable_new_implicit_backend=True,
     )
 
 
@@ -1222,12 +1221,6 @@ def _execute_fit_job_payload_subprocess(
     timeout_seconds: float | None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> FitResultPayload:
-    if not job.parallel_config.enable_new_implicit_backend:
-        return _execute_fit_job_payload_subprocess_legacy(
-            job,
-            timeout_seconds=timeout_seconds,
-            should_cancel=should_cancel,
-        )
     job_payload = _serialize_fit_job(job)
     timeout = timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None
     try:

@@ -24,7 +24,6 @@ def parallel_preferences_keys() -> tuple[str, ...]:
         KEY_PARALLEL_RESERVE_CORES,
         KEY_PARALLEL_NESTED_POLICY,
         KEY_PARALLEL_ENABLE_AUTO_FIT_BACKEND,
-        KEY_PARALLEL_ENABLE_IMPLICIT_BACKEND,
     )
 
 
@@ -51,7 +50,7 @@ class ParallelPreferencesStore:
             ),
             default.nested_policy,
         )
-        return ParallelConfig(
+        config = ParallelConfig(
             mode=mode,
             max_workers=None if raw_workers <= 0 else raw_workers,
             reserve_cores=self.settings.load_int(
@@ -68,11 +67,10 @@ class ParallelPreferencesStore:
                 KEY_PARALLEL_ENABLE_AUTO_FIT_BACKEND,
                 default.enable_new_auto_fit_backend,
             ),
-            enable_new_implicit_backend=self.settings.load_bool(
-                KEY_PARALLEL_ENABLE_IMPLICIT_BACKEND,
-                default.enable_new_implicit_backend,
-            ),
+            enable_new_implicit_backend=True,
         )
+        self.settings.remove(KEY_PARALLEL_ENABLE_IMPLICIT_BACKEND)
+        return config
 
     def save(self, config: ParallelConfig) -> None:
         self.settings.save_string(KEY_PARALLEL_MODE, config.mode.value)
@@ -89,10 +87,7 @@ class ParallelPreferencesStore:
             KEY_PARALLEL_ENABLE_AUTO_FIT_BACKEND,
             config.enable_new_auto_fit_backend,
         )
-        self.settings.save_bool(
-            KEY_PARALLEL_ENABLE_IMPLICIT_BACKEND,
-            config.enable_new_implicit_backend,
-        )
+        self.settings.remove(KEY_PARALLEL_ENABLE_IMPLICIT_BACKEND)
 
 
 def current_parallel_config_from_widgets(owner: object) -> ParallelConfig:
@@ -120,10 +115,7 @@ def current_parallel_config_from_widgets(owner: object) -> ParallelConfig:
         ),
         nested_policy=nested_policy,
         enable_new_auto_fit_backend=ParallelConfig().enable_new_auto_fit_backend,
-        enable_new_implicit_backend=_checked(
-            getattr(owner, "parallel_implicit_backend_checkbox", None),
-            ParallelConfig().enable_new_implicit_backend,
-        ),
+        enable_new_implicit_backend=True,
     )
 
 
@@ -137,10 +129,6 @@ def apply_parallel_config_to_widgets(owner: object, config: ParallelConfig) -> N
     _set_combo_data(
         getattr(owner, "parallel_nested_policy_combo", None),
         config.nested_policy.value,
-    )
-    _set_checked(
-        getattr(owner, "parallel_implicit_backend_checkbox", None),
-        config.enable_new_implicit_backend,
     )
 
 
@@ -185,15 +173,6 @@ def _spin_value(spin: Any, default: int) -> int:
         return default
 
 
-def _checked(checkbox: Any, default: bool) -> bool:
-    if checkbox is None:
-        return default
-    try:
-        return bool(checkbox.isChecked())
-    except Exception:  # noqa: BLE001
-        return default
-
-
 def _set_combo_data(combo: Any, data: object) -> None:
     if combo is None:
         return
@@ -210,11 +189,3 @@ def _set_spin_value(spin: Any, value: int) -> None:
     spin.blockSignals(True)
     spin.setValue(int(value))
     spin.blockSignals(False)
-
-
-def _set_checked(checkbox: Any, checked: bool) -> None:
-    if checkbox is None:
-        return
-    checkbox.blockSignals(True)
-    checkbox.setChecked(bool(checked))
-    checkbox.blockSignals(False)

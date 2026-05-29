@@ -311,6 +311,7 @@ def test_fit_job_default_parallel_config_enables_implicit_backend() -> None:
 
 def test_self_consistent_fit_job_payload_is_spawn_picklable() -> None:
     payload = _serialize_fit_job(_small_self_consistent_fit_job())
+    assert "enable_new_implicit_backend" not in payload["parallel_config"]
     roundtrip = pickle.loads(pickle.dumps(payload))
     restored = _deserialize_fit_job(roundtrip)
 
@@ -320,6 +321,16 @@ def test_self_consistent_fit_job_payload_is_spawn_picklable() -> None:
     assert restored.implicit_definition.solve_options.method == "root"
     assert restored.timeout_seconds == 10.0
     assert restored.parallel_config.process_start_method == "spawn"
+    assert restored.parallel_config.enable_new_implicit_backend is True
+
+
+def test_stale_fit_job_payload_false_implicit_backend_is_ignored() -> None:
+    payload = _serialize_fit_job(_small_self_consistent_fit_job())
+    payload["parallel_config"]["enable_new_implicit_backend"] = False
+
+    restored = _deserialize_fit_job(payload)
+
+    assert restored.parallel_config.enable_new_implicit_backend is True
 
 
 def test_self_consistent_fit_subprocess_uses_killable_runner_and_forwards_timeout(
@@ -383,7 +394,7 @@ def test_self_consistent_fit_subprocess_uses_killable_runner_and_forwards_timeou
     assert callable(calls["should_cancel"])
 
 
-def test_self_consistent_fit_subprocess_disabled_gate_uses_legacy_path(
+def test_self_consistent_fit_subprocess_ignores_disabled_legacy_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     job = _small_self_consistent_fit_job(
@@ -392,8 +403,43 @@ def test_self_consistent_fit_subprocess_disabled_gate_uses_legacy_path(
     calls: dict[str, object] = {}
 
     class FailingRunner:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            raise AssertionError("disabled implicit backend must use legacy path")
+        def __init__(self, *, config: ParallelConfig) -> None:
+            calls["config"] = config
+
+        def run_killable(
+            self,
+            target: Callable[[dict[str, Any]], dict[str, Any]],
+            payload: dict[str, Any],
+            *,
+            timeout_seconds: float | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> dict[str, Any]:
+            calls["target"] = target
+            calls["payload"] = payload
+            calls["timeout_seconds"] = timeout_seconds
+            calls["should_cancel"] = should_cancel
+            return workers_core._serialize_fit_result_payload(
+                workers_core.FitResultPayload(
+                    job=job,
+                    fit_result=FitResult(
+                        params={"a": mp.mpf("1"), "b": mp.mpf("2")},
+                        param_errors={},
+                        chi2=mp.mpf("0"),
+                        reduced_chi2=mp.mpf("0"),
+                        aic=mp.mpf("0"),
+                        bic=mp.mpf("0"),
+                        r2=mp.mpf("1"),
+                        rmse=mp.mpf("0"),
+                        residuals=[],
+                        fitted_curve=[],
+                        covariance=[],
+                        details={},
+                    ),
+                    expression="u",
+                    logs=[],
+                    warnings=[],
+                )
+            )
 
     def fake_legacy(
         received_job: FitJob,
@@ -401,29 +447,7 @@ def test_self_consistent_fit_subprocess_disabled_gate_uses_legacy_path(
         timeout_seconds: float | None,
         should_cancel: Callable[[], bool] | None = None,
     ) -> workers_core.FitResultPayload:
-        calls["job"] = received_job
-        calls["timeout_seconds"] = timeout_seconds
-        calls["should_cancel"] = should_cancel
-        return workers_core.FitResultPayload(
-            job=received_job,
-            fit_result=FitResult(
-                params={"a": mp.mpf("1"), "b": mp.mpf("2")},
-                param_errors={},
-                chi2=mp.mpf("0"),
-                reduced_chi2=mp.mpf("0"),
-                aic=mp.mpf("0"),
-                bic=mp.mpf("0"),
-                r2=mp.mpf("1"),
-                rmse=mp.mpf("0"),
-                residuals=[],
-                fitted_curve=[],
-                covariance=[],
-                details={},
-            ),
-            expression="u",
-            logs=[],
-            warnings=[],
-        )
+        raise AssertionError("stale implicit backend flag must not use legacy path")
 
     monkeypatch.setattr(workers_core, "KillableProcessTaskRunner", FailingRunner)
     monkeypatch.setattr(
@@ -439,9 +463,10 @@ def test_self_consistent_fit_subprocess_disabled_gate_uses_legacy_path(
     )
 
     assert result.fit_result.params["a"] == mp.mpf("1")
-    assert calls["job"] is job
     assert calls["timeout_seconds"] == 9.5
     assert callable(calls["should_cancel"])
+    assert calls["config"] is job.parallel_config
+    assert calls["target"] is workers_core._fit_job_subprocess_entry
 
 
 def test_self_consistent_fit_subprocess_target_uses_job_precision_under_low_ambient_dps(

@@ -1403,13 +1403,6 @@ def build_left_panel(self):
     self._register_text(lbl_nested_policy, "嵌套策略：", "Nested policy:")
     parallel_layout.addRow(lbl_nested_policy, self.parallel_nested_policy_combo)
 
-    self.parallel_implicit_backend_checkbox = QCheckBox("启用新隐式拟合后端")
-    self._register_text(
-        self.parallel_implicit_backend_checkbox,
-        "启用新隐式拟合后端",
-        "Enable new implicit backend",
-    )
-    parallel_layout.addRow(self.parallel_implicit_backend_checkbox)
     options_layout.addLayout(parallel_layout)
 
     try:
@@ -1442,10 +1435,6 @@ def build_left_panel(self):
     self.parallel_nested_policy_combo.currentIndexChanged.connect(
         lambda _index: save_current_parallel_config(self)
     )
-    self.parallel_implicit_backend_checkbox.toggled.connect(
-        lambda _checked: save_current_parallel_config(self)
-    )
-
     self.generate_latex_checkbox = QCheckBox("生成 LaTeX 文件")
     self.generate_latex_checkbox.setChecked(False)
     self.generate_latex_checkbox.toggled.connect(self._toggle_latex_options)
