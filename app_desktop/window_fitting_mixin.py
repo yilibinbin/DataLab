@@ -60,3 +60,12 @@ class WindowFittingMixin(
     imports (``from app_desktop.window_fitting_mixin import
     WindowFittingMixin``) keep working without any caller changes.
     """
+
+    def _on_fit_finished(self, payload):
+        super()._on_fit_finished(payload)
+        details = getattr(payload.fit_result, "details", {}) or {}
+        if details.get("fallback_history"):
+            self.statusBar().showMessage(
+                self._tr("已回退到高精度求解器。", "Fell back to high-precision solver."),
+                8000,
+            )

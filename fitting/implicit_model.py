@@ -93,7 +93,10 @@ def build_implicit_model_specification(
         var_tuple: tuple[mp.mpf, ...],
         param_tuple: tuple[mp.mpf, ...],
     ) -> mp.mpf:
-        solved = _solve_implicit_value(definition, cache, var_tuple, param_tuple)
+        try:
+            solved = _solve_implicit_value(definition, cache, var_tuple, param_tuple)
+        except ValueError as exc:
+            raise ValueError(_implicit_solve_failure_context(definition, cache, var_tuple, param_tuple, exc)) from exc
         scope = _scope_for(definition, var_tuple, param_tuple, solved)
         return mp.mpf(safe_eval(definition.output_expression, scope))
 
@@ -290,6 +293,34 @@ def _find_root(
                 f"Implicit equation solve failed: {exc}",
             )
         ) from exc
+
+
+def _implicit_solve_failure_context(
+    definition: ImplicitModelDefinition,
+    cache: ImplicitEvaluationCache,
+    var_tuple: tuple[mp.mpf, ...],
+    param_tuple: tuple[mp.mpf, ...],
+    exc: ValueError,
+) -> str:
+    variable_values = {
+        name: mp.nstr(value, 30)
+        for name, value in zip(definition.x_variables, var_tuple)
+    }
+    parameter_values = {
+        name: mp.nstr(value, 30)
+        for name, value in zip(definition.parameters, param_tuple)
+    }
+    diagnostics = cache.diagnostics
+    return _dual_msg(
+        "隐式方程逐点求解失败: "
+        f"point_index=unknown, variables={variable_values}, parameters={parameter_values}, "
+        f"method={definition.solve_options.method}, residual={mp.nstr(diagnostics.max_residual, 30)}, "
+        f"iterations={diagnostics.max_iterations_used}, error={exc}",
+        "Per-point implicit solve failed: "
+        f"point_index=unknown, variables={variable_values}, parameters={parameter_values}, "
+        f"method={definition.solve_options.method}, residual={mp.nstr(diagnostics.max_residual, 30)}, "
+        f"iterations={diagnostics.max_iterations_used}, error={exc}",
+    )
 
 
 def _scope_for(
