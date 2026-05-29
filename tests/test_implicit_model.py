@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from collections.abc import Sequence
 
 import pytest
 from mpmath import mp
@@ -74,6 +75,203 @@ def test_numeric_partial_matches_analytic_implicit_derivative() -> None:
     expected_da = 1 / (1 + params["b"] * mp.sin(u))
     assert mp.fabs(spec.partial("a", variables, params) - expected_da) < mp.mpf(
         "1e-8"
+    )
+
+
+def test_analytic_and_numeric_partials_agree_for_output_space_model() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*x + c*u",
+        output_expression="u*u + q",
+        parameters=("a", "b", "c", "q"),
+        solve_options=ImplicitSolveOptions(method="root", initial="0.5", tolerance="1e-40", max_iterations=80),
+    )
+    analytic = build_implicit_model_specification(definition, use_analytic_derivatives=True)
+    numeric = build_implicit_model_specification(definition, use_analytic_derivatives=False)
+    variables = {"x": mp.mpf("0.75")}
+    params = {"a": mp.mpf("0.1"), "b": mp.mpf("0.2"), "c": mp.mpf("0.3"), "q": mp.mpf("1.5")}
+
+    for name in definition.parameters:
+        diff = mp.fabs(analytic.partial(name, variables, params) - numeric.partial(name, variables, params))
+        assert diff < mp.mpf("1e-8")
+
+
+def test_datalab_function_syntax_analytic_numeric_partials_agree() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*Sin[x]",
+        output_expression="Exp[u] + c",
+        parameters=("a", "b", "c"),
+        solve_options=ImplicitSolveOptions(method="fixed_point", initial="0", tolerance="1e-30", max_iterations=20),
+    )
+    analytic = build_implicit_model_specification(definition, use_analytic_derivatives=True)
+    numeric = build_implicit_model_specification(definition, use_analytic_derivatives=False)
+    variables = {"x": mp.mpf("0.7")}
+    params = {"a": mp.mpf("0.1"), "b": mp.mpf("0.2"), "c": mp.mpf("0.3")}
+
+    for name in definition.parameters:
+        diff = mp.fabs(analytic.partial(name, variables, params) - numeric.partial(name, variables, params))
+        assert diff < mp.mpf("1e-8")
+
+
+def test_runner_uses_analytic_with_bounded_parameter_mapping() -> None:
+    from fitting.problem import ModelProblem
+    from fitting.runner import FitRunner
+
+    xs = [mp.mpf("1"), mp.mpf("2"), mp.mpf("3"), mp.mpf("4")]
+    ys = [(mp.mpf("0.2") + mp.mpf("0.1") * x) ** 2 for x in xs]
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*x",
+        output_expression="u*u",
+        parameters=("a", "b"),
+        solve_options=ImplicitSolveOptions(method="fixed_point", initial="0", tolerance="1e-30", max_iterations=20),
+    )
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="u*u",
+        variables=("x",),
+        parameter_config={
+            "a": {"initial": "0.2", "min": "0", "max": "1"},
+            "b": {"initial": "0.1", "min": "0", "max": "1"},
+        },
+        implicit_definition=definition,
+    )
+
+    result = FitRunner().fit(problem, {"x": xs}, ys, precision=50)
+
+    assert result.details["implicit_strategy"] == "analytic_implicit_output_space"
+    assert mp.fabs(result.params["a"] - mp.mpf("0.2")) < mp.mpf("1e-8")
+    assert mp.fabs(result.params["b"] - mp.mpf("0.1")) < mp.mpf("1e-8")
+
+
+def test_runner_disables_analytic_derivatives_for_dependent_parameters() -> None:
+    from fitting.problem import ModelProblem
+    from fitting.runner import FitRunner
+
+    xs = [mp.mpf("1"), mp.mpf("2"), mp.mpf("3")]
+    ys = [(mp.mpf("0.1") + mp.mpf("0.2") * x) ** 2 for x in xs]
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*x",
+        output_expression="u*u",
+        parameters=("a", "b"),
+        solve_options=ImplicitSolveOptions(method="fixed_point", initial="0", tolerance="1e-30", max_iterations=20),
+    )
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="u*u",
+        variables=("x",),
+        parameter_config={"a": {"initial": "0.1"}, "b": {"expr": "a+a"}},
+        implicit_definition=definition,
+    )
+
+    result = FitRunner().fit(problem, {"x": xs}, ys, precision=50)
+
+    assert result.details["implicit_strategy"] == "general_implicit_numeric_finite_difference"
+    fallback_history = result.details.get("fallback_history", [])
+    assert isinstance(fallback_history, list)
+    assert any(
+        isinstance(item, dict)
+        and
+        item.get("from") == "analytic_implicit_jacobian"
+        and item.get("to") == "numeric_finite_difference"
+        for item in fallback_history
+    )
+
+
+def test_analytic_preflight_rejects_near_singular_residual_slope() -> None:
+    from fitting.runner import _preflight_implicit_derivatives
+
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a*x + c*u",
+        output_expression="u*u",
+        parameters=("a", "c"),
+        solve_options=ImplicitSolveOptions(method="root", initial="1", tolerance="1e-30", max_iterations=80),
+    )
+    state = build_parameter_state(
+        {"a": {"initial": "1"}, "c": {"initial": "0.999999999999"}},
+        ["a", "c"],
+    )
+
+    ok, reason = _preflight_implicit_derivatives(
+        definition,
+        state,
+        {"x": [mp.mpf("1"), mp.mpf("2"), mp.mpf("3")]},
+        [mp.mpf("1"), mp.mpf("4"), mp.mpf("9")],
+        seed_hint=None,
+    )
+
+    assert ok is False
+    assert "fallback" in reason or "disagrees" in reason or "F_u" in reason
+
+
+def test_final_derivative_parity_failure_reruns_numeric(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fitting.problem import ModelProblem
+    import fitting.runner as runner
+    from fitting.implicit_seed_hints import ImplicitSeedHint
+    from fitting.runner import FitRunner
+
+    original_probe = runner._probe_implicit_derivative_parity
+    calls = 0
+
+    def fail_final_probe(
+        definition: ImplicitModelDefinition,
+        params: dict[str, mp.mpf],
+        parameter_names: Sequence[str],
+        variable_data: dict[str, Sequence[mp.mpf]],
+        target_data: Sequence[mp.mpf],
+        *,
+        seed_hint: ImplicitSeedHint | None,
+    ) -> tuple[bool, str]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return original_probe(
+                definition,
+                params,
+                parameter_names,
+                variable_data,
+                target_data,
+                seed_hint=seed_hint,
+            )
+        return False, "forced final parity mismatch"
+
+    monkeypatch.setattr(runner, "_probe_implicit_derivative_parity", fail_final_probe)
+    xs = [mp.mpf("1"), mp.mpf("2"), mp.mpf("3"), mp.mpf("4")]
+    ys = [(mp.mpf("0.2") + mp.mpf("0.1") * x) ** 2 for x in xs]
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*x",
+        output_expression="u*u",
+        parameters=("a", "b"),
+        solve_options=ImplicitSolveOptions(method="fixed_point", initial="0", tolerance="1e-30", max_iterations=20),
+    )
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="u*u",
+        variables=("x",),
+        parameter_config={"a": {"initial": "0.2"}, "b": {"initial": "0.1"}},
+        implicit_definition=definition,
+    )
+
+    result = FitRunner().fit(problem, {"x": xs}, ys, precision=50)
+
+    assert calls >= 2
+    assert result.details["implicit_strategy"] == "general_implicit_numeric_finite_difference"
+    history = result.details.get("fallback_history", [])
+    assert isinstance(history, list)
+    assert any(
+        isinstance(item, dict)
+        and "final derivative parity check failed" in str(item.get("reason", ""))
+        for item in history
     )
 
 

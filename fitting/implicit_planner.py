@@ -15,6 +15,7 @@ class ImplicitPlanKind(Enum):
     OBSERVED_LINEAR = "observed_linear"
     OBSERVED_NONLINEAR = "observed_nonlinear"
     EXACT_AFFINE_OUTPUT = "exact_affine_output"
+    ANALYTIC_IMPLICIT_JACOBIAN = "analytic_implicit_jacobian"
     GENERAL = "general"
 
 
@@ -24,6 +25,7 @@ class ImplicitPlan:
     reason: str
     transform: OutputTransform | None = None
     seed_hint: ImplicitSeedHint | None = None
+    use_analytic_derivatives: bool = False
 
 
 def plan_implicit_fit(definition: ImplicitModelDefinition, *, precision: int) -> ImplicitPlan:
@@ -52,7 +54,8 @@ def plan_implicit_fit(definition: ImplicitModelDefinition, *, precision: int) ->
     seed_hint = detect_seed_hint(definition, precision=precision)
 
     return ImplicitPlan(
-        kind=ImplicitPlanKind.GENERAL,
-        reason="general implicit output fit; use numeric finite-difference path",
+        kind=ImplicitPlanKind.ANALYTIC_IMPLICIT_JACOBIAN,
+        reason="general implicit output fit; use analytic implicit Jacobian when preflight succeeds",
         seed_hint=seed_hint,
+        use_analytic_derivatives=True,
     )

@@ -25,6 +25,7 @@ from .implicit_model import (
     fit_observed_implicit_variable_linear_model,
 )
 from .implicit_planner import ImplicitPlanKind, plan_implicit_fit
+from .implicit_seed_hints import ImplicitSeedHint
 from .implicit_transforms import OutputTransform
 from .model_parser import ModelSpecification, build_model_specification, infer_parameter_names
 from .problem import ModelProblem, constants_for_compute
@@ -168,7 +169,7 @@ class FitRunner:
             )
         state = build_parameter_state(problem.parameter_config or {}, list(definition.parameters))
         plan = plan_implicit_fit(definition, precision=precision)
-        fallback_history: list[dict[str, str]] = []
+        fallback_history: list[dict[str, object]] = []
         if plan.kind is ImplicitPlanKind.OBSERVED_LINEAR:
             try:
                 result = fit_observed_implicit_variable_linear_model(
@@ -199,6 +200,7 @@ class FitRunner:
                         "from": "exact_affine_output",
                         "to": "general",
                         "skipped": "unweighted_data_sigmas",
+                        "reason": "unweighted data_sigmas require systematic refits that the affine observed-linear shortcut does not preserve",
                     }
                 )
             else:
@@ -285,7 +287,47 @@ class FitRunner:
             definition,
             target_data=target_data,
             seed_hint=plan.seed_hint,
+            use_analytic_derivatives=plan.use_analytic_derivatives and not state.dependent_defs,
         )
+        if plan.use_analytic_derivatives and state.dependent_defs:
+            fallback_history.append(
+                {
+                    "from": "analytic_implicit_jacobian",
+                    "to": "numeric_finite_difference",
+                    "reason": "dependent parameter expressions require numeric finite differences",
+                }
+            )
+        if getattr(spec, "implicit_derivative_strategy", "") == "analytic_implicit":
+            with mp.workdps(precision):
+                ok, reason = _preflight_implicit_derivatives(
+                    definition,
+                    state,
+                    variable_data,
+                    target_data,
+                    seed_hint=plan.seed_hint,
+                )
+            if not ok:
+                fallback_history.append(
+                    {
+                        "from": "analytic_implicit_jacobian",
+                        "to": "numeric_finite_difference",
+                        "reason": reason,
+                    }
+                )
+                spec = build_implicit_model_specification(
+                    definition,
+                    target_data=target_data,
+                    seed_hint=plan.seed_hint,
+                    use_analytic_derivatives=False,
+                )
+        elif plan.use_analytic_derivatives and not state.dependent_defs:
+            fallback_history.append(
+                {
+                    "from": "analytic_implicit_jacobian",
+                    "to": "numeric_finite_difference",
+                    "reason": "analytic derivative evaluator could not be built for this expression",
+                }
+            )
         result = fit_custom_model(
             spec,
             state,
@@ -296,13 +338,80 @@ class FitRunner:
             data_sigmas=data_sigmas,
         )
         diagnostics = getattr(spec, "implicit_diagnostics")
+        if (
+            getattr(spec, "implicit_derivative_strategy", "") == "analytic_implicit"
+            and int(getattr(diagnostics, "analytic_derivative_fallbacks", 0)) > 0
+        ):
+            fallback_history.append(
+                {
+                    "from": "analytic_implicit_jacobian",
+                    "to": "numeric_finite_difference",
+                    "reason": "analytic derivative fallback occurred during fitting; reran with numeric finite differences",
+                    "fallbacks": int(getattr(diagnostics, "analytic_derivative_fallbacks", 0)),
+                }
+            )
+            spec = build_implicit_model_specification(
+                definition,
+                target_data=target_data,
+                seed_hint=plan.seed_hint,
+                use_analytic_derivatives=False,
+            )
+            result = fit_custom_model(
+                spec,
+                state,
+                variable_data,
+                target_data,
+                precision=precision,
+                weights=weights,
+                data_sigmas=data_sigmas,
+            )
+            diagnostics = getattr(spec, "implicit_diagnostics")
+        elif getattr(spec, "implicit_derivative_strategy", "") == "analytic_implicit":
+            with mp.workdps(precision):
+                final_ok, final_reason = _probe_implicit_derivative_parity(
+                    definition,
+                    result.params,
+                    state.free_params,
+                    variable_data,
+                    target_data,
+                    seed_hint=plan.seed_hint,
+                )
+            if not final_ok:
+                fallback_history.append(
+                    {
+                        "from": "analytic_implicit_jacobian",
+                        "to": "numeric_finite_difference",
+                        "reason": f"final derivative parity check failed: {final_reason}",
+                    }
+                )
+                spec = build_implicit_model_specification(
+                    definition,
+                    target_data=target_data,
+                    seed_hint=plan.seed_hint,
+                    use_analytic_derivatives=False,
+                )
+                result = fit_custom_model(
+                    spec,
+                    state,
+                    variable_data,
+                    target_data,
+                    precision=precision,
+                    weights=weights,
+                    data_sigmas=data_sigmas,
+                )
+                diagnostics = getattr(spec, "implicit_diagnostics")
         result.details["implicit_diagnostics"] = {
             "points_solved": int(diagnostics.points_solved),
             "root_fallbacks": int(diagnostics.root_fallbacks),
             "max_iterations_used": int(diagnostics.max_iterations_used),
             "max_residual": str(diagnostics.max_residual),
+            "analytic_derivative_fallbacks": int(getattr(diagnostics, "analytic_derivative_fallbacks", 0)),
         }
-        result.details["implicit_strategy"] = "general_implicit_numeric_finite_difference"
+        result.details["implicit_strategy"] = (
+            "analytic_implicit_output_space"
+            if getattr(spec, "implicit_derivative_strategy", "") == "analytic_implicit"
+            else "general_implicit_numeric_finite_difference"
+        )
         if plan.seed_hint is not None:
             result.details["implicit_seed_hint"] = plan.seed_hint.reason
         if fallback_history:
@@ -494,6 +603,93 @@ def _weighted_residual_norm(
         weight = mp.mpf(weights[idx]) if weights else mp.mpf("1")
         total += weight * residual * residual
     return float(total)
+
+
+def _preflight_implicit_derivatives(
+    definition: ImplicitModelDefinition,
+    parameter_state: ParameterState,
+    variable_data: dict[str, Sequence[mp.mpf]],
+    target_data: Sequence[mp.mpf],
+    *,
+    seed_hint: ImplicitSeedHint | None,
+) -> tuple[bool, str]:
+    params = parameter_state.compose(parameter_state.initial_vector())
+    return _probe_implicit_derivative_parity(
+        definition,
+        params,
+        parameter_state.free_params,
+        variable_data,
+        target_data,
+        seed_hint=seed_hint,
+    )
+
+
+def _probe_implicit_derivative_parity(
+    definition: ImplicitModelDefinition,
+    params: dict[str, mp.mpf],
+    parameter_names: Sequence[str],
+    variable_data: dict[str, Sequence[mp.mpf]],
+    target_data: Sequence[mp.mpf],
+    *,
+    seed_hint: ImplicitSeedHint | None,
+) -> tuple[bool, str]:
+    analytic_spec = build_implicit_model_specification(
+        definition,
+        target_data=target_data,
+        seed_hint=seed_hint,
+        use_analytic_derivatives=True,
+    )
+    numeric_spec = build_implicit_model_specification(
+        definition,
+        target_data=target_data,
+        seed_hint=seed_hint,
+        use_analytic_derivatives=False,
+    )
+    observations, targets = _prepare_points(variable_data, target_data)
+    if len(targets) != len(observations):
+        return False, "dependent variable length must match independent variables"
+    if not observations:
+        return True, "no observations to probe"
+    indices = sorted({0, len(observations) // 2, len(observations) - 1})
+    analytic_set_point_index = getattr(analytic_spec, "set_implicit_point_index", None)
+    numeric_set_point_index = getattr(numeric_spec, "set_implicit_point_index", None)
+    try:
+        for index in indices:
+            if callable(analytic_set_point_index):
+                analytic_set_point_index(index)
+            if callable(numeric_set_point_index):
+                numeric_set_point_index(index)
+            obs = observations[index]
+            for name in parameter_names:
+                analytic_value = analytic_spec.partial(name, obs, params)
+                numeric_value = numeric_spec.partial(name, obs, params)
+                if not _mp_is_finite(analytic_value):
+                    return False, f"analytic derivative for {name!r} is not finite"
+                if not _mp_is_finite(numeric_value):
+                    return False, f"numeric derivative parity probe for {name!r} is not finite"
+                if not _derivatives_close(analytic_value, numeric_value):
+                    return (
+                        False,
+                        f"analytic derivative for {name!r} disagrees with numeric finite difference",
+                    )
+        diagnostics = getattr(analytic_spec, "implicit_diagnostics", None)
+        if diagnostics is not None and int(getattr(diagnostics, "analytic_derivative_fallbacks", 0)) > 0:
+            return False, "analytic derivative fallback occurred during derivative parity probe"
+    except (ArithmeticError, KeyError, TypeError, ValueError) as exc:
+        return False, str(exc)
+    finally:
+        if callable(analytic_set_point_index):
+            analytic_set_point_index(None)
+        if callable(numeric_set_point_index):
+            numeric_set_point_index(None)
+    return True, "accepted"
+
+
+def _derivatives_close(analytic_value: mp.mpf, numeric_value: mp.mpf) -> bool:
+    diff = mp.fabs(mp.mpf(analytic_value) - mp.mpf(numeric_value))
+    scale = max(mp.mpf("1"), mp.fabs(analytic_value), mp.fabs(numeric_value))
+    tolerance = max(mp.power(mp.eps, mp.mpf("0.25")), mp.mpf("1e-12"))
+    return bool(diff <= tolerance * scale)
 
 
 def _remap_affine_result_to_output_space(

@@ -118,7 +118,7 @@ def test_seed_hint_is_attached_to_high_precision_fit_path() -> None:
     result = FitRunner().fit(problem, {"n": xs}, ys, precision=80)
 
     assert result.details.get("implicit_seed_hint") == "validated inverse-square output seed"
-    assert result.details["implicit_strategy"] == "general_implicit_numeric_finite_difference"
+    assert result.details["implicit_strategy"] == "analytic_implicit_output_space"
     assert all(mp.isfinite(value) for value in result.fitted_curve)
 
 

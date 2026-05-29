@@ -123,6 +123,34 @@ This section is also authoritative when it conflicts with older task snippets be
   - `DataLab.spec`
   - `build_mac_data_gui.sh`
   - `build_windows_data_gui.ps1`
+
+## 2026-05-30 Task 4/5 Review Hard Corrections
+
+This section is authoritative over the Task 4 and Task 5 snippets below. It incorporates the latest read-only subagent reviews and Claude adversarial reviews. Do not continue implementation from the older snippets unless these corrections are satisfied first.
+
+### Analytic Implicit Jacobian Safety
+
+- Do not run analytic-derivative preflight on the same `ModelSpecification` / implicit cache that will be used for the production fit. Preflight must use a fresh spec/cache, or it must fully restore `_values`, `_warm_starts`, point index, and diagnostics. Preferred implementation: create a fresh analytic spec for preflight and discard it.
+- Preflight must not check only finiteness at the initial parameter vector. It must compare analytic partials against the existing numeric finite-difference partials through the same forward model at representative rows, using an explicit relative/absolute tolerance. Finiteness alone is not enough to prove the derivative matches DataLab runtime semantics.
+- Analytic derivative evaluation must be gated on root-solve quality. The implicit-function derivative is valid only when the solved implicit variable satisfies the residual tolerance. If the solve uses a fallback branch, exceeds tolerance, or has a non-finite residual, the analytic derivative path must fall back consistently to numeric finite differences.
+- Define a numeric `F_u` singularity policy. Exact symbolic `F_u == 0` rejection is insufficient. Runtime `|F_u|` near zero must either disable analytic derivatives for the fit or trigger a deterministic numeric fallback with a diagnostic warning.
+- Avoid mixed silent Jacobians. If analytic derivative calls fall back to numeric during optimization or covariance, the result must not continue reporting a clean `"analytic_implicit_output_space"` strategy. Preferred first implementation: if any analytic derivative fallback occurs, rerun the fit with `use_analytic_derivatives=False`; otherwise downgrade the strategy and emit a covariance/diagnostic warning with the fallback count.
+- The analytic path remains disabled when dependent parameter expressions are present unless a full chain-rule implementation from optimizer free parameters to dependent parameters is added and tested. Add a dependent-parameter parity regression before enabling those cases.
+- Add bounded-parameter/constraint parity tests proving analytic and numeric derivatives agree under the same optimizer free-parameter mapping used by `fit_custom_model()`.
+- Add runtime compatibility tests for DataLab formula syntax and allowed functions by comparing analytic partials against numeric partials, not only by checking that SymPy can parse and lambdify the expression.
+- Task 4 is incomplete until `tests/test_implicit_derivatives.py` exists and targeted planner/model/seed-hint tests are updated for the new analytic planner behavior.
+
+### SciPy Candidate Routing
+
+- Rewrite Task 5 before implementation. Older snippets that require `precision <= 16` to execute `scipy_implicit_least_squares` are obsolete and conflict with the final design.
+- SciPy for implicit models is a candidate path, not a guaranteed backend. It may be tried only behind safety and benchmark gates, and must fall back to analytic mpmath or numeric finite differences when the candidate fails accuracy, conditioning, spot-check, or speed criteria.
+- Do not add or depend on a `SCIPY_IMPLICIT` planner kind until an executable, tested routing implementation exists. If a planned-vs-executed diagnostic is useful, add it together with the implementation and tests.
+- Any SciPy implicit residual loop must set the implicit point index for each row and must avoid reusing stale implicit caches during spot-check or covariance. Preferred implementation: use a fresh model/spec factory for candidate fit, spot-check, and any accepted result rematerialization.
+- Add a representative benchmark gate before advertising SciPy as preferred for low precision. If the benchmark does not prove it is no slower than analytic mpmath on the target implicit workloads, keep SciPy as an optional candidate/fallback only.
+- Strategy selection remains fully automatic and must not reintroduce GUI-visible backend toggles.
+
+### Packaging and Legacy Backend Safety
+
 - Include explicit hidden imports and collection/`--collect-all` handling sufficient for PyInstaller builds that import `sympy` through the new planner/transform/derivative modules.
 - Remove or neutralize stale `ParallelConfig.enable_new_implicit_backend=False` as an execution selector. Old preferences or workspace payloads may deserialize the field, but they must still route through the unified new backend.
 - Add regressions for all legacy entry points that can carry the stale flag: preferences load/save, serialized job payload deserialize, and `app_desktop/workers_core.py` execution path.

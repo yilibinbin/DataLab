@@ -13,6 +13,7 @@ from datalab_latex.expression_engine import safe_eval
 from fitting.model_parser import ModelSpecification, MpfCallable
 from fitting.constraints import ParameterState
 from fitting.hp_fitter import FitResult, combine_error_components
+from fitting.implicit_derivatives import ImplicitDerivativeEvaluator, build_implicit_derivative_evaluator
 from fitting.implicit_seed_hints import ImplicitSeedHint
 from fitting.statistics import compute_fit_statistics
 from shared.bilingual import _dual_msg
@@ -21,6 +22,12 @@ from shared.bilingual import _dual_msg
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MpfKey = tuple[int, int, int, int]
 _CacheKey = tuple[int, int, tuple[_MpfKey, ...], tuple[_MpfKey, ...]]
+
+
+@dataclass(frozen=True)
+class ImplicitSolveStatus:
+    used_fallback: bool
+    residual: mp.mpf
 
 
 @dataclass(frozen=True)
@@ -49,12 +56,14 @@ class ImplicitSolveDiagnostics:
     max_iterations_used: int = 0
     max_residual: mp.mpf = field(default_factory=lambda: mp.mpf("0"))
     warm_start_uses: int = 0
+    analytic_derivative_fallbacks: int = 0
 
 
 class ImplicitEvaluationCache:
     def __init__(self) -> None:
         self.diagnostics = ImplicitSolveDiagnostics()
         self._values: dict[_CacheKey, mp.mpf] = {}
+        self._statuses: dict[_CacheKey, ImplicitSolveStatus] = {}
         self._warm_starts: dict[tuple[int, int, tuple[_MpfKey, ...]], mp.mpf] = {}
         self.current_point_index: int | None = None
 
@@ -70,9 +79,19 @@ class ImplicitEvaluationCache:
         var_tuple: tuple[mp.mpf, ...],
         param_tuple: tuple[mp.mpf, ...],
         value: mp.mpf,
+        status: ImplicitSolveStatus,
     ) -> None:
-        self._values[self._key(var_tuple, param_tuple)] = value
+        key = self._key(var_tuple, param_tuple)
+        self._values[key] = value
+        self._statuses[key] = status
         self._warm_starts[self._warm_key(param_tuple)] = value
+
+    def status(
+        self,
+        var_tuple: tuple[mp.mpf, ...],
+        param_tuple: tuple[mp.mpf, ...],
+    ) -> ImplicitSolveStatus | None:
+        return self._statuses.get(self._key(var_tuple, param_tuple))
 
     def get_warm_start(self, param_tuple: tuple[mp.mpf, ...]) -> mp.mpf | None:
         return self._warm_starts.get(self._warm_key(param_tuple))
@@ -103,11 +122,13 @@ def build_implicit_model_specification(
     target_data: Sequence[mp.mpf] | None = None,
     *,
     seed_hint: ImplicitSeedHint | None = None,
+    use_analytic_derivatives: bool = False,
 ) -> ModelSpecification:
     """Build a `ModelSpecification` for a one-variable implicit equation."""
 
     _validate_definition(definition)
     cache = ImplicitEvaluationCache()
+    derivative_evaluator = build_implicit_derivative_evaluator(definition) if use_analytic_derivatives else None
     x_names = list(definition.x_variables)
     param_names = list(definition.parameters)
 
@@ -140,13 +161,24 @@ def build_implicit_model_specification(
 
     gradient_funcs: dict[str, MpfCallable] = {}
     for parameter_index, parameter_name in enumerate(param_names):
-        gradient_funcs[parameter_name] = _build_numeric_partial(
-            definition,
-            cache,
-            target_data=target_data,
-            seed_hint=seed_hint,
-            parameter_index=parameter_index,
-        )
+        if derivative_evaluator is not None:
+            gradient_funcs[parameter_name] = _build_analytic_partial(
+                definition,
+                cache,
+                derivative_evaluator,
+                target_data=target_data,
+                seed_hint=seed_hint,
+                parameter_index=parameter_index,
+                parameter_name=parameter_name,
+            )
+        else:
+            gradient_funcs[parameter_name] = _build_numeric_partial(
+                definition,
+                cache,
+                target_data=target_data,
+                seed_hint=seed_hint,
+                parameter_index=parameter_index,
+            )
 
     spec = ModelSpecification(
         expression=definition.output_expression.strip(),
@@ -158,7 +190,11 @@ def build_implicit_model_specification(
     )
     setattr(spec, "implicit_definition", definition)
     setattr(spec, "implicit_diagnostics", cache.diagnostics)
-    setattr(spec, "implicit_derivative_strategy", "numeric_finite_difference")
+    setattr(
+        spec,
+        "implicit_derivative_strategy",
+        "analytic_implicit" if derivative_evaluator is not None else "numeric_finite_difference",
+    )
     setattr(spec, "implicit_seed_hint", seed_hint)
     setattr(spec, "set_implicit_point_index", _set_point_index)
     return spec
@@ -381,6 +417,81 @@ def _build_numeric_partial(
     return _call
 
 
+def _build_analytic_partial(
+    definition: ImplicitModelDefinition,
+    cache: ImplicitEvaluationCache,
+    derivative_evaluator: ImplicitDerivativeEvaluator,
+    *,
+    target_data: Sequence[mp.mpf] | None,
+    seed_hint: ImplicitSeedHint | None,
+    parameter_index: int,
+    parameter_name: str,
+) -> MpfCallable:
+    numeric_partial = _build_numeric_partial(
+        definition,
+        cache,
+        target_data=target_data,
+        seed_hint=seed_hint,
+        parameter_index=parameter_index,
+    )
+
+    def _call(
+        var_tuple: tuple[mp.mpf, ...],
+        param_tuple: tuple[mp.mpf, ...],
+    ) -> mp.mpf:
+        _validate_tuple_lengths(definition, var_tuple, param_tuple, derivative=True)
+        seed_candidates = _seed_candidates_for_current_point(
+            definition,
+            cache,
+            var_tuple,
+            target_data,
+            seed_hint,
+        )
+        solved = _solve_implicit_value(
+            definition,
+            cache,
+            var_tuple,
+            param_tuple,
+            initial_guesses=seed_candidates,
+        )
+        try:
+            status = cache.status(var_tuple, param_tuple)
+            if status is None:
+                raise ValueError("Implicit root solve status is unavailable; analytic derivative disabled.")
+            residual = status.residual
+            tolerance = mp.mpf(definition.solve_options.tolerance)
+            residual_limit = tolerance * mp.mpf("10")
+            if status is not None and status.used_fallback:
+                raise ValueError("Implicit root solve used fallback; analytic derivative disabled.")
+            if not mp.isfinite(residual) or residual > residual_limit:
+                raise ValueError(
+                    f"Implicit root residual {mp.nstr(residual, 12)} exceeds analytic derivative limit."
+                )
+            variables = {
+                name: mp.mpf(value)
+                for name, value in zip(definition.x_variables, var_tuple, strict=True)
+            }
+            params = {
+                name: mp.mpf(value)
+                for name, value in zip(definition.parameters, param_tuple, strict=True)
+            }
+            constants = {name: mp.mpf(value) for name, value in definition.constants.items()}
+            min_abs_residual_u = max(mp.sqrt(mp.eps), tolerance)
+            return derivative_evaluator.partial(
+                parameter_name,
+                variables,
+                params,
+                constants,
+                solved,
+                min_abs_residual_u=min_abs_residual_u,
+            )
+        except (ArithmeticError, KeyError, TypeError, ValueError):
+            cache.diagnostics.analytic_derivative_fallbacks += 1
+            return numeric_partial(var_tuple, param_tuple)
+
+    return _call
+
+
 def _evaluate_output(
     definition: ImplicitModelDefinition,
     cache: ImplicitEvaluationCache,
@@ -397,6 +508,17 @@ def _evaluate_output(
         initial_guesses=initial_guesses,
     )
     return mp.mpf(safe_eval(definition.output_expression, _scope_for(definition, var_tuple, param_tuple, solved)))
+
+
+def _implicit_residual(
+    definition: ImplicitModelDefinition,
+    var_tuple: tuple[mp.mpf, ...],
+    param_tuple: tuple[mp.mpf, ...],
+    implicit_value: mp.mpf,
+) -> mp.mpf:
+    scope = _scope_for(definition, var_tuple, param_tuple, implicit_value)
+    rhs = mp.mpf(safe_eval(definition.equation, scope))
+    return mp.fabs(mp.mpf(implicit_value) - rhs)
 
 
 def _solve_implicit_value(
@@ -459,7 +581,12 @@ def _solve_implicit_value(
         diagnostics.root_fallbacks += 1
     diagnostics.max_iterations_used = max(diagnostics.max_iterations_used, iterations_used)
     diagnostics.max_residual = max(diagnostics.max_residual, residual)
-    cache.set(var_tuple, param_tuple, solved)
+    cache.set(
+        var_tuple,
+        param_tuple,
+        solved,
+        ImplicitSolveStatus(used_fallback=used_fallback, residual=mp.mpf(residual)),
+    )
     return solved
 
 
