@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 import sys
 from typing import Any
@@ -13,7 +12,9 @@ from shared.workspace_io import write_workspace  # noqa: E402
 from shared.workspace_schema import compute_workspace_hash, sha256_bytes  # noqa: E402
 
 EXAMPLE_ROOT = PROJECT_ROOT / "examples" / "workspaces"
+DATASET_ROOT = PROJECT_ROOT / "examples"
 APP_VERSION = "2.0.2"
+GENERATED_TIMESTAMP = "2026-05-29T00:00:00Z"
 EXAMPLE_NAMES = {
     "extrapolation.datalab",
     "error-propagation.datalab",
@@ -22,23 +23,43 @@ EXAMPLE_NAMES = {
 }
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+def _project_relative(path: Path) -> str:
+    return path.relative_to(PROJECT_ROOT).as_posix()
 
 
-def _data_section(headers: list[str], rows: list[list[str]]) -> dict[str, Any]:
+def _parse_table_text(path: Path) -> tuple[list[str], list[list[str]], str, bytes]:
+    raw_bytes = path.read_bytes()
+    raw_text = raw_bytes.decode("utf-8")
+    logical_lines = [
+        line.strip()
+        for line in raw_text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if not logical_lines:
+        raise ValueError(f"dataset is empty: {path}")
+    headers = logical_lines[0].split()
+    rows = [line.split() for line in logical_lines[1:]]
+    for row in rows:
+        if len(row) != len(headers):
+            raise ValueError(f"dataset row has {len(row)} cells; expected {len(headers)} in {path}")
     decoded_text = "\n".join(["\t".join(headers), *("\t".join(row) for row in rows)]) + "\n"
+    return headers, rows, decoded_text, raw_bytes
+
+
+def _table_section_from_file(path: Path) -> dict[str, Any]:
+    headers, rows, decoded_text, raw_bytes = _parse_table_text(path)
+    source_label = _project_relative(path)
     canonical = {"headers": headers, "rows": rows}
     return {
         "enabled": True,
-        "source_kind": "manual_table",
-        "source_path": None,
-        "source_path_label": None,
+        "source_kind": "file",
+        "source_path": source_label,
+        "source_path_label": source_label,
         "active_view": "table",
         "decoded_text": decoded_text,
         "encoding": "utf-8",
         "newline": "lf",
-        "original_bytes_sha256": sha256_bytes(decoded_text.encode("utf-8")),
+        "original_bytes_sha256": sha256_bytes(raw_bytes),
         "raw_bytes_path": None,
         "canonical_table": canonical,
         "sha256": sha256_bytes((decoded_text + repr(canonical)).encode("utf-8")),
@@ -59,6 +80,37 @@ def _empty_constants() -> dict[str, Any]:
         "raw_bytes_path": None,
         "canonical_table": {"headers": ["Name", "Value"], "rows": []},
         "sha256": sha256_bytes(repr({"headers": ["Name", "Value"], "rows": []}).encode("utf-8")),
+    }
+
+
+def _constants_section_from_file(path: Path) -> dict[str, Any]:
+    rows: list[list[str]] = []
+    raw_bytes = path.read_bytes()
+    raw_text = raw_bytes.decode("utf-8")
+    for line in raw_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split(maxsplit=1)
+        if len(parts) == 2:
+            rows.append(parts)
+    headers = ["Name", "Value"]
+    decoded_text = "\n".join(["\t".join(headers), *("\t".join(row) for row in rows)]) + "\n"
+    source_label = _project_relative(path)
+    canonical = {"headers": headers, "rows": rows}
+    return {
+        "enabled": True,
+        "source_kind": "file",
+        "source_path": source_label,
+        "source_path_label": source_label,
+        "active_view": "table",
+        "decoded_text": decoded_text,
+        "encoding": "utf-8",
+        "newline": "lf",
+        "original_bytes_sha256": sha256_bytes(raw_bytes),
+        "raw_bytes_path": None,
+        "canonical_table": canonical,
+        "sha256": sha256_bytes((decoded_text + repr(canonical)).encode("utf-8")),
     }
 
 
@@ -158,6 +210,7 @@ def _manifest(
     config: dict[str, Any],
     markdown: str,
     csv_rows: list[dict[str, str]],
+    constants: dict[str, Any] | None = None,
     examples: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     workspace = {
@@ -166,7 +219,7 @@ def _manifest(
         "language": "auto",
         "ui": {"main_tab": 0, "result_subtab": 0, "selected_plot_index": 0, "plot_zoom": 1.0},
         "data": data,
-        "constants": _empty_constants(),
+        "constants": constants or _empty_constants(),
         "config": config,
         "result_snapshot": {"present": False},
     }
@@ -183,13 +236,12 @@ def _manifest(
         "latex_source": "",
         "plots": [],
     }
-    now = _now()
     manifest = {
         "schema": "datalab.workspace.v1",
         "schema_version": 1,
         "app": {"name": "DataLab", "version": APP_VERSION},
-        "created_at": now,
-        "updated_at": now,
+        "created_at": GENERATED_TIMESTAMP,
+        "updated_at": GENERATED_TIMESTAMP,
         "config": config,
         "data": data,
         "workspace": workspace,
@@ -201,17 +253,15 @@ def _manifest(
 
 def build_examples() -> dict[str, dict[str, Any]]:
     config = _base_config()
+    config["extrapolation"]["uncertainty_column"] = "A"
     extrapolation = _manifest(
         title="Example - Extrapolation",
         mode="extrapolation",
-        data=_data_section(
-            ["n", "Value"],
-            [["2", "1.2541"], ["3", "1.1806"], ["4", "1.1428"], ["5", "1.1217"], ["6", "1.1089"]],
-        ),
+        data=_table_section_from_file(DATASET_ROOT / "extrapolation_richardson.txt"),
         config=config,
         markdown="Richardson extrapolation example with a stored limit snapshot.",
         csv_rows=[{"quantity": "limit", "value": "1.0833"}, {"quantity": "order", "value": "2"}],
-        examples={"category": "extrapolation"},
+        examples={"category": "extrapolation", "source_files": ["examples/extrapolation_richardson.txt"]},
     )
 
     error_config = _base_config()
@@ -219,14 +269,12 @@ def build_examples() -> dict[str, dict[str, Any]]:
     error = _manifest(
         title="Example - Error Propagation",
         mode="error",
-        data=_data_section(
-            ["x", "dx", "y", "dy"],
-            [["1.20", "0.03", "2.50", "0.04"], ["1.45", "0.02", "2.20", "0.05"]],
-        ),
+        data=_table_section_from_file(DATASET_ROOT / "error_propagation.txt"),
+        constants=_constants_section_from_file(DATASET_ROOT / "constants.txt"),
         config=error_config,
         markdown="First-order uncertainty propagation example for a product quantity.",
         csv_rows=[{"row": "1", "value": "3.000", "sigma": "0.091"}, {"row": "2", "value": "3.190", "sigma": "0.083"}],
-        examples={"category": "error-propagation"},
+        examples={"category": "error-propagation", "source_files": ["examples/error_propagation.txt", "examples/constants.txt"]},
     )
 
     stats_config = _base_config()
@@ -235,25 +283,20 @@ def build_examples() -> dict[str, dict[str, Any]]:
     statistics = _manifest(
         title="Example - Statistics",
         mode="statistics",
-        data=_data_section(
-            ["Value", "Sigma"],
-            [["1.234", "0.012"], ["1.219", "0.015"], ["1.241", "0.011"], ["1.228", "0.014"]],
-        ),
+        data=_table_section_from_file(DATASET_ROOT / "statistics_weighted.txt"),
         config=stats_config,
         markdown="Weighted mean and sample-spread statistics example.",
         csv_rows=[{"quantity": "weighted_mean", "value": "1.232"}, {"quantity": "standard_error", "value": "0.006"}],
-        examples={"category": "statistics"},
+        examples={"category": "statistics", "source_files": ["examples/statistics_weighted.txt"]},
     )
 
     fitting_config = _base_config()
     fitting_config["common"]["mpmath_precision"] = 80
+    fitting_config["fitting"]["expression"] = "A + B*x^(-C)"
     fitting = _manifest(
         title="Example - Fitting",
         mode="fitting",
-        data=_data_section(
-            ["x", "y", "sigma_y"],
-            [["0.0", "1.02", "0.05"], ["1.0", "1.43", "0.04"], ["2.0", "2.04", "0.05"], ["3.0", "2.84", "0.06"]],
-        ),
+        data=_table_section_from_file(DATASET_ROOT / "fitting_powerlaw.txt"),
         config=fitting_config,
         markdown=(
             "Explicit custom fitting example with weighted data, parameter constraints, "
@@ -262,6 +305,7 @@ def build_examples() -> dict[str, dict[str, Any]]:
         csv_rows=[{"parameter": "A", "value": "1.01"}, {"parameter": "B", "value": "0.36"}, {"parameter": "C", "value": "0.08"}],
         examples={
             "category": "fitting",
+            "source_files": ["examples/fitting_powerlaw.txt"],
             "variants": ["custom", "implicit", "weighted", "constraints", "high_precision", "scipy_precision_16"],
         },
     )
