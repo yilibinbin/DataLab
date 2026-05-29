@@ -109,6 +109,7 @@ from .workers_core import (
     FitJob,
     _mp_precision_guard,
 )
+from .parallel_preferences import current_parallel_config_from_widgets
 from .workers_qt import AutoFitWorker, FitBatchWorker, FitWorker
 
 
@@ -121,6 +122,9 @@ class CustomFitConfig(TypedDict):
 
 
 class WindowFittingModelsMixin:
+    def _current_parallel_config(self):
+        return current_parallel_config_from_widgets(self)
+
     def _collect_custom_constants(self) -> dict[str, str]:
         host = cast(Any, self)
         editor = getattr(host, "custom_constants_editor", None)
@@ -878,6 +882,7 @@ class WindowFittingModelsMixin:
             extra_models=extra_models,
             verbose=verbose,
             render_plots=self.generate_plots_checkbox.isChecked() if hasattr(self, "generate_plots_checkbox") else True,
+            parallel_config=self._current_parallel_config(),
             refine_with_mcmc=(
                 self.fit_mcmc_refine.isChecked()
                 if hasattr(self, "fit_mcmc_refine")
@@ -1007,6 +1012,7 @@ class WindowFittingModelsMixin:
             implicit_definition=implicit_definition,
             timeout_seconds=timeout_seconds,
             custom_constants=custom_constants,
+            parallel_config=self._current_parallel_config(),
         )
 
     def _execute_fit_async(self, job: FitJob):

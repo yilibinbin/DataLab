@@ -31,11 +31,13 @@ from __future__ import annotations
 import logging
 import multiprocessing as _mp
 import pickle
-from concurrent.futures import ProcessPoolExecutor, TimeoutError as _PoolTimeout
+from concurrent.futures import TimeoutError as _PoolTimeout
 from typing import Callable, Sequence
 
 from mpmath import mp
 
+from shared.parallel_backend import ParallelMapExecutor
+from shared.parallel_config import ParallelConfig, ParallelMode, ParallelWorkload
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 
 __all__ = [
@@ -221,13 +223,21 @@ def sample_mp_function_parallel(
     ]
 
     try:
-        ctx = _mp.get_context("spawn")
-        with ProcessPoolExecutor(
-            max_workers=resolved_workers, mp_context=ctx
-        ) as ex:
-            # ex.map returns a lazy iterator; list() forces realisation
-            # so a TimeoutError here cancels the still-in-flight shards.
-            results = list(ex.map(_worker, shards, timeout=timeout))
+        executor = ParallelMapExecutor(
+            ParallelConfig(
+                mode=ParallelMode.PROCESS,
+                max_workers=resolved_workers,
+                min_process_tasks=1,
+                reserve_cores=0,
+                process_start_method="spawn",
+            )
+        )
+        results = executor.map_pure(
+            _worker,
+            shards,
+            workload=ParallelWorkload.CPU_MPMATH,
+            timeout=timeout,
+        )
     except _PoolTimeout:
         _logger.warning(
             "sampling_parallel: map timed out after %.1fs, falling "

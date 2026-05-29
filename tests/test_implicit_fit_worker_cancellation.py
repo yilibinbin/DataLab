@@ -59,12 +59,12 @@ def _small_self_consistent_fit_job(*, timeout_seconds: float | None = 10.0) -> F
     )
 
 
-def _slow_fit_job_subprocess_entry(result_queue, job_payload) -> None:
+def _slow_fit_job_subprocess_entry(job_payload) -> dict[str, object]:
     marker = os.environ.get("DATALAB_TEST_SLOW_FIT_MARKER")
     if marker:
         Path(marker).write_text("started", encoding="utf-8")
     time.sleep(30)
-    result_queue.put({"ok": False, "error": "slow entry unexpectedly completed"})
+    return {"error": "slow entry unexpectedly completed"}
 
 
 def test_fit_worker_stop_cancels_self_consistent_subprocess(
