@@ -13,6 +13,7 @@ from datalab_latex.expression_engine import safe_eval
 from fitting.model_parser import ModelSpecification, MpfCallable
 from fitting.constraints import ParameterState
 from fitting.hp_fitter import FitResult, combine_error_components
+from fitting.implicit_seed_hints import ImplicitSeedHint
 from fitting.statistics import compute_fit_statistics
 from shared.bilingual import _dual_msg
 
@@ -99,6 +100,9 @@ class ImplicitEvaluationCache:
 
 def build_implicit_model_specification(
     definition: ImplicitModelDefinition,
+    target_data: Sequence[mp.mpf] | None = None,
+    *,
+    seed_hint: ImplicitSeedHint | None = None,
 ) -> ModelSpecification:
     """Build a `ModelSpecification` for a one-variable implicit equation."""
 
@@ -112,7 +116,20 @@ def build_implicit_model_specification(
         param_tuple: tuple[mp.mpf, ...],
     ) -> mp.mpf:
         try:
-            solved = _solve_implicit_value(definition, cache, var_tuple, param_tuple)
+            seed_candidates = _seed_candidates_for_current_point(
+                definition,
+                cache,
+                var_tuple,
+                target_data,
+                seed_hint,
+            )
+            solved = _solve_implicit_value(
+                definition,
+                cache,
+                var_tuple,
+                param_tuple,
+                initial_guesses=seed_candidates,
+            )
         except ValueError as exc:
             raise ValueError(_implicit_solve_failure_context(definition, cache, var_tuple, param_tuple, exc)) from exc
         scope = _scope_for(definition, var_tuple, param_tuple, solved)
@@ -126,6 +143,8 @@ def build_implicit_model_specification(
         gradient_funcs[parameter_name] = _build_numeric_partial(
             definition,
             cache,
+            target_data=target_data,
+            seed_hint=seed_hint,
             parameter_index=parameter_index,
         )
 
@@ -139,6 +158,8 @@ def build_implicit_model_specification(
     )
     setattr(spec, "implicit_definition", definition)
     setattr(spec, "implicit_diagnostics", cache.diagnostics)
+    setattr(spec, "implicit_derivative_strategy", "numeric_finite_difference")
+    setattr(spec, "implicit_seed_hint", seed_hint)
     setattr(spec, "set_implicit_point_index", _set_point_index)
     return spec
 
@@ -313,6 +334,8 @@ def _build_numeric_partial(
     definition: ImplicitModelDefinition,
     cache: ImplicitEvaluationCache,
     *,
+    target_data: Sequence[mp.mpf] | None,
+    seed_hint: ImplicitSeedHint | None,
     parameter_index: int,
 ) -> MpfCallable:
     options = definition.solve_options
@@ -332,8 +355,27 @@ def _build_numeric_partial(
         minus_params = list(param_tuple)
         plus_params[parameter_index] = base + step
         minus_params[parameter_index] = base - step
-        plus_value = _evaluate_output(definition, cache, var_tuple, tuple(plus_params))
-        minus_value = _evaluate_output(definition, cache, var_tuple, tuple(minus_params))
+        seed_candidates = _seed_candidates_for_current_point(
+            definition,
+            cache,
+            var_tuple,
+            target_data,
+            seed_hint,
+        )
+        plus_value = _evaluate_output(
+            definition,
+            cache,
+            var_tuple,
+            tuple(plus_params),
+            initial_guesses=seed_candidates,
+        )
+        minus_value = _evaluate_output(
+            definition,
+            cache,
+            var_tuple,
+            tuple(minus_params),
+            initial_guesses=seed_candidates,
+        )
         return mp.mpf((plus_value - minus_value) / (2 * step))
 
     return _call
@@ -344,8 +386,16 @@ def _evaluate_output(
     cache: ImplicitEvaluationCache,
     var_tuple: tuple[mp.mpf, ...],
     param_tuple: tuple[mp.mpf, ...],
+    *,
+    initial_guesses: Sequence[mp.mpf] = (),
 ) -> mp.mpf:
-    solved = _solve_implicit_value(definition, cache, var_tuple, param_tuple)
+    solved = _solve_implicit_value(
+        definition,
+        cache,
+        var_tuple,
+        param_tuple,
+        initial_guesses=initial_guesses,
+    )
     return mp.mpf(safe_eval(definition.output_expression, _scope_for(definition, var_tuple, param_tuple, solved)))
 
 
@@ -354,6 +404,8 @@ def _solve_implicit_value(
     cache: ImplicitEvaluationCache,
     var_tuple: tuple[mp.mpf, ...],
     param_tuple: tuple[mp.mpf, ...],
+    *,
+    initial_guesses: Sequence[mp.mpf] = (),
 ) -> mp.mpf:
     _validate_tuple_lengths(definition, var_tuple, param_tuple, derivative=False)
     cached = cache.get(var_tuple, param_tuple)
@@ -372,11 +424,16 @@ def _solve_implicit_value(
         return mp.mpf(safe_eval(definition.equation, scope))
 
     seeds: list[tuple[mp.mpf, bool]] = [(configured_seed, False)]
-    if warm_seed is not None:
-        if prefer_warm_start:
-            seeds = [(warm_seed, True), (configured_seed, False)]
-        else:
-            seeds.append((warm_seed, True))
+    if warm_seed is not None and prefer_warm_start:
+        seeds.append((warm_seed, True))
+    anchor = warm_seed if warm_seed is not None and prefer_warm_start else configured_seed
+    sorted_hints = sorted(
+        (mp.mpf(seed) for seed in initial_guesses),
+        key=lambda value: mp.fabs(value - anchor),
+    )
+    for seed in sorted_hints:
+        seeds.append((seed, False))
+    seeds = _dedupe_solve_seeds(seeds)
 
     last_error: ValueError | None = None
     for seed, used_warm_start in seeds:
@@ -404,6 +461,37 @@ def _solve_implicit_value(
     diagnostics.max_residual = max(diagnostics.max_residual, residual)
     cache.set(var_tuple, param_tuple, solved)
     return solved
+
+
+def _seed_candidates_for_current_point(
+    definition: ImplicitModelDefinition,
+    cache: ImplicitEvaluationCache,
+    var_tuple: tuple[mp.mpf, ...],
+    target_data: Sequence[mp.mpf] | None,
+    seed_hint: ImplicitSeedHint | None,
+) -> tuple[mp.mpf, ...]:
+    if seed_hint is None or target_data is None or cache.current_point_index is None:
+        return ()
+    point_index = cache.current_point_index
+    if point_index < 0 or point_index >= len(target_data):
+        return ()
+    variables = {
+        name: mp.mpf(value)
+        for name, value in zip(definition.x_variables, var_tuple, strict=True)
+    }
+    return seed_hint.candidates(variables, mp.mpf(target_data[point_index]))
+
+
+def _dedupe_solve_seeds(seeds: Sequence[tuple[mp.mpf, bool]]) -> list[tuple[mp.mpf, bool]]:
+    unique: list[tuple[mp.mpf, bool]] = []
+    seen: set[tuple[int, int, _MpfKey]] = set()
+    for seed, is_warm in seeds:
+        key = (int(mp.dps), int(mp.prec), cast(_MpfKey, mp.mpf(seed)._mpf_))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((mp.mpf(seed), is_warm))
+    return unique
 
 
 def _solve_from_seed(

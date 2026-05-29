@@ -281,7 +281,11 @@ class FitRunner:
             except ValueError as exc:
                 fallback_history.append({"from": "observed_nonlinear", "to": "general", "reason": str(exc)})
 
-        spec = build_implicit_model_specification(definition)
+        spec = build_implicit_model_specification(
+            definition,
+            target_data=target_data,
+            seed_hint=plan.seed_hint,
+        )
         result = fit_custom_model(
             spec,
             state,
@@ -299,11 +303,8 @@ class FitRunner:
             "max_residual": str(diagnostics.max_residual),
         }
         result.details["implicit_strategy"] = "general_implicit_numeric_finite_difference"
-        if plan.kind in {
-            ImplicitPlanKind.SCIPY_IMPLICIT,
-            ImplicitPlanKind.ANALYTIC_IMPLICIT_JACOBIAN,
-        }:
-            result.details["implicit_planned_strategy"] = plan.kind.value
+        if plan.seed_hint is not None:
+            result.details["implicit_seed_hint"] = plan.seed_hint.reason
         if fallback_history:
             result.details["fallback_history"] = fallback_history
         result.details["optimizer_backend"] = "mpmath_high_precision"

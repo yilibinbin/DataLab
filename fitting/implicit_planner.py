@@ -4,21 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
 from .implicit_classifier import ImplicitProblemClassifier, ImplicitStrategy
 from .implicit_model import ImplicitModelDefinition
+from .implicit_seed_hints import ImplicitSeedHint, detect_seed_hint
 from .implicit_transforms import OutputTransform, detect_output_transform
-
-_DOUBLE_PRECISION_DPS = 16
 
 
 class ImplicitPlanKind(Enum):
     OBSERVED_LINEAR = "observed_linear"
     OBSERVED_NONLINEAR = "observed_nonlinear"
     EXACT_AFFINE_OUTPUT = "exact_affine_output"
-    ANALYTIC_IMPLICIT_JACOBIAN = "analytic_implicit_jacobian"
-    SCIPY_IMPLICIT = "scipy_implicit"
     GENERAL = "general"
 
 
@@ -27,9 +23,7 @@ class ImplicitPlan:
     kind: ImplicitPlanKind
     reason: str
     transform: OutputTransform | None = None
-    seed_hint: Any | None = None
-    use_analytic_derivatives: bool = False
-    try_scipy: bool = False
+    seed_hint: ImplicitSeedHint | None = None
 
 
 def plan_implicit_fit(definition: ImplicitModelDefinition, *, precision: int) -> ImplicitPlan:
@@ -55,17 +49,10 @@ def plan_implicit_fit(definition: ImplicitModelDefinition, *, precision: int) ->
             transform=transform,
         )
 
-    # Exact observed-variable affine reduction is precision-independent and
-    # intentionally outranks double-precision candidate routing.
-    if precision <= _DOUBLE_PRECISION_DPS:
-        return ImplicitPlan(
-            kind=ImplicitPlanKind.SCIPY_IMPLICIT,
-            reason="double precision requested; future runner task may try SciPy implicit least_squares before mpmath fallback",
-            try_scipy=True,
-        )
+    seed_hint = detect_seed_hint(definition, precision=precision)
 
     return ImplicitPlan(
-        kind=ImplicitPlanKind.ANALYTIC_IMPLICIT_JACOBIAN,
-        reason="high precision implicit output fit; use analytic implicit Jacobian before numeric fallback",
-        use_analytic_derivatives=True,
+        kind=ImplicitPlanKind.GENERAL,
+        reason="general implicit output fit; use numeric finite-difference path",
+        seed_hint=seed_hint,
     )

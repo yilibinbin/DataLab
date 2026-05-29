@@ -50,10 +50,9 @@ def test_affine_output_outranks_double_precision_candidate_routing() -> None:
     plan = plan_implicit_fit(definition, precision=16)
 
     assert plan.kind is ImplicitPlanKind.EXACT_AFFINE_OUTPUT
-    assert plan.try_scipy is False
 
 
-def test_nonlinear_output_uses_analytic_implicit_jacobian_at_precision_80() -> None:
+def test_nonlinear_output_uses_general_numeric_boundary_at_precision_80() -> None:
     definition = ImplicitModelDefinition(
         x_variables=("n",),
         implicit_variable="delta",
@@ -64,11 +63,11 @@ def test_nonlinear_output_uses_analytic_implicit_jacobian_at_precision_80() -> N
 
     plan = plan_implicit_fit(definition, precision=80)
 
-    assert plan.kind is ImplicitPlanKind.ANALYTIC_IMPLICIT_JACOBIAN
+    assert plan.kind is ImplicitPlanKind.GENERAL
     assert plan.transform is None
 
 
-def test_precision_16_derived_output_records_future_scipy_implicit_plan_boundary() -> None:
+def test_precision_16_derived_output_stays_general_until_scipy_implicit_is_implemented() -> None:
     definition = ImplicitModelDefinition(
         x_variables=("n",),
         implicit_variable="delta",
@@ -79,8 +78,7 @@ def test_precision_16_derived_output_records_future_scipy_implicit_plan_boundary
 
     plan = plan_implicit_fit(definition, precision=16)
 
-    assert plan.kind is ImplicitPlanKind.SCIPY_IMPLICIT
-    assert plan.try_scipy is True
+    assert plan.kind is ImplicitPlanKind.GENERAL
 
 
 def test_precision_17_derived_output_stays_high_precision_plan_boundary() -> None:
@@ -94,5 +92,4 @@ def test_precision_17_derived_output_stays_high_precision_plan_boundary() -> Non
 
     plan = plan_implicit_fit(definition, precision=17)
 
-    assert plan.kind is ImplicitPlanKind.ANALYTIC_IMPLICIT_JACOBIAN
-    assert plan.try_scipy is False
+    assert plan.kind is ImplicitPlanKind.GENERAL

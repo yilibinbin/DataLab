@@ -7,7 +7,7 @@ import pytest
 from mpmath import mp
 
 from fitting.constraints import build_parameter_state
-from fitting.hp_fitter import fit_custom_model
+from fitting.hp_fitter import FitResult, fit_custom_model
 from fitting.implicit_model import (
     ImplicitModelDefinition,
     ImplicitSolveOptions,
@@ -15,6 +15,7 @@ from fitting.implicit_model import (
     default_implicit_template,
     quantum_defect_template,
 )
+from fitting.model_parser import ModelSpecification
 
 
 def test_fixed_point_model_solves_real_self_dependent_equation() -> None:
@@ -280,7 +281,7 @@ def test_general_implicit_failure_reports_actual_point_index() -> None:
     assert "iterations=" in message
 
 
-def test_sequential_general_implicit_evaluations_use_warm_starts() -> None:
+def test_sequential_general_implicit_evaluations_keep_configured_seed_before_warm_starts() -> None:
     definition = ImplicitModelDefinition(
         x_variables=("x",),
         implicit_variable="u",
@@ -304,11 +305,11 @@ def test_sequential_general_implicit_evaluations_use_warm_starts() -> None:
 
     diagnostics = getattr(spec, "implicit_diagnostics")
     assert diagnostics.points_solved == 3
-    assert diagnostics.warm_start_uses == 2
+    assert diagnostics.warm_start_uses == 0
 
 
 def test_row_dependent_initial_expression_preserves_fresh_root_branch() -> None:
-    def build_spec():
+    def build_spec() -> ModelSpecification:
         definition = ImplicitModelDefinition(
             x_variables=("x",),
             implicit_variable="u",
@@ -402,7 +403,7 @@ def _scaled_rydberg_definition() -> ImplicitModelDefinition:
 def _fit_scaled_rydberg_dataset(
     xs: list[mp.mpf],
     ys: list[mp.mpf],
-):
+) -> FitResult:
     definition = _scaled_rydberg_definition()
     spec = build_implicit_model_specification(definition)
     state = build_parameter_state(
