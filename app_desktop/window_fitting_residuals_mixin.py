@@ -7,7 +7,7 @@ This mixin owns the post-compute side of fitting: receive a
 (``_render_fit_plot_bytes``), update the result panel
 (``_format_fit_display`` is in Formatters and called via MRO),
 write LaTeX, and handle worker lifecycle (``_on_fit_thread_done``,
-``_on_auto_fit_thread_done``).
+and fit batch cleanup).
 
 Methods MOVED here from window_fitting_mixin.py (line numbers
 refer to the pre-Phase-7 monolith and are frozen as one-time
@@ -23,9 +23,6 @@ for canonical history):
 - _on_fit_finished                   (was line 1671)
 - _on_fit_failed                     (was line 1722)
 - _on_fit_thread_done                (was line 1729)
-- _on_auto_fit_finished              (was line 1765)
-- _on_auto_fit_failed                (was line 1793)
-- _on_auto_fit_thread_done           (was line 1799)
 
 Methods provided by sibling mixins (resolved via Python MRO):
 - ``self._tr`` — bilingual helper (host class)
@@ -33,7 +30,6 @@ Methods provided by sibling mixins (resolved via Python MRO):
   ``self._format_fit_result_text``, ``self._build_fit_csv_rows``,
   ``self._fit_latex_preamble``, ``self._fit_latex_block`` —
   Formatters mixin
-- ``self._render_auto_fit_summary`` — Models mixin
 
 Methods provided by the host class (``ExtrapolationWindow``):
 - result-panel updaters: ``self._set_result_text``,
@@ -52,7 +48,7 @@ Methods provided by the host class (``ExtrapolationWindow``):
   ``self._caption_value``, ``self._ordered_variable_pairs``
 
 State variables READ/WRITTEN:
-- ``self._fit_worker``, ``self._auto_fit_worker``
+- ``self._fit_worker``
 - ``self._fit_batch_context`` (read + cleared here; WRITTEN by the
   Models mixin in ``_run_fitting_mode`` / ``_prepare_*`` helpers)
 - ``self.latex_input_precision_spin``, ``self.latex_group_size_spin``
@@ -64,15 +60,12 @@ State variables READ/WRITTEN:
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
-
 import mpmath as mp
 
 from PySide6.QtWidgets import QMessageBox
 
 from fitting import render_fitting_overview
 from fitting.auto_models import (
-    AUTO_MODELS,
     build_inverse_series_definition,
     build_polynomial_definition,
 )
@@ -103,34 +96,6 @@ class WindowFittingResidualsMixin:
                 text, rows = self._format_fit_display(payload.fit_result, expression, substituted, batch_idx=entry.index)
                 batch_texts.append(header + "\n" + text)
                 csv_rows.extend(rows)
-            elif entry.kind == "auto" and entry.auto_payload:
-                summary_obj, job = entry.auto_payload
-                render = self._render_auto_fit_summary(
-                    summary_obj,
-                    job.headers,
-                    job.data_rows,
-                    job.sigma_rows,
-                    job.x_series,
-                    job.y_series,
-                    job.sigma_series,
-                    job.weights,
-                    False,
-                    "",
-                    job.extra_models if hasattr(job, "extra_models") else [],
-                    context.get("verbose", False),
-                    job_obj=job,
-                    return_payload=True,
-                    render_plots=False,
-                )
-                batch_texts.append(header + "\n" + render.text)
-                if render.fit_result:
-                    csv_rows.extend(
-                        self._build_fit_csv_rows(
-                            render.fit_result,
-                            render.expression or "",
-                            batch_idx=entry.index,
-                        )
-                    )
             else:
                 batch_texts.append(header + "\n" + self._tr("未获得该批次结果。", "No result for this batch."))
         combined = "\n\n".join(batch_texts)
@@ -245,14 +210,11 @@ class WindowFittingResidualsMixin:
             # Validate log-scale selection against current data to avoid log(<=0) failures
             safe_log_scale = self._sanitize_log_scale(log_scale if log_scale is not None else self._current_log_scale(), job.x_series, job.y_series)
             if show_curves:
-                if job.model_type in {"poly", "inverse", "log_poly", "exp_combo"}:
+                if job.model_type in {"poly", "inverse"}:
                     if job.model_type == "poly":
                         definition = build_polynomial_definition(job.poly_degree)
-                    elif job.model_type == "inverse":
-                        definition = build_inverse_series_definition(job.inverse_min, job.inverse_max)
                     else:
-                        identifier = job.auto_identifier or ("M4B" if job.model_type == "log_poly" else "M7B")
-                        definition = next((d for d in AUTO_MODELS if d.identifier == identifier), None)
+                        definition = build_inverse_series_definition(job.inverse_min, job.inverse_max)
                     if definition:
                         fitted_curve, residuals = self._build_linear_plot_series(definition, fit_result, job.x_series, job.y_series)
                     else:
@@ -344,44 +306,6 @@ class WindowFittingResidualsMixin:
                         path = self._save_batch_figure(plot_bytes, ctx.get("output_path", ""), entry.index, "fit")
                         if path:
                             figure_paths.append(path)
-            elif entry.kind == "auto" and entry.auto_payload:
-                summary_obj, job = entry.auto_payload
-                render = self._render_auto_fit_summary(
-                    summary_obj,
-                    job.headers,
-                    job.data_rows,
-                    job.sigma_rows,
-                    job.x_series,
-                    job.y_series,
-                    job.sigma_series,
-                    job.weights,
-                    False,
-                    "",
-                    job.extra_models if hasattr(job, "extra_models") else [],
-                    ctx.get("verbose", False),
-                    return_payload=True,
-                    render_plots=False,
-                    job_obj=job,
-                )
-                if render.fit_result and getattr(job, "render_plots", True):
-                    job_for_plot = SimpleNamespace(
-                        model_type="auto",
-                        poly_degree=0,
-                        inverse_min=1,
-                        inverse_max=1,
-                        auto_identifier=None,
-                        is_multidim=False,
-                        label=f"fit#{entry.index}",
-                        x_series=job.x_series,
-                        y_series=job.y_series,
-                        sigma_series=job.sigma_series,
-                        render_plots=job.render_plots,
-                    )
-                    plot_bytes = self._render_fit_plot_bytes(job_for_plot, render.fit_result, log_scale=log_scale)
-                    if plot_bytes:
-                        path = self._save_batch_figure(plot_bytes, ctx.get("output_path", ""), entry.index, "fit")
-                        if path:
-                            figure_paths.append(path)
         if figure_paths:
             self._set_image_list("fit", figure_paths)
         else:
@@ -440,48 +364,6 @@ class WindowFittingResidualsMixin:
                         batch_idx=entry.index,
                     )
                 )
-            elif entry.kind == "auto" and entry.auto_payload:
-                summary_obj, job = entry.auto_payload
-                render = self._render_auto_fit_summary(
-                    summary_obj,
-                    job.headers,
-                    job.data_rows,
-                    job.sigma_rows,
-                    job.x_series,
-                    job.y_series,
-                    job.sigma_series,
-                    job.weights,
-                    False,
-                    "",
-                    job.extra_models,
-                    self.verbose_checkbox.isChecked(),
-                    return_payload=True,
-                    render_plots=job.render_plots,
-                )
-                batch_texts.append(header + "\n" + render.text)
-                fig_path = self._save_batch_figure(render.plot_bytes, output_path, entry.index, "fit") if render.plot_bytes else None
-                if fig_path:
-                    figure_paths.append(fig_path)
-                    if render.fit_result:
-                        latex_batches.append(
-                            {
-                                "index": entry.index,
-                                "headers": job.headers,
-                                "rows": job.data_rows,
-                                "sigma_rows": job.sigma_rows,
-                                "fit_result": render.fit_result,
-                                "expression": render.expression or "",
-                                "substituted": render.substituted or "",
-                                "figure_path": fig_path,
-                            }
-                        )
-                        csv_rows.extend(
-                            self._build_fit_csv_rows(
-                                render.fit_result,
-                                render.expression or "",
-                                batch_idx=entry.index,
-                            )
-                        )
             else:
                 batch_texts.append(header + "\n" + self._tr("未获得该批次结果。", "No result for this batch."))
         combined = "\n\n".join(batch_texts)
@@ -573,79 +455,3 @@ class WindowFittingResidualsMixin:
             except Exception:
                 pass
         self._fit_worker = None
-
-    def _on_auto_fit_finished(self, payload, generate_latex: bool, output_path: str, verbose_mode: bool):
-        captured_log = ""
-        try:
-            if isinstance(payload, (list, tuple)) and len(payload) == 3:
-                summary, job, captured_log = payload
-            else:
-                summary, job = payload
-        except Exception as exc:  # noqa: BLE001
-            self._on_auto_fit_failed(str(exc))
-            return
-        if verbose_mode and captured_log:
-            self._append_log(captured_log)
-        self._render_auto_fit_summary(
-            summary,
-            job.headers,
-            job.data_rows,
-            job.sigma_rows,
-            job.x_series,
-            job.y_series,
-            job.sigma_series,
-            job.weights,
-            generate_latex,
-            output_path,
-            job.extra_models,
-            verbose_mode,
-            render_plots=job.render_plots,
-        )
-
-    def _on_auto_fit_failed(self, message: str):
-        localized = self._localize_text(message)
-        QMessageBox.critical(self, self._tr("自动拟合失败", "Auto fit failed"), localized)
-        log_msg = self._tr(f"自动拟合失败: {localized}", f"Auto fit failed: {localized}")
-        self._append_log(log_msg)
-
-    def _on_auto_fit_thread_done(self):
-        self._set_button_to_run_mode()
-        if self._auto_fit_worker:
-            try:
-                self._auto_fit_worker.deleteLater()
-            except Exception:
-                pass
-        self._auto_fit_worker = None
-
-    def _on_auto_fit_progress(self, event):
-        """Receive a ``ProgressEvent`` from the auto-fit worker and
-        surface it in the log. The GUI shows e.g.
-        ``"[3/19] 正在拟合 Padé(1|1)…"`` so the user can see which
-        model is currently running and that the pipeline is
-        progressing — not frozen — even on long fits.
-        """
-        verbs_zh = {
-            "started": "正在拟合",
-            "ok": "完成",
-            "timeout": "超时跳过",
-            "error": "失败",
-            "cancelled": "已取消",
-        }
-        verbs_en = {
-            "started": "Fitting",
-            "ok": "Done",
-            "timeout": "Timed out",
-            "error": "Failed",
-            "cancelled": "Cancelled",
-        }
-        status = getattr(event, "status", "?")
-        verb = self._tr(verbs_zh.get(status, status), verbs_en.get(status, status))
-        idx = getattr(event, "index", 0) + 1
-        total = getattr(event, "total", 0)
-        label = getattr(event, "label", "?")
-        line = f"[{idx}/{total}] {verb}: {label}"
-        err = getattr(event, "error", None)
-        if err:
-            line += f" — {err}"
-        self._append_log(line)
-

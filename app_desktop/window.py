@@ -972,9 +972,7 @@ class ExtrapolationWindow(
             return
         mode = self.fit_model_combo.currentData()
         hint = ""
-        if mode in {"log_poly", "exp_combo"}:
-            hint = self._tr("该模型要求 x>0。", "This model requires x>0.")
-        elif mode == "self_consistent":
+        if mode == "self_consistent":
             hint = self._tr(
                 "通用自洽模型中的符号默认都是变量或参数；常量请在表达式中显式处理。",
                 "Symbols in generic self-consistent models are variables or parameters by default; handle constants explicitly in the expression.",
@@ -999,10 +997,6 @@ class ExtrapolationWindow(
             p_min, p_max = self._inverse_power_range()
             parts = [f"A{p}/x^{p}" for p in range(p_min, p_max + 1)]
             return " + ".join(parts) if parts else "A0"
-        if mode in {"log_poly", "exp_combo"}:
-            definition = self._auto_model_map.get("M4B" if mode == "log_poly" else "M7B")
-            if definition:
-                return " + ".join([f"{name}*({text})" for name, text in zip(definition.parameter_names, definition.basis_texts)])
         if mode == "self_consistent" and hasattr(self, "implicit_output_edit"):
             return self.implicit_output_edit.toPlainText().strip()
         if mode == "custom":

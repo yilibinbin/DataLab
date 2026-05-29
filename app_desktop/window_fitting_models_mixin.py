@@ -2,18 +2,10 @@
 concern.
 
 Methods extracted VERBATIM from the original ``window_fitting_mixin.py``.
-This is the largest split file because it owns every fit-execution
-path: custom Levenberg-Marquardt fits, polynomial / inverse / Padé /
-linear-named templates, auto-fit-across-all-models, plus the worker
-thread setup (``_execute_fit_async``, ``_execute_auto_fit_async``)
-and the central dispatcher ``_run_fitting_mode`` that decides which
-of the above to call based on the user's UI selection.
-
-The auto-fit summary renderer ``_render_auto_fit_summary`` lives
-here (it's the engine that builds an ``AutoFitRenderResult`` from a
-``summarize_auto_results`` output, which is then consumed by the
-Residuals mixin via signal). It is the single biggest method in
-this whole subsystem (~180 lines).
+This file owns fit-mode dispatch for custom Levenberg-Marquardt fits,
+polynomial / inverse / Padé / power-limit templates, self-consistent
+models, worker thread setup (``_execute_fit_async``), and the central
+dispatcher ``_run_fitting_mode``.
 
 Methods MOVED here from window_fitting_mixin.py (line numbers
 refer to the pre-Phase-7 monolith and are frozen as one-time
@@ -27,12 +19,8 @@ for canonical history):
 - _execute_template_custom_fit       (was line 909)
 - _execute_power_limit_model         (was line 1023)
 - _execute_pade_model                (was line 1026)
-- _execute_auto_fit                  (was line 1029)
-- _render_auto_fit_summary           (was line 1064)
-- _prepare_auto_fit_job              (was line 1249)
 - _prepare_fit_job                   (was line 1307)
 - _execute_fit_async                 (was line 1385)
-- _execute_auto_fit_async            (was line 1738)
 - _run_fitting_mode                  (was line 1808)
 
 Methods provided by sibling mixins (resolved via Python MRO):
@@ -45,9 +33,7 @@ Methods provided by sibling mixins (resolved via Python MRO):
 - ``self._fit_latex_preamble``, ``self._fit_latex_block`` — Formatters
 - worker-result handlers ``self._on_fit_finished``,
   ``self._on_fit_batches_finished``, ``self._on_fit_failed``,
-  ``self._on_fit_thread_done``, ``self._on_auto_fit_finished``,
-  ``self._on_auto_fit_failed``, ``self._on_auto_fit_thread_done``
-  — Residuals mixin
+  ``self._on_fit_thread_done`` — Residuals mixin
 
 Methods provided by the host class (``ExtrapolationWindow``):
 - ``self._localize_label`` — translate a model label per UI locale
@@ -58,10 +44,9 @@ Methods provided by the host class (``ExtrapolationWindow``):
   ``self._build_batches_from_segments``, ``self._peek_user_precision``
   — batch-mode helpers
 - ``self._append_log`` — log channel
-- ``self._auto_model_map`` — host-class lookup of registered AutoModelDefinition
 
 State variables OWNED:
-- ``self._fit_worker``, ``self._auto_fit_worker`` (worker handles)
+- ``self._fit_worker`` (worker handle)
 - ``self._fit_batch_context`` (batch-job metadata; written here,
   read + cleared by Residuals' result handlers)
 - ``self._last_result_kind``, ``self._last_result_payloads`` (cache)
@@ -625,15 +610,6 @@ class WindowFittingModelsMixin:
     def _execute_pade_model(self, dataset, generate_latex: bool, output_path: str, batch_tag: str = ""):
         self._execute_template_custom_fit("pade", "Padé 拟合", dataset, generate_latex, output_path, batch_tag=batch_tag)
 
-    def _execute_auto_fit(self, *_args, **_kwargs):
-        raise ValueError(_dual_msg("自动拟合已不再支持。", "Automatic fitting is no longer supported."))
-
-    def _render_auto_fit_summary(self, *_args, **_kwargs):
-        raise ValueError(_dual_msg("自动拟合已不再支持。", "Automatic fitting is no longer supported."))
-
-    def _prepare_auto_fit_job(self, *_args, **_kwargs):
-        raise ValueError(_dual_msg("自动拟合已不再支持。", "Automatic fitting is no longer supported."))
-
     def _prepare_fit_job(self, dataset, generate_latex: bool, output_path: str, verbose: bool, render_plots: bool = True) -> FitJob:
         headers, data_rows, sigma_rows, x_series, y_series, sigma_series, weights = self._prepare_linear_fit_inputs(*dataset)
         precision = self._read_precision()
@@ -659,7 +635,6 @@ class WindowFittingModelsMixin:
         inverse_max = 3
         pade_m = 1
         pade_n = 1
-        auto_identifier: str | None = None
         if model_type == "custom":
             custom_config = self._collect_custom_fit_config(
                 validate_parameters=True,
@@ -705,9 +680,6 @@ class WindowFittingModelsMixin:
         elif model_type == "power_limit":
             template_expr, template_params = self._power_limit_template()
             model_expr = template_expr
-        elif model_type in {"log_poly", "exp_combo"}:
-            auto_identifier = "M4B" if model_type == "log_poly" else "M7B"
-            model_expr = self._mode_expression_preview(model_type)
         else:
             # fallback to custom
             custom_config = self._collect_custom_fit_config(
@@ -740,7 +712,6 @@ class WindowFittingModelsMixin:
             inverse_max=inverse_max,
             pade_m=pade_m,
             pade_n=pade_n,
-            auto_identifier=auto_identifier,
             precision=precision,
             generate_latex=generate_latex,
             output_path=output_path,
@@ -773,9 +744,6 @@ class WindowFittingModelsMixin:
         self._set_button_to_stop_mode()
         worker.start()
         self._append_log(self._tr("拟合已在后台运行…", "Fit running in background…"))
-
-    def _execute_auto_fit_async(self, *_args, **_kwargs):
-        raise ValueError(_dual_msg("自动拟合已不再支持。", "Automatic fitting is no longer supported."))
 
     def _run_fitting_mode(self, generate_latex: bool, output_path: str, verbose: bool, render_plots: bool = True) -> bool:
         headers, rows, sigma_rows, segments, _ = self._collect_batched_fitting_dataset(precision_hint=self._peek_user_precision())

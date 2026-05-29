@@ -959,8 +959,6 @@ def build_left_panel(self):
     self.fit_model_combo.addItem("1/x^p 展开", "inverse")
     self.fit_model_combo.addItem("Padé 拟合", "pade")
     self.fit_model_combo.addItem("幂律极限拟合", "power_limit")
-    self.fit_model_combo.addItem("对数多项式", "log_poly")
-    self.fit_model_combo.addItem("通用指数基", "exp_combo")
     fit_items = [
         ("自定义模型（非线性）", "Custom (nonlinear)", "custom"),
         ("自洽隐式模型", "Self-consistent / implicit", "self_consistent"),
@@ -968,8 +966,6 @@ def build_left_panel(self):
         ("1/x^p 展开", "1/x^p series", "inverse"),
         ("Padé 拟合", "Padé", "pade"),
         ("幂律极限拟合", "Power limit", "power_limit"),
-        ("对数多项式", "Log polynomial", "log_poly"),
-        ("通用指数基", "Exponential basis", "exp_combo"),
     ]
     self._register_combo(self.fit_model_combo, fit_items)
     self.fit_model_combo.currentIndexChanged.connect(self._on_model_type_changed)
@@ -1374,19 +1370,12 @@ def build_left_panel(self):
     self._register_text(lbl_nested_policy, "嵌套策略：", "Nested policy:")
     parallel_layout.addRow(lbl_nested_policy, self.parallel_nested_policy_combo)
 
-    self.parallel_auto_fit_backend_checkbox = QCheckBox("启用新自动拟合后端")
-    self._register_text(
-        self.parallel_auto_fit_backend_checkbox,
-        "启用新自动拟合后端",
-        "Enable new auto-fit backend",
-    )
     self.parallel_implicit_backend_checkbox = QCheckBox("启用新隐式拟合后端")
     self._register_text(
         self.parallel_implicit_backend_checkbox,
         "启用新隐式拟合后端",
         "Enable new implicit backend",
     )
-    parallel_layout.addRow(self.parallel_auto_fit_backend_checkbox)
     parallel_layout.addRow(self.parallel_implicit_backend_checkbox)
     options_layout.addLayout(parallel_layout)
 
@@ -1419,9 +1408,6 @@ def build_left_panel(self):
     )
     self.parallel_nested_policy_combo.currentIndexChanged.connect(
         lambda _index: save_current_parallel_config(self)
-    )
-    self.parallel_auto_fit_backend_checkbox.toggled.connect(
-        lambda _checked: save_current_parallel_config(self)
     )
     self.parallel_implicit_backend_checkbox.toggled.connect(
         lambda _checked: save_current_parallel_config(self)

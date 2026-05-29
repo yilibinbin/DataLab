@@ -41,7 +41,6 @@ from fitting import (
     fit_custom_model,
 )
 from fitting.auto_models import (
-    AUTO_MODELS,
     build_inverse_series_definition,
     build_polynomial_definition,
     fit_linear_model,
@@ -1330,16 +1329,11 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
         model_type = job.model_type
         fit_result: FitResult | None = None
         expression = job.model_expr
-        if model_type in {"poly", "inverse", "log_poly", "exp_combo"}:
+        if model_type in {"poly", "inverse"}:
             if model_type == "poly":
                 definition = build_polynomial_definition(job.poly_degree)
-            elif model_type == "inverse":
-                definition = build_inverse_series_definition(job.inverse_min, job.inverse_max)
             else:
-                identifier = job.auto_identifier or ("M4B" if model_type == "log_poly" else "M7B")
-                definition = next((d for d in AUTO_MODELS if d.identifier == identifier), None)
-                if definition is None:
-                    raise ValueError(_dual_msg(f"未找到模型 {identifier}", f"Model not found: {identifier}"))
+                definition = build_inverse_series_definition(job.inverse_min, job.inverse_max)
             fit_result = fit_linear_model(
                 definition,
                 job.x_series,

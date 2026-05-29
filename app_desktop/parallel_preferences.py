@@ -119,10 +119,7 @@ def current_parallel_config_from_widgets(owner: object) -> ParallelConfig:
             ),
         ),
         nested_policy=nested_policy,
-        enable_new_auto_fit_backend=_checked(
-            getattr(owner, "parallel_auto_fit_backend_checkbox", None),
-            ParallelConfig().enable_new_auto_fit_backend,
-        ),
+        enable_new_auto_fit_backend=ParallelConfig().enable_new_auto_fit_backend,
         enable_new_implicit_backend=_checked(
             getattr(owner, "parallel_implicit_backend_checkbox", None),
             ParallelConfig().enable_new_implicit_backend,
@@ -140,10 +137,6 @@ def apply_parallel_config_to_widgets(owner: object, config: ParallelConfig) -> N
     _set_combo_data(
         getattr(owner, "parallel_nested_policy_combo", None),
         config.nested_policy.value,
-    )
-    _set_checked(
-        getattr(owner, "parallel_auto_fit_backend_checkbox", None),
-        config.enable_new_auto_fit_backend,
     )
     _set_checked(
         getattr(owner, "parallel_implicit_backend_checkbox", None),
