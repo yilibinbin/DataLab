@@ -262,6 +262,12 @@ def build_menu(self):
     file_menu.addAction(open_workspace_action)
     self._register_text(open_workspace_action, "打开工作区…", "Open Workspace…", "setText")
 
+    open_example_workspace_action = QAction("打开示例工作区…", self)
+    open_example_workspace_action.setMenuRole(QAction.NoRole)
+    open_example_workspace_action.triggered.connect(self.open_example_workspace)
+    file_menu.addAction(open_example_workspace_action)
+    self._register_text(open_example_workspace_action, "打开示例工作区…", "Open Example Workspace…", "setText")
+
     file_menu.addSeparator()
 
     save_workspace_action = QAction("保存工作区", self)
@@ -275,6 +281,10 @@ def build_menu(self):
     save_workspace_as_action.triggered.connect(self.save_workspace_as)
     file_menu.addAction(save_workspace_as_action)
     self._register_text(save_workspace_as_action, "工作区另存为…", "Save Workspace As…", "setText")
+
+    examples_menu = menubar.addMenu("示例")
+    self._register_text(examples_menu, "示例", "Examples", "setTitle")
+    examples_menu.addAction(open_example_workspace_action)
 
     lang_menu = menubar.addMenu("语言")
     self._register_text(lang_menu, "语言", "Language", "setTitle")

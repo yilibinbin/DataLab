@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QFileDialog,
+    QInputDialog,
     QWidget,
     QVBoxLayout,
     QScrollArea,
@@ -186,6 +187,13 @@ from .window_data_mixin import WindowDataMixin
 from .window_fitting_mixin import WindowFittingMixin
 from .window_extrapolation_mixin import WindowExtrapolationMixin
 
+EXAMPLE_WORKSPACE_NAMES = (
+    "extrapolation.datalab",
+    "error-propagation.datalab",
+    "statistics.datalab",
+    "fitting.datalab",
+)
+
 
 # Per-mode example placeholder text. Maps the mode key from
 # ``self.mode_combo.currentData()`` to a ``(zh, en)`` example pair.
@@ -234,6 +242,63 @@ def _qt_object_alive(obj) -> bool:
             return True
         except Exception:
             return False
+
+
+def _example_workspace_candidates(name: str) -> list[Path]:
+    rel = Path("examples") / "workspaces" / name
+    candidates: list[Path] = []
+    resolved = resolve_resource_path(rel)
+    if resolved is not None:
+        candidates.append(resolved)
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / rel)
+        candidates.append(Path(meipass) / "_internal" / rel)
+    module_root = Path(__file__).resolve().parent
+    candidates.extend(
+        [
+            module_root.parent / rel,
+            Path.cwd() / rel,
+        ]
+    )
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        try:
+            candidate = candidate.resolve()
+        except Exception:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        unique.append(candidate)
+    return unique
+
+
+def list_example_workspaces() -> list[Path]:
+    examples: list[Path] = []
+    for name in EXAMPLE_WORKSPACE_NAMES:
+        for candidate in _example_workspace_candidates(name):
+            if candidate.is_file():
+                examples.append(candidate)
+                break
+    return examples
+
+
+def copy_example_workspace(name: str, destination_dir: Path | None = None) -> Path:
+    clean_name = Path(name).name
+    if clean_name not in EXAMPLE_WORKSPACE_NAMES:
+        raise ValueError(f"unknown example workspace: {name}")
+    source = next((path for path in list_example_workspaces() if path.name == clean_name), None)
+    if source is None:
+        raise FileNotFoundError(f"example workspace not found: {clean_name}")
+    if destination_dir is None:
+        destination_dir = Path(tempfile.mkdtemp(prefix="datalab-example-"))
+    else:
+        destination_dir.mkdir(parents=True, exist_ok=True)
+    target = destination_dir / clean_name
+    shutil.copy2(source, target)
+    return target
 
 
 class _CornerExampleClickFilter(QObject):
@@ -650,6 +715,35 @@ class ExtrapolationWindow(
         if not filename:
             return False
         return self._open_workspace_from_path(Path(filename))
+
+    def open_example_workspace(self, _checked: bool = False) -> bool:
+        if not self._workspace_guard_running() or not self._confirm_workspace_discard_or_save():
+            return False
+        examples = list_example_workspaces()
+        if not examples:
+            QMessageBox.critical(
+                self,
+                self._tr("打开失败", "Open failed"),
+                self._tr("未找到示例工作区。", "No example workspaces were found."),
+            )
+            return False
+        labels = [path.name for path in examples]
+        selected, ok = QInputDialog.getItem(
+            self,
+            self._tr("打开示例工作区", "Open Example Workspace"),
+            self._tr("选择示例工作区：", "Select an example workspace:"),
+            labels,
+            0,
+            False,
+        )
+        if not ok or not selected:
+            return False
+        try:
+            copied = copy_example_workspace(str(selected))
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, self._tr("打开失败", "Open failed"), str(exc))
+            return False
+        return self._open_workspace_from_path(copied)
 
     def _open_workspace_from_path(self, path: Path) -> bool:
         if not self._workspace_guard_running():

@@ -230,6 +230,26 @@ def build_fit_latex_block(
     if cleaned_sub:
         lines.append(f"With params: $ {cleaned_sub} $")
 
+    solver_details: list[str] = []
+    optimizer_backend = fit_result.details.get("optimizer_backend") or fit_result.details.get("optimizer")
+    if optimizer_backend:
+        solver_details.append(f"Solver: \\texttt{{{_latex_escape_text(str(optimizer_backend))}}}")
+    if "scipy_safety_passed" in fit_result.details:
+        status = "passed" if bool(fit_result.details.get("scipy_safety_passed")) else "not used"
+        solver_details.append(f"SciPy precision check: {status}")
+    if "precision" in fit_result.details:
+        solver_details.append(f"Precision: {latex_escape(str(fit_result.details.get('precision')))}")
+    seed_tried = fit_result.details.get("seed_variants_tried")
+    seed_succeeded = fit_result.details.get("seed_variants_succeeded")
+    if seed_tried is not None or seed_succeeded is not None:
+        solver_details.append(
+            "Seed variants: "
+            f"{latex_escape(str(seed_succeeded if seed_succeeded is not None else '-'))}/"
+            f"{latex_escape(str(seed_tried if seed_tried is not None else '-'))}"
+        )
+    if solver_details:
+        lines.append("\\\\ ".join(solver_details))
+
     value_cells = [val for _, val in table_rows]
     if use_dcolumn:
         numeric_spec = calculate_dcolumn_format_for_column(value_cells, "fit_values")

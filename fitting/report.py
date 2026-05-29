@@ -36,4 +36,16 @@ def summarize_fit_result(result: FitResult) -> str:
             f"RMSE = {_format_value(result.rmse)}",
         ]
     )
+    details = result.details or {}
+    solver = details.get("optimizer_backend") or details.get("optimizer")
+    if solver:
+        lines.append(f"Solver = {solver}")
+    if "scipy_safety_passed" in details:
+        status = "passed" if bool(details.get("scipy_safety_passed")) else "not used"
+        lines.append(f"SciPy precision check = {status}")
+    if "precision" in details:
+        lines.append(f"Precision = {details.get('precision')}")
+    if result.residuals:
+        max_abs = max((mp.fabs(value) for value in result.residuals), default=mp.mpf("0"))
+        lines.append(f"Residual max |r| = {_format_value(max_abs)}")
     return "\n".join(lines)
