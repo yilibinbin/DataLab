@@ -197,7 +197,7 @@ if ($usingExisting) {
 
 if ($usingExisting) {
     Write-Host "[3/6] Skipping dependency installation (using existing environment)."
-    Write-Host "       Ensure PySide6, Pillow, mpmath, and PyInstaller are already installed in this interpreter."
+    Write-Host "       Ensure PySide6, Pillow, mpmath, sympy, and PyInstaller are already installed in this interpreter."
 }
 
 Write-Host "[4/6] Preparing icon..."
@@ -376,6 +376,8 @@ $commonArgs = @(
     "--paths", $projectRoot,
     "--hidden-import", "mpmath",
     "--collect-all", "mpmath",
+    "--hidden-import", "sympy",
+    "--collect-all", "sympy",
     # emcee and corner sit behind ``HAS_EMCEE`` guards in
     # fitting.mcmc_fitter, so PyInstaller's static import graph won't
     # pick them up automatically; declare them explicitly so the bundled

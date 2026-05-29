@@ -17,9 +17,11 @@ data_gui.ps1):
 - icon: ``build/macos_gui_build/app_icon.icns`` (created by the
   build script before PyInstaller runs; absent on first invocation —
   guarded with ``Path.is_file()``)
-- hidden imports + ``collect_all`` for mpmath, emcee, corner — these
-  ship behind ``HAS_EMCEE`` runtime guards so PyInstaller's static
-  analyser drops them without explicit declaration
+- hidden imports + ``collect_all`` for mpmath and sympy — numerical and
+  symbolic backends used by fitting and constraints
+- hidden imports + ``collect_all`` for emcee and corner — these ship
+  behind ``HAS_EMCEE`` runtime guards so PyInstaller's static analyser
+  drops them without explicit declaration
 """
 from pathlib import Path
 
@@ -52,12 +54,13 @@ datas = [
 binaries = []
 hiddenimports = [
     "mpmath",
+    "sympy",
     "emcee",
     "emcee.moves",
     "emcee.backends",
     "corner",
 ]
-for _pkg in ("mpmath", "emcee", "corner"):
+for _pkg in ("mpmath", "sympy", "emcee", "corner"):
     _d, _b, _h = collect_all(_pkg)
     datas += _d
     binaries += _b

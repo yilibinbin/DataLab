@@ -255,14 +255,16 @@ if [[ "${DATALAB_BUNDLE_TINYTEX:-0}" == "1" ]]; then
   fi
 fi
 
-# Hidden imports — modules that the static analyzer can miss because they
-# are imported lazily / conditionally. emcee and corner sit behind
-# ``HAS_EMCEE`` guards in fitting.mcmc_fitter, so PyInstaller's import
-# graph won't pick them up automatically; declare them explicitly so the
-# bundled .app actually ships MCMC support.
+# Hidden imports and package collections for numerical/symbolic backends.
+# SymPy is collected for formula parsing, symbolic fitting, and constraints.
+# emcee and corner sit behind ``HAS_EMCEE`` guards in fitting.mcmc_fitter, so
+# PyInstaller's import graph won't pick them up automatically; declare them
+# explicitly so the bundled .app actually ships MCMC support.
 HIDDEN_IMPORT_FLAGS=(
   --hidden-import "mpmath"
   --collect-all "mpmath"
+  --hidden-import "sympy"
+  --collect-all "sympy"
   --hidden-import "emcee"
   --hidden-import "emcee.moves"
   --hidden-import "emcee.backends"
