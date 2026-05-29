@@ -38,6 +38,21 @@ def test_affine_output_two_delta_plus_one_returns_exact_affine_output() -> None:
         assert plan.transform.forward_values({}, [mp.mpf("3.25")]) == [mp.mpf("7.5")]
 
 
+def test_affine_output_outranks_double_precision_candidate_routing() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("n",),
+        implicit_variable="delta",
+        equation="a + b*n",
+        output_expression="2*delta + 1",
+        parameters=("a", "b"),
+    )
+
+    plan = plan_implicit_fit(definition, precision=16)
+
+    assert plan.kind is ImplicitPlanKind.EXACT_AFFINE_OUTPUT
+    assert plan.try_scipy is False
+
+
 def test_nonlinear_output_uses_analytic_implicit_jacobian_at_precision_80() -> None:
     definition = ImplicitModelDefinition(
         x_variables=("n",),

@@ -10,10 +10,10 @@ from typing import Callable, Sequence, cast
 from mpmath import mp
 
 from datalab_latex.expression_engine import safe_eval
-from shared.numerics import noise_floor
 from fitting.model_parser import ModelSpecification, MpfCallable
 from fitting.constraints import ParameterState
 from fitting.hp_fitter import FitResult, combine_error_components
+from fitting.statistics import compute_fit_statistics
 from shared.bilingual import _dual_msg
 
 
@@ -648,33 +648,14 @@ def _solve_observed_linear_least_squares(
         for i in range(row_count)
     ]
     residuals = [fitted_curve[i] - targets[i] for i in range(row_count)]
-    if weights:
-        chi2 = mp.fsum(weight * (residual * residual) for weight, residual in zip(weights, residuals))
-        total_weight = mp.fsum(weights)
-        mean_target = (
-            mp.fsum(weight * target for weight, target in zip(weights, targets)) / total_weight
-            if total_weight > 0 else mp.fsum(targets) / row_count
-        )
-        sst = mp.fsum(weight * (target - mean_target) ** 2 for weight, target in zip(weights, targets))
-        rmse = mp.sqrt(chi2 / total_weight)
-    else:
-        chi2 = mp.fsum(residual * residual for residual in residuals)
-        mean_target = mp.fsum(targets) / row_count
-        sst = mp.fsum((target - mean_target) ** 2 for target in targets)
-        rmse = mp.sqrt(chi2 / row_count)
-    dof = row_count - col_count
-    if dof <= 0:
-        reduced = mp.nan
-        r2 = mp.nan
-        aic = mp.nan
-        bic = mp.nan
-    else:
-        reduced = chi2 / dof
-        r2 = mp.mpf("1") - (chi2 / sst if sst != 0 else mp.mpf("0"))
-        eps = noise_floor()
-        noise = chi2 / row_count if chi2 > eps else eps
-        aic = 2 * col_count + row_count * mp.log(noise)
-        bic = col_count * mp.log(row_count) + row_count * mp.log(noise)
+    stats = compute_fit_statistics(targets, residuals, weights, free_param_count=col_count)
+    chi2 = stats.chi2
+    reduced = stats.reduced_chi2
+    r2 = stats.r2
+    rmse = stats.rmse
+    aic = stats.aic
+    bic = stats.bic
+    dof = stats.dof
 
     covariance, stat_errors, cov_warning = _linear_covariance(
         design=design,

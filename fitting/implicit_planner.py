@@ -47,7 +47,7 @@ def plan_implicit_fit(definition: ImplicitModelDefinition, *, precision: int) ->
             reason="observed implicit variable with nonlinear parameter equation",
         )
 
-    transform = detect_output_transform(definition)
+    transform = detect_output_transform(definition, precision=precision)
     if transform is not None:
         return ImplicitPlan(
             kind=ImplicitPlanKind.EXACT_AFFINE_OUTPUT,
@@ -55,6 +55,8 @@ def plan_implicit_fit(definition: ImplicitModelDefinition, *, precision: int) ->
             transform=transform,
         )
 
+    # Exact observed-variable affine reduction is precision-independent and
+    # intentionally outranks double-precision candidate routing.
     if precision <= _DOUBLE_PRECISION_DPS:
         return ImplicitPlan(
             kind=ImplicitPlanKind.SCIPY_IMPLICIT,

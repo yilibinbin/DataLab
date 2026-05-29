@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Any
 
 from mpmath import mp
 
 from shared.bilingual import _dual_msg
 
-from .constraints import build_parameter_state
+from .constraints import ParameterState, build_parameter_state
 from .hp_fitter import (
     FitResult,
     _compute_covariance,
@@ -18,14 +19,16 @@ from .hp_fitter import (
     combine_error_components,
     fit_custom_model,
 )
-from .implicit_classifier import ImplicitProblemClassifier, ImplicitStrategy
 from .implicit_model import (
     ImplicitModelDefinition,
     build_implicit_model_specification,
     fit_observed_implicit_variable_linear_model,
 )
+from .implicit_planner import ImplicitPlanKind, plan_implicit_fit
+from .implicit_transforms import OutputTransform
 from .model_parser import ModelSpecification, build_model_specification, infer_parameter_names
 from .problem import ModelProblem, constants_for_compute
+from .statistics import compute_fit_statistics
 
 
 @dataclass(frozen=True)
@@ -164,8 +167,9 @@ class FitRunner:
                 )
             )
         state = build_parameter_state(problem.parameter_config or {}, list(definition.parameters))
-        classification = ImplicitProblemClassifier().classify(definition)
-        if classification.strategy is ImplicitStrategy.OBSERVED_LINEAR:
+        plan = plan_implicit_fit(definition, precision=precision)
+        fallback_history: list[dict[str, str]] = []
+        if plan.kind is ImplicitPlanKind.OBSERVED_LINEAR:
             try:
                 result = fit_observed_implicit_variable_linear_model(
                     definition,
@@ -185,10 +189,67 @@ class FitRunner:
                 result.details["implicit_strategy"] = "observed_linear"
                 result.details["optimizer_backend"] = "mpmath_qr"
                 return result
-            except ValueError:
-                pass
+            except ValueError as exc:
+                fallback_history.append({"from": "observed_linear", "to": "general", "reason": str(exc)})
 
-        if classification.strategy is ImplicitStrategy.OBSERVED_NONLINEAR:
+        if plan.kind is ImplicitPlanKind.EXACT_AFFINE_OUTPUT and plan.transform is not None:
+            if weights is None and data_sigmas is not None and any(sigma is not None for sigma in data_sigmas):
+                fallback_history.append(
+                    {
+                        "from": "exact_affine_output",
+                        "to": "general",
+                        "skipped": "unweighted_data_sigmas",
+                    }
+                )
+            else:
+                try:
+                    with mp.workdps(precision):
+                        transformed_targets = plan.transform.transformed_targets(variable_data, target_data)
+                        transformed_weights = plan.transform.transformed_weights(variable_data, weights)
+                        transformed_sigmas = plan.transform.transformed_sigmas(variable_data, data_sigmas)
+                    observed_definition = ImplicitModelDefinition(
+                        x_variables=definition.x_variables,
+                        implicit_variable=definition.implicit_variable,
+                        equation=definition.equation,
+                        output_expression=definition.implicit_variable,
+                        parameters=definition.parameters,
+                        constants=definition.constants,
+                        solve_options=definition.solve_options,
+                    )
+                    observed_plan = plan_implicit_fit(observed_definition, precision=precision)
+                    if observed_plan.kind is not ImplicitPlanKind.OBSERVED_LINEAR:
+                        raise ValueError("Exact affine output fast path requires an observed-linear implicit equation.")
+                    result = fit_observed_implicit_variable_linear_model(
+                        observed_definition,
+                        state,
+                        variable_data,
+                        transformed_targets,
+                        precision=precision,
+                        weights=transformed_weights,
+                        data_sigmas=transformed_sigmas,
+                    )
+                    result.details["implicit_diagnostics"] = {
+                        "points_solved": 0,
+                        "root_fallbacks": 0,
+                        "max_iterations_used": 0,
+                        "max_residual": "0",
+                    }
+                    result.details["implicit_strategy"] = "exact_affine_output_observed_linear"
+                    result.details["optimizer_backend"] = "mpmath_qr"
+                    result.details["output_transform"] = plan.transform.reason
+                    with mp.workdps(precision):
+                        return _remap_affine_result_to_output_space(
+                            result,
+                            plan.transform,
+                            variable_data,
+                            target_data,
+                            weights,
+                            free_param_count=len(state.free_params),
+                        )
+                except ValueError as exc:
+                    fallback_history.append({"from": "exact_affine_output", "to": "general", "reason": str(exc)})
+
+        if plan.kind is ImplicitPlanKind.OBSERVED_NONLINEAR:
             try:
                 observed_variable_data = dict(variable_data)
                 observed_variable_data[definition.implicit_variable] = target_data
@@ -218,11 +279,7 @@ class FitRunner:
                 }
                 return result
             except ValueError as exc:
-                nonlinear_fallback_reason = str(exc)
-            else:
-                nonlinear_fallback_reason = ""
-        else:
-            nonlinear_fallback_reason = ""
+                fallback_history.append({"from": "observed_nonlinear", "to": "general", "reason": str(exc)})
 
         spec = build_implicit_model_specification(definition)
         result = fit_custom_model(
@@ -241,13 +298,14 @@ class FitRunner:
             "max_iterations_used": int(diagnostics.max_iterations_used),
             "max_residual": str(diagnostics.max_residual),
         }
-        result.details["implicit_strategy"] = classification.strategy.value
-        if classification.strategy is ImplicitStrategy.OBSERVED_LINEAR:
-            result.details["implicit_strategy_fallback"] = "observed_linear_fast_path_unavailable"
-        elif classification.strategy is ImplicitStrategy.OBSERVED_NONLINEAR:
-            result.details["implicit_strategy_fallback"] = "direct_observed_nonlinear_optimizer_unavailable"
-            if nonlinear_fallback_reason:
-                result.details["implicit_strategy_fallback_reason"] = nonlinear_fallback_reason
+        result.details["implicit_strategy"] = "general_implicit_numeric_finite_difference"
+        if plan.kind in {
+            ImplicitPlanKind.SCIPY_IMPLICIT,
+            ImplicitPlanKind.ANALYTIC_IMPLICIT_JACOBIAN,
+        }:
+            result.details["implicit_planned_strategy"] = plan.kind.value
+        if fallback_history:
+            result.details["fallback_history"] = fallback_history
         result.details["optimizer_backend"] = "mpmath_high_precision"
         return result
 
@@ -277,7 +335,7 @@ def _accept_scipy_result(
 
 def _fit_with_scipy_least_squares(
     model: ModelSpecification,
-    parameter_state,
+    parameter_state: ParameterState,
     variable_data: dict[str, Sequence[mp.mpf]],
     target_data: Sequence[mp.mpf],
     *,
@@ -285,7 +343,7 @@ def _fit_with_scipy_least_squares(
     data_sigmas: list[mp.mpf | None] | None,
 ) -> _SciPyCandidate:
     import numpy as np
-    from scipy.optimize import least_squares
+    from scipy.optimize import least_squares  # type: ignore[import-untyped]
 
     observations, targets = _prepare_points(variable_data, target_data)
     if len(targets) != len(observations):
@@ -305,7 +363,7 @@ def _fit_with_scipy_least_squares(
         upper.append(float(hi) if hi is not None else np.inf)
     x0 = np.asarray([float(value) for value in parameter_state.initial_vector()], dtype=float)
 
-    def _residual_vector(values) -> np.ndarray:
+    def _residual_vector(values: Sequence[float]) -> Any:
         params = parameter_state.compose(tuple(mp.mpf(str(float(value))) for value in values))
         residuals = []
         for idx, (obs, target) in enumerate(zip(observations, targets)):
@@ -437,7 +495,40 @@ def _weighted_residual_norm(
     return float(total)
 
 
-def _jacobian_condition_estimate(jacobian) -> float:
+def _remap_affine_result_to_output_space(
+    result: FitResult,
+    transform: OutputTransform,
+    variable_data: dict[str, Sequence[mp.mpf]],
+    target_data: Sequence[mp.mpf],
+    weights: list[mp.mpf] | None,
+    *,
+    free_param_count: int,
+) -> FitResult:
+    fitted = transform.forward_values(variable_data, result.fitted_curve)
+    residuals = [mp.mpf(fit) - mp.mpf(target) for fit, target in zip(fitted, target_data)]
+    stats = compute_fit_statistics(
+        target_data,
+        residuals,
+        weights,
+        free_param_count=free_param_count,
+    )
+    details = dict(result.details)
+    details["output_space_remapped"] = True
+    return replace(
+        result,
+        chi2=stats.chi2,
+        reduced_chi2=stats.reduced_chi2,
+        aic=stats.aic,
+        bic=stats.bic,
+        r2=stats.r2,
+        rmse=stats.rmse,
+        residuals=residuals,
+        fitted_curve=fitted,
+        details=details,
+    )
+
+
+def _jacobian_condition_estimate(jacobian: Any) -> float:
     import numpy as np
 
     try:
@@ -465,7 +556,7 @@ def _spotcheck_scipy_solution(
     return True
 
 
-def _dependent_zero_errors(parameter_state, params: dict[str, mp.mpf]) -> dict[str, mp.mpf]:
+def _dependent_zero_errors(parameter_state: ParameterState, params: dict[str, mp.mpf]) -> dict[str, mp.mpf]:
     errors: dict[str, mp.mpf] = {}
     for name in params:
         if name not in parameter_state.free_params:

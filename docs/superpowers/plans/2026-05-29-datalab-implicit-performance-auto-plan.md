@@ -75,6 +75,58 @@ def build_implicit_model_specification(
 - Task 6 must explicitly handle `ParallelConfig.enable_new_implicit_backend` and the legacy branch in `app_desktop/workers_core.py`. Stale persisted settings with `enable_new_implicit_backend=False` must still compute through the new backend.
 - Add a regression that loads or constructs stale settings/workspace data with `enable_new_implicit_backend=False` and verifies the new backend is used.
 
+## 2026-05-30 Final Multi-Agent Review Corrections
+
+This section is also authoritative when it conflicts with older task snippets below. It incorporates the 2026-05-30 multi-subagent deep reviews plus Claude adversarial re-review. Do not implement later tasks from the older code sketches unless they also satisfy these corrections.
+
+### Parser and Formula Contract
+
+- `shared.symbolic_math` and every SymPy-based detector must match DataLab's formula contract as enforced by the runtime expression engine. The symbolic parser must not accept aliases that the fit evaluator rejects.
+- Add regressions proving affine/seed/derivative detectors reject or normalize consistently with `safe_eval` for lowercase aliases such as `e`, `pi`, and `sin(...)`. A detector must not select a fast path for an expression that the normal model evaluator would reject.
+- Keep the single shared parser interface, but treat parser acceptance as syntax-only. Domain modules still own free-symbol, parameter, constant, and runtime-evaluator compatibility validation.
+
+### Task 2 Maintainability Corrections
+
+- Do not keep a separate `_output_space_statistics()` formula copy in `fitting/runner.py`. Before committing Task 2, extract a shared helper, for example `fitting/statistics.py::compute_fit_statistics(targets, residuals, weights, free_param_count)`, and use it from the existing high-precision/general path and the affine remap path. Extend later observed-linear cleanup only if it stays in scope and tests remain focused.
+- The affine remap helper must return a new `FitResult` via `dataclasses.replace()`; it must not mutate an existing result in place. Any older snippet below showing a `None` return or in-place mutation is obsolete.
+- General-path parity tests must patch the planner-bound symbol, e.g. `monkeypatch.setattr("fitting.implicit_planner.detect_output_transform", ...)`, not only `fitting.implicit_transforms.detect_output_transform`.
+- Until analytic/SciPy execution is actually implemented, details must distinguish any planned capability from the strategy that actually executed. Prefer keeping not-yet-executable plan kinds out of `details["implicit_strategy"]`, or add explicit `details["implicit_planned_strategy"]` plus tests.
+
+### Seed Hint Corrections
+
+- Task 3 must modify `fitting/implicit_planner.py` and wire `detect_seed_hint()` into `plan_implicit_fit()`. A seed hint module that is not connected to the planner is incomplete.
+- The only allowed branch order is:
+  1. configured initial seed,
+  2. compatible warm start,
+  3. validated hint candidates sorted by distance to the configured/warm anchor.
+  Delete or ignore older snippets that put seed hints ahead of configured/warm seeds.
+- Inverse-square detection must explicitly recognize `A + B/(x-u)^2` and `A - B/(x-u)^2`. Candidate generation must use `effective_target = target - A`; using raw `target` is incorrect for offset forms.
+- Add a two-branch regression proving seed hints do not silently switch to a different root branch than the configured/warm path.
+- Seed hints must either be passed into numeric finite-difference partial solves as well as objective evaluation, or the implementation and diagnostics must clearly state that the feature only improves objective root-solve seeding and is not a Jacobian-speed optimization.
+- Do not hard-code `evalf(80)` in seed hints. Use the requested precision or the current `mp.workdps(...)` context.
+
+### Analytic Derivative Corrections
+
+- Analytic implicit derivatives must be with respect to the optimizer's free parameters, not blindly every `definition.parameters` entry.
+- If dependent parameter expressions are present, the first implementation must disable the analytic path and fall back to numeric finite differences, unless it implements and tests the full chain rule from dependent parameters to free parameters.
+- Add a dependent-parameter parity regression before enabling analytic derivatives for those cases.
+
+### SciPy Routing Corrections
+
+- SciPy implicit least-squares is a safety candidate until representative benchmarks prove it is no slower than the analytic mpmath route for low-precision implicit workloads.
+- Task 5 must not assert that `precision <= 16` always executes `scipy_implicit_least_squares`. It may assert that SciPy is tried, spot-checked, and either accepted or rejected according to the benchmark/safety gate.
+- Move the representative SciPy-vs-mpmath benchmark gate into Task 5 before SciPy is advertised as the preferred backend. If the gate fails, keep SciPy as fallback/candidate only.
+
+### Packaging and Legacy Backend Corrections
+
+- Add SymPy packaging support in all frozen-app build paths before release testing:
+  - `DataLab.spec`
+  - `build_mac_data_gui.sh`
+  - `build_windows_data_gui.ps1`
+- Include explicit hidden imports and collection/`--collect-all` handling sufficient for PyInstaller builds that import `sympy` through the new planner/transform/derivative modules.
+- Remove or neutralize stale `ParallelConfig.enable_new_implicit_backend=False` as an execution selector. Old preferences or workspace payloads may deserialize the field, but they must still route through the unified new backend.
+- Add regressions for all legacy entry points that can carry the stale flag: preferences load/save, serialized job payload deserialize, and `app_desktop/workers_core.py` execution path.
+
 ## Design Summary
 
 Current evidence:

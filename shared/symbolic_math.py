@@ -44,8 +44,6 @@ def _hyp2f1(a: Any, b: Any, c: Any, z: Any) -> Any:
 SYMPY_CONSTANTS: dict[str, object] = {
     "Pi": sp.pi,
     "E": sp.E,
-    "pi": sp.pi,
-    "e": sp.E,
 }
 
 SYMPY_FUNCTIONS: dict[str, object] = {
@@ -78,35 +76,6 @@ SYMPY_FUNCTIONS: dict[str, object] = {
     "Hyp0f1": _hyp0f1,
     "Hyp1f1": _hyp1f1,
     "Hyp2f1": _hyp2f1,
-    "sin": sp.sin,
-    "cos": sp.cos,
-    "tan": sp.tan,
-    "asin": sp.asin,
-    "acos": sp.acos,
-    "atan": sp.atan,
-    "sinh": sp.sinh,
-    "cosh": sp.cosh,
-    "tanh": sp.tanh,
-    "asinh": sp.asinh,
-    "acosh": sp.acosh,
-    "atanh": sp.atanh,
-    "exp": sp.exp,
-    "log": sp.log,
-    "ln": sp.log,
-    "log10": _log10,
-    "sqrt": sp.sqrt,
-    "power": sp.Pow,
-    "abs": sp.Abs,
-    "erf": sp.erf,
-    "gamma": sp.gamma,
-    "zeta": sp.zeta,
-    "polylog": sp.polylog,
-    "besselj": sp.besselj,
-    "bessely": sp.bessely,
-    "airy": sp.airyai,
-    "hyp0f1": _hyp0f1,
-    "hyp1f1": _hyp1f1,
-    "hyp2f1": _hyp2f1,
 }
 
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")

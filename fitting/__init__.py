@@ -1,6 +1,6 @@
 """High-precision fitting toolkit for the GUI."""
 
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from .implicit_model import (
     ImplicitEvaluationCache,
@@ -27,7 +27,7 @@ from .auto_models import (
 from .report import summarize_fit_result
 
 
-def build_parameter_state(parameter_config, parameter_names=None):
+def build_parameter_state(parameter_config: Any, parameter_names: Any = None) -> ParameterState:
     """Public compatibility wrapper for parameter state construction."""
 
     if isinstance(parameter_config, (list, tuple)) and isinstance(parameter_names, dict):

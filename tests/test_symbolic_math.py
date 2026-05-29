@@ -35,13 +35,18 @@ def test_parse_symbolic_expression_supports_mathematica_functions() -> None:
     assert symbols == {"x": x}
 
 
-def test_parse_symbolic_expression_supports_constants_variables_and_aliases() -> None:
+def test_parse_symbolic_expression_supports_runtime_formula_constants() -> None:
     x = sp.Symbol("x")
 
-    expr, symbols = parse_symbolic_expression("Pi + E + pi + e + sin[x]", variables=("x",))
+    expr, symbols = parse_symbolic_expression("Pi + E + Sin[x]", variables=("x",))
 
-    assert expr == sp.pi + sp.E + sp.pi + sp.E + sp.sin(x)
+    assert expr == sp.pi + sp.E + sp.sin(x)
     assert symbols == {"x": x}
+
+
+def test_parse_symbolic_expression_rejects_lowercase_runtime_function_aliases() -> None:
+    with pytest.raises(ValueError, match="Unsupported symbolic function call"):
+        parse_symbolic_expression("sin[x]", variables=("x",))
 
 
 def test_parse_symbolic_expression_rejects_unknown_function_names() -> None:
@@ -95,7 +100,6 @@ def test_build_sympy_local_dict_uses_exact_parser_registry() -> None:
     assert local_dict["x"] == sp.Symbol("x")
     assert local_dict["Pi"] == sp.Symbol("Pi")
     assert local_dict["Sin"] is sp.sin
-    assert local_dict["sin"] is sp.sin
     assert local_dict["Ln"] is sp.log
     log10 = cast(Callable[[object], object], local_dict["Log10"])
     assert callable(log10)
