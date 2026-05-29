@@ -14,7 +14,7 @@ Query-string schema::
 
     x=1,2,3,4,5         # comma-separated x values
     y=2,4,6,8,10        # comma-separated y values (must match x length)
-    model=M1            # single-model endpoint only; linear alias accepted
+    model=polynomial    # single-model endpoint only; explicit public model
     precision=50        # optional; clamped to [10, 1000]
 
 Hardening:
@@ -272,17 +272,40 @@ def _parse_precision(raw: str | None, default: int = 50) -> int:
     return max(10, min(1000, value))
 
 
+_PUBLIC_SSE_MODEL_ALIASES = {
+    "polynomial": "polynomial",
+    "poly": "polynomial",
+    "inverse_power": "inverse_power",
+    "inverse": "inverse_power",
+    "pade": "pade",
+    "power_limit": "power_limit",
+    "custom": "custom",
+}
+
+_LINEAR_SSE_MODELS = {"polynomial", "inverse_power"}
+
+_REMOVED_SSE_MODEL_IDS = {"auto", "auto_fit", "log_poly", "exp_combo"}
+
+
 def _resolve_model_id(raw: str) -> str:
-    """Map aliases ('linear' → 'M1') and pass identifiers through.
-    Caller checks existence in AUTO_MODELS.
-
-    Delegates to ``fitting.auto_models.resolve_model_identifier`` —
-    the single source of truth shared with the CLI so both entry
-    points accept the same set of friendly names.
-    """
-    from fitting.auto_models import resolve_model_identifier
-
-    return resolve_model_identifier(raw)
+    """Resolve public SSE model aliases without the retained auto registry."""
+    model = raw.strip().lower()
+    if not model:
+        return ""
+    if model in _REMOVED_SSE_MODEL_IDS:
+        raise ValueError(
+            f"model {raw!r} has been removed from public fitting. "
+            "Choose an explicit supported model such as 'polynomial' "
+            "or 'inverse_power'."
+        )
+    resolved = _PUBLIC_SSE_MODEL_ALIASES.get(model)
+    if resolved is None:
+        raise ValueError(
+            f"unsupported model {raw!r} for /api/fit/stream. "
+            "Supported models: polynomial, inverse_power, pade, "
+            "power_limit, custom."
+        )
+    return resolved
 
 
 def _sanitise_error_message(exc: Exception) -> str:
@@ -334,24 +357,32 @@ def _single_fit_events(
     ``mp.mpf`` happens inside the locked ``precision_guard`` region
     so high-precision input survives unrounded.
     """
-    from fitting.auto_models import AUTO_MODELS, fit_linear_model
+    from fitting import (
+        build_inverse_series_definition,
+        build_polynomial_definition,
+    )
+    from fitting.auto_models import fit_linear_model
     from shared.precision import precision_guard
 
     yield ("started", {
         "n_points": len(xs_str), "model": model_id, "precision": precision,
     })
 
-    by_id = {d.identifier: d for d in AUTO_MODELS}
-    definition = by_id.get(model_id)
-    if definition is None:
+    if model_id not in _LINEAR_SSE_MODELS:
         yield ("error", {
-            "error": "UnknownModel",
+            "error": "UnsupportedModel",
             "message": (
-                f"Unknown model {model_id!r}. Available: "
-                f"{', '.join(sorted(by_id))}"
+                f"Model {model_id!r} is not supported by this streaming "
+                "linear-fit endpoint. Use the standard web fitting form "
+                "for nonlinear or custom explicit models."
             ),
         })
         return
+
+    if model_id == "polynomial":
+        definition = build_polynomial_definition(1)
+    else:
+        definition = build_inverse_series_definition(1, 3)
 
     yield ("progress", {"model": model_id, "status": "fitting"})
 
