@@ -118,6 +118,8 @@ def test_docs_do_not_advertise_automatic_fitting_as_current_feature():
         root / "docs" / "PROGRAM_FRAMEWORK.en.tex",
         root / "docs" / "PROGRAM_FRAMEWORK.tex",
         root / "docs" / "DATALAB_WEB_GUIDE.md",
+        root / "docs" / "DATALAB_WEB_GUIDE.en.md",
+        root / "docs" / "web" / "fitting.en.md",
         root / "docs" / "web" / "fitting.zh.md",
         root / "app_desktop" / "window_data_mixin.py",
         root / "app_desktop" / "window_i18n_mixin.py",
@@ -136,6 +138,11 @@ def test_docs_do_not_advertise_automatic_fitting_as_current_feature():
         "automatic fitting",
         "自动模型",
         "自动拟合",
+        "auto selection",
+        "auto model selection",
+        "tries multiple candidate",
+        "preset/log",
+        "auto/custom",
     )
     offenders: list[str] = []
     for path in checked_paths:
@@ -181,6 +188,11 @@ def test_web_fitting_template_exposes_only_explicit_supported_choices():
         'value="custom"',
     ):
         assert allowed in text
+
+    # The exact six-model Task 1 set applies to desktop. The current web
+    # flow has no self-consistent/implicit input fields, so it exposes only
+    # the supported explicit subset and does not pretend to route it.
+    assert 'value="self_consistent"' not in text
 
 
 def test_cli_batch_config_no_longer_advertises_auto_fit(tmp_path):
