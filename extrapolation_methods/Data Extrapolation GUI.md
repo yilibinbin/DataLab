@@ -18,12 +18,12 @@ This document defines the complete design of the **Data Fitting Module** for the
 The new module introduces:
 
 1. **Custom multi-parameter, multi-variable nonlinear fitting**  
-2. **Automatic model selection (AIC/BIC) from multiple candidate models**  
+2. **Explicit fitting modes with AIC/BIC metrics for manual comparison**  
 3. **Full statistical evaluation and uncertainty estimation**  
 4. **A visualization panel** with automatic plotting and export  
 5. **Parameter constraints support**  
 6. **High-precision symbolic differentiation (sympy)**  
-7. **Automatic fitting comparison across models**
+7. **Manual comparison across supported explicit models**
 
 ---
 
@@ -76,34 +76,27 @@ Parameter specification (example):
 
 ---
 
-# 2.3 Auto Model Selection
+# 2.3 Explicit Model Selection
 
-The software automatically fits the dataset to a suite of predefined models:
+The software fits the dataset with the model explicitly selected by the user.
+Supported model families are polynomial, inverse-power series, Padé,
+power-limit templates, custom expressions, and desktop self-consistent/implicit
+models. AIC/BIC and residual plots are reported so users can compare repeated
+runs manually.
 
-| ID  | Model                      | Form                                                  |
-| --- | -------------------------- | ----------------------------------------------------- |
-| M1  | Power-law                  | \(y = A x^{-p} + C\)                                  |
-| M2  | Exponential                | \(y = A e^{-kx} + C\)                                 |
-| M3  | Polynomial                 | automatically determine degree n                      |
-| M4  | Rydberg quantum defect     | \(-R / (n - (\delta_0+\delta_2/n^2+\delta_4/n^4))^2\) |
-| M5  | 1/x series                 | \( y = A + B/x^2 + C/x^3 \)                           |
-| M6  | 1/nᵖ convergence           | \( y = A + B n^{-p} \)                                |
-| M7  | Pure sequence acceleration | Shanks / Levin-u                                      |
-| M8  | User-defined model         | Provided via custom function                          |
+### Model Comparison
 
-### Model Ranking
+For each selected model run:
 
-For each model:
-
-1. Fit is performed  
-2. χ², AIC, BIC computed  
-3. Best model determined by lowest AIC  
+1. Fit is performed
+2. χ², AIC, BIC are computed
+3. Residuals and fitted curves are exported
 
 System outputs:
 
-- best model  
-- comparison table of all models  
-- overlaid plot of all fitted curves  
+- selected model parameters
+- model quality metrics
+- fitted curve and residual plots
 
 ---
 
@@ -204,10 +197,10 @@ BIC = k\ln(n) + n\ln(\chi^2/n)
 ### Required Plots
 
 1. **Scatter plot with error bars**  
-2. **Fitted curve** (multiple curves if auto-model selection)  
+2. **Fitted curve** for the selected explicit model  
 3. **Residual plot**  
 4. **Extrapolation plot (x→∞ or n→∞)**  
-5. **Comparison of multiple model curves**  
+5. **Comparison of manually selected explicit model curves**  
 
 ### Plot Features
 
@@ -233,7 +226,7 @@ BIC = k\ln(n) + n\ln(\chi^2/n)
 fitting/
 ├── model_parser.py         # sympy parsing of custom expressions
 ├── hp_fitter.py            # high-precision solver (sympy+mpmath)
-├── auto_models.py          # built-in model library
+├── auto_models.py          # low-level explicit linear-basis definitions
 ├── model_selector.py       # AIC/BIC model ranking
 ├── constraints.py          # parameter constraints engine
 ├── plot_fitting.py         # complete plotting toolkit

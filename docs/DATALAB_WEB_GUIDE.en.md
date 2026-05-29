@@ -37,7 +37,7 @@ DataLab Web is a browser-based, high-precision numerical tool that provides four
   - Polynomial fitting
   - Inverse-power series fitting
   - Padé approximation
-  - Built-in model library (log/exp combinations, etc.)
+  - Power-limit template
   - Custom models
 
 #### 1.4 Statistics

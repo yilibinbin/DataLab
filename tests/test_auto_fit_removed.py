@@ -121,6 +121,14 @@ def test_docs_do_not_advertise_automatic_fitting_as_current_feature():
         root / "docs" / "DATALAB_WEB_GUIDE.en.md",
         root / "docs" / "web" / "fitting.en.md",
         root / "docs" / "web" / "fitting.zh.md",
+        root / "docs" / "web" / "index.en.md",
+        root / "docs" / "web" / "index.zh.md",
+        root / "docs" / "web" / "roadmap.en.md",
+        root / "docs" / "web" / "roadmap.zh.md",
+        root / "docs" / "web" / "theory.en.md",
+        root / "docs" / "web" / "theory.zh.md",
+        root / "extrapolation_methods" / "Data Extrapolation GUI.md",
+        root / "app_web" / "README_UPDATES.md",
         root / "app_desktop" / "window_data_mixin.py",
         root / "app_desktop" / "window_i18n_mixin.py",
         root / "app_web" / "templates" / "fit.html",
@@ -144,12 +152,41 @@ def test_docs_do_not_advertise_automatic_fitting_as_current_feature():
         "preset/log",
         "auto/custom",
     )
+    user_facing_doc_paths = {
+        root / "docs" / "DATALAB_WEB_GUIDE.md",
+        root / "docs" / "DATALAB_WEB_GUIDE.en.md",
+        root / "docs" / "web" / "fitting.en.md",
+        root / "docs" / "web" / "fitting.zh.md",
+        root / "docs" / "web" / "index.en.md",
+        root / "docs" / "web" / "index.zh.md",
+        root / "docs" / "web" / "roadmap.en.md",
+        root / "docs" / "web" / "roadmap.zh.md",
+        root / "docs" / "web" / "theory.en.md",
+        root / "docs" / "web" / "theory.zh.md",
+        root / "extrapolation_methods" / "Data Extrapolation GUI.md",
+        root / "app_web" / "README_UPDATES.md",
+    }
+    user_facing_doc_claims = (
+        "preset model library",
+        "built-in model library",
+        "auto-model selection",
+        "log/exp combinations",
+        "预设模型库",
+        "对数、指数",
+    )
     offenders: list[str] = []
     for path in checked_paths:
         text = path.read_text(encoding="utf-8").lower()
         for claim in banned_claims:
             if claim in text:
                 offenders.append(f"{path.relative_to(root)}: {claim}")
+        if path in user_facing_doc_paths:
+            original_text = path.read_text(encoding="utf-8")
+            if "AUTO_MODELS" in original_text:
+                offenders.append(f"{path.relative_to(root)}: AUTO_MODELS")
+            for claim in user_facing_doc_claims:
+                if claim in text:
+                    offenders.append(f"{path.relative_to(root)}: {claim}")
 
     assert offenders == []
 
