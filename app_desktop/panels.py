@@ -954,7 +954,6 @@ def build_left_panel(self):
     model_row.addWidget(lbl_model)
     self.fit_model_combo = QComboBox()
     self.fit_model_combo.addItem("自定义模型（非线性）", "custom")
-    self.fit_model_combo.addItem("自动模型选择", "auto")
     self.fit_model_combo.addItem("自洽隐式模型", "self_consistent")
     self.fit_model_combo.addItem("多项式拟合", "poly")
     self.fit_model_combo.addItem("1/x^p 展开", "inverse")
@@ -964,7 +963,6 @@ def build_left_panel(self):
     self.fit_model_combo.addItem("通用指数基", "exp_combo")
     fit_items = [
         ("自定义模型（非线性）", "Custom (nonlinear)", "custom"),
-        ("自动模型选择", "Auto select", "auto"),
         ("自洽隐式模型", "Self-consistent / implicit", "self_consistent"),
         ("多项式拟合", "Polynomial", "poly"),
         ("1/x^p 展开", "1/x^p series", "inverse"),

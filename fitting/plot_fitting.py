@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import logging
 from functools import lru_cache
-from typing import Any, Callable, Hashable, Iterable, NamedTuple, Optional, Sequence, TypeAlias
+from typing import Any, Callable, Hashable, NamedTuple, Optional, Sequence, TypeAlias
 
 # Centralised matplotlib init — backend=Agg, CJK font fallback, and
 # axes.unicode_minus=False are all configured at import time via

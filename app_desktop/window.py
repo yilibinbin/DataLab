@@ -107,12 +107,10 @@ from fitting import (
     build_model_specification,
     build_parameter_state,
     fit_custom_model,
-    auto_fit_dataset,
     infer_parameter_names,
     ModelSpecification,
     ParameterState,
     render_fitting_overview,
-    summarize_auto_results,
     sample_mp_function,
 )
 from fitting.auto_models import (
@@ -166,8 +164,6 @@ from .resources import (
     resolve_resource_path,
 )
 from .workers_core import (
-    AutoFitJob,
-    AutoFitRenderResult,
     CalcJob,
     CalcResult,
     FitBatchResultEntry,
@@ -180,7 +176,7 @@ from .workers_core import (
     _safe_resolve_path,
     split_extrapolation_result,
 )
-from .workers_qt import AutoFitWorker, CalcWorker, FitBatchWorker, FitWorker
+from .workers_qt import CalcWorker, FitBatchWorker, FitWorker
 
 from .window_latex_pdf_mixin import WindowLatexPdfMixin
 from .window_i18n_mixin import WindowI18nMixin
@@ -344,6 +340,7 @@ class ExtrapolationWindow(
         self._workspace_snapshot_only = False
         self._workspace_snapshot_stale = False
         self._workspace_restoring = False
+        self._workspace_migration_warnings: list[str] = []
 
         self.current_fit_figures: list[Path] = []
         self.current_stats_figures: list[Path] = []
@@ -358,7 +355,6 @@ class ExtrapolationWindow(
         self.current_extrap_index: int = 0
 
         self._current_precision = mp.mp.dps
-        self._auto_fit_worker: AutoFitWorker | None = None
         self._fit_worker: FitWorker | None = None
         self._calc_worker: CalcWorker | None = None
         self._translations: list[tuple[object, str, str, str]] = []  # (widget, attr, zh, en)
@@ -565,6 +561,7 @@ class ExtrapolationWindow(
             self._workspace_path = None
             self._workspace_dirty = False
             self._workspace_degraded = False
+            self._workspace_migration_warnings = []
             self._workspace_snapshot_only = False
             self._workspace_snapshot_stale = False
             self.result_edit.clear()
@@ -673,7 +670,6 @@ class ExtrapolationWindow(
             return False
         self._workspace_path = path
         self._workspace_dirty = False
-        self._workspace_degraded = False
         self._workspace_snapshot_stale = False
         self._update_workspace_window_title()
         return True
@@ -926,7 +922,7 @@ class ExtrapolationWindow(
             self.pade_widget.setVisible(mode == "pade")
         if hasattr(self, "implicit_model_widget"):
             self.implicit_model_widget.setVisible(mode == "self_consistent")
-        show_expr = mode not in {"auto", "self_consistent"}
+        show_expr = mode != "self_consistent"
         self.fit_expr_edit.setVisible(show_expr)
         if show_expr:
             self.fit_expr_edit.setEnabled(True)
@@ -1794,33 +1790,13 @@ class ExtrapolationWindow(
                 else:
                     self._reset_csv_data()
             elif kind == "fit_auto":
-                auto_kwargs = {k: payload.get(k) for k in [
-                    "summary",
-                    "headers",
-                    "data_rows",
-                    "sigma_rows",
-                    "x_series",
-                    "y_series",
-                    "sigma_series",
-                    "weights",
-                    "generate_latex",
-                    "output_path",
-                    "extra_models",
-                    "verbose_mode",
-                ] if k in payload}
-                render = self._render_auto_fit_summary(return_payload=True, render_plots=False, job_obj=payload.get("job"), **auto_kwargs)
-                self._set_result_text(render.text)
-                csv_rows = []
-                if render.fit_result:
-                    csv_rows = self._build_fit_csv_rows(render.fit_result, render.expression or "", batch_idx=1)
-                if csv_rows:
-                    self._set_csv_data(
-                        csv_rows,
-                        ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error", "note"],
-                        suggestion="fitting_results.csv",
+                self._set_result_text(
+                    self._tr(
+                        "旧版自动拟合结果快照无法重新渲染；请选择一个显式拟合模型后重新运行。",
+                        "Legacy automatic fitting snapshots cannot be re-rendered; choose an explicit model and rerun.",
                     )
-                else:
-                    self._reset_csv_data()
+                )
+                self._reset_csv_data()
             elif kind == "fit_batches":
                 self._reformat_fit_batches(**payload)
             else:
@@ -1986,8 +1962,6 @@ class ExtrapolationWindow(
                         self._calc_worker.wait(100)
                     if self._fit_worker:
                         self._fit_worker.wait(100)
-                    if self._auto_fit_worker:
-                        self._auto_fit_worker.wait(100)
                     max_wait_ms -= 100
 
                 # Force terminate if still running
@@ -1997,10 +1971,6 @@ class ExtrapolationWindow(
                 if self._fit_worker and self._fit_worker.isRunning():
                     self._fit_worker.terminate()
                     self._fit_worker.wait()
-                if self._auto_fit_worker and self._auto_fit_worker.isRunning():
-                    self._auto_fit_worker.terminate()
-                    self._auto_fit_worker.wait()
-
                 event.accept()
             else:
                 event.ignore()

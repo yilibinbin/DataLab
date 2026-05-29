@@ -12,18 +12,14 @@ from data_extrapolation_latex_latest import (
     UncertainValue,
 )
 
-from fitting.model_selector import AutoFitCancelled
-
 from . import workers_core
 from .workers_core import (
-    AutoFitJob,
     CalcJob,
     CalcResult,
     FitBatchResultEntry,
     FitBatchTask,
     FitJob,
     FitResultPayload,
-    _execute_auto_fit_job,
     _execute_calc_job,
     _safe_read_text,
 )
@@ -65,142 +61,6 @@ class _SignalLogger:
     def captured_text(self) -> str:
         return "".join(self._chunks)
 
-
-class AutoFitWorker(QThread):
-    result_ready = Signal(object)
-    failed = Signal(str)
-    log_ready = Signal(str)
-    cancelled = Signal()
-    # ``progress_changed`` (NEW): emitted as the auto-fit pipeline
-    # advances through its candidate models. The payload is a
-    # ``ProgressEvent`` (defined in ``app_desktop.auto_fit_subprocess``)
-    # with ``index`` / ``total`` / ``label`` / ``status`` fields the
-    # GUI uses to render "(3/19) Fitting Padé(1|1)…" in the status
-    # bar between models. Callers that don't care can ignore it.
-    progress_changed = Signal(object)
-
-    def __init__(self, job: AutoFitJob):
-        super().__init__()
-        self.job = job
-        self._stop_requested = False
-
-    def request_stop(self):
-        self._stop_requested = True
-
-    def run(self):
-        from .workers_core import _execute_auto_fit_job_subprocess
-
-        verbose = getattr(self.job, "verbose", False)
-        logger = _SignalLogger(self.log_ready.emit) if verbose else None
-        stdout_cm = redirect_stdout(logger) if logger else nullcontext()
-        stderr_cm = redirect_stderr(logger) if logger else nullcontext()
-        captured = ""
-        if verbose:
-            try:
-                self.log_ready.emit(f"[auto-fit] start rows={len(self.job.data_rows)} headers={self.job.headers}")
-            except Exception:
-                pass
-
-        if self._stop_requested:
-            if verbose:
-                try:
-                    self.log_ready.emit("[auto-fit] cancelled before start")
-                except Exception:
-                    pass
-            self.cancelled.emit()
-            return
-
-        def _on_progress(event):
-            # Forward to the Qt signal so the main thread (where the
-            # GUI lives) can update the status bar. We swallow any
-            # exception here because progress reporting must NEVER
-            # break the actual fitting pipeline.
-            try:
-                self.progress_changed.emit(event)
-            except Exception:
-                pass
-            if verbose:
-                try:
-                    self.log_ready.emit(
-                        f"[auto-fit] [{event.index + 1}/{event.total}] "
-                        f"{event.label}: {event.status}"
-                        + (f" — {event.error}" if event.error else "")
-                    )
-                except Exception:
-                    pass
-
-        try:
-            with stdout_cm, stderr_cm:
-                # Subprocess path: each model runs in its own child
-                # Python interpreter, killed via SIGKILL on cancel
-                # for true immediate cancellation. See
-                # ``app_desktop.auto_fit_subprocess`` for the
-                # full architecture rationale.
-                summary = _execute_auto_fit_job_subprocess(
-                    self.job,
-                    should_cancel=lambda: self._stop_requested,
-                    progress_callback=_on_progress,
-                )
-
-            if self._stop_requested:
-                if verbose:
-                    try:
-                        self.log_ready.emit("[auto-fit] cancelled")
-                    except Exception:
-                        pass
-                self.cancelled.emit()
-                return
-
-            if verbose:
-                try:
-                    best = summary.best() if summary.best_model is not None else None
-                    chi2_str = best.fit_result.chi2 if best and best.fit_result else "?"
-                    print(f"[auto-fit] best model={summary.best_model} chi2={chi2_str}")
-                except Exception:
-                    pass
-            if logger:
-                logger.consume_buffer()
-                captured = logger.captured_text().strip()
-                if captured:
-                    self.log_ready.emit(captured)
-            self.result_ready.emit((summary, self.job, captured))
-        except AutoFitCancelled:
-            # Raised from inside ``auto_fit_dataset`` when
-            # ``should_cancel`` returns True. Convert to the same
-            # ``cancelled`` signal as a pre-start cancel so the UI
-            # path is uniform (no error dialog).
-            if verbose:
-                try:
-                    self.log_ready.emit("[auto-fit] cancelled mid-run")
-                except Exception:
-                    pass
-            self.cancelled.emit()
-            return
-        except Exception as exc:  # noqa: BLE001
-            if self._stop_requested:
-                if verbose:
-                    try:
-                        self.log_ready.emit("[auto-fit] cancelled")
-                    except Exception:
-                        pass
-                self.cancelled.emit()
-                return
-            if logger:
-                logger.consume_buffer()
-                captured = logger.captured_text().strip()
-            else:
-                captured = ""
-            message = f"{exc}"
-            if captured:
-                message += f"\n{captured}"
-                self.log_ready.emit(captured)
-            self.failed.emit(message)
-        else:
-            if verbose:
-                try:
-                    self.log_ready.emit("[auto-fit] finished")
-                except Exception:
-                    pass
 
 
 class CalcWorker(QThread):
@@ -579,33 +439,10 @@ class FitBatchWorker(QThread):
                 stderr_cm = redirect_stderr(logger) if logger else nullcontext()
                 if self.capture_output:
                     try:
-                        task_type = "auto" if task.auto_job else "fit"
-                        self.log_ready.emit(f"[fit-batch] start index={task.index} type={task_type}")
+                        self.log_ready.emit(f"[fit-batch] start index={task.index} type=fit")
                     except Exception:
                         pass
-                if task.auto_job is not None:
-                    try:
-                        with stdout_cm, stderr_cm:
-                            summary = _execute_auto_fit_job(task.auto_job)
-                        captured = logger.captured_text().strip() if logger else ""
-                        if logger:
-                            logger.consume_buffer()
-                        results.append(
-                            FitBatchResultEntry(
-                                index=task.index,
-                                kind="auto",
-                                auto_payload=(summary, task.auto_job),
-                                captured_log=captured,
-                            )
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        captured = logger.captured_text().strip() if logger else ""
-                        if logger:
-                            logger.consume_buffer()
-                        results.append(
-                            FitBatchResultEntry(index=task.index, kind="error", error=str(exc), captured_log=captured)
-                        )
-                elif task.fit_job is not None:
+                if task.fit_job is not None:
                     try:
                         with stdout_cm, stderr_cm:
                             payload = self._run_fit_task(task.fit_job)
@@ -675,7 +512,6 @@ class FitBatchWorker(QThread):
 
 
 __all__ = [
-    "AutoFitWorker",
     "CalcWorker",
     "FitBatchWorker",
     "FitWorker",

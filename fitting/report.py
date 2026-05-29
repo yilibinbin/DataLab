@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Iterable
-
 from mpmath import mp
 
 from .hp_fitter import FitResult
-from .model_selector import AutoModelResult
 
 
 def _format_value(value: mp.mpf, digits: int = 6) -> str:
@@ -39,17 +36,4 @@ def summarize_fit_result(result: FitResult) -> str:
             f"RMSE = {_format_value(result.rmse)}",
         ]
     )
-    return "\n".join(lines)
-
-
-def summarize_auto_results(results: Iterable[AutoModelResult]) -> str:
-    lines = ["=== 自动模型评估 / Auto Model Summary ==="]
-    for result in results:
-        if not result.success or not result.fit_result:
-            lines.append(f"{result.label}: 失败 / Failed ({result.error})")
-            continue
-        lines.append(
-            f"{result.label}: AIC={_format_value(result.fit_result.aic)} | "
-            f"χ²={_format_value(result.fit_result.chi2)}"
-        )
     return "\n".join(lines)

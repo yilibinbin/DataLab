@@ -19,8 +19,7 @@ from .auto_models import (
     build_inverse_series_definition,
     build_polynomial_definition,
 )
-from .model_selector import AutoFitSummary, auto_fit_dataset
-from .report import summarize_fit_result, summarize_auto_results
+from .report import summarize_fit_result
 
 try:
     from .plot_fitting import render_fitting_overview, sample_mp_function
@@ -51,10 +50,7 @@ __all__ = [
     "build_linear_evaluator",
     "build_inverse_series_definition",
     "build_polynomial_definition",
-    "AutoFitSummary",
-    "auto_fit_dataset",
     "render_fitting_overview",
     "sample_mp_function",
     "summarize_fit_result",
-    "summarize_auto_results",
 ]

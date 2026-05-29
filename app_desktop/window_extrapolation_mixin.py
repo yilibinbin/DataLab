@@ -29,7 +29,6 @@ class WindowExtrapolationMixin:
         return (
             (self._calc_worker and self._calc_worker.isRunning())
             or (self._fit_worker and self._fit_worker.isRunning())
-            or (self._auto_fit_worker and self._auto_fit_worker.isRunning())
         )
 
     def _set_button_to_stop_mode(self):
@@ -52,9 +51,6 @@ class WindowExtrapolationMixin:
             stopped = True
         if self._fit_worker and self._fit_worker.isRunning():
             self._fit_worker.request_stop()
-            stopped = True
-        if self._auto_fit_worker and self._auto_fit_worker.isRunning():
-            self._auto_fit_worker.request_stop()
             stopped = True
         if stopped:
             self._append_log(self._tr("正在停止任务...", "Stopping task..."))
@@ -297,8 +293,7 @@ class WindowExtrapolationMixin:
             if mode == "fitting":
                 started = self._run_fitting_mode(generate_latex, output_path, verbose, render_plots=generate_plots)
                 background_running = bool(
-                    (self._auto_fit_worker and self._auto_fit_worker.isRunning())
-                    or (self._fit_worker and self._fit_worker.isRunning())
+                    self._fit_worker and self._fit_worker.isRunning()
                 )
                 if background_running and started:
                     self._append_log(self._tr("拟合已在后台运行…", "Fitting is running in the background…"))
@@ -449,7 +444,7 @@ class WindowExtrapolationMixin:
 
     def _cleanup_workers(self):
         """Ensure background threads are stopped when the app exits."""
-        for attr in ("_auto_fit_worker", "_fit_worker", "_calc_worker"):
+        for attr in ("_fit_worker", "_calc_worker"):
             worker = getattr(self, attr, None)
             if not worker:
                 continue

@@ -535,6 +535,8 @@ def _legacy_parameter_text_rows(parameter_text: Any) -> list[dict[str, str]]:
 
 def _capture_config(window: Any) -> dict[str, Any]:
     fitting_model = _combo_data(getattr(window, "fit_model_combo", None), "custom")
+    if fitting_model == "auto":
+        fitting_model = "custom"
     return {
         "common": {
             "mpmath_precision": _value(getattr(window, "mpmath_precision_spin", None), 16),
@@ -611,6 +613,39 @@ def _capture_config(window: Any) -> dict[str, Any]:
             },
         },
     }
+
+
+def _workspace_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    workspace = manifest.get("workspace")
+    if isinstance(workspace, dict):
+        return workspace
+    return {
+        "title": manifest.get("title") or "Untitled",
+        "current_mode": manifest.get("current_mode") or "fitting",
+        "ui": manifest.get("ui") or {},
+        "data": (manifest.get("data") or {}).get("input") or manifest.get("data") or {},
+        "constants": (manifest.get("data") or {}).get("constants") or manifest.get("constants") or {},
+        "config": manifest.get("config") or {},
+        "result_snapshot": manifest.get("result_snapshot") or {"present": False},
+    }
+
+
+def _degrade_obsolete_auto_fit_config(window: Any, fitting: dict[str, Any]) -> bool:
+    has_obsolete_auto = fitting.get("model") == "auto" or "auto_fit" in fitting
+    if not has_obsolete_auto:
+        return False
+
+    fitting.pop("auto_fit", None)
+    if fitting.get("model") == "auto":
+        fitting["model"] = "custom"
+
+    warnings = list(getattr(window, "_workspace_migration_warnings", []) or [])
+    warnings.append(
+        "Automatic fitting is no longer supported; obsolete automatic fitting "
+        "workspace settings were ignored."
+    )
+    window._workspace_migration_warnings = warnings
+    return True
 
 
 def _capture_ui(window: Any) -> dict[str, Any]:
@@ -692,6 +727,7 @@ def capture_workspace(window: Any, *, title: str = "Untitled") -> WorkspaceBundl
             "app": {"name": "DataLab", "version": current_version()},
             "created_at": now,
             "updated_at": now,
+            "config": workspace["config"],
             "workspace": workspace,
         },
         attachments=attachments,
@@ -743,13 +779,14 @@ def _restore_data_section(window: Any, section: dict[str, Any], *, constants: bo
 
 
 def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[str, bytes]) -> None:
-    workspace = manifest["workspace"]
+    workspace = _workspace_from_manifest(manifest)
     _set_combo_data(getattr(window, "mode_combo", None), str(workspace.get("current_mode") or "fitting"))
     _restore_data_section(window, workspace.get("data") or {}, constants=False)
     _restore_data_section(window, workspace.get("constants") or {}, constants=True)
 
     config = workspace.get("config") or {}
     fitting = config.get("fitting") or {}
+    degraded = _degrade_obsolete_auto_fit_config(window, fitting)
     _set_combo_data(getattr(window, "fit_model_combo", None), str(fitting.get("model") or "custom"))
     if hasattr(window, "fit_expr_edit"):
         window.fit_expr_edit.setPlainText(str(fitting.get("expression") or ""))
@@ -786,6 +823,6 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
     window._last_result_payloads = {}
     window._workspace_snapshot_only = bool(snapshot.get("present"))
     window._workspace_dirty = False
-    window._workspace_degraded = False
+    window._workspace_degraded = degraded
     if hasattr(window, "_set_snapshot_controls_enabled"):
         window._set_snapshot_controls_enabled(not window._workspace_snapshot_only)
