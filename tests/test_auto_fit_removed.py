@@ -8,6 +8,20 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 
+def _current_changelog_text(path: Path) -> str:
+    """Return Unreleased plus the newest release notes, excluding history."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    version_heading_count = 0
+    current_lines: list[str] = []
+    for line in lines:
+        if line.startswith("## [") and not line.startswith("## [Unreleased]"):
+            version_heading_count += 1
+            if version_heading_count > 1:
+                break
+        current_lines.append(line)
+    return "\n".join(current_lines)
+
+
 def test_fitting_model_combo_contains_only_supported_explicit_models(qtbot):
     from app_desktop.window import ExtrapolationWindow
 
@@ -113,6 +127,7 @@ def test_tests_do_not_import_removed_auto_fit_job():
 def test_docs_do_not_advertise_automatic_fitting_as_current_feature():
     root = Path(__file__).resolve().parents[1]
     checked_paths = [
+        root / "CHANGELOG.md",
         root / "README.md",
         root / "docs" / "ARCHITECTURE.md",
         root / "docs" / "PROGRAM_FRAMEWORK.en.tex",
@@ -151,6 +166,7 @@ def test_docs_do_not_advertise_automatic_fitting_as_current_feature():
         "tries multiple candidate",
         "preset/log",
         "auto/custom",
+        "auto-fit subprocess execution paths",
     )
     user_facing_doc_paths = {
         root / "docs" / "DATALAB_WEB_GUIDE.md",
@@ -176,13 +192,17 @@ def test_docs_do_not_advertise_automatic_fitting_as_current_feature():
     )
     offenders: list[str] = []
     for path in checked_paths:
-        text = path.read_text(encoding="utf-8").lower()
+        raw_text = (
+            _current_changelog_text(path)
+            if path.name == "CHANGELOG.md"
+            else path.read_text(encoding="utf-8")
+        )
+        text = raw_text.lower()
         for claim in banned_claims:
             if claim in text:
                 offenders.append(f"{path.relative_to(root)}: {claim}")
         if path in user_facing_doc_paths:
-            original_text = path.read_text(encoding="utf-8")
-            if "AUTO_MODELS" in original_text:
+            if "AUTO_MODELS" in raw_text:
                 offenders.append(f"{path.relative_to(root)}: AUTO_MODELS")
             for claim in user_facing_doc_claims:
                 if claim in text:
