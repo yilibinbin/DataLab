@@ -124,7 +124,7 @@ QT_QPA_PLATFORM=offscreen pytest -q   # 770+ tests
 | Mode | Purpose | Methods |
 |------|---------|---------|
 | **Extrapolation** | Take a numerical method's approximations at decreasing step sizes and extrapolate to the limit | Richardson, Wynn-ε (Shanks), Levin u-transform, custom formulas |
-| **Curve Fitting** | Non-linear least-squares with measurement uncertainties + automatic model selection (AIC/BIC) | Polynomial, Padé, arbitrary expression; optional MCMC posterior refinement |
+| **Curve Fitting** | Explicit model least-squares with measurement uncertainties and model-comparison metrics (AIC/BIC) | Polynomial, inverse-power series, Padé, power-limit, custom/self-consistent models; optional MCMC posterior refinement |
 | **Error Propagation** | Propagate 1σ uncertainties from `1.23(4)[-2]`-style data through user formulas | SymPy partial derivatives + Monte Carlo cross-check |
 | **Statistics** | Weighted / arithmetic mean + standard error + RMS scatter | One-sided / two-sided, weighted variance |
 

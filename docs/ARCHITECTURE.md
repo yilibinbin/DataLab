@@ -71,7 +71,7 @@ A TeX distribution providing `pdflatex` or `xelatex` is required for PDF export.
 
 ### Two frontends, one core
 
-- **`app_desktop/`** — PySide6 GUI. Entry: `app_desktop/main.py`. The main window class `ExtrapolationWindow` (`app_desktop/window.py`) is composed of **domain mixins**: `window_data_mixin.py`, `window_extrapolation_mixin.py`, `window_fitting_mixin.py`, `window_statistics_mixin.py`, `window_latex_pdf_mixin.py`, `window_images_mixin.py`, `window_i18n_mixin.py`. Long-running work dispatches to background workers in `workers_core.py` (`CalcJob`, `FitJob`, `AutoFitJob`).
+- **`app_desktop/`** — PySide6 GUI. Entry: `app_desktop/main.py`. The main window class `ExtrapolationWindow` (`app_desktop/window.py`) is composed of **domain mixins**: `window_data_mixin.py`, `window_extrapolation_mixin.py`, `window_fitting_mixin.py`, `window_statistics_mixin.py`, `window_latex_pdf_mixin.py`, `window_images_mixin.py`, `window_i18n_mixin.py`. Long-running work dispatches to background workers in `workers_core.py` (`CalcJob`, `FitJob`). Automatic fitting was removed; desktop fitting uses explicit `FitJob` / `FitWorker` paths only.
 - **`app_web/`** — Flask app using the application-factory pattern (`app_web/server.py`). Routes are split into Blueprints under `app_web/blueprints/` (`pages.py`, `api.py`, `docs.py`). Web-specific computation glue lives in `app_web/logic/` and **mirrors** desktop functionality but reuses the same shared modules below.
 - **Shared scientific modules** (used by both frontends): `extrapolation_methods/`, `fitting/`, `datalab_latex/`, `shared/`, `statistics_utils.py`, `formula_help.py`.
 
@@ -85,7 +85,7 @@ A TeX distribution providing `pdflatex` or `xelatex` is required for PDF export.
 ### Cross-cutting conventions (follow these)
 
 - **Bilingual messages**: user-facing errors and labels use `_dual_msg(zh, en)` returning `"汉语 / English"`. The locale layer splits on `" / "` to extract the active language. Don't return single-language strings from new code paths.
-- **Precision discipline**: every numerical computation wraps work in `with precision_guard(dps): ...`. Don't mutate `mp.dps` directly — direct mutations leak across threads/jobs. Defaults: power-law=50, accelerators=80, fitting=formula-dependent. `mp.dps` is **process-global** in mpmath; existing workers (`CalcJob`, `FitJob`, `AutoFitJob`) already enter `precision_guard` at their entry point. Any new worker or new code path that calls mpmath directly must wrap the same way, or concurrent jobs will corrupt each other's precision.
+- **Precision discipline**: every numerical computation wraps work in `with precision_guard(dps): ...`. Don't mutate `mp.dps` directly — direct mutations leak across threads/jobs. Defaults: power-law=50, accelerators=80, fitting=formula-dependent. `mp.dps` is **process-global** in mpmath; existing workers (`CalcJob`, `FitJob`) already enter `precision_guard` at their entry point. Any new worker or new code path that calls mpmath directly must wrap the same way, or concurrent jobs will corrupt each other's precision.
 - **Single expression engine**: extrapolation custom formulas, error-propagation formulas, and fitting model expressions all flow through `data_extrapolation_latex_latest` / `datalab_latex/expression_engine.py`. Add new functions to its whitelist; don't write a second parser.
 - **Config/Result DTO pattern**: each method has a `<Method>Config` and `<Method>Result` dataclass. Mirror this when adding new methods.
 

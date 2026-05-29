@@ -110,6 +110,33 @@ def test_tests_do_not_import_removed_auto_fit_job():
     assert offenders == []
 
 
+def test_docs_do_not_advertise_automatic_fitting_as_current_feature():
+    root = Path(__file__).resolve().parents[1]
+    checked_paths = [
+        root / "README.md",
+        *sorted((root / "docs" / "desktop").glob("*.md")),
+    ]
+    banned_claims = (
+        "automatic model selection",
+        "auto model selection",
+        "auto-fit",
+        "automatic fitting",
+        "自动模型",
+        "自动拟合",
+    )
+    offenders: list[str] = []
+    for path in checked_paths:
+        text = path.read_text(encoding="utf-8").lower()
+        for claim in banned_claims:
+            if claim in text:
+                offenders.append(f"{path.relative_to(root)}: {claim}")
+
+    assert offenders == []
+
+    architecture_text = (root / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    assert "AutoFitJob" not in architecture_text
+
+
 def test_fitting_package_no_longer_exports_auto_fit():
     import fitting
 
