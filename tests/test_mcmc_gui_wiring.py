@@ -9,8 +9,8 @@ Pins the UI contract:
 - The ``fit_mcmc_refine`` attribute is greppable; a future refactor
   that removes it fails these tests instead of silently dropping
   the feature.
-- When the user prepares an auto-fit job, the ``refine_with_mcmc``
-  flag reads the checkbox state.
+- Explicit fit jobs remain the desktop fitting job surface after automatic
+  fitting removal.
 - Corner-plot rendering is stubbable via a helper function that
   never imports emcee at module load time.
 """
@@ -20,8 +20,6 @@ from __future__ import annotations
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from typing import Any  # noqa: E402
 
 import pytest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
@@ -83,72 +81,35 @@ def test_mcmc_checkbox_bilingual_registered(_window):
     assert text.strip(), "MCMC checkbox must have a visible label"
 
 
-def test_auto_fit_job_reads_mcmc_flag(_window):
-    """``_prepare_auto_fit_kwargs`` (or equivalent) must route the
-    checkbox state into the job's refine_with_mcmc flag so the
-    worker knows whether to run MCMC."""
-    from app_desktop.workers_core import AutoFitJob
+def test_removed_auto_fit_job_is_not_mcmc_contract(_window):
+    """MCMC GUI wiring must not depend on the removed automatic fitting job."""
+    import app_desktop.workers_core as workers_core
 
-    # AutoFitJob must have a refine_with_mcmc field (default False)
-    # so the CLI + GUI share one source of truth.
-    fields = AutoFitJob.__dataclass_fields__
-    assert "refine_with_mcmc" in fields, (
-        "AutoFitJob must expose refine_with_mcmc for #12"
-    )
-    # Default must be False (opt-in semantics)
-    assert fields["refine_with_mcmc"].default is False
+    assert not hasattr(workers_core, "AutoFitJob")
+    assert hasattr(workers_core, "FitJob")
 
 
-def test_prepare_auto_fit_job_forwards_mcmc_checkbox(_window, qtbot):
-    """End-to-end wiring: flipping the checkbox must propagate into
-    the AutoFitJob that the worker receives. A field that exists but
-    is never populated is a dead wire."""
-    from app_desktop.workers_core import AutoFitJob
-    import fitting.mcmc_fitter as mcmc_mod
-
-    # Need a minimal dataset for _prepare_auto_fit_job. If the helper
-    # requires full state, skip — the contract we really care about
-    # is: checkbox state → job field.
-    if not hasattr(_window, "_prepare_auto_fit_job"):
-        pytest.skip("window does not expose _prepare_auto_fit_job")
-
-    # Build a synthetic dataset the fit can chew on. The helper's
-    # exact signature lives in window_fitting_mixin; use a duck-typed
-    # dataset tuple.
+def test_prepare_explicit_fit_job_keeps_mcmc_checkbox_independent(_window):
+    """Preparing an explicit fit job should use the remaining FitJob path."""
+    from app_desktop.workers_core import FitJob
     from mpmath import mp
 
+    _window.fit_model_combo.setCurrentIndex(_window.fit_model_combo.findData("polynomial"))
+    _window.fit_mcmc_refine.setChecked(True)
     xs = [mp.mpf(v) for v in (1, 2, 3, 4, 5)]
     ys = [mp.mpf(v) for v in (2, 4, 6, 8, 10)]
-    dataset = (["x", "y"], [(xs[i], ys[i]) for i in range(5)], [])
+    dataset = (["A", "B"], [(xs[i], ys[i]) for i in range(5)], [])
 
-    # Only exercise when emcee is installed, otherwise the checkbox
-    # is disabled and the helper's guard forces refine_with_mcmc=False.
-    if not mcmc_mod.HAS_EMCEE:
-        # Absent-path variant: the helper must propagate False
-        # regardless of checkbox state because the checkbox is
-        # disabled.
-        _window.fit_mcmc_refine.setChecked(True)  # shouldn't matter
-        try:
-            job = _window._prepare_auto_fit_job(dataset)
-        except Exception:
-            pytest.skip("_prepare_auto_fit_job has extra requirements")
-        assert isinstance(job, AutoFitJob)
-        assert job.refine_with_mcmc is False, (
-            "checkbox is disabled without emcee — helper must force False"
-        )
-        return
+    job = _window._prepare_fit_job(
+        dataset,
+        generate_latex=False,
+        output_path="",
+        verbose=False,
+        render_plots=False,
+    )
 
-    # Present-path: checkbox True → job.refine_with_mcmc True.
-    _window.fit_mcmc_refine.setChecked(True)
-    try:
-        job = _window._prepare_auto_fit_job(dataset)
-    except Exception:
-        pytest.skip("_prepare_auto_fit_job has extra requirements")
-    assert job.refine_with_mcmc is True
-
-    _window.fit_mcmc_refine.setChecked(False)
-    job = _window._prepare_auto_fit_job(dataset)
-    assert job.refine_with_mcmc is False
+    assert isinstance(job, FitJob)
+    assert job.model_type == "polynomial"
 
 
 def test_render_corner_plot_accepts_mcmc_result():

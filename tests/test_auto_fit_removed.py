@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -95,6 +96,18 @@ def test_auto_fit_worker_is_not_exported():
     assert not hasattr(workers_core, "AutoFitJob")
     assert not hasattr(workers_core, "_execute_auto_fit_job_subprocess")
     assert not hasattr(workers_qt, "AutoFitWorker")
+
+
+def test_tests_do_not_import_removed_auto_fit_job():
+    tests_dir = Path(__file__).resolve().parent
+    removed_import = "from app_desktop.workers_core import " + "AutoFitJob"
+    offenders = [
+        path
+        for path in tests_dir.glob("test_*.py")
+        if removed_import in path.read_text(encoding="utf-8")
+    ]
+
+    assert offenders == []
 
 
 def test_fitting_package_no_longer_exports_auto_fit():

@@ -8,7 +8,7 @@ The desktop app provides four main modules:
 
 - Extrapolation: extrapolate multi-column sequence data and output the limit and uncertainty
 - Error propagation: compute formulas on uncertain inputs and propagate uncertainties
-- Fitting: fit datasets / run auto model selection and output parameters, metrics, residuals and curves
+- Fitting: fit explicit models and output parameters, metrics, residuals and curves
 - Statistics: compute (weighted/unweighted) statistics and mean estimates
 
 Common capabilities:
