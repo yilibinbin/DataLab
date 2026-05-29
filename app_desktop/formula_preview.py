@@ -186,7 +186,7 @@ def update_formula_preview(label: QLabel, expression: str, lhs: str | None = Non
     """Update ``label`` with a rendered preview or plain-text fallback."""
     configure_formula_preview_label(label)
     if hasattr(label, "set_preview_source"):
-        label.set_preview_source(expression or "", lhs)  # type: ignore[attr-defined]
+        label.set_preview_source(expression or "", lhs)
     pixmap = render_formula_pixmap(expression, lhs=lhs)
     if pixmap is not None and not pixmap.isNull():
         if pixmap.width() > _INLINE_PREVIEW_MAX_WIDTH:
