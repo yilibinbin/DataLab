@@ -4,10 +4,10 @@ Schema:
 
     jobs:
       - name: str                # human-readable (required, safe basename)
-        operation: str           # "fit" | "auto_fit" | "calc" (required)
+        operation: str           # "fit" | "calc" (required)
         data_path: str           # path to 2-column CSV or .dat (required)
         output_dir: str          # where to write artefacts (required)
-        model: str               # for fit/auto_fit (default "linear")
+        model: str               # for fit (default "linear")
         precision: int           # mpmath dps, default 50
         log_scale: str | null    # None / "x" / "y" / "xy"
 
@@ -38,7 +38,7 @@ __all__ = [
 
 # Whitelist — adding a new entry requires a conscious decision to
 # expose the operation via the CLI surface.
-ALLOWED_OPERATIONS = frozenset({"fit", "auto_fit", "calc"})
+ALLOWED_OPERATIONS = frozenset({"fit", "calc"})
 
 # Defensive caps. A batch YAML claiming 10 000 jobs is almost always
 # a user mistake; cap so we don't spawn a runaway process.

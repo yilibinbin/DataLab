@@ -8,8 +8,8 @@ to integrate DataLab into automation pipelines.
 Contract pinned here:
 - ``cli.main.run_batch_file(path)`` parses a YAML config and dispatches
   per-entry to the pure-function workers from ``app_desktop.workers_core``.
-- Each entry specifies an ``operation`` (``calc`` / ``fit`` /
-  ``auto_fit``), input data (inline list or file path), and an
+- Each entry specifies an ``operation`` (``calc`` / ``fit``),
+  input data (inline list or file path), and an
   ``output`` directory.
 - The batch never touches PySide6; the CLI is import-safe from headless
   contexts (CI, SSH, containers).
@@ -41,7 +41,7 @@ def _data_csv(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def _batch_config(_data_csv: Path, tmp_path: Path) -> Path:
-    """Write a batch YAML invoking a single auto-fit."""
+    """Write a batch YAML invoking a single explicit fit."""
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     config = f"""

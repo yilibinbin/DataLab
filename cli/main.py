@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import sys
 import traceback
 from pathlib import Path
 from typing import Optional, Sequence
@@ -111,79 +110,6 @@ def _run_fit(job) -> dict:
     }
 
 
-def _run_auto_fit(job) -> dict:
-    """Execute an auto-fit via ``fitting.model_selector.auto_fit_dataset``.
-
-    Returns the top 5 models ranked by AIC (ascending; lower is
-    better). Reads ``AutoModelResult.fit_result`` — the real
-    dataclass field — NOT ``entry.fit`` which doesn't exist and
-    would crash 100 % of calls (the prior bug).
-
-    Routes ``auto_fit_dataset`` inside a ``precision_guard`` so
-    concurrent CLI jobs don't race on ``mp.dps`` (which is
-    process-global in mpmath).
-    """
-    from fitting.model_selector import auto_fit_dataset
-    from shared.precision import precision_guard
-
-    xs, ys = _read_xy_csv(job.data_path)
-    with precision_guard(job.precision):
-        summary = auto_fit_dataset(xs, ys, precision=job.precision)
-
-    ranked = [
-        r for r in summary.results
-        if r.success and r.fit_result is not None
-    ]
-
-    def _aic(entry) -> float:
-        """Extract the AIC score from a successful AutoModelResult.
-
-        FitResult exposes ``aic`` as a first-class mpmath field; fall
-        back to ``details['aic']`` then to +inf so failed/NaN models
-        rank last without crashing the sort.
-        """
-        fit = entry.fit_result
-        # FitResult.aic is mpmath.mpf; mp.nan is falsy-weird so guard
-        # isnan before float-cast.
-        try:
-            from mpmath import mp as _mp
-
-            if fit.aic is not None and not _mp.isnan(fit.aic):
-                return float(fit.aic)
-        except (TypeError, ValueError, AttributeError):
-            pass
-        details = fit.details or {}
-        for key in ("aic", "AIC", "information_criterion_aic"):
-            if key in details:
-                try:
-                    return float(details[key])
-                except (TypeError, ValueError):
-                    pass
-        return float("inf")
-
-    ranked.sort(key=_aic)
-    top = []
-    for entry in ranked[:5]:
-        params = {
-            k: float(v) for k, v in (entry.fit_result.params or {}).items()
-        }
-        top.append({
-            "model": entry.identifier,
-            "label": entry.label,
-            "aic": _aic(entry),
-            "params": params,
-        })
-    return {
-        "job_name": job.name,
-        "operation": "auto_fit",
-        "data_path": str(job.data_path),
-        "n_points": len(xs),
-        "precision": job.precision,
-        "best": top[0] if top else None,
-        "top": top,
-    }
-
-
 def _run_calc(job) -> dict:
     """Execute a sequence-extrapolation calc via the Wynn-ε accelerator.
 
@@ -222,8 +148,6 @@ def _dispatch(job) -> dict:
     """Route to the operation-specific runner."""
     if job.operation == "fit":
         return _run_fit(job)
-    if job.operation == "auto_fit":
-        return _run_auto_fit(job)
     if job.operation == "calc":
         return _run_calc(job)
     # load_batch_config already rejects unknown operations, but

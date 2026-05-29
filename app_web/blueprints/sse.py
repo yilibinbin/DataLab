@@ -1,10 +1,8 @@
-"""SSE streaming endpoints for long-running fit jobs (Phase 4 #3).
+"""SSE streaming endpoints for long-running explicit fit jobs.
 
-Two GET endpoints:
+GET endpoints:
 - ``/api/fit/stream`` — single-model fit with progress events.
-- ``/api/auto-fit/stream`` — iterate every registered linear model,
-  emit a ``progress`` event per model + a final ``result`` event
-  with the ranked list.
+- ``/api/auto-fit/stream`` — legacy route that returns a deprecation error.
 
 Why GET and not POST: SSE is a one-way stream over HTTP; GET is the
 canonical method and works through the broadest set of proxies.
@@ -301,20 +299,6 @@ def _sanitise_error_message(exc: Exception) -> str:
     )
 
 
-# Exception types we treat as expected per-model failures during
-# auto-fit (and thus emit a "model failed" progress event for, while
-# continuing to the next model). Any other exception is a programmer
-# bug or systemic failure — those propagate out so the SSE generator
-# can convert them to a single 'error' event and close, rather than
-# silently masking them as "every model failed individually".
-_AUTO_FIT_EXPECTED_FAILURES: tuple[type[BaseException], ...] = (
-    ValueError,        # bad input shape, sign, monotonicity
-    ArithmeticError,   # mpmath divide-by-zero, OverflowError, etc.
-    RuntimeError,      # LM solver convergence failure
-    NotImplementedError,  # model rejecting an unsupported config
-)
-
-
 def _materialise_mpf_pairs(
     xs_str: list[str], ys_str: list[str], precision: int
 ) -> tuple[list, list]:
@@ -412,180 +396,6 @@ def _single_fit_events(
         "model_label": definition.label,
         "params": params,
         "param_errors_stat": errors,
-    })
-
-
-def _auto_fit_events(
-    xs_str: list[str],
-    ys_str: list[str],
-    precision: int,
-) -> Iterator[tuple[str, dict]]:
-    """Yield events for auto-fit across every registered linear model.
-
-    Protocol::
-
-        started → progress (per model) → result (ranked list) OR error
-
-    The implementation drives the per-model loop INSIDE this generator
-    so each model's completion triggers an immediate ``yield``. The
-    existing ``auto_fit_dataset`` builds everything in a list, which
-    defeats streaming — we replicate the loop here for this endpoint.
-
-    Lock discipline: ``_MP_SERIAL_LOCK`` is acquired ONLY around the
-    actual ``fit_linear_model`` call — not around the ``yield``. The
-    previous design held the lock across yields, which serialised
-    slow SSE clients with compute work and let one buffering proxy
-    pin the lock for minutes. With per-model acquisition, concurrent
-    SSE requests interleave at model boundaries and the lock is
-    never held during network I/O.
-
-    GUARD: no mpmath calls may appear between the ``with`` block exit
-    and the ``yield ("progress", ...)``. The ``float()`` and
-    ``math.isnan`` casts on ``aic`` operate on Python floats, not
-    mpmath, so the inter-iteration window is safe.
-
-    Honours ``MAX_SSE_WALLCLOCK_SECONDS`` — if the total fit time
-    exceeds the budget, emits a ``timeout`` error event between
-    iterations and closes. Per-model exception text is sanitised
-    to the class name only to avoid leaking mpmath internals.
-
-    Per-model exception handling: ONLY the expected numerical /
-    domain failures listed in ``_AUTO_FIT_EXPECTED_FAILURES`` are
-    treated as "this model didn't converge, try the next". Other
-    exceptions (programmer bugs, KeyboardInterrupt, MemoryError,
-    serialisation errors) propagate out and are converted to a
-    single terminal 'error' event by the SSE generator wrapper —
-    surfacing what would otherwise be silently swallowed as
-    "AllModelsFailed".
-    """
-    from fitting.auto_models import AUTO_MODELS, fit_linear_model
-    from shared.precision import precision_guard
-
-    yield ("started", {
-        "n_points": len(xs_str), "precision": precision,
-        "n_models": len(AUTO_MODELS),
-    })
-
-    if not AUTO_MODELS:
-        yield ("error", {
-            "error": "NoModels",
-            "message": "No models registered — check fitting.auto_models",
-        })
-        return
-
-    deadline = time.monotonic() + MAX_SSE_WALLCLOCK_SECONDS
-    candidates: list[dict] = []
-
-    # Materialise xs / ys ONCE before the per-model loop. The strings
-    # don't change between iterations and the conversion is O(N×digits);
-    # repeating it for every model wastes work proportional to
-    # len(AUTO_MODELS) × len(xs_str). The lock + precision_guard pair
-    # ensures the conversion happens at the correct mp.dps without
-    # racing other SSE requests.
-    try:
-        with _MP_SERIAL_LOCK, precision_guard(precision):
-            xs, ys = _materialise_mpf_pairs(xs_str, ys_str, precision)
-    except Exception as exc:  # noqa: BLE001
-        _logger.warning(
-            "auto_fit_stream: input materialisation failed: %s", exc,
-            exc_info=True,
-        )
-        yield ("error", {
-            "error": type(exc).__name__,
-            "message": _sanitise_error_message(exc),
-        })
-        return
-
-    for index, definition in enumerate(AUTO_MODELS, start=1):
-        if time.monotonic() > deadline:
-            yield ("error", {
-                "error": "Timeout",
-                "message": (
-                    f"Auto-fit exceeded the "
-                    f"{MAX_SSE_WALLCLOCK_SECONDS:.0f}s wall-clock "
-                    f"budget after {index - 1}/{len(AUTO_MODELS)} models"
-                ),
-            })
-            return
-
-        # Lock acquired per-model, released BEFORE the yield. mp.dps
-        # state leakage across iterations is fine because each fit
-        # re-enters precision_guard — the lock just prevents a
-        # concurrent SSE request from racing on mp.dps DURING a
-        # single fit_linear_model call.
-        try:
-            with _MP_SERIAL_LOCK, precision_guard(precision):
-                fit_result = fit_linear_model(
-                    definition, xs, ys, precision=precision
-                )
-            aic = (
-                float(fit_result.aic) if fit_result.aic is not None else None
-            )
-            # NaN AIC is not less-than-anything — treat as missing
-            # for ranking purposes so float('nan') doesn't poison
-            # the sort key downstream.
-            if aic is not None and math.isnan(aic):
-                aic = None
-            payload = {
-                "model": definition.identifier,
-                "label": definition.label,
-                "status": "success",
-                "index": index,
-                "total": len(AUTO_MODELS),
-                "aic": aic,
-            }
-            candidates.append({
-                "model": definition.identifier,
-                "label": definition.label,
-                "aic": aic,
-                "params": {
-                    k: float(v)
-                    for k, v in (fit_result.params or {}).items()
-                },
-            })
-        except _AUTO_FIT_EXPECTED_FAILURES as exc:
-            # Numerical / domain failure for this model — log and
-            # continue. The protocol contract says the user gets a
-            # ranked list of models that DID succeed, and a per-model
-            # 'failed' progress event for each that didn't.
-            _logger.warning(
-                "auto_fit_stream: model %s failed (%s): %s",
-                definition.identifier, type(exc).__name__, exc,
-            )
-            payload = {
-                "model": definition.identifier,
-                "label": definition.label,
-                "status": "failed",
-                "index": index,
-                "total": len(AUTO_MODELS),
-                "error": type(exc).__name__,
-            }
-        # Yield is OUTSIDE the lock so a slow client receiving the
-        # progress frame cannot pin the mp.dps serialiser.
-        yield ("progress", payload)
-
-    if not candidates:
-        # Every model failed — emit an error rather than a
-        # null-best result. Protocol contract: terminal event is
-        # either 'result' (success) OR 'error' (failure).
-        yield ("error", {
-            "error": "AllModelsFailed",
-            "message": (
-                "All registered models failed to converge on this "
-                "dataset. Check the data range, sign, and sample size."
-            ),
-        })
-        return
-
-    # Rank by AIC ascending; None AIC go to the back.
-    ranked = sorted(
-        candidates,
-        key=lambda c: (c["aic"] is None, c["aic"] if c["aic"] is not None else 0.0),
-    )
-    yield ("result", {
-        "best": ranked[0],
-        "candidates": ranked[:5],
-        "n_successful": len(candidates),
     })
 
 
@@ -690,7 +500,7 @@ def fit_stream():
 
 @bp.route("/api/auto-fit/stream", methods=["GET"])
 def auto_fit_stream():
-    """Auto-fit with per-model progress events.
+    """Legacy route kept to reject removed automatic fitting requests.
 
     GET-only: CSRF protection via method restriction is intentional.
     See fit_stream for the future-POST note.
@@ -698,20 +508,21 @@ def auto_fit_stream():
     client_ip = _client_ip()
     if not _check_rate_limit(client_ip):
         _logger.info(
-            "auto_fit_stream: rate-limited %s (budget %d/%ds)",
+            "deprecated_auto_fit_stream: rate-limited %s (budget %d/%ds)",
             client_ip, RATE_MAX_REQUESTS, RATE_WINDOW_SECONDS,
         )
         return build_sse_response(_rate_limited_gen())
 
-    xs_str, ys_str, _model, precision, err = _extract_and_validate_common(
-        require_model=False
-    )
-
-    if err is not None:
-        def _gen() -> Iterator[tuple[str, dict]]:
-            yield ("error", {"error": "BadRequest", "message": err})
-    else:
-        def _gen() -> Iterator[tuple[str, dict]]:
-            yield from _auto_fit_events(xs_str, ys_str, precision)
+    def _gen() -> Iterator[tuple[str, dict]]:
+        yield (
+            "error",
+            {
+                "error": "Deprecated",
+                "message": (
+                    "Automatic fitting is no longer supported. Use "
+                    "/api/fit/stream with an explicit model."
+                ),
+            },
+        )
 
     return build_sse_response(_gen())

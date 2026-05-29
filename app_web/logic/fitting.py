@@ -18,15 +18,12 @@ from data_extrapolation_latex_latest import (
 )
 from datalab_latex.sisetup_block import build_sisetup_block
 from fitting import (
-    AUTO_MODELS,
-    auto_fit_dataset,
     build_inverse_series_definition,
     build_model_specification,
     build_parameter_state,
     build_polynomial_definition,
     fit_custom_model,
     render_fitting_overview,
-    summarize_auto_results,
     summarize_fit_result,
 )
 
@@ -192,6 +189,31 @@ def _pade_template(m: int, n: int) -> tuple[str, dict[str, dict[str, float]]] | 
     denominator = " + ".join(den_terms)
     expression = f"({numerator})/({denominator})"
     return expression, params
+
+
+def _normalize_fit_mode(raw_mode: str | None) -> str:
+    mode = (raw_mode or "polynomial").strip()
+    legacy_aliases = {
+        "poly": "polynomial",
+        "inverse": "inverse_power",
+    }
+    return legacy_aliases.get(mode, mode)
+
+
+def _unsupported_fit_mode_error(mode: str) -> ValueError:
+    if mode in {"auto", "preset"}:
+        return ValueError(
+            _dual_msg(
+                "旧版自动模式已移除。请选择多项式、倒数幂、Padé、幂律极限或自定义模型。",
+                "The legacy automatic mode has been removed. Choose polynomial, inverse-power, Padé, power-limit, or custom fitting.",
+            )
+        )
+    return ValueError(
+        _dual_msg(
+            f"不支持的拟合模式: {mode}",
+            f"Unsupported fitting mode: {mode}",
+        )
+    )
 
 
 def _format_fit_rows(
@@ -573,8 +595,7 @@ def _generate_fitting_latex(
 def _run_fit(data_text: str, form) -> FitResultBundle:
     mp_precision = _parse_int(form.get("fit_mp_precision")) or 80
     log_scale = (form.get("fit_log_scale") or "").strip().lower()
-    fit_mode = (form.get("fit_mode") or "auto").strip()
-    selected_model_id = form.get("fit_model_id") or None
+    fit_mode = _normalize_fit_mode(form.get("fit_mode"))
     custom_expr = (form.get("fit_custom_expr") or "").strip()
     custom_params_text = form.get("fit_custom_params") or ""
     poly_degree = _parse_int(form.get("fit_poly_degree")) or 3
@@ -706,27 +727,7 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
             return None
 
     with _precision_guard(mp_precision):
-        if fit_mode == "preset" and selected_model_id:
-            from fitting.auto_models import fit_linear_model
-
-            definition = next((m for m in AUTO_MODELS if m.identifier == selected_model_id), None)
-            if not definition:
-                raise ValueError(_dual_msg("未找到所选模型。", "Selected model was not found."))
-            fit_res = fit_linear_model(
-                definition,
-                x_vals,
-                y_vals,
-                precision=mp_precision,
-                weights=None,
-                data_sigmas=sigmas_for_fit,
-            )
-            best_label = definition.label
-            params = _collect_params(fit_res)
-            metrics = _collect_metrics(fit_res)
-            summary_text = summarize_fit_result(fit_res)
-            plot_b64 = _render_plot(fit_res)
-            expression_for_csv = fit_res.details.get("expression")
-        elif fit_mode == "poly":
+        if fit_mode == "polynomial":
             definition = build_polynomial_definition(max(1, poly_degree))
             from fitting.auto_models import fit_linear_model
 
@@ -744,7 +745,7 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
             summary_text = summarize_fit_result(fit_res)
             plot_b64 = _render_plot(fit_res)
             expression_for_csv = fit_res.details.get("expression")
-        elif fit_mode == "inverse":
+        elif fit_mode == "inverse_power":
             definition = build_inverse_series_definition(inv_min, inv_max)
             from fitting.auto_models import fit_linear_model
 
@@ -755,27 +756,6 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                 precision=mp_precision,
                 weights=None,
                 data_sigmas=sigmas_for_fit,
-            )
-            best_label = definition.label
-            params = _collect_params(fit_res)
-            metrics = _collect_metrics(fit_res)
-            summary_text = summarize_fit_result(fit_res)
-            plot_b64 = _render_plot(fit_res)
-            expression_for_csv = fit_res.details.get("expression")
-        elif fit_mode in {"log_poly", "exp_combo"}:
-            target_id = "M4B" if fit_mode == "log_poly" else "M7B"
-            definition = next((m for m in AUTO_MODELS if m.identifier == target_id), None)
-            if not definition:
-                raise ValueError(_dual_msg("未找到对应模型。", "Target model was not found."))
-            from fitting.auto_models import fit_linear_model
-
-            fit_res = fit_linear_model(
-                definition,
-                x_vals,
-                y_vals,
-                precision=mp_precision,
-                weights=None,
-                data_sigmas=sigma_list,
             )
             best_label = definition.label
             params = _collect_params(fit_res)
@@ -824,7 +804,14 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
             summary_text = summarize_fit_result(fit_res)
             plot_b64 = _render_plot(fit_res)
             expression_for_csv = expr
-        elif fit_mode == "custom" and custom_expr:
+        elif fit_mode == "custom":
+            if not custom_expr:
+                raise ValueError(
+                    _dual_msg(
+                        "自定义模型需要表达式。",
+                        "Custom fitting requires a model expression.",
+                    )
+                )
             try:
                 variable_names = list(var_mapping.keys()) if var_mapping else ["x"]
 
@@ -873,33 +860,7 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
             plot_b64 = _render_plot(fit_res)
             expression_for_csv = custom_expr
         else:
-            summary = auto_fit_dataset(
-                x_vals,
-                y_vals,
-                precision=mp_precision,
-                data_sigmas=sigmas_for_fit,
-            )
-            best = summary.best()
-            if not best or not best.fit_result:
-                raise ValueError(
-                    _dual_msg(
-                        "自动模型选择未获得有效结果。",
-                        "Auto model selection did not produce a valid result.",
-                    )
-                )
-            fit_res = best.fit_result
-            best_label = best.label
-            params = _collect_params(fit_res)
-            metrics = _collect_metrics(fit_res)
-            plot_b64 = _render_plot(fit_res)
-            summary_text = summarize_auto_results(summary.results)
-            failed = [res for res in summary.results if not res.success]
-            if failed:
-                n_failed = len(failed)
-                warnings.append(
-                    f"{n_failed} 个模型拟合失败，已在摘要中列出。 / {n_failed} model fits failed; see summary."
-                )
-            expression_for_csv = fit_res.details.get("expression")
+            raise _unsupported_fit_mode_error(fit_mode)
 
     csv_data = None
     if fit_res:
@@ -942,4 +903,3 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
         latex_text=latex_text,
         pdf_b64=pdf_b64,
     )
-

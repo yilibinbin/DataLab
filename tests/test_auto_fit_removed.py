@@ -117,8 +117,15 @@ def test_docs_do_not_advertise_automatic_fitting_as_current_feature():
         root / "docs" / "ARCHITECTURE.md",
         root / "docs" / "PROGRAM_FRAMEWORK.en.tex",
         root / "docs" / "PROGRAM_FRAMEWORK.tex",
+        root / "docs" / "DATALAB_WEB_GUIDE.md",
+        root / "docs" / "web" / "fitting.zh.md",
         root / "app_desktop" / "window_data_mixin.py",
         root / "app_desktop" / "window_i18n_mixin.py",
+        root / "app_web" / "templates" / "fit.html",
+        root / "app_web" / "static" / "js" / "i18n.js",
+        root / "app_web" / "openapi.py",
+        root / "cli" / "batch_config.py",
+        root / "cli" / "main.py",
         *sorted((root / "docs" / "desktop").glob("*.md")),
     ]
     banned_claims = (
@@ -141,6 +148,71 @@ def test_docs_do_not_advertise_automatic_fitting_as_current_feature():
 
     architecture_text = (root / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     assert "AutoFitJob" not in architecture_text
+
+
+def test_web_fitting_logic_imports_without_public_auto_fit_export():
+    import app_web.logic.fitting as web_fitting
+
+    assert hasattr(web_fitting, "_run_fit")
+    assert not hasattr(web_fitting, "auto_fit_dataset")
+
+
+def test_web_fitting_template_exposes_only_explicit_supported_choices():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "app_web" / "templates" / "fit.html").read_text(encoding="utf-8")
+
+    for disallowed in (
+        'value="auto"',
+        'value="preset"',
+        'value="log_poly"',
+        'value="exp_combo"',
+        "automatic model selection",
+        "auto model selection",
+        "自动模型",
+        "自动拟合",
+    ):
+        assert disallowed not in text
+
+    for allowed in (
+        'value="polynomial"',
+        'value="inverse_power"',
+        'value="pade"',
+        'value="power_limit"',
+        'value="custom"',
+    ):
+        assert allowed in text
+
+
+def test_cli_batch_config_no_longer_advertises_auto_fit(tmp_path):
+    from cli.batch_config import ALLOWED_OPERATIONS, load_batch_config
+
+    assert "auto_fit" not in ALLOWED_OPERATIONS
+
+    data_path = tmp_path / "data.csv"
+    data_path.write_text("x,y\n1,2\n2,4\n", encoding="utf-8")
+    cfg_path = tmp_path / "batch.yml"
+    cfg_path.write_text(
+        "\n".join(
+            [
+                "jobs:",
+                "  - name: legacy",
+                "    operation: auto_fit",
+                f"    data_path: {data_path}",
+                f"    output_dir: {tmp_path / 'out'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        load_batch_config(cfg_path)
+    except ValueError as exc:
+        message = str(exc)
+    else:  # pragma: no cover - assertion path
+        raise AssertionError("legacy auto_fit operation should be rejected")
+
+    assert "unknown operation" in message
+    assert "auto_fit" in message
 
 
 def test_fitting_package_no_longer_exports_auto_fit():

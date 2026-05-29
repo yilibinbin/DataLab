@@ -12,15 +12,13 @@ parent_dir = Path(__file__).parent.parent
 if str(parent_dir) not in sys.path:
     sys.path.insert(0, str(parent_dir))
 
-from formula_help import (
+from formula_help import (  # noqa: E402
+    EXTRAPOLATION_METHODS,
     get_function_help,
     get_function_tooltip,
     get_method_description,
     get_method_name,
     get_method_parameters,
-    EXTRAPOLATION_METHODS,
-    FUNCTION_HELP_ZH,
-    FUNCTION_HELP_EN,
 )
 
 

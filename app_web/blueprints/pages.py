@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from flask import Blueprint, flash, render_template, request
 
-from fitting import AUTO_MODELS
-
 from .._security_shim import csrf_protect
 from ..logic import (
     _extract_data_text,
@@ -166,7 +164,7 @@ def error():
 @csrf_protect
 def fit():
     use_file_checked = _is_checked(request.form, "fit_use_file", False)
-    fit_mode = request.form.get("fit_mode", "auto")
+    fit_mode = request.form.get("fit_mode", "polynomial")
     weighted_checked = _is_checked(request.form, "fit_weighted", False)
     context: dict[str, object] = {
         "sample_data": SAMPLE_FIT_DATA.strip(),
@@ -176,7 +174,6 @@ def fit():
         "use_file_checked": use_file_checked,
         "fit_mode": fit_mode,
         "fit_weighted": weighted_checked,
-        "auto_models": AUTO_MODELS,
         "use_dcolumn_checked": _is_checked(request.form, "fit_use_dcolumn", True),
         "use_caption_checked": _is_checked(request.form, "fit_use_caption", False),
         "compile_pdf_checked": _is_checked(request.form, "fit_compile_pdf", False),

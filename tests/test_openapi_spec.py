@@ -46,7 +46,6 @@ def test_spec_has_core_endpoints():
         "/api/ui-specs",
         "/api/extrapolate",
         "/api/fit",
-        "/api/auto-fit",
         "/api/error-propagation",
         "/api/spec.json",
     ]
