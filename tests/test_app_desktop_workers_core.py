@@ -678,3 +678,52 @@ def test_execute_calc_job_extrapolation_returns_payload() -> None:
 
         res0 = payload["results"][0]
         assert mp.fabs(res0.value - limit) < mp.mpf("1e-2")
+
+
+def test_run_calculation_excludes_disabled_error_constants_from_calc_job(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app_desktop import window_extrapolation_mixin
+    from app_desktop.window import ExtrapolationWindow
+
+    class _Signal:
+        def connect(self, _callback: object) -> None:
+            return
+
+    class _DummyCalcWorker:
+        finished_ok = _Signal()
+        failed = _Signal()
+        finished = _Signal()
+        cancelled = _Signal()
+        log_ready = _Signal()
+
+        def __init__(self, job: CalcJob) -> None:
+            captured["job"] = job
+
+        def start(self) -> None:
+            captured["started"] = True
+
+        def isRunning(self) -> bool:  # noqa: N802 - Qt-style test double
+            return False
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(window_extrapolation_mixin, "CalcWorker", _DummyCalcWorker)
+
+    win = ExtrapolationWindow()
+    qtbot.addWidget(win)
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("error"))
+    win._data_stack.setCurrentIndex(1)
+    win.manual_data_edit.setPlainText("A B\n1 2\n")
+    win.formula_edit.setPlainText("A + B")
+    win.error_constants_editor.set_rows([{"name": "K", "value": "1.23(4)"}])
+    win.error_constants_editor.setChecked(False)
+
+    win.run_calculation()
+
+    job = captured["job"]
+    assert isinstance(job, CalcJob)
+    assert captured["started"] is True
+    assert win.error_constants_editor.constants_dict(validate=False) == {"K": "1.23(4)"}
+    assert job.constants_enabled is False
+    assert job.manual_constants == ""

@@ -70,7 +70,11 @@ class WindowExtrapolationMixin:
 
         data_path, manual_content = self._active_data_source()
         constants_editor = getattr(self, "error_constants_editor", None)
-        manual_constants_content = constants_editor.text().strip() if constants_editor is not None else ""
+        manual_constants_content = (
+            constants_editor.text().strip()
+            if constants_editor is not None and constants_editor.isChecked()
+            else ""
+        )
         use_file_mode = getattr(self, "use_file_checkbox", None).isChecked() if hasattr(self, "use_file_checkbox") else False
 
         if data_path:
