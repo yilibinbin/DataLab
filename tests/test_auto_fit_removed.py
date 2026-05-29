@@ -183,8 +183,18 @@ def test_docs_do_not_advertise_automatic_fitting_as_current_feature():
         root / "app_web" / "README_UPDATES.md",
     }
     user_facing_doc_claims = (
+        "preset",
         "preset model library",
         "built-in model library",
+        "predefined models",
+        "log models",
+        "exponential models",
+        "m4b",
+        "m7b",
+        "auto model selector",
+        "fit_auto",
+        "candidate models",
+        "choose model with minimum aic",
         "auto-model selection",
         "log/exp combinations",
         "预设模型库",

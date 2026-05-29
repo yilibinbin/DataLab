@@ -167,26 +167,22 @@ Optionally:
 
 ---
 
-## 3.3 Auto Model Selector
+## 3.3 Explicit Model Fitting
 
-For each candidate model:
+The current fitting workflow requires the user to choose the model
+family before execution. Supported public model families are:
 
-1. Fit parameters  
-2. Evaluate:
-   - χ²  
-   - AIC  
-   - BIC  
+1. polynomial
+2. inverse-power series
+3. Padé rational approximation
+4. power-limit template
+5. custom expressions
+6. self-consistent / implicit models in the desktop application
 
-\[
-AIC = 2k + n\ln(\chi^2/n)
-\]
-
-\[
-BIC = k\ln(n) + n\ln(\chi^2/n)
-\]
-
-3. Choose model with minimum AIC  
-4. Store per-model results for comparison  
+For each selected explicit model, DataLab fits the parameters and
+reports diagnostics such as residuals, χ², AIC, and BIC where those
+statistics apply. These diagnostics help compare manually selected
+fits, but DataLab does not select a model automatically.
 
 ---
 
@@ -268,24 +264,30 @@ Returns:
 
 ---
 
-## 6.2 Auto Model Fit API
+## 6.2 Explicit Model Fit API
 
 ```python
-result = fit_auto(x_data, y_data)
+result = fit_explicit_model(
+    model="polynomial",
+    x_data=x_data,
+    y_data=y_data,
+    options={"degree": 2},
+    precision=100,
+)
 ```
 
 Returns:
 
 ```json
 {
-  "best_model": "power_law",
-  "model_results": {
-      "power_law": {...},
-      "exponential": {...},
-      "rydberg": {...},
-      "shanks": {...}
-  },
-  "comparison": {...}
+  "model": "polynomial",
+  "params": {...},
+  "errors": {...},
+  "chi2": ...,
+  "aic": ...,
+  "bic": ...,
+  "residuals": [...],
+  "fitted_curve": [...]
 }
 ```
 
