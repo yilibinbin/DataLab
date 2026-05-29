@@ -363,17 +363,55 @@ def _solve_implicit_value(
     options = definition.solve_options
     tol = mp.mpf(options.tolerance)
     seed_scope = _scope_for(definition, var_tuple, param_tuple, None)
-    seed = cache.get_warm_start(param_tuple)
-    if seed is None:
-        seed = mp.mpf(safe_eval(options.initial, seed_scope))
-    else:
-        cache.diagnostics.warm_start_uses += 1
+    configured_seed = mp.mpf(safe_eval(options.initial, seed_scope))
+    warm_seed = cache.get_warm_start(param_tuple)
+    prefer_warm_start = warm_seed is not None and not _initial_depends_on_variables(definition)
 
     def rhs(value: mp.mpf) -> mp.mpf:
         scope = _scope_for(definition, var_tuple, param_tuple, mp.mpf(value))
         return mp.mpf(safe_eval(definition.equation, scope))
 
-    solved: mp.mpf
+    seeds: list[tuple[mp.mpf, bool]] = [(configured_seed, False)]
+    if warm_seed is not None:
+        if prefer_warm_start:
+            seeds = [(warm_seed, True), (configured_seed, False)]
+        else:
+            seeds.append((warm_seed, True))
+
+    last_error: ValueError | None = None
+    for seed, used_warm_start in seeds:
+        try:
+            solved, iterations_used, used_fallback, residual = _solve_from_seed(
+                rhs,
+                seed,
+                options,
+                tol,
+            )
+            if used_warm_start:
+                cache.diagnostics.warm_start_uses += 1
+            break
+        except ValueError as exc:
+            last_error = exc
+    else:
+        assert last_error is not None
+        raise last_error
+
+    diagnostics = cache.diagnostics
+    diagnostics.points_solved += 1
+    if used_fallback:
+        diagnostics.root_fallbacks += 1
+    diagnostics.max_iterations_used = max(diagnostics.max_iterations_used, iterations_used)
+    diagnostics.max_residual = max(diagnostics.max_residual, residual)
+    cache.set(var_tuple, param_tuple, solved)
+    return solved
+
+
+def _solve_from_seed(
+    rhs: Callable[[mp.mpf], mp.mpf],
+    seed: mp.mpf,
+    options: ImplicitSolveOptions,
+    tol: mp.mpf,
+) -> tuple[mp.mpf, int, bool, mp.mpf]:
     iterations_used = 0
     used_fallback = False
     if options.method == "fixed_point":
@@ -405,15 +443,12 @@ def _solve_implicit_value(
         used_fallback = True
         solved = _find_root(rhs, solved, options)
         residual = mp.fabs(solved - rhs(solved))
+    return solved, iterations_used, used_fallback, residual
 
-    diagnostics = cache.diagnostics
-    diagnostics.points_solved += 1
-    if used_fallback:
-        diagnostics.root_fallbacks += 1
-    diagnostics.max_iterations_used = max(diagnostics.max_iterations_used, iterations_used)
-    diagnostics.max_residual = max(diagnostics.max_residual, residual)
-    cache.set(var_tuple, param_tuple, solved)
-    return solved
+
+def _initial_depends_on_variables(definition: ImplicitModelDefinition) -> bool:
+    identifiers = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", definition.solve_options.initial))
+    return any(name in identifiers for name in definition.x_variables)
 
 
 def _find_root(

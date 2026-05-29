@@ -307,6 +307,37 @@ def test_sequential_general_implicit_evaluations_use_warm_starts() -> None:
     assert diagnostics.warm_start_uses == 2
 
 
+def test_row_dependent_initial_expression_preserves_fresh_root_branch() -> None:
+    def build_spec():
+        definition = ImplicitModelDefinition(
+            x_variables=("x",),
+            implicit_variable="u",
+            equation="u**2 - x",
+            output_expression="u",
+            parameters=("a",),
+            constants={},
+            solve_options=ImplicitSolveOptions(
+                method="root",
+                initial="x - 10",
+                tolerance="1e-30",
+                max_iterations=80,
+            ),
+        )
+        return build_implicit_model_specification(definition)
+
+    params = {"a": mp.mpf("0")}
+    sequential = build_spec()
+    sequential.evaluate({"x": mp.mpf("0")}, params)
+    sequential_second = sequential.evaluate({"x": mp.mpf("100")}, params)
+
+    fresh_second = build_spec().evaluate({"x": mp.mpf("100")}, params)
+
+    assert sequential_second > 0
+    assert mp.fabs(sequential_second - fresh_second) < mp.mpf("1e-28")
+    diagnostics = getattr(sequential, "implicit_diagnostics")
+    assert diagnostics.warm_start_uses == 0
+
+
 def test_initial_expression_cannot_reference_implicit_variable() -> None:
     definition = ImplicitModelDefinition(
         x_variables=("x",),

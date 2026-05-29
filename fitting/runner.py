@@ -79,48 +79,57 @@ class FitRunner:
         state = build_parameter_state(problem.parameter_config, parameter_names)
         fallback_history: list[dict[str, object]] = []
         if _can_try_scipy(problem, precision):
-            try:
-                candidate = _fit_with_scipy_least_squares(
-                    spec,
-                    state,
-                    variable_data,
-                    target_data,
-                    weights=weights,
-                    data_sigmas=data_sigmas,
-                )
-                start_norm = _weighted_residual_norm(
-                    spec,
-                    state.compose(state.initial_vector()),
-                    variable_data,
-                    target_data,
-                    weights,
-                )
-                accepted, reason = _accept_scipy_result(
-                    candidate.result,
-                    start_norm,
-                    candidate.condition,
-                    candidate.spotcheck_ok,
-                )
-                if accepted:
-                    candidate.result.details["optimizer_backend"] = "scipy_least_squares"
-                    candidate.result.details["scipy_safety_passed"] = True
-                    return candidate.result
+            if state.dependent_defs:
                 fallback_history.append(
                     {
                         "from": "scipy_least_squares",
                         "to": "mpmath_high_precision",
-                        "reason": reason,
-                        "condition": candidate.condition,
+                        "reason": "dependent parameter error propagation is not implemented for SciPy",
                     }
                 )
-            except Exception as exc:
-                fallback_history.append(
-                    {
-                        "from": "scipy_least_squares",
-                        "to": "mpmath_high_precision",
-                        "reason": f"scipy unavailable or failed: {exc}",
-                    }
-                )
+            else:
+                try:
+                    candidate = _fit_with_scipy_least_squares(
+                        spec,
+                        state,
+                        variable_data,
+                        target_data,
+                        weights=weights,
+                        data_sigmas=data_sigmas,
+                    )
+                    start_norm = _weighted_residual_norm(
+                        spec,
+                        state.compose(state.initial_vector()),
+                        variable_data,
+                        target_data,
+                        weights,
+                    )
+                    accepted, reason = _accept_scipy_result(
+                        candidate.result,
+                        start_norm,
+                        candidate.condition,
+                        candidate.spotcheck_ok,
+                    )
+                    if accepted:
+                        candidate.result.details["optimizer_backend"] = "scipy_least_squares"
+                        candidate.result.details["scipy_safety_passed"] = True
+                        return candidate.result
+                    fallback_history.append(
+                        {
+                            "from": "scipy_least_squares",
+                            "to": "mpmath_high_precision",
+                            "reason": reason,
+                            "condition": candidate.condition,
+                        }
+                    )
+                except Exception as exc:
+                    fallback_history.append(
+                        {
+                            "from": "scipy_least_squares",
+                            "to": "mpmath_high_precision",
+                            "reason": f"scipy unavailable or failed: {exc}",
+                        }
+                    )
 
         result = fit_custom_model(
             spec,
