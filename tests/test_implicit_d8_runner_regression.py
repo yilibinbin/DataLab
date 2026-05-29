@@ -77,5 +77,5 @@ def test_observed_implicit_d8_weighted_fit_finishes_quickly():
 
     assert time.perf_counter() - start < 1.0
     assert result.details["implicit_strategy"] == "observed_linear"
-    assert result.details["optimizer_backend"] in {"mpmath_qr", "scipy_least_squares"}
+    assert result.details["optimizer_backend"] == "mpmath_qr"
     assert set(result.params) == {"d0", "d2", "d4", "d6", "d8"}

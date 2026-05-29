@@ -19,10 +19,10 @@ from .hp_fitter import (
     fit_custom_model,
 )
 from .implicit_classifier import ImplicitProblemClassifier, ImplicitStrategy
-from . import implicit_model as _implicit_model
 from .implicit_model import (
     ImplicitModelDefinition,
     build_implicit_model_specification,
+    fit_observed_implicit_variable_linear_model,
 )
 from .model_parser import ModelSpecification, build_model_specification, infer_parameter_names
 from .problem import ModelProblem, constants_for_compute
@@ -156,10 +156,9 @@ class FitRunner:
             )
         state = build_parameter_state(problem.parameter_config or {}, list(definition.parameters))
         classification = ImplicitProblemClassifier().classify(definition)
-        observed_linear_fit = getattr(_implicit_model, "fit_observed_implicit_variable_linear_model", None)
-        if classification.strategy is ImplicitStrategy.OBSERVED_LINEAR and observed_linear_fit is not None:
+        if classification.strategy is ImplicitStrategy.OBSERVED_LINEAR:
             try:
-                result = observed_linear_fit(
+                result = fit_observed_implicit_variable_linear_model(
                     definition,
                     state,
                     variable_data,
@@ -245,7 +244,7 @@ class FitRunner:
 
 
 def _can_try_scipy(problem: ModelProblem, precision: int) -> bool:
-    return precision <= 16 and problem.model_type in {"custom", "self_consistent"}
+    return precision <= 16 and problem.model_type == "custom"
 
 
 def _accept_scipy_result(

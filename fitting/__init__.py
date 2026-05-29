@@ -8,6 +8,8 @@ from .implicit_model import (
     ImplicitSolveDiagnostics,
     ImplicitSolveOptions,
     build_implicit_model_specification,
+    can_fit_observed_implicit_variable,
+    fit_observed_implicit_variable_linear_model,
     quantum_defect_template,
 )
 from .model_parser import ModelSpecification, build_model_specification, infer_parameter_names
@@ -58,6 +60,8 @@ __all__ = [
     "ModelProblem",
     "ParameterDraft",
     "build_implicit_model_specification",
+    "can_fit_observed_implicit_variable",
+    "fit_observed_implicit_variable_linear_model",
     "quantum_defect_template",
     "build_model_specification",
     "infer_parameter_names",
