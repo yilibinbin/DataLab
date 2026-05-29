@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 
 def test_build_spec_returns_openapi_3():
     from app_web.openapi import OPENAPI_VERSION, build_spec

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import importlib.util
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -110,6 +111,7 @@ def test_auto_fit_worker_is_not_exported():
     assert not hasattr(workers_core, "AutoFitJob")
     assert not hasattr(workers_core, "_execute_auto_fit_job_subprocess")
     assert not hasattr(workers_qt, "AutoFitWorker")
+    assert importlib.util.find_spec("app_desktop.auto_fit_subprocess") is None
 
 
 def test_tests_do_not_import_removed_auto_fit_job():
