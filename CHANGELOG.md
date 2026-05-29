@@ -6,6 +6,23 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-05-29
+
+### Added
+- Added desktop parallel compute preferences for execution mode, worker
+  count, reserved CPU cores, nested parallelism policy, and backend
+  rollback gates.
+- Added a shared parallel backend for serial, thread, process, and
+  killable subprocess execution.
+
+### Changed
+- Routed sampling and self-consistent fitting subprocess execution
+  through the shared backend while preserving rollback behavior.
+
+### Fixed
+- Cleaned up active fitting subprocesses during shutdown and made
+  multiprocessing child shutdown handling safer.
+
 ## [2.3.2] — 2026-05-29
 
 ### Added
