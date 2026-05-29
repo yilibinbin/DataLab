@@ -22,6 +22,28 @@ __all__ = ["main", "run_batch_file"]
 _logger = logging.getLogger(__name__)
 
 
+_REMOVED_FIT_MODELS = frozenset({"auto", "auto_fit", "log_poly", "exp_combo"})
+_CLI_MODEL_ALIASES = {
+    "poly": "polynomial",
+    "polynomial": "polynomial",
+    "linear": "polynomial",
+    "quadratic": "polynomial",
+    "cubic": "polynomial",
+    "inverse": "inverse_power",
+    "inverse_power": "inverse_power",
+}
+_POLYNOMIAL_DEGREES = {
+    "linear": 1,
+    "poly": 1,
+    "polynomial": 1,
+    "quadratic": 2,
+    "cubic": 3,
+}
+_PUBLIC_CLI_MODELS = frozenset(
+    {"polynomial", "inverse_power", "pade", "power_limit", "custom"}
+)
+
+
 def _configure_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
@@ -62,29 +84,39 @@ def _read_xy_csv(path: Path) -> tuple[list[float], list[float]]:
 
 
 def _run_fit(job) -> dict:
-    """Execute a single-model fit via ``fitting.auto_models.fit_linear_model``.
-
-    ``job.model`` is the model identifier from ``AUTO_MODELS``
-    (e.g., ``"M1"`` for linear, ``"M2"`` for quadratic) or the
-    friendly alias ``"linear"`` / ``"quadratic"`` / ``"cubic"``.
-    """
+    """Execute a single explicit CLI fit."""
+    from fitting import build_inverse_series_definition, build_polynomial_definition
     from fitting.auto_models import (
-        AUTO_MODELS,
-        MODEL_ID_ALIASES,
         fit_linear_model,
-        resolve_model_identifier,
     )
     from shared.precision import precision_guard
 
-    requested = resolve_model_identifier(job.model)
-    by_id = {d.identifier: d for d in AUTO_MODELS}
-    definition = by_id.get(requested)
-    if definition is None:
-        available = ", ".join(sorted(by_id.keys()))
+    raw_model = (job.model or "polynomial").strip()
+    model_key = raw_model.lower()
+    if model_key in _REMOVED_FIT_MODELS:
+        raise ValueError(
+            f"Job {job.name!r}: model {raw_model!r} has been removed. "
+            "Choose an explicit model: polynomial, inverse_power, "
+            "pade, power_limit, or custom."
+        )
+
+    canonical_model = _CLI_MODEL_ALIASES.get(model_key, model_key)
+    if canonical_model not in _PUBLIC_CLI_MODELS:
+        available = ", ".join(sorted(_PUBLIC_CLI_MODELS))
         raise ValueError(
             f"Job {job.name!r}: unknown model {job.model!r}. "
-            f"Available identifiers: {available} (aliases: "
-            f"{', '.join(sorted(MODEL_ID_ALIASES))})"
+            f"Available models: {available}"
+        )
+    if canonical_model == "polynomial":
+        definition = build_polynomial_definition(_POLYNOMIAL_DEGREES.get(model_key, 1))
+    elif canonical_model == "inverse_power":
+        definition = build_inverse_series_definition(1, 3)
+    else:
+        raise ValueError(
+            f"Job {job.name!r}: model {canonical_model!r} is an explicit "
+            "DataLab model, but this CLI batch runner currently supports "
+            "only polynomial and inverse_power fits. Use the desktop or web "
+            "UI for this model."
         )
 
     xs, ys = _read_xy_csv(job.data_path)
@@ -100,7 +132,7 @@ def _run_fit(job) -> dict:
     return {
         "job_name": job.name,
         "operation": "fit",
-        "model": definition.identifier,
+        "model": canonical_model,
         "model_label": definition.label,
         "data_path": str(job.data_path),
         "n_points": len(xs),
