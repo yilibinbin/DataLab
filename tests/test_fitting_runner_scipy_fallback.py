@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import mpmath as mp
+import pytest
 
 
-def test_precision_16_uses_scipy_when_safety_checks_pass():
+def test_precision_16_uses_scipy_when_safety_checks_pass() -> None:
     from fitting.problem import ModelProblem
     from fitting.runner import FitRunner
 
@@ -24,7 +25,7 @@ def test_precision_16_uses_scipy_when_safety_checks_pass():
     assert result.details["scipy_safety_passed"] is True
 
 
-def test_precision_16_falls_back_when_scipy_safety_fails(monkeypatch):
+def test_precision_16_falls_back_when_scipy_safety_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     from fitting.problem import ModelProblem
     from fitting.runner import FitRunner
 
@@ -44,10 +45,14 @@ def test_precision_16_falls_back_when_scipy_safety_fails(monkeypatch):
     )
 
     assert result.details["optimizer_backend"] == "mpmath_high_precision"
-    assert result.details["fallback_history"][0]["from"] == "scipy_least_squares"
+    history = result.details.get("fallback_history", [])
+    assert isinstance(history, list)
+    first = history[0]
+    assert isinstance(first, dict)
+    assert first["from"] == "scipy_least_squares"
 
 
-def test_precision_16_dependent_parameters_fall_back_from_scipy():
+def test_precision_16_dependent_parameters_fall_back_from_scipy() -> None:
     from fitting.problem import ModelProblem
     from fitting.runner import FitRunner
 
@@ -69,6 +74,10 @@ def test_precision_16_dependent_parameters_fall_back_from_scipy():
 
     assert result.details["optimizer_backend"] == "mpmath_high_precision"
     assert result.details["scipy_safety_passed"] is False
-    assert result.details["fallback_history"][0]["from"] == "scipy_least_squares"
-    assert "dependent parameter error propagation" in result.details["fallback_history"][0]["reason"]
+    history = result.details.get("fallback_history", [])
+    assert isinstance(history, list)
+    first = history[0]
+    assert isinstance(first, dict)
+    assert first["from"] == "scipy_least_squares"
+    assert "dependent parameter error propagation" in str(first["reason"])
     assert result.param_errors["b"] > 0

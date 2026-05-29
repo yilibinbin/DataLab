@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -39,6 +40,7 @@ class _SciPyCandidate:
     scipy_message: str
     condition: float
     spotcheck_ok: bool
+    solution: tuple[mp.mpf, ...]
 
 
 class FitRunner:
@@ -283,6 +285,89 @@ class FitRunner:
             except ValueError as exc:
                 fallback_history.append({"from": "observed_nonlinear", "to": "general", "reason": str(exc)})
 
+        scipy_fallback_reason = ""
+        can_try_implicit_scipy, scipy_eligibility_reason = _can_try_scipy_implicit(precision, state)
+        if can_try_implicit_scipy:
+            try:
+                benchmark_ok, benchmark_reason = _implicit_scipy_benchmark_gate(
+                    definition,
+                    state,
+                    variable_data,
+                    target_data,
+                    seed_hint=plan.seed_hint,
+                    weights=weights,
+                    precision=precision,
+                )
+            except Exception as exc:
+                benchmark_ok = False
+                benchmark_reason = f"scipy implicit benchmark gate failed: {exc}"
+            if benchmark_ok:
+                try:
+                    start_norm_spec = build_implicit_model_specification(
+                        definition,
+                        target_data=target_data,
+                        seed_hint=plan.seed_hint,
+                        use_analytic_derivatives=False,
+                    )
+                    def fresh_factory() -> ModelSpecification:
+                        return build_implicit_model_specification(
+                            definition,
+                            target_data=target_data,
+                            seed_hint=plan.seed_hint,
+                            use_analytic_derivatives=False,
+                        )
+                    start_norm = _weighted_residual_norm(
+                        start_norm_spec,
+                        state.compose(state.initial_vector()),
+                        variable_data,
+                        target_data,
+                        weights,
+                    )
+                    spec = fresh_factory()
+                    candidate = _fit_with_scipy_least_squares(
+                        spec,
+                        state,
+                        variable_data,
+                        target_data,
+                        weights=weights,
+                        data_sigmas=data_sigmas,
+                        fresh_model_factory=fresh_factory,
+                    )
+                    accepted, reason = _accept_scipy_result(
+                        candidate.result,
+                        start_norm,
+                        candidate.condition,
+                        candidate.spotcheck_ok,
+                    )
+                    if accepted:
+                        materialized, materialized_diagnostics = _materialize_scipy_result_with_fresh_model(
+                            candidate,
+                            fresh_factory,
+                            state,
+                            variable_data,
+                            target_data,
+                            weights,
+                            precision=precision,
+                        )
+                        materialized.details["implicit_strategy"] = "scipy_general_implicit"
+                        materialized.details["optimizer_backend"] = "scipy_implicit_least_squares"
+                        materialized.details["scipy_safety_passed"] = True
+                        materialized.details["scipy_implicit_benchmark"] = benchmark_reason
+                        materialized.details["implicit_diagnostics"] = {
+                            "points_solved": int(materialized_diagnostics.points_solved),
+                            "root_fallbacks": int(materialized_diagnostics.root_fallbacks),
+                            "max_iterations_used": int(materialized_diagnostics.max_iterations_used),
+                            "max_residual": str(materialized_diagnostics.max_residual),
+                        }
+                        return materialized
+                    scipy_fallback_reason = reason
+                except Exception as exc:
+                    scipy_fallback_reason = f"scipy implicit unavailable or failed: {exc}"
+            else:
+                scipy_fallback_reason = benchmark_reason
+        elif precision <= 16:
+            scipy_fallback_reason = scipy_eligibility_reason
+
         spec = build_implicit_model_specification(
             definition,
             target_data=target_data,
@@ -414,6 +499,15 @@ class FitRunner:
         )
         if plan.seed_hint is not None:
             result.details["implicit_seed_hint"] = plan.seed_hint.reason
+        if scipy_fallback_reason:
+            fallback_history.append(
+                {
+                    "from": "scipy_implicit_least_squares",
+                    "to": "mpmath_high_precision",
+                    "reason": scipy_fallback_reason,
+                }
+            )
+            result.details["scipy_safety_passed"] = False
         if fallback_history:
             result.details["fallback_history"] = fallback_history
         result.details["optimizer_backend"] = "mpmath_high_precision"
@@ -422,6 +516,14 @@ class FitRunner:
 
 def _can_try_scipy(problem: ModelProblem, precision: int) -> bool:
     return precision <= 16 and problem.model_type == "custom"
+
+
+def _can_try_scipy_implicit(precision: int, state: ParameterState) -> tuple[bool, str]:
+    if precision > 16:
+        return False, "precision is above the double-precision SciPy candidate range"
+    if state.dependent_defs:
+        return False, "dependent parameter expressions require mpmath error propagation"
+    return True, "eligible"
 
 
 def _accept_scipy_result(
@@ -451,6 +553,7 @@ def _fit_with_scipy_least_squares(
     *,
     weights: list[mp.mpf] | None,
     data_sigmas: list[mp.mpf | None] | None,
+    fresh_model_factory: Callable[[], ModelSpecification] | None = None,
 ) -> _SciPyCandidate:
     import numpy as np
     from scipy.optimize import least_squares  # type: ignore[import-untyped]
@@ -465,6 +568,7 @@ def _fit_with_scipy_least_squares(
         )
     scipy_weights = _normalise_scipy_weights(weights, len(targets))
     sqrt_weights = np.sqrt(np.asarray(scipy_weights, dtype=float)) if scipy_weights is not None else None
+    point_index_setter = getattr(model, "set_implicit_point_index", None)
     lower: list[float] = []
     upper: list[float] = []
     for name in parameter_state.free_params:
@@ -477,6 +581,8 @@ def _fit_with_scipy_least_squares(
         params = parameter_state.compose(tuple(mp.mpf(str(float(value))) for value in values))
         residuals = []
         for idx, (obs, target) in enumerate(zip(observations, targets)):
+            if callable(point_index_setter):
+                point_index_setter(idx)
             residual = float(model.evaluate(obs, params) - target)
             if sqrt_weights is not None:
                 residual *= float(sqrt_weights[idx])
@@ -556,7 +662,13 @@ def _fit_with_scipy_least_squares(
         details=details,
     )
     condition = _jacobian_condition_estimate(scipy_result.jac)
-    spotcheck_ok = _spotcheck_scipy_solution(model, observations, params, fitted_curve)
+    spotcheck_ok = _spotcheck_scipy_solution(
+        model,
+        observations,
+        params,
+        fitted_curve,
+        fresh_model_factory=fresh_model_factory,
+    )
     fit_result.details["scipy_jacobian_condition"] = condition
     fit_result.details["scipy_spotcheck_ok"] = spotcheck_ok
     return _SciPyCandidate(
@@ -565,6 +677,7 @@ def _fit_with_scipy_least_squares(
         scipy_message=str(scipy_result.message),
         condition=condition,
         spotcheck_ok=spotcheck_ok,
+        solution=solution,
     )
 
 
@@ -589,6 +702,67 @@ def _normalise_scipy_weights(weights: list[mp.mpf] | None, row_count: int) -> li
     return normalized
 
 
+def _materialize_scipy_result_with_fresh_model(
+    candidate: _SciPyCandidate,
+    fresh_model_factory: Callable[[], ModelSpecification],
+    parameter_state: ParameterState,
+    variable_data: dict[str, Sequence[mp.mpf]],
+    target_data: Sequence[mp.mpf],
+    weights: list[mp.mpf] | None,
+    *,
+    precision: int,
+) -> tuple[FitResult, Any]:
+    with mp.workdps(precision):
+        model = fresh_model_factory()
+        observations, targets = _prepare_points(variable_data, target_data)
+        params = parameter_state.compose(candidate.solution)
+        fitted_curve, residuals, chi2, reduced, r2, rmse, aic, bic, dof = _compute_statistics(
+            model,
+            params,
+            observations,
+            targets,
+            len(parameter_state.free_params),
+            weights,
+        )
+        covariance, stat_errors, cov_warning = _compute_covariance(
+            model,
+            params,
+            observations,
+            targets,
+            parameter_state.free_params,
+            chi2,
+            dof if dof > 0 else 1,
+            weights,
+        )
+    stat_errors.update(_dependent_zero_errors(parameter_state, params))
+    for name in model.parameters:
+        stat_errors.setdefault(name, mp.mpf("0"))
+    stat_errors, sys_errors, total_errors = combine_error_components(params, stat_errors, {})
+    details = dict(candidate.result.details)
+    if cov_warning:
+        details["covariance_warning"] = cov_warning
+    result = replace(
+        candidate.result,
+        params=params,
+        param_errors=total_errors,
+        chi2=chi2,
+        reduced_chi2=reduced,
+        aic=aic,
+        bic=bic,
+        r2=r2,
+        rmse=rmse,
+        residuals=residuals,
+        fitted_curve=fitted_curve,
+        covariance=covariance,
+        param_errors_stat=stat_errors,
+        param_errors_sys=sys_errors,
+        param_errors_total=total_errors,
+        details=details,
+    )
+    diagnostics = getattr(model, "implicit_diagnostics", None)
+    return result, diagnostics
+
+
 def _weighted_residual_norm(
     model: ModelSpecification,
     params: dict[str, mp.mpf],
@@ -597,8 +771,11 @@ def _weighted_residual_norm(
     weights: list[mp.mpf] | None,
 ) -> float:
     observations, targets = _prepare_points(variable_data, target_data)
+    point_index_setter = getattr(model, "set_implicit_point_index", None)
     total = mp.mpf("0")
     for idx, (obs, target) in enumerate(zip(observations, targets)):
+        if callable(point_index_setter):
+            point_index_setter(idx)
         residual = model.evaluate(obs, params) - target
         weight = mp.mpf(weights[idx]) if weights else mp.mpf("1")
         total += weight * residual * residual
@@ -692,6 +869,75 @@ def _derivatives_close(analytic_value: mp.mpf, numeric_value: mp.mpf) -> bool:
     return bool(diff <= tolerance * scale)
 
 
+def _implicit_scipy_benchmark_gate(
+    definition: ImplicitModelDefinition,
+    parameter_state: ParameterState,
+    variable_data: dict[str, Sequence[mp.mpf]],
+    target_data: Sequence[mp.mpf],
+    *,
+    seed_hint: ImplicitSeedHint | None,
+    weights: list[mp.mpf] | None,
+    precision: int,
+) -> tuple[bool, str]:
+    if precision > 16:
+        return False, "precision is above the double-precision SciPy candidate range"
+    if len(target_data) < max(3, len(parameter_state.free_params)):
+        return False, "not enough rows for representative SciPy implicit benchmark"
+    if len(target_data) > 256:
+        return False, "dataset is too large for the initial SciPy implicit candidate gate"
+    params = parameter_state.compose(parameter_state.initial_vector())
+    analytic_spec = build_implicit_model_specification(
+        definition,
+        target_data=target_data,
+        seed_hint=seed_hint,
+        use_analytic_derivatives=True,
+    )
+    if getattr(analytic_spec, "implicit_derivative_strategy", "") != "analytic_implicit":
+        return False, "analytic implicit derivative route is unavailable for benchmark comparison"
+
+    scipy_probes: list[float] = []
+    for _ in range(3):
+        numeric_spec = build_implicit_model_specification(
+            definition,
+            target_data=target_data,
+            seed_hint=seed_hint,
+            use_analytic_derivatives=False,
+        )
+        start = time.perf_counter()
+        _weighted_residual_norm(numeric_spec, params, variable_data, target_data, weights)
+        scipy_probes.append(time.perf_counter() - start)
+    scipy_probe_seconds = min(scipy_probes)
+
+    observations, _targets = _prepare_points(variable_data, target_data)
+    analytic_probes: list[float] = []
+    for _ in range(3):
+        probe_spec = build_implicit_model_specification(
+            definition,
+            target_data=target_data,
+            seed_hint=seed_hint,
+            use_analytic_derivatives=True,
+        )
+        point_index_setter = getattr(probe_spec, "set_implicit_point_index", None)
+        start = time.perf_counter()
+        for idx, obs in enumerate(observations):
+            if callable(point_index_setter):
+                point_index_setter(idx)
+            probe_spec.evaluate(obs, params)
+            for name in parameter_state.free_params:
+                probe_spec.partial(name, obs, params)
+        analytic_probes.append(time.perf_counter() - start)
+    analytic_probe_seconds = min(analytic_probes)
+    if scipy_probe_seconds <= analytic_probe_seconds * 0.5:
+        return (
+            True,
+            f"benchmark accepted: scipy_residual={scipy_probe_seconds:.6g}s analytic_gradient={analytic_probe_seconds:.6g}s",
+        )
+    return (
+        False,
+        f"benchmark rejected SciPy implicit candidate: scipy_residual={scipy_probe_seconds:.6g}s analytic_gradient={analytic_probe_seconds:.6g}s",
+    )
+
+
 def _remap_affine_result_to_output_space(
     result: FitResult,
     transform: OutputTransform,
@@ -740,11 +986,18 @@ def _spotcheck_scipy_solution(
     observations: Sequence[dict[str, mp.mpf]],
     params: dict[str, mp.mpf],
     fitted_curve: Sequence[mp.mpf],
+    *,
+    fresh_model_factory: Callable[[], ModelSpecification] | None = None,
 ) -> bool:
     if not observations:
         return False
+    if fresh_model_factory is not None:
+        model = fresh_model_factory()
+    point_index_setter = getattr(model, "set_implicit_point_index", None)
     indices = sorted({0, len(observations) // 2, len(observations) - 1})
     for index in indices:
+        if callable(point_index_setter):
+            point_index_setter(index)
         expected = mp.mpf(fitted_curve[index])
         actual = model.evaluate(observations[index], params)
         scale = max(mp.mpf("1"), mp.fabs(expected), mp.fabs(actual))
