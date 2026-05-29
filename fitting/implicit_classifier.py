@@ -2,31 +2,31 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 from enum import Enum
 
-import sympy as sp
-from sympy.parsing.sympy_parser import convert_xor, parse_expr, standard_transformations
-
 from .implicit_model import ImplicitModelDefinition
 
-_DATALAB_FUNCTIONS: dict[str, object] = {
-    "Abs": sp.Abs,
-    "Cos": sp.cos,
-    "Exp": sp.exp,
-    "Log": sp.log,
-    "Sin": sp.sin,
-    "Sqrt": sp.sqrt,
-    "Tan": sp.tan,
-    "abs": sp.Abs,
-    "cos": sp.cos,
-    "exp": sp.exp,
-    "log": sp.log,
-    "sin": sp.sin,
-    "sqrt": sp.sqrt,
-    "tan": sp.tan,
+_SAFE_FUNCTION_NAMES = {
+    "Abs",
+    "Cos",
+    "Exp",
+    "Log",
+    "Sin",
+    "Sqrt",
+    "Tan",
+    "abs",
+    "cos",
+    "exp",
+    "log",
+    "sin",
+    "sqrt",
+    "tan",
 }
+_SAFE_CONSTANT_NAMES = {"E", "Pi", "pi"}
+_NONLINEAR_DEGREE = 2
 
 
 class ImplicitStrategy(Enum):
@@ -67,24 +67,109 @@ class ImplicitProblemClassifier:
     def _is_linear_in_parameters(self, definition: ImplicitModelDefinition) -> bool | None:
         if not definition.parameters:
             return False
-        names = set(definition.parameters) | set(definition.x_variables) | {definition.implicit_variable}
-        local_dict = {name: sp.symbols(name) for name in names}
-        local_dict.update(_DATALAB_FUNCTIONS)
+        expression = _normalise_datalab_expression(definition.equation)
         try:
-            parsed = parse_expr(
-                _normalise_datalab_expression(definition.equation),
-                local_dict=local_dict,
-                transformations=standard_transformations + (convert_xor,),
-                evaluate=False,
-            )
-            numerator, denominator = sp.together(parsed).as_numer_denom()
-            parameter_symbols = [local_dict[name] for name in definition.parameters]
-            if set(denominator.free_symbols) & set(parameter_symbols):
-                return False
-            polynomial = sp.Poly(numerator, *parameter_symbols)
-        except Exception:
+            parsed = ast.parse(expression, mode="eval")
+        except SyntaxError:
             return None
-        return int(polynomial.total_degree()) <= 1
+        allowed_non_parameters = (
+            set(definition.x_variables)
+            | {definition.implicit_variable}
+            | set(definition.constants)
+            | _SAFE_CONSTANT_NAMES
+        )
+        degree = _parameter_degree(parsed.body, set(definition.parameters), allowed_non_parameters)
+        if degree is None:
+            return None
+        return degree <= 1
+
+
+def _parameter_degree(
+    node: ast.AST,
+    parameters: set[str],
+    allowed_non_parameters: set[str],
+) -> int | None:
+    if isinstance(node, ast.Constant):
+        return 0 if isinstance(node.value, int | float) else None
+    if isinstance(node, ast.Name):
+        if node.id in parameters:
+            return 1
+        if node.id in allowed_non_parameters:
+            return 0
+        return None
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd | ast.USub):
+        return _parameter_degree(node.operand, parameters, allowed_non_parameters)
+    if isinstance(node, ast.BinOp):
+        return _binary_parameter_degree(node, parameters, allowed_non_parameters)
+    if isinstance(node, ast.Call):
+        return _call_parameter_degree(node, parameters, allowed_non_parameters)
+    return None
+
+
+def _binary_parameter_degree(
+    node: ast.BinOp,
+    parameters: set[str],
+    allowed_non_parameters: set[str],
+) -> int | None:
+    left = _parameter_degree(node.left, parameters, allowed_non_parameters)
+    right = _parameter_degree(node.right, parameters, allowed_non_parameters)
+    if left is None or right is None:
+        return None
+    if isinstance(node.op, ast.Add | ast.Sub):
+        return max(left, right)
+    if isinstance(node.op, ast.Mult):
+        return min(left + right, _NONLINEAR_DEGREE)
+    if isinstance(node.op, ast.Div):
+        if right != 0:
+            return _NONLINEAR_DEGREE
+        return left
+    if isinstance(node.op, ast.Pow):
+        return _power_parameter_degree(node, left, right)
+    return None
+
+
+def _power_parameter_degree(node: ast.BinOp, base_degree: int, exponent_degree: int) -> int | None:
+    if exponent_degree != 0:
+        return _NONLINEAR_DEGREE
+    if base_degree == 0:
+        return 0
+    exponent = _numeric_literal(node.right)
+    if exponent is None:
+        return _NONLINEAR_DEGREE
+    if exponent == 0:
+        return 0
+    if exponent == 1:
+        return base_degree
+    return _NONLINEAR_DEGREE
+
+
+def _call_parameter_degree(
+    node: ast.Call,
+    parameters: set[str],
+    allowed_non_parameters: set[str],
+) -> int | None:
+    if not isinstance(node.func, ast.Name) or node.func.id not in _SAFE_FUNCTION_NAMES:
+        return None
+    if node.keywords:
+        return None
+    for arg in node.args:
+        degree = _parameter_degree(arg, parameters, allowed_non_parameters)
+        if degree is None:
+            return None
+        if degree != 0:
+            return _NONLINEAR_DEGREE
+    return 0
+
+
+def _numeric_literal(node: ast.AST) -> int | float | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, int | float):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd | ast.USub):
+        value = _numeric_literal(node.operand)
+        if value is None:
+            return None
+        return value if isinstance(node.op, ast.UAdd) else -value
+    return None
 
 
 def _is_observed_implicit_variable(definition: ImplicitModelDefinition) -> bool:
@@ -95,9 +180,10 @@ def _is_observed_implicit_variable(definition: ImplicitModelDefinition) -> bool:
 
 
 def _normalise_datalab_expression(expression: str) -> str:
-    normalised = expression
+    normalised = expression.replace("^", "**")
+    function_names = "|".join(re.escape(name) for name in sorted(_SAFE_FUNCTION_NAMES, key=len, reverse=True))
     for _ in range(20):
-        updated = re.sub(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\[", r"\1(", normalised)
+        updated = re.sub(rf"\b({function_names})\s*\[", r"\1(", normalised)
         if updated == normalised:
             break
         normalised = updated

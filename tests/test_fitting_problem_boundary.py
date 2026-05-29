@@ -72,3 +72,22 @@ def test_implicit_classifier_uses_general_for_uncertain_parse():
 
     assert classification.strategy is ImplicitStrategy.GENERAL
     assert any(word in classification.reason.lower() for word in ("parse", "uncertain", "conservative"))
+
+
+def test_implicit_classifier_does_not_execute_malicious_equation(tmp_path):
+    from fitting.implicit_classifier import ImplicitProblemClassifier, ImplicitStrategy
+    from fitting.implicit_model import ImplicitModelDefinition
+
+    sentinel = tmp_path / "datalab_unsafe_classifier"
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation=f'__import__("os").system("touch {sentinel}")',
+        output_expression="u",
+        parameters=("a",),
+    )
+
+    classification = ImplicitProblemClassifier().classify(definition)
+
+    assert classification.strategy is ImplicitStrategy.GENERAL
+    assert not sentinel.exists()
