@@ -7,8 +7,19 @@ import re
 from collections.abc import Callable
 from typing import Final, cast
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QPlainTextEdit,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 _IDENTIFIER_RE: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _FUNCTION_NAMES: Final = {
@@ -21,6 +32,134 @@ _FUNCTION_NAMES: Final = {
     "sqrt": r"\sqrt",
     "abs": r"\left|",
 }
+_INLINE_PREVIEW_MAX_WIDTH: Final = 300
+
+
+class FormulaPreviewLabel(QLabel):
+    """Compact formula preview that opens a larger read-only preview on click."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        configure_formula_preview_label(self)
+        self._preview_expression = ""
+        self._preview_lhs: str | None = None
+
+    def set_preview_source(self, expression: str, lhs: str | None) -> None:
+        self._preview_expression = expression
+        self._preview_lhs = lhs
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.button() != Qt.MouseButton.LeftButton or not self._preview_expression.strip():
+            super().mousePressEvent(event)
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Formula")
+        layout = QVBoxLayout(dialog)
+        expanded = QLabel()
+        expanded.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pixmap = render_formula_pixmap(self._preview_expression, lhs=self._preview_lhs)
+        if pixmap is not None and not pixmap.isNull():
+            expanded.setPixmap(pixmap)
+        else:
+            expanded.setText(self._preview_expression)
+        layout.addWidget(expanded)
+        dialog.resize(
+            max(420, expanded.sizeHint().width() + 48),
+            max(180, expanded.sizeHint().height() + 48),
+        )
+        dialog.exec()
+
+
+class FormulaPreviewDialog(QDialog):
+    """Read-only formula preview dialog with a light rendering surface."""
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        expression: str,
+        lhs: str | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.expression = expression or ""
+        self.lhs = lhs
+        self.setWindowTitle("Formula Preview")
+        self.resize(560, 320)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        self.formula_surface = QLabel()
+        self.formula_surface.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.formula_surface.setMinimumHeight(96)
+        self.formula_surface.setStyleSheet(
+            "background: #ffffff; color: #111111; border: 1px solid #d0d7de; "
+            "border-radius: 4px; padding: 12px;"
+        )
+        layout.addWidget(self.formula_surface)
+
+        self.error_label = QLabel("")
+        self.error_label.setStyleSheet("color: #b42318;")
+        self.error_label.setWordWrap(True)
+        self.error_label.hide()
+        layout.addWidget(self.error_label)
+
+        self.expression_text = QPlainTextEdit()
+        self.expression_text.setReadOnly(True)
+        self.expression_text.setPlainText(self.expression)
+        self.expression_text.setMinimumHeight(84)
+        layout.addWidget(self.expression_text)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch()
+        self.copy_button = QPushButton("Copy")
+        self.copy_button.clicked.connect(self._copy_expression)
+        button_row.addWidget(self.copy_button)
+        self.close_button = QPushButton("Close")
+        self.close_button.clicked.connect(self.accept)
+        button_row.addWidget(self.close_button)
+        layout.addLayout(button_row)
+
+        self._render_formula()
+
+    def _render_formula(self) -> None:
+        try:
+            pixmap = render_formula_pixmap(self.expression, lhs=self.lhs)
+        except Exception as exc:  # noqa: BLE001
+            pixmap = None
+            self.error_label.setText(str(exc))
+            self.error_label.show()
+        if pixmap is not None and not pixmap.isNull():
+            self.formula_surface.setPixmap(pixmap)
+            self.formula_surface.setText("")
+            return
+        self.formula_surface.setPixmap(QPixmap())
+        self.formula_surface.setText(self.expression)
+        if self.expression.strip() and not self.error_label.text():
+            self.error_label.setText("Formula rendering unavailable; showing source text.")
+            self.error_label.show()
+
+    def _copy_expression(self) -> None:
+        clipboard = QApplication.clipboard()
+        clipboard.setText(self.expression)
+
+
+def open_formula_preview_dialog(
+    parent: QWidget | None,
+    expression: str,
+    lhs: str | None = None,
+) -> FormulaPreviewDialog:
+    dialog = FormulaPreviewDialog(parent, expression=expression, lhs=lhs)
+    dialog.exec()
+    return dialog
+
+
+def configure_formula_preview_label(label: QLabel) -> None:
+    label.setWordWrap(True)
+    label.setMaximumWidth(_INLINE_PREVIEW_MAX_WIDTH + 20)
+    label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+    label.setCursor(Qt.CursorShape.PointingHandCursor)
+    label.setToolTip("Click to enlarge formula")
 
 
 def render_formula_pixmap(expression: str, lhs: str | None = None) -> QPixmap | None:
@@ -45,8 +184,16 @@ def render_formula_pixmap(expression: str, lhs: str | None = None) -> QPixmap | 
 
 def update_formula_preview(label: QLabel, expression: str, lhs: str | None = None) -> None:
     """Update ``label`` with a rendered preview or plain-text fallback."""
+    configure_formula_preview_label(label)
+    if hasattr(label, "set_preview_source"):
+        label.set_preview_source(expression or "", lhs)
     pixmap = render_formula_pixmap(expression, lhs=lhs)
     if pixmap is not None and not pixmap.isNull():
+        if pixmap.width() > _INLINE_PREVIEW_MAX_WIDTH:
+            pixmap = pixmap.scaledToWidth(
+                _INLINE_PREVIEW_MAX_WIDTH,
+                Qt.TransformationMode.SmoothTransformation,
+            )
         label.setPixmap(pixmap)
         label.setText("")
         return

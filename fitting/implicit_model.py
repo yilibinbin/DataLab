@@ -10,7 +10,10 @@ from typing import Callable, Sequence, cast
 from mpmath import mp
 
 from datalab_latex.expression_engine import safe_eval
+from shared.numerics import noise_floor
 from fitting.model_parser import ModelSpecification, MpfCallable
+from fitting.constraints import ParameterState
+from fitting.hp_fitter import FitResult, combine_error_components
 from shared.bilingual import _dual_msg
 
 
@@ -44,12 +47,15 @@ class ImplicitSolveDiagnostics:
     root_fallbacks: int = 0
     max_iterations_used: int = 0
     max_residual: mp.mpf = field(default_factory=lambda: mp.mpf("0"))
+    warm_start_uses: int = 0
 
 
 class ImplicitEvaluationCache:
     def __init__(self) -> None:
         self.diagnostics = ImplicitSolveDiagnostics()
         self._values: dict[_CacheKey, mp.mpf] = {}
+        self._warm_starts: dict[tuple[int, int, tuple[_MpfKey, ...]], mp.mpf] = {}
+        self.current_point_index: int | None = None
 
     def get(
         self,
@@ -65,6 +71,10 @@ class ImplicitEvaluationCache:
         value: mp.mpf,
     ) -> None:
         self._values[self._key(var_tuple, param_tuple)] = value
+        self._warm_starts[self._warm_key(param_tuple)] = value
+
+    def get_warm_start(self, param_tuple: tuple[mp.mpf, ...]) -> mp.mpf | None:
+        return self._warm_starts.get(self._warm_key(param_tuple))
 
     @staticmethod
     def _key(
@@ -75,6 +85,14 @@ class ImplicitEvaluationCache:
             int(mp.dps),
             int(mp.prec),
             tuple(cast(_MpfKey, value._mpf_) for value in var_tuple),
+            tuple(cast(_MpfKey, value._mpf_) for value in param_tuple),
+        )
+
+    @staticmethod
+    def _warm_key(param_tuple: tuple[mp.mpf, ...]) -> tuple[int, int, tuple[_MpfKey, ...]]:
+        return (
+            int(mp.dps),
+            int(mp.prec),
             tuple(cast(_MpfKey, value._mpf_) for value in param_tuple),
         )
 
@@ -93,9 +111,15 @@ def build_implicit_model_specification(
         var_tuple: tuple[mp.mpf, ...],
         param_tuple: tuple[mp.mpf, ...],
     ) -> mp.mpf:
-        solved = _solve_implicit_value(definition, cache, var_tuple, param_tuple)
+        try:
+            solved = _solve_implicit_value(definition, cache, var_tuple, param_tuple)
+        except ValueError as exc:
+            raise ValueError(_implicit_solve_failure_context(definition, cache, var_tuple, param_tuple, exc)) from exc
         scope = _scope_for(definition, var_tuple, param_tuple, solved)
         return mp.mpf(safe_eval(definition.output_expression, scope))
+
+    def _set_point_index(row_index: int | None) -> None:
+        cache.current_point_index = row_index
 
     gradient_funcs: dict[str, MpfCallable] = {}
     for parameter_index, parameter_name in enumerate(param_names):
@@ -115,7 +139,126 @@ def build_implicit_model_specification(
     )
     setattr(spec, "implicit_definition", definition)
     setattr(spec, "implicit_diagnostics", cache.diagnostics)
+    setattr(spec, "set_implicit_point_index", _set_point_index)
     return spec
+
+
+def can_fit_observed_implicit_variable(
+    definition: ImplicitModelDefinition,
+) -> bool:
+    """Return true when the target column is the implicit variable itself.
+
+    For data such as quantum-defect tables where the observed y column is
+    already ``delta`` and the model is ``delta = rhs(n, delta, params)``, the
+    statistically useful residual is ``rhs(n, delta_obs, params) - delta_obs``.
+    That form does not require solving an inner implicit equation for every
+    point and parameter perturbation.
+    """
+
+    return (
+        definition.output_expression.strip() == definition.implicit_variable
+        and definition.implicit_variable not in definition.x_variables
+    )
+
+
+def fit_observed_implicit_variable_linear_model(
+    definition: ImplicitModelDefinition,
+    parameter_state: ParameterState,
+    variable_data: dict[str, Sequence[mp.mpf]],
+    target_data: Sequence[mp.mpf],
+    precision: int = 80,
+    weights: list[mp.mpf] | None = None,
+    data_sigmas: list[mp.mpf | None] | None = None,
+) -> FitResult:
+    """Fit an implicit-variable target through a direct linear least-squares path.
+
+    This covers the common self-consistent residual
+    ``u_obs ~= equation(x, u_obs, params)`` when the equation is linear in the
+    free parameters. It intentionally refuses bounded/dependent free-parameter
+    configurations because direct QR cannot honor nonlinear constraints; those
+    cases should use the generic implicit solver path.
+    """
+
+    if not can_fit_observed_implicit_variable(definition):
+        raise ValueError(
+            _dual_msg(
+                "该隐式模型不能使用观测隐变量快路径。",
+                "This implicit model cannot use the observed-implicit-variable fast path.",
+            )
+        )
+    _validate_definition(definition)
+    if parameter_state.dependent_defs:
+        raise ValueError(
+            _dual_msg(
+                "带参数表达式约束的隐式模型暂不支持线性快路径。",
+                "Implicit models with dependent parameter constraints do not support the linear fast path.",
+            )
+        )
+    bounded = [
+        name
+        for name in parameter_state.free_params
+        if parameter_state.bounds.get(name, (None, None)) != (None, None)
+    ]
+    if bounded:
+        raise ValueError(
+            _dual_msg(
+                "带边界约束的隐式模型暂不支持线性快路径。",
+                "Implicit models with bounded parameters do not support the linear fast path.",
+            )
+        )
+
+    with mp.workdps(precision):
+        targets = [mp.mpf(value) for value in target_data]
+        if not targets:
+            raise ValueError(
+                _dual_msg(
+                    "未找到任何可用于拟合的数据行。",
+                    "No data rows available for fitting.",
+                )
+            )
+        for name in definition.x_variables:
+            if name not in variable_data:
+                raise ValueError(
+                    _dual_msg(
+                        f"缺少自变量数据: {name}",
+                        f"Missing independent variable data: {name}",
+                    )
+                )
+            if len(variable_data[name]) != len(targets):
+                raise ValueError(
+                    _dual_msg(
+                        "所有自变量的点数必须一致。",
+                        "All independent variables must have the same length.",
+                    )
+                )
+        weight_vec = _normalise_weights(weights, len(targets))
+
+        offsets: list[mp.mpf] = []
+        basis_rows: list[list[mp.mpf]] = []
+        zero_vector = tuple(mp.mpf("0") for _ in parameter_state.free_params)
+        offset_params = parameter_state.compose(zero_vector)
+        for row_index, target in enumerate(targets):
+            scope_base = _observed_scope_for(definition, variable_data, targets, row_index)
+            offset = _eval_equation_with_params(definition, scope_base, offset_params)
+            offsets.append(offset)
+            row: list[mp.mpf] = []
+            for free_index, _name in enumerate(parameter_state.free_params):
+                unit = list(zero_vector)
+                unit[free_index] = mp.mpf("1")
+                unit_params = parameter_state.compose(tuple(unit))
+                row.append(_eval_equation_with_params(definition, scope_base, unit_params) - offset)
+            basis_rows.append(row)
+
+        _assert_linear_in_free_params(definition, parameter_state, variable_data, targets, offsets, basis_rows)
+        return _solve_observed_linear_least_squares(
+            definition=definition,
+            parameter_state=parameter_state,
+            targets=targets,
+            offsets=offsets,
+            basis_rows=basis_rows,
+            weights=weight_vec,
+            data_sigmas=data_sigmas,
+        )
 
 
 def default_implicit_template() -> ImplicitModelDefinition:
@@ -220,13 +363,55 @@ def _solve_implicit_value(
     options = definition.solve_options
     tol = mp.mpf(options.tolerance)
     seed_scope = _scope_for(definition, var_tuple, param_tuple, None)
-    seed = mp.mpf(safe_eval(options.initial, seed_scope))
+    configured_seed = mp.mpf(safe_eval(options.initial, seed_scope))
+    warm_seed = cache.get_warm_start(param_tuple)
+    prefer_warm_start = warm_seed is not None and not _initial_depends_on_variables(definition)
 
     def rhs(value: mp.mpf) -> mp.mpf:
         scope = _scope_for(definition, var_tuple, param_tuple, mp.mpf(value))
         return mp.mpf(safe_eval(definition.equation, scope))
 
-    solved: mp.mpf
+    seeds: list[tuple[mp.mpf, bool]] = [(configured_seed, False)]
+    if warm_seed is not None:
+        if prefer_warm_start:
+            seeds = [(warm_seed, True), (configured_seed, False)]
+        else:
+            seeds.append((warm_seed, True))
+
+    last_error: ValueError | None = None
+    for seed, used_warm_start in seeds:
+        try:
+            solved, iterations_used, used_fallback, residual = _solve_from_seed(
+                rhs,
+                seed,
+                options,
+                tol,
+            )
+            if used_warm_start:
+                cache.diagnostics.warm_start_uses += 1
+            break
+        except ValueError as exc:
+            last_error = exc
+    else:
+        assert last_error is not None
+        raise last_error
+
+    diagnostics = cache.diagnostics
+    diagnostics.points_solved += 1
+    if used_fallback:
+        diagnostics.root_fallbacks += 1
+    diagnostics.max_iterations_used = max(diagnostics.max_iterations_used, iterations_used)
+    diagnostics.max_residual = max(diagnostics.max_residual, residual)
+    cache.set(var_tuple, param_tuple, solved)
+    return solved
+
+
+def _solve_from_seed(
+    rhs: Callable[[mp.mpf], mp.mpf],
+    seed: mp.mpf,
+    options: ImplicitSolveOptions,
+    tol: mp.mpf,
+) -> tuple[mp.mpf, int, bool, mp.mpf]:
     iterations_used = 0
     used_fallback = False
     if options.method == "fixed_point":
@@ -258,15 +443,12 @@ def _solve_implicit_value(
         used_fallback = True
         solved = _find_root(rhs, solved, options)
         residual = mp.fabs(solved - rhs(solved))
+    return solved, iterations_used, used_fallback, residual
 
-    diagnostics = cache.diagnostics
-    diagnostics.points_solved += 1
-    if used_fallback:
-        diagnostics.root_fallbacks += 1
-    diagnostics.max_iterations_used = max(diagnostics.max_iterations_used, iterations_used)
-    diagnostics.max_residual = max(diagnostics.max_residual, residual)
-    cache.set(var_tuple, param_tuple, solved)
-    return solved
+
+def _initial_depends_on_variables(definition: ImplicitModelDefinition) -> bool:
+    identifiers = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", definition.solve_options.initial))
+    return any(name in identifiers for name in definition.x_variables)
 
 
 def _find_root(
@@ -292,6 +474,34 @@ def _find_root(
         ) from exc
 
 
+def _implicit_solve_failure_context(
+    definition: ImplicitModelDefinition,
+    cache: ImplicitEvaluationCache,
+    var_tuple: tuple[mp.mpf, ...],
+    param_tuple: tuple[mp.mpf, ...],
+    exc: ValueError,
+) -> str:
+    variable_values = {
+        name: mp.nstr(value, 30)
+        for name, value in zip(definition.x_variables, var_tuple)
+    }
+    parameter_values = {
+        name: mp.nstr(value, 30)
+        for name, value in zip(definition.parameters, param_tuple)
+    }
+    diagnostics = cache.diagnostics
+    return _dual_msg(
+        "隐式方程逐点求解失败: "
+        f"point_index={cache.current_point_index}, variables={variable_values}, parameters={parameter_values}, "
+        f"method={definition.solve_options.method}, residual={mp.nstr(diagnostics.max_residual, 30)}, "
+        f"iterations={diagnostics.max_iterations_used}, error={exc}",
+        "Per-point implicit solve failed: "
+        f"point_index={cache.current_point_index}, variables={variable_values}, parameters={parameter_values}, "
+        f"method={definition.solve_options.method}, residual={mp.nstr(diagnostics.max_residual, 30)}, "
+        f"iterations={diagnostics.max_iterations_used}, error={exc}",
+    )
+
+
 def _scope_for(
     definition: ImplicitModelDefinition,
     var_tuple: tuple[mp.mpf, ...],
@@ -309,6 +519,242 @@ def _scope_for(
 
 def _constant_values(constants: dict[str, str]) -> dict[str, mp.mpf]:
     return {name: mp.mpf(value) for name, value in constants.items()}
+
+
+def _observed_scope_for(
+    definition: ImplicitModelDefinition,
+    variable_data: dict[str, Sequence[mp.mpf]],
+    targets: Sequence[mp.mpf],
+    row_index: int,
+) -> dict[str, object]:
+    scope: dict[str, object] = {}
+    scope.update(_constant_values(definition.constants))
+    for name in definition.x_variables:
+        scope[name] = mp.mpf(variable_data[name][row_index])
+    scope[definition.implicit_variable] = mp.mpf(targets[row_index])
+    return scope
+
+
+def _eval_equation_with_params(
+    definition: ImplicitModelDefinition,
+    scope_base: dict[str, object],
+    params: dict[str, mp.mpf],
+) -> mp.mpf:
+    scope = dict(scope_base)
+    scope.update(params)
+    return mp.mpf(safe_eval(definition.equation, scope))
+
+
+def _normalise_weights(
+    weights: list[mp.mpf] | None,
+    row_count: int,
+) -> list[mp.mpf] | None:
+    if not weights:
+        return None
+    if len(weights) != row_count:
+        raise ValueError(
+            _dual_msg(
+                "权重数量必须与数据点数量一致。",
+                "Weight count must match number of data points.",
+            )
+        )
+    weight_vec = [mp.mpf(weight) for weight in weights]
+    if any(weight <= 0 or mp.isnan(weight) for weight in weight_vec):
+        raise ValueError(
+            _dual_msg(
+                "权重必须为正且有限。",
+                "Weights must be positive and finite.",
+            )
+        )
+    return weight_vec
+
+
+def _assert_linear_in_free_params(
+    definition: ImplicitModelDefinition,
+    parameter_state: ParameterState,
+    variable_data: dict[str, Sequence[mp.mpf]],
+    targets: Sequence[mp.mpf],
+    offsets: Sequence[mp.mpf],
+    basis_rows: Sequence[Sequence[mp.mpf]],
+) -> None:
+    if not parameter_state.free_params:
+        return
+    trial_values = tuple(
+        mp.mpf(idx + 2) / mp.mpf("3")
+        for idx, _name in enumerate(parameter_state.free_params)
+    )
+    trial_params = parameter_state.compose(trial_values)
+    tolerance = mp.sqrt(mp.eps) * mp.mpf("100")
+    for row_index, target in enumerate(targets):
+        scope_base = _observed_scope_for(definition, variable_data, targets, row_index)
+        actual = _eval_equation_with_params(definition, scope_base, trial_params)
+        linear = offsets[row_index] + mp.fsum(
+            coeff * value for coeff, value in zip(basis_rows[row_index], trial_values)
+        )
+        scale = max(mp.mpf("1"), mp.fabs(actual), mp.fabs(linear), mp.fabs(target))
+        if mp.fabs(actual - linear) > tolerance * scale:
+            raise ValueError(
+                _dual_msg(
+                    "隐式方程对自由参数不是线性的，不能使用线性快路径。",
+                    "Implicit equation is not linear in free parameters; cannot use the linear fast path.",
+                )
+            )
+
+
+def _solve_observed_linear_least_squares(
+    *,
+    definition: ImplicitModelDefinition,
+    parameter_state: ParameterState,
+    targets: list[mp.mpf],
+    offsets: list[mp.mpf],
+    basis_rows: list[list[mp.mpf]],
+    weights: list[mp.mpf] | None,
+    data_sigmas: list[mp.mpf | None] | None,
+) -> FitResult:
+    row_count = len(targets)
+    free_params = list(parameter_state.free_params)
+    col_count = len(free_params)
+    if row_count < col_count:
+        raise ValueError(
+            _dual_msg(
+                "数据点数量不足以拟合该模型。",
+                "Not enough data points for this model.",
+            )
+        )
+    design = mp.matrix(row_count, col_count)
+    rhs = mp.matrix(row_count, 1)
+    for i in range(row_count):
+        weight_scale = mp.sqrt(weights[i]) if weights else mp.mpf("1")
+        for j in range(col_count):
+            design[i, j] = mp.mpf(basis_rows[i][j]) * weight_scale
+        rhs[i] = (mp.mpf(targets[i]) - mp.mpf(offsets[i])) * weight_scale
+    try:
+        q_matrix, r_matrix = mp.qr(design)
+        qt_rhs = q_matrix.T * rhs
+        r_top = r_matrix[:col_count, :col_count]
+        rhs_top = qt_rhs[:col_count, :]
+        coeff_matrix = mp.lu_solve(r_top, rhs_top)
+    except ZeroDivisionError as exc:
+        raise ValueError(
+            _dual_msg(
+                "设计矩阵奇异，无法拟合。",
+                "Design matrix is singular, cannot fit.",
+            )
+        ) from exc
+    free_solution = tuple(mp.mpf(coeff_matrix[i, 0]) for i in range(col_count))
+    params = parameter_state.compose(free_solution)
+    fitted_curve = [
+        offsets[i] + mp.fsum(basis_rows[i][j] * free_solution[j] for j in range(col_count))
+        for i in range(row_count)
+    ]
+    residuals = [fitted_curve[i] - targets[i] for i in range(row_count)]
+    if weights:
+        chi2 = mp.fsum(weight * (residual * residual) for weight, residual in zip(weights, residuals))
+        total_weight = mp.fsum(weights)
+        mean_target = (
+            mp.fsum(weight * target for weight, target in zip(weights, targets)) / total_weight
+            if total_weight > 0 else mp.fsum(targets) / row_count
+        )
+        sst = mp.fsum(weight * (target - mean_target) ** 2 for weight, target in zip(weights, targets))
+        rmse = mp.sqrt(chi2 / total_weight)
+    else:
+        chi2 = mp.fsum(residual * residual for residual in residuals)
+        mean_target = mp.fsum(targets) / row_count
+        sst = mp.fsum((target - mean_target) ** 2 for target in targets)
+        rmse = mp.sqrt(chi2 / row_count)
+    dof = row_count - col_count
+    if dof <= 0:
+        reduced = mp.nan
+        r2 = mp.nan
+        aic = mp.nan
+        bic = mp.nan
+    else:
+        reduced = chi2 / dof
+        r2 = mp.mpf("1") - (chi2 / sst if sst != 0 else mp.mpf("0"))
+        eps = noise_floor()
+        noise = chi2 / row_count if chi2 > eps else eps
+        aic = 2 * col_count + row_count * mp.log(noise)
+        bic = col_count * mp.log(row_count) + row_count * mp.log(noise)
+
+    covariance, stat_errors, cov_warning = _linear_covariance(
+        design=design,
+        free_params=free_params,
+        chi2=chi2,
+        dof=dof if dof > 0 else 1,
+    )
+    for name in definition.parameters:
+        stat_errors.setdefault(name, mp.mpf("0"))
+    sys_errors: dict[str, mp.mpf] = {}
+    stat_errors, sys_errors, total_errors = combine_error_components(params, stat_errors, sys_errors)
+    details: dict[str, object] = {
+        "expression": definition.equation,
+        "dof": int(dof),
+        "implicit_fast_path": "observed_implicit_linear",
+    }
+    if weights:
+        details["weighted"] = True
+    if data_sigmas is not None:
+        if weights:
+            details["uncertainty_note"] = {
+                "zh": "已用数据不确定度进行加权，仅统计误差；为避免双计，未单独计算系统误差。",
+                "en": "Data uncertainties were used for weighting (statistical only); to avoid double-counting, no separate systematic error was added.",
+            }
+        else:
+            details["uncertainty_note"] = {
+                "zh": "已保存数据不确定度；该线性快路径当前未执行 ±σ 系统重拟合。",
+                "en": "Data uncertainties were retained; this linear fast path does not currently run +/- sigma systematic refits.",
+            }
+    if cov_warning:
+        details["covariance_warning"] = cov_warning
+    return FitResult(
+        params=params,
+        param_errors=total_errors,
+        chi2=chi2,
+        reduced_chi2=reduced,
+        aic=aic,
+        bic=bic,
+        r2=r2,
+        rmse=rmse,
+        residuals=residuals,
+        fitted_curve=fitted_curve,
+        covariance=covariance,
+        param_errors_stat=stat_errors,
+        param_errors_sys=sys_errors,
+        param_errors_total=total_errors,
+        details=details,
+    )
+
+
+def _linear_covariance(
+    *,
+    design: mp.matrix,
+    free_params: list[str],
+    chi2: mp.mpf,
+    dof: int,
+) -> tuple[list[list[mp.mpf]], dict[str, mp.mpf], str | None]:
+    col_count = len(free_params)
+    try:
+        inv = (design.T * design) ** -1
+    except ZeroDivisionError:
+        return (
+            [[mp.nan for _ in range(col_count)] for _ in range(col_count)],
+            {name: mp.nan for name in free_params},
+            "协方差矩阵奇异，参数不确定度不可用。 / Covariance matrix is singular; parameter uncertainties unavailable.",
+        )
+    sigma2 = chi2 / dof if dof > 0 else mp.nan
+    covariance = [[inv[i, j] * sigma2 for j in range(col_count)] for i in range(col_count)]
+    errors = {
+        name: (
+            mp.sqrt(covariance[idx][idx])
+            if not mp.isnan(covariance[idx][idx]) and covariance[idx][idx] >= 0
+            else mp.nan
+        )
+        for idx, name in enumerate(free_params)
+    }
+    warning = None
+    if any(mp.isnan(value) or mp.isinf(value) for row in covariance for value in row):
+        warning = "协方差矩阵病态或奇异，参数不确定度可能不可靠。 / Covariance matrix is ill-conditioned or singular; parameter uncertainties may be unreliable."
+    return covariance, errors, warning
 
 
 def _validate_definition(definition: ImplicitModelDefinition) -> None:

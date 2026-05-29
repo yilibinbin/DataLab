@@ -268,10 +268,10 @@ def get_config_value(key: str, default=None, type_=str):
     if value is None:
         return default
 
-    if type_ == bool:
+    if type_ is bool:
         return value.lower() in ('true', '1', 'yes', 'on')
 
-    if type_ == int:
+    if type_ is int:
         try:
             return int(value)
         except ValueError:

@@ -1,9 +1,8 @@
 """Server-Sent Events (SSE) helpers for long-running DataLab jobs.
 
-Phase 4 #3 — the web app's auto-fit / MCMC / error-propagation runs
-can take minutes. Without streaming, the user sees a blank page for
-the duration; with SSE they see incremental events ("model 1 of 10
-complete", "best AIC so far: 42.1").
+Some web computations can take minutes. Without streaming, the user
+sees a blank page for the duration; with SSE they see incremental
+events as the current computation advances.
 
 SSE is chosen over WebSocket because:
 - unidirectional server→client is sufficient (client never sends

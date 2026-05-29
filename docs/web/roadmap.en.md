@@ -7,7 +7,7 @@ This page summarizes the development roadmap for DataLab Web.
 ### Core Features
 - Extrapolation (power-law, Richardson, Shanks, Levin u-transform, custom formula)
 - Error propagation (numerical derivatives, uncertainty synthesis, constants support)
-- Fitting (polynomial, Padé, preset models, custom models)
+- Fitting (polynomial, inverse-power, Padé, power-limit, custom models)
 - Statistics (mean, sample variance, weighted variance)
 - LaTeX table generation and optional PDF compilation
 - CSV export

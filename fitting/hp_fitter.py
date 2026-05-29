@@ -156,6 +156,7 @@ def _gradient_builder(
         params = state.compose(tuple(free_values))
         total = mp.mpf("0")
         for idx, (obs, target) in enumerate(zip(observations, targets)):
+            _set_model_point_index(model, idx)
             y_model = model.evaluate(obs, params)
             derivative = model.partial(parameter_name, obs, params)
             weight = weights[idx] if weights else mp.mpf("1")
@@ -177,7 +178,8 @@ def _compute_statistics(
 ]:
     fitted: list[mp.mpf] = []
     residuals: list[mp.mpf] = []
-    for obs, target in zip(observations, targets):
+    for idx, (obs, target) in enumerate(zip(observations, targets)):
+        _set_model_point_index(model, idx)
         value = model.evaluate(obs, params)
         fitted.append(value)
         residuals.append(value - target)
@@ -240,6 +242,7 @@ def _compute_covariance(
                 )
     sqrt_weights = [mp.sqrt(w) for w in weights] if weights else None
     for idx, (obs, target) in enumerate(zip(observations, targets)):
+        _set_model_point_index(model, idx)
         for jdx, name in enumerate(free_params):
             derivative = model.partial(name, obs, params)
             if sqrt_weights:
@@ -274,6 +277,12 @@ def _compute_covariance(
     if any(mp.isnan(val) or mp.isinf(val) for row in covariance for val in row):
         cov_warning = "协方差矩阵病态或奇异，参数不确定度可能不可靠。 / Covariance matrix is ill-conditioned or singular; parameter uncertainties may be unreliable."
     return covariance, errors, cov_warning
+
+
+def _set_model_point_index(model: ModelSpecification, row_index: int) -> None:
+    setter = getattr(model, "set_implicit_point_index", None)
+    if setter is not None:
+        setter(row_index)
 
 
 def _propagate_dependent_errors(

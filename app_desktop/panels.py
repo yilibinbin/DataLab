@@ -53,6 +53,7 @@ from formula_help import (
     get_method_parameters,
 )
 from app_desktop.constants_editor import ConstantsEditor
+from app_desktop.formula_preview import open_formula_preview_dialog
 from app_desktop.formula_preview import update_formula_preview as _render_formula_preview
 from app_desktop.parameter_table import ParameterTable
 from app_desktop.parallel_preferences import (
@@ -261,6 +262,12 @@ def build_menu(self):
     file_menu.addAction(open_workspace_action)
     self._register_text(open_workspace_action, "打开工作区…", "Open Workspace…", "setText")
 
+    open_example_workspace_action = QAction("打开示例工作区…", self)
+    open_example_workspace_action.setMenuRole(QAction.NoRole)
+    open_example_workspace_action.triggered.connect(self.open_example_workspace)
+    file_menu.addAction(open_example_workspace_action)
+    self._register_text(open_example_workspace_action, "打开示例工作区…", "Open Example Workspace…", "setText")
+
     file_menu.addSeparator()
 
     save_workspace_action = QAction("保存工作区", self)
@@ -274,6 +281,10 @@ def build_menu(self):
     save_workspace_as_action.triggered.connect(self.save_workspace_as)
     file_menu.addAction(save_workspace_as_action)
     self._register_text(save_workspace_as_action, "工作区另存为…", "Save Workspace As…", "setText")
+
+    examples_menu = menubar.addMenu("示例")
+    self._register_text(examples_menu, "示例", "Examples", "setTitle")
+    examples_menu.addAction(open_example_workspace_action)
 
     lang_menu = menubar.addMenu("语言")
     self._register_text(lang_menu, "语言", "Language", "setTitle")
@@ -363,12 +374,7 @@ def build_ui(self):
     splitter.setSizes([520, 820])
 
     self._build_left_panel()
-    # Prevent collapsing the left panel past its minimum
-    try:
-        min_left = max(360, self.left_container.sizeHint().width())
-        left_scroll.setMinimumWidth(min_left)
-    except Exception:
-        pass
+    left_scroll.setMinimumWidth(320)
     self._build_right_panel(right_layout)
     # 初始化手动输入占位示例
     self._update_manual_placeholder(self.mode_combo.currentData())
@@ -591,7 +597,16 @@ def build_left_panel(self):
     custom_layout = QVBoxLayout(self.custom_formula_widget)
     lbl_custom = QLabel("自定义公式：")
     self._register_text(lbl_custom, "自定义公式：", "Custom formula:")
-    custom_layout.addWidget(lbl_custom)
+    custom_title_row = QHBoxLayout()
+    custom_title_row.addWidget(lbl_custom)
+    custom_title_row.addStretch()
+    self.custom_formula_preview_button = _make_formula_preview_button(
+        self,
+        self.custom_formula_edit if hasattr(self, "custom_formula_edit") else None,
+        title="Preview formula",
+    )
+    custom_title_row.addWidget(self.custom_formula_preview_button)
+    custom_layout.addLayout(custom_title_row)
     self.custom_formula_edit = QPlainTextEdit("(C - B)^2/(B - A) + C")
     self.custom_formula_edit.setPlaceholderText(
         self._tr(
@@ -603,12 +618,9 @@ def build_left_panel(self):
     self.custom_formula_edit.setMinimumHeight(80)
     self.custom_formula_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
     custom_layout.addWidget(self.custom_formula_edit, stretch=1)
-    # Formula preview label
-    self.formula_preview_label = QLabel()
-    self.formula_preview_label.setWordWrap(True)
-    self.formula_preview_label.setStyleSheet("color: var(--muted, #8b949e); font-family: serif; font-size: 16px; padding: 4px 8px;")
-    custom_layout.addWidget(self.formula_preview_label)
-    self.custom_formula_edit.textChanged.connect(lambda: _update_formula_preview(self, self.custom_formula_edit, self.formula_preview_label))
+    self.custom_formula_preview_button.clicked.connect(
+        lambda: _open_formula_preview(self, self.custom_formula_edit, lhs=None)
+    )
     custom_hint_row = QHBoxLayout()
     custom_hint_row.setContentsMargins(0, 0, 0, 0)
     custom_hint_row.setSpacing(6)
@@ -764,17 +776,26 @@ def build_left_panel(self):
     self.error_box = QGroupBox("误差传递设置")
     self._register_title(self.error_box, "误差传递设置", "Error propagation")
     error_layout = QVBoxLayout(self.error_box)
+    error_formula_row = QHBoxLayout()
+    lbl_error_formula = QLabel("公式：")
+    self._register_text(lbl_error_formula, "公式：", "Formula:")
+    error_formula_row.addWidget(lbl_error_formula)
+    error_formula_row.addStretch()
+    self.error_formula_preview_button = _make_formula_preview_button(
+        self,
+        None,
+        title="Preview formula",
+    )
+    error_formula_row.addWidget(self.error_formula_preview_button)
+    error_layout.addLayout(error_formula_row)
     self.formula_edit = QPlainTextEdit()
     self.formula_edit.setPlaceholderText(
         self._tr("公式（使用列名或 x1, x2 …）", "Formula (use column names or x1, x2 …)")
     )
     error_layout.addWidget(self.formula_edit)
-    # Error formula preview
-    self.error_formula_preview = QLabel()
-    self.error_formula_preview.setWordWrap(True)
-    self.error_formula_preview.setStyleSheet("color: var(--muted, #8b949e); font-family: serif; font-size: 16px; padding: 4px 8px;")
-    error_layout.addWidget(self.error_formula_preview)
-    self.formula_edit.textChanged.connect(lambda: _update_formula_preview(self, self.formula_edit, self.error_formula_preview))
+    self.error_formula_preview_button.clicked.connect(
+        lambda: _open_formula_preview(self, self.formula_edit, lhs=None)
+    )
 
     func_btn_row = QHBoxLayout()
     error_layout.setSpacing(4)
@@ -954,24 +975,18 @@ def build_left_panel(self):
     model_row.addWidget(lbl_model)
     self.fit_model_combo = QComboBox()
     self.fit_model_combo.addItem("自定义模型（非线性）", "custom")
-    self.fit_model_combo.addItem("自动模型选择", "auto")
     self.fit_model_combo.addItem("自洽隐式模型", "self_consistent")
-    self.fit_model_combo.addItem("多项式拟合", "poly")
-    self.fit_model_combo.addItem("1/x^p 展开", "inverse")
+    self.fit_model_combo.addItem("多项式拟合", "polynomial")
+    self.fit_model_combo.addItem("1/x^p 展开", "inverse_power")
     self.fit_model_combo.addItem("Padé 拟合", "pade")
     self.fit_model_combo.addItem("幂律极限拟合", "power_limit")
-    self.fit_model_combo.addItem("对数多项式", "log_poly")
-    self.fit_model_combo.addItem("通用指数基", "exp_combo")
     fit_items = [
         ("自定义模型（非线性）", "Custom (nonlinear)", "custom"),
-        ("自动模型选择", "Auto select", "auto"),
         ("自洽隐式模型", "Self-consistent / implicit", "self_consistent"),
-        ("多项式拟合", "Polynomial", "poly"),
-        ("1/x^p 展开", "1/x^p series", "inverse"),
+        ("多项式拟合", "Polynomial", "polynomial"),
+        ("1/x^p 展开", "1/x^p series", "inverse_power"),
         ("Padé 拟合", "Padé", "pade"),
         ("幂律极限拟合", "Power limit", "power_limit"),
-        ("对数多项式", "Log polynomial", "log_poly"),
-        ("通用指数基", "Exponential basis", "exp_combo"),
     ]
     self._register_combo(self.fit_model_combo, fit_items)
     self.fit_model_combo.currentIndexChanged.connect(self._on_model_type_changed)
@@ -1086,15 +1101,20 @@ def build_left_panel(self):
     fit_layout.addWidget(self.poly_degree_widget)
     self.poly_degree_widget.hide()
 
+    fit_expr_title_row = QHBoxLayout()
+    lbl_fit_expr = QLabel("模型表达式：")
+    self._register_text(lbl_fit_expr, "模型表达式：", "Model expression:")
+    fit_expr_title_row.addWidget(lbl_fit_expr)
+    fit_expr_title_row.addStretch()
+    self.fit_formula_preview_button = _make_formula_preview_button(self, None, lhs="y", title="Preview formula")
+    fit_expr_title_row.addWidget(self.fit_formula_preview_button)
+    fit_layout.addLayout(fit_expr_title_row)
     self.fit_expr_edit = QPlainTextEdit("A*x**(-p) + C")
     self.fit_expr_edit.setPlaceholderText("自定义模型表达式，例如 A*x**(-p) + C / Custom model expression")
     fit_layout.addWidget(self.fit_expr_edit)
-    # Fit formula preview
-    self.fit_formula_preview = QLabel()
-    self.fit_formula_preview.setWordWrap(True)
-    self.fit_formula_preview.setStyleSheet("color: var(--muted, #8b949e); font-family: serif; font-size: 16px; padding: 4px 8px;")
-    fit_layout.addWidget(self.fit_formula_preview)
-    self.fit_expr_edit.textChanged.connect(lambda: _update_formula_preview(self, self.fit_expr_edit, self.fit_formula_preview, lhs="y"))
+    self.fit_formula_preview_button.clicked.connect(
+        lambda: _open_formula_preview(self, self.fit_expr_edit, lhs="y")
+    )
     fit_expr_hint_row = QHBoxLayout()
     fit_expr_hint_row.setContentsMargins(0, 0, 0, 0)
     fit_expr_hint_row.setSpacing(6)
@@ -1146,24 +1166,36 @@ def build_left_panel(self):
     self.implicit_equation_edit.setPlaceholderText("u = g(x, u, parameters)")
     lbl_implicit_eq = QLabel("自洽方程：")
     self._register_text(lbl_implicit_eq, "自洽方程：", "Self-consistent equation:")
-    implicit_layout.addWidget(lbl_implicit_eq)
+    implicit_equation_title_row = QHBoxLayout()
+    implicit_equation_title_row.addWidget(lbl_implicit_eq)
+    implicit_equation_title_row.addStretch()
+    self.implicit_equation_preview_button = _make_formula_preview_button(
+        self,
+        self.implicit_equation_edit,
+        lhs=lambda: self.implicit_variable_edit.text(),
+        title="Preview equation",
+    )
+    implicit_equation_title_row.addWidget(self.implicit_equation_preview_button)
+    implicit_layout.addLayout(implicit_equation_title_row)
     implicit_layout.addWidget(self.implicit_equation_edit)
-    self.implicit_equation_preview = QLabel()
-    self.implicit_equation_preview.setWordWrap(True)
-    self.implicit_equation_preview.setStyleSheet("color: var(--muted, #8b949e); font-family: serif; font-size: 16px; padding: 4px 8px;")
-    implicit_layout.addWidget(self.implicit_equation_preview)
 
     self.implicit_output_edit = QPlainTextEdit("u")
     self.implicit_output_edit.setMinimumHeight(84)
     self.implicit_output_edit.setPlaceholderText("y = f(x, u, parameters)")
     lbl_implicit_output = QLabel("输出表达式：")
     self._register_text(lbl_implicit_output, "输出表达式：", "Output expression:")
-    implicit_layout.addWidget(lbl_implicit_output)
+    implicit_output_title_row = QHBoxLayout()
+    implicit_output_title_row.addWidget(lbl_implicit_output)
+    implicit_output_title_row.addStretch()
+    self.implicit_output_preview_button = _make_formula_preview_button(
+        self,
+        self.implicit_output_edit,
+        lhs="y",
+        title="Preview output",
+    )
+    implicit_output_title_row.addWidget(self.implicit_output_preview_button)
+    implicit_layout.addLayout(implicit_output_title_row)
     implicit_layout.addWidget(self.implicit_output_edit)
-    self.implicit_output_preview = QLabel()
-    self.implicit_output_preview.setWordWrap(True)
-    self.implicit_output_preview.setStyleSheet("color: var(--muted, #8b949e); font-family: serif; font-size: 16px; padding: 4px 8px;")
-    implicit_layout.addWidget(self.implicit_output_preview)
 
     implicit_param_header = QHBoxLayout()
     lbl_implicit_params = QLabel("参数列表：")
@@ -1236,11 +1268,6 @@ def build_left_panel(self):
     self._register_text(lbl_implicit_timeout, "最长运行秒数：", "Max runtime (s):")
     implicit_solver_layout.addRow(lbl_implicit_timeout, self.implicit_timeout_spin)
     implicit_layout.addLayout(implicit_solver_layout)
-    self.implicit_equation_edit.textChanged.connect(lambda: _update_formula_preview(self, self.implicit_equation_edit, self.implicit_equation_preview, lhs=lambda: self.implicit_variable_edit.text()))
-    self.implicit_variable_edit.textChanged.connect(lambda: _update_formula_preview(self, self.implicit_equation_edit, self.implicit_equation_preview, lhs=lambda: self.implicit_variable_edit.text()))
-    self.implicit_output_edit.textChanged.connect(lambda: _update_formula_preview(self, self.implicit_output_edit, self.implicit_output_preview, lhs="y"))
-    _update_formula_preview(self, self.implicit_equation_edit, self.implicit_equation_preview, lhs=lambda: self.implicit_variable_edit.text())
-    _update_formula_preview(self, self.implicit_output_edit, self.implicit_output_preview, lhs="y")
     fit_layout.addWidget(self.implicit_model_widget)
     self.implicit_model_widget.hide()
 
@@ -1376,19 +1403,12 @@ def build_left_panel(self):
     self._register_text(lbl_nested_policy, "嵌套策略：", "Nested policy:")
     parallel_layout.addRow(lbl_nested_policy, self.parallel_nested_policy_combo)
 
-    self.parallel_auto_fit_backend_checkbox = QCheckBox("启用新自动拟合后端")
-    self._register_text(
-        self.parallel_auto_fit_backend_checkbox,
-        "启用新自动拟合后端",
-        "Enable new auto-fit backend",
-    )
     self.parallel_implicit_backend_checkbox = QCheckBox("启用新隐式拟合后端")
     self._register_text(
         self.parallel_implicit_backend_checkbox,
         "启用新隐式拟合后端",
         "Enable new implicit backend",
     )
-    parallel_layout.addRow(self.parallel_auto_fit_backend_checkbox)
     parallel_layout.addRow(self.parallel_implicit_backend_checkbox)
     options_layout.addLayout(parallel_layout)
 
@@ -1421,9 +1441,6 @@ def build_left_panel(self):
     )
     self.parallel_nested_policy_combo.currentIndexChanged.connect(
         lambda _index: save_current_parallel_config(self)
-    )
-    self.parallel_auto_fit_backend_checkbox.toggled.connect(
-        lambda _checked: save_current_parallel_config(self)
     )
     self.parallel_implicit_backend_checkbox.toggled.connect(
         lambda _checked: save_current_parallel_config(self)
@@ -2007,6 +2024,25 @@ def _update_formula_preview(self, edit_widget, label_widget, lhs=None):
         text = edit_widget.text().strip()
     left_hand_side = lhs() if callable(lhs) else lhs
     _render_formula_preview(label_widget, text, lhs=left_hand_side)
+
+
+def _make_formula_preview_button(self, edit_widget=None, lhs=None, title: str = "Preview formula"):
+    button = QPushButton("Preview")
+    button.setFocusPolicy(Qt.NoFocus)
+    button.setToolTip(title)
+    self._register_text(button, "预览", "Preview")
+    if edit_widget is not None:
+        button.clicked.connect(lambda: _open_formula_preview(self, edit_widget, lhs=lhs))
+    return button
+
+
+def _open_formula_preview(self, edit_widget, lhs=None) -> None:
+    if hasattr(edit_widget, "toPlainText"):
+        text = edit_widget.toPlainText().strip()
+    else:
+        text = edit_widget.text().strip()
+    left_hand_side = lhs() if callable(lhs) else lhs
+    open_formula_preview_dialog(self, text, left_hand_side)
 
 
 def _clear_table(self):

@@ -249,6 +249,95 @@ def test_repeated_evaluate_and_partial_reuse_implicit_solve_cache() -> None:
     assert diagnostics.points_solved <= 12
 
 
+def test_general_implicit_failure_reports_actual_point_index() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="u + 1",
+        output_expression="u + x",
+        parameters=("a",),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="root",
+            initial="0",
+            tolerance="1e-30",
+            max_iterations=5,
+        ),
+    )
+    spec = build_implicit_model_specification(definition)
+    getattr(spec, "set_implicit_point_index")(3)
+
+    with pytest.raises(ValueError) as exc_info:
+        spec.evaluate({"x": mp.mpf("2")}, {"a": mp.mpf("1")})
+
+    message = str(exc_info.value)
+    assert "point_index=3" in message
+    assert "point_index=unknown" not in message
+    assert "variables={'x': '2.0'}" in message
+    assert "parameters={'a': '1.0'}" in message
+    assert "method=root" in message
+    assert "residual=" in message
+    assert "iterations=" in message
+
+
+def test_sequential_general_implicit_evaluations_use_warm_starts() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="0.1*x + a",
+        output_expression="u",
+        parameters=("a",),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="fixed_point",
+            initial="0",
+            tolerance="1e-30",
+            max_iterations=5,
+        ),
+    )
+    spec = build_implicit_model_specification(definition)
+    params = {"a": mp.mpf("1")}
+
+    for row_index in range(3):
+        getattr(spec, "set_implicit_point_index")(row_index)
+        spec.evaluate({"x": mp.mpf(row_index)}, params)
+
+    diagnostics = getattr(spec, "implicit_diagnostics")
+    assert diagnostics.points_solved == 3
+    assert diagnostics.warm_start_uses == 2
+
+
+def test_row_dependent_initial_expression_preserves_fresh_root_branch() -> None:
+    def build_spec():
+        definition = ImplicitModelDefinition(
+            x_variables=("x",),
+            implicit_variable="u",
+            equation="u**2 - x",
+            output_expression="u",
+            parameters=("a",),
+            constants={},
+            solve_options=ImplicitSolveOptions(
+                method="root",
+                initial="x - 10",
+                tolerance="1e-30",
+                max_iterations=80,
+            ),
+        )
+        return build_implicit_model_specification(definition)
+
+    params = {"a": mp.mpf("0")}
+    sequential = build_spec()
+    sequential.evaluate({"x": mp.mpf("0")}, params)
+    sequential_second = sequential.evaluate({"x": mp.mpf("100")}, params)
+
+    fresh_second = build_spec().evaluate({"x": mp.mpf("100")}, params)
+
+    assert sequential_second > 0
+    assert mp.fabs(sequential_second - fresh_second) < mp.mpf("1e-28")
+    diagnostics = getattr(sequential, "implicit_diagnostics")
+    assert diagnostics.warm_start_uses == 0
+
+
 def test_initial_expression_cannot_reference_implicit_variable() -> None:
     definition = ImplicitModelDefinition(
         x_variables=("x",),

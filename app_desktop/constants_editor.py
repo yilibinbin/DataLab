@@ -47,6 +47,8 @@ class ConstantsEditor(QWidget):
         self._numeric_mode = numeric_mode
         self._table_revision = 0
         self._text_source_table_revision = -1
+        self._inputs_visible = True
+        self._constructed = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -97,6 +99,7 @@ class ConstantsEditor(QWidget):
         layout.addWidget(self.stack)
 
         self._on_checked_changed(self.checkbox.isChecked())
+        self._constructed = True
 
     def setChecked(self, checked: bool) -> None:  # noqa: N802 - Qt-style API
         self.checkbox.setChecked(bool(checked))
@@ -119,8 +122,8 @@ class ConstantsEditor(QWidget):
         self._update_toggle_label()
 
     def set_inputs_visible(self, visible: bool) -> None:
-        self.controls_widget.setVisible(bool(visible))
-        self.stack.setVisible(bool(visible))
+        self._inputs_visible = bool(visible)
+        self._apply_inputs_visibility()
 
     def rows(self) -> list[dict[str, str]]:
         if self.using_text_view():
@@ -196,9 +199,17 @@ class ConstantsEditor(QWidget):
             raise ValueError(f"Invalid value for constant {name}.") from exc
 
     def _on_checked_changed(self, checked: bool) -> None:
-        self.controls_widget.setEnabled(bool(checked))
-        self.stack.setEnabled(bool(checked))
+        if self._constructed and checked and self.parentWidget() is None and not self.isVisible():
+            self.show()
+        self._apply_inputs_visibility()
         self._emit_changed()
+
+    def _apply_inputs_visibility(self) -> None:
+        visible = self._inputs_visible and self.checkbox.isChecked()
+        self.controls_widget.setVisible(visible)
+        self.stack.setVisible(visible)
+        self.controls_widget.setEnabled(visible)
+        self.stack.setEnabled(visible)
 
     def _emit_changed(self, *_args: object) -> None:
         if not self._syncing:

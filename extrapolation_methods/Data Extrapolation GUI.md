@@ -1,8 +1,8 @@
-# Data Extrapolation GUI  
-# Fitting Module – Technical Design Specification  
-**Version**: 1.0  
-**Author**: Hao Fang  
-**Module**: High-Precision Fitting (sympy + mpmath)  
+# Data Extrapolation GUI
+# Fitting Module – Technical Design Specification
+**Version**: 1.0
+**Author**: Hao Fang
+**Module**: High-Precision Fitting (sympy + mpmath)
 
 ---
 
@@ -10,20 +10,20 @@
 
 This document defines the complete design of the **Data Fitting Module** for the Data Extrapolation GUI. The system already supports:
 
-- sequence extrapolation  
-- power-law extrapolation  
-- high-precision error propagation  
-- arbitrary-precision computation via mpmath  
+- sequence extrapolation
+- power-law extrapolation
+- high-precision error propagation
+- arbitrary-precision computation via mpmath
 
 The new module introduces:
 
-1. **Custom multi-parameter, multi-variable nonlinear fitting**  
-2. **Automatic model selection (AIC/BIC) from multiple candidate models**  
-3. **Full statistical evaluation and uncertainty estimation**  
-4. **A visualization panel** with automatic plotting and export  
-5. **Parameter constraints support**  
-6. **High-precision symbolic differentiation (sympy)**  
-7. **Automatic fitting comparison across models**
+1. **Custom multi-parameter, multi-variable nonlinear fitting**
+2. **Explicit fitting modes with AIC/BIC metrics for manual comparison**
+3. **Full statistical evaluation and uncertainty estimation**
+4. **A visualization panel** with automatic plotting and export
+5. **Parameter constraints support**
+6. **High-precision symbolic differentiation (sympy)**
+7. **Manual comparison across supported explicit models**
 
 ---
 
@@ -39,30 +39,30 @@ f(x_1, x_2, ..., x_N; p_1, p_2, ..., p_M)
 
 with full support for:
 
-- multi-dimensional input variables  
-- multiple parameters  
-- symbolic parsing through **sympy**  
-- automatic derivative generation (∂f/∂pₖ)  
-- arbitrary precision evaluation through **mpmath**  
-- nonlinear least-squares solution via `mp.findroot` or gradient-based minimization  
+- multi-dimensional input variables
+- multiple parameters
+- symbolic parsing through **sympy**
+- automatic derivative generation (∂f/∂pₖ)
+- arbitrary precision evaluation through **mpmath**
+- nonlinear least-squares solution via `mp.findroot` or gradient-based minimization
 
 The system returns:
 
-- fitted parameters  
-- parameter uncertainties (variance from Hessian)  
-- χ², reduced χ²  
-- R², RMSE  
-- residual vectors  
-- confidence intervals  
+- fitted parameters
+- parameter uncertainties (variance from Hessian)
+- χ², reduced χ²
+- R², RMSE
+- residual vectors
+- confidence intervals
 
 ## 2.2 Parameter Constraints
 
 Support:
 
-- fixed parameters  
-- upper and lower bounds  
-- linear or functional constraints: e.g. `p2 = 2*p1`  
-- parameter initial values  
+- fixed parameters
+- upper and lower bounds
+- linear or functional constraints: e.g. `p2 = 2*p1`
+- parameter initial values
 
 Parameter specification (example):
 
@@ -76,34 +76,27 @@ Parameter specification (example):
 
 ---
 
-# 2.3 Auto Model Selection
+# 2.3 Explicit Model Selection
 
-The software automatically fits the dataset to a suite of predefined models:
+The software fits the dataset with the model explicitly selected by the user.
+Supported model families are polynomial, inverse-power series, Padé,
+power-limit templates, custom expressions, and desktop self-consistent/implicit
+models. AIC/BIC and residual plots are reported so users can compare repeated
+runs manually.
 
-| ID  | Model                      | Form                                                  |
-| --- | -------------------------- | ----------------------------------------------------- |
-| M1  | Power-law                  | \(y = A x^{-p} + C\)                                  |
-| M2  | Exponential                | \(y = A e^{-kx} + C\)                                 |
-| M3  | Polynomial                 | automatically determine degree n                      |
-| M4  | Rydberg quantum defect     | \(-R / (n - (\delta_0+\delta_2/n^2+\delta_4/n^4))^2\) |
-| M5  | 1/x series                 | \( y = A + B/x^2 + C/x^3 \)                           |
-| M6  | 1/nᵖ convergence           | \( y = A + B n^{-p} \)                                |
-| M7  | Pure sequence acceleration | Shanks / Levin-u                                      |
-| M8  | User-defined model         | Provided via custom function                          |
+### Model Comparison
 
-### Model Ranking
+For each selected model run:
 
-For each model:
-
-1. Fit is performed  
-2. χ², AIC, BIC computed  
-3. Best model determined by lowest AIC  
+1. Fit is performed
+2. χ², AIC, BIC are computed
+3. Residuals and fitted curves are exported
 
 System outputs:
 
-- best model  
-- comparison table of all models  
-- overlaid plot of all fitted curves  
+- selected model parameters
+- model quality metrics
+- fitted curve and residual plots
 
 ---
 
@@ -111,16 +104,16 @@ System outputs:
 
 Returned:
 
-- χ²  
-- reduced χ²  
-- AIC  
-- BIC  
-- R²  
-- RMSE  
-- residual statistics  
-- parameter covariance matrix  
-- parameter uncertainties  
-- confidence intervals  
+- χ²
+- reduced χ²
+- AIC
+- BIC
+- R²
+- RMSE
+- residual statistics
+- parameter covariance matrix
+- parameter uncertainties
+- confidence intervals
 
 ---
 
@@ -136,15 +129,15 @@ f_expr = "a*x**2 + b*y + c"
 
 System:
 
-1. sympy parses variables and parameters  
-2. builds symbolic expression  
+1. sympy parses variables and parameters
+2. builds symbolic expression
 3. computes analytical derivatives:
 
 \[
 \frac{\partial f}{\partial p_k}
 \]
 
-4. lambdifies both f and ∂f/∂pₖ into **mpmath** functions  
+4. lambdifies both f and ∂f/∂pₖ into **mpmath** functions
 
 Allows arbitrary precision and stability.
 
@@ -168,32 +161,28 @@ using `mp.findroot`.
 
 Optionally:
 
-- gradient descent  
-- Levenberg-Marquardt (mp implementation)  
-- covariance extraction via Hessian  
+- gradient descent
+- Levenberg-Marquardt (mp implementation)
+- covariance extraction via Hessian
 
 ---
 
-## 3.3 Auto Model Selector
+## 3.3 Explicit Model Fitting
 
-For each candidate model:
+The current fitting workflow requires the user to choose the model
+family before execution. Supported public model families are:
 
-1. Fit parameters  
-2. Evaluate:
-   - χ²  
-   - AIC  
-   - BIC  
+1. polynomial
+2. inverse-power series
+3. Padé rational approximation
+4. power-limit template
+5. custom expressions
+6. self-consistent / implicit models in the desktop application
 
-\[
-AIC = 2k + n\ln(\chi^2/n)
-\]
-
-\[
-BIC = k\ln(n) + n\ln(\chi^2/n)
-\]
-
-3. Choose model with minimum AIC  
-4. Store per-model results for comparison  
+For each selected explicit model, DataLab fits the parameters and
+reports diagnostics such as residuals, χ², AIC, and BIC where those
+statistics apply. These diagnostics help compare manually selected
+fits, but DataLab does not select a model automatically.
 
 ---
 
@@ -203,27 +192,27 @@ BIC = k\ln(n) + n\ln(\chi^2/n)
 
 ### Required Plots
 
-1. **Scatter plot with error bars**  
-2. **Fitted curve** (multiple curves if auto-model selection)  
-3. **Residual plot**  
-4. **Extrapolation plot (x→∞ or n→∞)**  
-5. **Comparison of multiple model curves**  
+1. **Scatter plot with error bars**
+2. **Fitted curve** for the selected explicit model
+3. **Residual plot**
+4. **Extrapolation plot (x→∞ or n→∞)**
+5. **Comparison of manually selected explicit model curves**
 
 ### Plot Features
 
-- LaTeX axis and labels  
-- logarithmic / power / reciprocal coordinate transforms:  
-  - log x  
-  - log y  
-  - log-log  
-  - 1/x  
-  - 1/x²  
-  - arbitrary user-defined transform  
-- high DPI (300+)  
-- PDF / EPS / PNG / SVG export  
-- arbitrary-precision evaluation via mpmath  
-- custom colormap  
-- customizable markers  
+- LaTeX axis and labels
+- logarithmic / power / reciprocal coordinate transforms:
+  - log x
+  - log y
+  - log-log
+  - 1/x
+  - 1/x²
+  - arbitrary user-defined transform
+- high DPI (300+)
+- PDF / EPS / PNG / SVG export
+- arbitrary-precision evaluation via mpmath
+- custom colormap
+- customizable markers
 
 ---
 
@@ -233,7 +222,7 @@ BIC = k\ln(n) + n\ln(\chi^2/n)
 fitting/
 ├── model_parser.py         # sympy parsing of custom expressions
 ├── hp_fitter.py            # high-precision solver (sympy+mpmath)
-├── auto_models.py          # built-in model library
+├── auto_models.py          # low-level explicit linear-basis definitions
 ├── model_selector.py       # AIC/BIC model ranking
 ├── constraints.py          # parameter constraints engine
 ├── plot_fitting.py         # complete plotting toolkit
@@ -275,24 +264,30 @@ Returns:
 
 ---
 
-## 6.2 Auto Model Fit API
+## 6.2 Explicit Model Fit API
 
 ```python
-result = fit_auto(x_data, y_data)
+result = fit_explicit_model(
+    model="polynomial",
+    x_data=x_data,
+    y_data=y_data,
+    options={"degree": 2},
+    precision=100,
+)
 ```
 
 Returns:
 
 ```json
 {
-  "best_model": "power_law",
-  "model_results": {
-      "power_law": {...},
-      "exponential": {...},
-      "rydberg": {...},
-      "shanks": {...}
-  },
-  "comparison": {...}
+  "model": "polynomial",
+  "params": {...},
+  "errors": {...},
+  "chi2": ...,
+  "aic": ...,
+  "bic": ...,
+  "residuals": [...],
+  "fitted_curve": [...]
 }
 ```
 
@@ -302,18 +297,18 @@ Returns:
 
 The module must support exporting:
 
-- PDF  
-- EPS  
-- PNG  
-- SVG  
-- LaTeX tables  
+- PDF
+- EPS
+- PNG
+- SVG
+- LaTeX tables
 
 Applied to:
 
-- fitted curves  
-- residual plots  
-- extrapolation plots  
-- multi-model comparison plots  
+- fitted curves
+- residual plots
+- extrapolation plots
+- multi-model comparison plots
 
 ---
 
@@ -321,11 +316,11 @@ Applied to:
 
 Possible enhancements:
 
-- Bootstrap uncertainty estimation  
-- Bayesian inference / MCMC sampling  
-- Joint multi-dataset global fitting  
-- Integration with CODATA physical constants  
-- Built-in atomic units conversion in fitting interface  
+- Bootstrap uncertainty estimation
+- Bayesian inference / MCMC sampling
+- Joint multi-dataset global fitting
+- Integration with CODATA physical constants
+- Built-in atomic units conversion in fitting interface
 
 ---
 

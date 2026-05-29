@@ -22,6 +22,9 @@ from .workspace_schema import (
     validate_manifest_attachment_hashes,
 )
 
+_ZIP_TIMESTAMP = (2026, 1, 1, 0, 0, 0)
+_ZIP_FILE_MODE = 0o100644 << 16
+
 
 @dataclass(frozen=True)
 class WorkspaceReadResult:
@@ -121,6 +124,14 @@ def read_workspace(path: str | Path) -> WorkspaceReadResult:
     return _load_and_validate(Path(path))
 
 
+def _deterministic_zip_info(name: str) -> zipfile.ZipInfo:
+    info = zipfile.ZipInfo(name, date_time=_ZIP_TIMESTAMP)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.create_system = 3
+    info.external_attr = _ZIP_FILE_MODE
+    return info
+
+
 def write_workspace(
     path: str | Path,
     manifest: dict[str, Any],
@@ -147,13 +158,13 @@ def write_workspace(
     fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
     try:
         with os.fdopen(fd, "wb") as raw:
-            with zipfile.ZipFile(raw, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            with zipfile.ZipFile(raw, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
                 zf.writestr(
-                    "manifest.json",
+                    _deterministic_zip_info("manifest.json"),
                     json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
                 )
                 for name in sorted(normalized_attachments):
-                    zf.writestr(name, normalized_attachments[name])
+                    zf.writestr(_deterministic_zip_info(name), normalized_attachments[name])
             raw.flush()
             os.fsync(raw.fileno())
         _load_and_validate(Path(tmp_name))

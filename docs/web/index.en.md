@@ -35,7 +35,7 @@ Fit datasets and obtain best-fit parameters. Supported modes include:
 - Polynomial fitting
 - Inverse power series fitting
 - Padé approximation
-- Preset model library
+- Power-limit template
 - Custom model expressions
 
 ### Statistics

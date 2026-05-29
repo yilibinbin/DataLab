@@ -145,3 +145,41 @@ def test_build_fit_latex_block_tolerates_invalid_x_sigma_objects():
     )
 
     assert any(line.startswith("(x=1.0) &") for line in lines)
+
+
+def test_fit_latex_block_does_not_emit_automatic_fit_rankings():
+    fit_result = _sample_fit_result()
+    fit_result.details.update(
+        {
+            "optimizer_backend": "mpmath",
+            "scipy_safety_passed": False,
+            "seed_variants_tried": 1,
+            "seed_variants_succeeded": 1,
+        }
+    )
+    lines = writer.build_fit_latex_block(
+        headers=["x", "y"],
+        rows=[(mp.mpf("1.0"), mp.mpf("2.0"))],
+        sigma_rows=[(None, None)],
+        fit_result=fit_result,
+        expression="A*x",
+        substituted="1.5*x",
+        image_path=None,
+        use_dcolumn=False,
+        digits=6,
+        latex_group_size=3,
+        batch_index=None,
+        target_column="y",
+        variable_pairs=[("x", "x")],
+        caption_text="Fit results",
+        default_uncertainty_digits=1,
+        cleaned_substituted="1.5*x",
+    )
+
+    text = "\n".join(lines).lower()
+    assert "solver:" in text
+    assert "sciPy".lower() in text
+    assert "automatic" not in text
+    assert "auto-fit" not in text
+    assert "ranking" not in text
+    assert "best model" not in text

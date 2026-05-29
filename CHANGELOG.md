@@ -40,8 +40,8 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 - Preserved custom and self-consistent fitting parameter and constants
   drafts in workspace files, including disabled editors and inactive
   text-view drafts.
-- Passed custom fitting constants through manual, worker, and auto-fit
-  subprocess execution paths.
+- Passed custom fitting constants through manual and worker execution
+  paths.
 
 ## [2.3.1] — 2026-05-28
 

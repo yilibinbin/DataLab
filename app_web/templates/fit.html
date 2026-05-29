@@ -3,11 +3,11 @@
 {% block content %}
 <section class="hero">
   <div>
-    <p class="eyebrow" data-i18n="fit.eyebrow">自动模型选择 / 拟合</p>
-    <h1 data-i18n="fit.title">用现有高精度拟合核心在浏览器里选模型、输出参数和残差图。</h1>
-    <p class="lede" data-i18n="fit.subtitle">粘贴 x,y,(σ) 数据即可运行自动模型库（多项式/指数/对数/序列加速等），展示最优模型参数、AIC/BIC/R²、残差与拟合曲线。</p>
+    <p class="eyebrow" data-i18n="fit.eyebrow">显式模型拟合</p>
+    <h1 data-i18n="fit.title">用现有高精度拟合核心在浏览器里运行显式模型、输出参数和残差图。</h1>
+    <p class="lede" data-i18n="fit.subtitle">粘贴 x,y,(σ) 数据即可运行多项式、倒数幂、Padé、幂律极限或自定义模型，展示模型参数、AIC/BIC/R²、残差与拟合曲线。</p>
     <div class="hero-actions">
-      <span class="chip" data-i18n="fit.chip1">AUTO_MODELS</span>
+      <span class="chip" data-i18n="fit.chip1">显式模型</span>
       <span class="chip" data-i18n="fit.chip2">mpmath 精度控制</span>
       <span class="chip" data-i18n="fit.chip3">残差/直方图可视化</span>
     </div>
@@ -68,30 +68,14 @@
         </label>
       </div>
       <label class="field-label" for="fit_mode" data-i18n="fit.modeLabel">拟合模式</label>
-      {% set mode = fit_mode or 'auto' %}
+      {% set mode = fit_mode or 'polynomial' %}
       <select id="fit_mode" name="fit_mode">
-        <option value="auto" {% if mode == 'auto' %}selected{% endif %} data-i18n="fit.modeAuto">自动模型选择</option>
-        <option value="preset" {% if mode == 'preset' %}selected{% endif %} data-i18n="fit.modePreset">预设模型 (Preset)</option>
-        <option value="custom" {% if mode == 'custom' %}selected{% endif %} data-i18n="fit.modeCustom">自定义模型表达式</option>
-        <option value="poly" {% if mode == 'poly' %}selected{% endif %} data-i18n="fit.modePoly">多项式拟合</option>
-        <option value="inverse" {% if mode == 'inverse' %}selected{% endif %} data-i18n="fit.modeInverse">1/x^p 展开</option>
+        <option value="polynomial" {% if mode == 'polynomial' %}selected{% endif %} data-i18n="fit.modePoly">多项式拟合</option>
+        <option value="inverse_power" {% if mode == 'inverse_power' %}selected{% endif %} data-i18n="fit.modeInverse">1/x^p 展开</option>
         <option value="pade" {% if mode == 'pade' %}selected{% endif %} data-i18n="fit.modePade">Padé 拟合</option>
         <option value="power_limit" {% if mode == 'power_limit' %}selected{% endif %} data-i18n="fit.modePowerLimit">幂律极限拟合</option>
-        <option value="log_poly" {% if mode == 'log_poly' %}selected{% endif %} data-i18n="fit.modeLogPoly">对数多项式</option>
-        <option value="exp_combo" {% if mode == 'exp_combo' %}selected{% endif %} data-i18n="fit.modeExpCombo">通用指数基</option>
+        <option value="custom" {% if mode == 'custom' %}selected{% endif %} data-i18n="fit.modeCustom">自定义模型表达式</option>
       </select>
-
-      <div class="method-block" data-fit-mode="preset" style="{% if mode == 'preset' %}display:block{% endif %}">
-        <label class="field-label" for="fit_model_id" data-i18n="fit.presetModelLabel">选择预设模型</label>
-        <select id="fit_model_id" name="fit_model_id">
-          {% for model in auto_models %}
-            <option value="{{ model.identifier }}" {% if request.form.get('fit_model_id') == model.identifier %}selected{% endif %} data-dual-text="{{ model.label }}">
-              {{ model.label }}
-            </option>
-          {% endfor %}
-        </select>
-        <div class="hint" data-i18n="fit.presetModelHint">预设模型库包含线性、多项式、对数、指数、1/x系列等常用模型。</div>
-      </div>
 
       <div class="method-block" data-fit-mode="custom" style="{% if mode == 'custom' %}display:block{% endif %}">
         <label class="field-label" for="fit_custom_expr" data-i18n="fit.customExprLabel">自定义模型表达式</label>
@@ -103,12 +87,12 @@
         <textarea id="fit_var_mapping" name="fit_var_mapping" rows="4" spellcheck="false">{{ request.form.get('fit_var_mapping', '') }}</textarea>
       </div>
 
-      <div class="method-block" data-fit-mode="poly" style="{% if mode == 'poly' %}display:block{% endif %}">
+      <div class="method-block" data-fit-mode="polynomial" style="{% if mode == 'polynomial' %}display:block{% endif %}">
         <label class="field-label" for="fit_poly_degree" data-i18n="fit.polyDegreeLabel">多项式最高阶</label>
         <input id="fit_poly_degree" name="fit_poly_degree" type="number" min="1" max="18" value="{{ request.form.get('fit_poly_degree', '3') }}">
       </div>
 
-      <div class="method-block" data-fit-mode="inverse" style="{% if mode == 'inverse' %}display:block{% endif %}">
+      <div class="method-block" data-fit-mode="inverse_power" style="{% if mode == 'inverse_power' %}display:block{% endif %}">
         <div class="split">
           <div>
             <label class="field-label" for="fit_inverse_min">min p</label>
@@ -136,14 +120,6 @@
 
       <div class="method-block" data-fit-mode="power_limit" style="{% if mode == 'power_limit' %}display:block{% endif %}">
         <div class="hint" data-i18n="fit.powerLimitHint">使用模板 A*x**(-p)+C，p≥0.1，参数初值沿用内置默认值。</div>
-      </div>
-
-      <div class="method-block" data-fit-mode="log_poly" style="{% if mode == 'log_poly' %}display:block{% endif %}">
-        <div class="hint" data-i18n="fit.logPolyHint">对数多项式模型（要求 x>0），结构与自动模型库保持一致。</div>
-      </div>
-
-      <div class="method-block" data-fit-mode="exp_combo" style="{% if mode == 'exp_combo' %}display:block{% endif %}">
-        <div class="hint" data-i18n="fit.expComboHint">通用指数基模型，沿用内置参数基础。</div>
       </div>
 
       <label class="field-label" for="fit_log_scale" data-i18n="fit.logScaleLabel">坐标轴对数刻度</label>
@@ -220,7 +196,7 @@
 
   <div class="actions">
     <button class="primary" type="submit" data-i18n="fit.btnSubmit">运行拟合并生成 LaTeX</button>
-    <span class="muted" data-i18n="fit.submitHint">支持自动模型选择、指定内置模型或自定义表达式。</span>
+    <span class="muted" data-i18n="fit.submitHint">支持多项式、倒数幂、Padé、幂律极限和自定义表达式。</span>
   </div>
 </form>
 
@@ -382,7 +358,7 @@
     const fitModeSelect = document.getElementById('fit_mode');
     if (fitModeSelect) {
       fitModeSelect.addEventListener('change', (e) => toggleFitBlocks(e.target.value));
-      toggleFitBlocks(fitModeSelect.value || '{{ fit_mode or "auto" }}');
+      toggleFitBlocks(fitModeSelect.value || '{{ fit_mode or "polynomial" }}');
     }
 
     const fitCsvBtn = document.getElementById('fit-csv-download-btn');

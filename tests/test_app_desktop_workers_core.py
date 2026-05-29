@@ -12,12 +12,10 @@ from data_extrapolation_latex_latest import ExtrapolationOptions
 
 import app_desktop.workers_core as workers_core
 from app_desktop.workers_core import (
-    AutoFitJob,
     CalcJob,
     FitBatchTask,
     FitJob,
     _deserialize_fit_job,
-    _execute_auto_fit_job,
     _execute_calc_job,
     _execute_fit_job_payload,
     _execute_fit_job_payload_subprocess,
@@ -25,10 +23,9 @@ from app_desktop.workers_core import (
     _serialize_fit_job,
 )
 from app_desktop.workers_qt import FitBatchWorker
-from fitting.model_selector import AutoFitSummary
 from fitting.hp_fitter import FitResult
 from fitting.implicit_model import ImplicitModelDefinition, ImplicitSolveOptions
-from shared.parallel_config import ParallelConfig, ParallelMode
+from shared.parallel_config import ParallelConfig
 from shared.parallel_backend import KillableProcessTaskRunner, current_parallel_depth
 
 
@@ -83,46 +80,6 @@ def _small_self_consistent_fit_job(
     )
 
 
-def _small_auto_fit_job(
-    *,
-    parallel_config: ParallelConfig | None = None,
-) -> AutoFitJob:
-    x_series = [mp.mpf(v) for v in ["0", "1", "2", "3", "4"]]
-    y_series = [mp.mpf("2") * x + mp.mpf("1") for x in x_series]
-    data_rows = list(zip(x_series, y_series))
-    sigma_rows: list[tuple[mp.mpf | None, ...]] = [(None, None) for _ in data_rows]
-    if parallel_config is None:
-        return AutoFitJob(
-            headers=["x", "y"],
-            data_rows=data_rows,
-            sigma_rows=sigma_rows,
-            x_series=x_series,
-            y_series=y_series,
-            sigma_series=[None] * len(y_series),
-            weights=None,
-            precision=80,
-            custom_entries=[],
-            extra_models=[],
-            verbose=False,
-            render_plots=False,
-        )
-    return AutoFitJob(
-        headers=["x", "y"],
-        data_rows=data_rows,
-        sigma_rows=sigma_rows,
-        x_series=x_series,
-        y_series=y_series,
-        sigma_series=[None] * len(y_series),
-        weights=None,
-        precision=80,
-        custom_entries=[],
-        extra_models=[],
-        verbose=False,
-        render_plots=False,
-        parallel_config=parallel_config,
-    )
-
-
 def _depth_probe_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "payload": payload,
@@ -139,7 +96,7 @@ def test_execute_fit_job_payload_poly_recovers_linear_params():
     sigma_rows = [(None, None) for _ in data_rows]
 
     job = FitJob(
-        model_type="poly",
+        model_type="polynomial",
         headers=["x", "y"],
         data_rows=data_rows,
         sigma_rows=sigma_rows,
@@ -326,7 +283,7 @@ def test_self_consistent_fit_job_is_marked_for_process_boundary() -> None:
     assert _fit_job_requires_process_boundary(job) is True
 
     direct_job = FitJob(
-        model_type="poly",
+        model_type="polynomial",
         headers=["x", "y"],
         data_rows=[],
         sigma_rows=[],
@@ -680,158 +637,6 @@ def test_fit_batch_worker_emits_cancelled_when_self_consistent_subprocess_interr
     assert worker.wait(3000)
 
 
-def test_execute_auto_fit_job_selects_a_model() -> None:
-    job = _small_auto_fit_job()
-    summary = _execute_auto_fit_job(job)
-    assert summary.best_model is not None
-    best = summary.best()
-    assert best is not None
-    assert best.success is True
-
-
-def test_auto_fit_job_default_parallel_config_disables_new_backend() -> None:
-    job = _small_auto_fit_job()
-
-    assert isinstance(job.parallel_config, ParallelConfig)
-    assert job.parallel_config.enable_new_auto_fit_backend is False
-
-
-def test_auto_fit_subprocess_ignores_serial_mode_for_gui_hard_cancel_path(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: dict[str, object] = {}
-
-    class FakeOrchestrator:
-        def __init__(
-            self,
-            *,
-            precision: int,
-            per_model_timeout_seconds: float | None,
-        ) -> None:
-            calls["orchestrator_init"] = (precision, per_model_timeout_seconds)
-
-        def run(self, **kwargs: object) -> AutoFitSummary:
-            calls["orchestrator_run"] = kwargs
-            return AutoFitSummary(best_model=None, results=[])
-
-    def forbidden_in_process(*args: object, **kwargs: object) -> object:
-        raise AssertionError("GUI auto-fit must keep using subprocess path")
-
-    import app_desktop.auto_fit_subprocess as auto_fit_subprocess
-
-    monkeypatch.setattr(workers_core, "_execute_auto_fit_job", forbidden_in_process)
-    monkeypatch.setattr(
-        auto_fit_subprocess,
-        "SubprocessAutoFitOrchestrator",
-        FakeOrchestrator,
-    )
-
-    job = _small_auto_fit_job(
-        parallel_config=ParallelConfig(mode=ParallelMode.SERIAL),
-    )
-    summary = workers_core._execute_auto_fit_job_subprocess(job)
-
-    assert summary.results == []
-    assert calls["orchestrator_init"] == (80, 15.0)
-    assert "orchestrator_run" in calls
-
-
-def test_auto_fit_subprocess_disabled_gate_uses_proven_orchestrator(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: dict[str, object] = {}
-
-    class FakeOrchestrator:
-        def __init__(
-            self,
-            *,
-            precision: int,
-            per_model_timeout_seconds: float | None,
-        ) -> None:
-            calls["orchestrator_init"] = (precision, per_model_timeout_seconds)
-
-        def run(self, **kwargs: object) -> AutoFitSummary:
-            calls["orchestrator_run"] = kwargs
-            return AutoFitSummary(best_model=None, results=[])
-
-    def forbidden_adapter(*args: object, **kwargs: object) -> object:
-        raise AssertionError("disabled gate must not enter the new adapter")
-
-    import app_desktop.auto_fit_subprocess as auto_fit_subprocess
-
-    monkeypatch.setattr(
-        auto_fit_subprocess,
-        "SubprocessAutoFitOrchestrator",
-        FakeOrchestrator,
-    )
-    monkeypatch.setattr(
-        workers_core,
-        "_execute_auto_fit_job_subprocess_backend_adapter",
-        forbidden_adapter,
-    )
-
-    job = _small_auto_fit_job(
-        parallel_config=ParallelConfig(enable_new_auto_fit_backend=False),
-    )
-    summary = workers_core._execute_auto_fit_job_subprocess(job)
-
-    assert summary.results == []
-    assert calls["orchestrator_init"] == (80, 15.0)
-    assert "orchestrator_run" in calls
-
-
-def test_auto_fit_subprocess_enabled_gate_enters_adapter_but_keeps_orchestrator(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: dict[str, object] = {}
-
-    class FakeOrchestrator:
-        def __init__(
-            self,
-            *,
-            precision: int,
-            per_model_timeout_seconds: float | None,
-        ) -> None:
-            calls["orchestrator_init"] = (precision, per_model_timeout_seconds)
-
-        def run(self, **kwargs: object) -> AutoFitSummary:
-            calls["orchestrator_run"] = kwargs
-            return AutoFitSummary(best_model=None, results=[])
-
-    original_adapter = workers_core._execute_auto_fit_job_subprocess_backend_adapter
-
-    def recording_adapter(
-        job: AutoFitJob,
-        should_cancel: Callable[[], bool] | None = None,
-        progress_callback: Callable[[Any], None] | None = None,
-    ) -> AutoFitSummary:
-        calls["adapter"] = True
-        return original_adapter(job, should_cancel, progress_callback)
-
-    import app_desktop.auto_fit_subprocess as auto_fit_subprocess
-
-    monkeypatch.setattr(
-        auto_fit_subprocess,
-        "SubprocessAutoFitOrchestrator",
-        FakeOrchestrator,
-    )
-    monkeypatch.setattr(
-        workers_core,
-        "_execute_auto_fit_job_subprocess_backend_adapter",
-        recording_adapter,
-    )
-
-    job = _small_auto_fit_job(
-        parallel_config=ParallelConfig(enable_new_auto_fit_backend=True),
-    )
-    summary = workers_core._execute_auto_fit_job_subprocess(job)
-
-    assert summary.results == []
-    assert calls["adapter"] is True
-    assert calls["orchestrator_init"] == (80, 15.0)
-    assert "orchestrator_run" in calls
-
-
 def test_execute_calc_job_extrapolation_returns_payload() -> None:
     with mp.workdps(80):
         limit = mp.mpf("1")
@@ -873,3 +678,52 @@ def test_execute_calc_job_extrapolation_returns_payload() -> None:
 
         res0 = payload["results"][0]
         assert mp.fabs(res0.value - limit) < mp.mpf("1e-2")
+
+
+def test_run_calculation_excludes_disabled_error_constants_from_calc_job(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app_desktop import window_extrapolation_mixin
+    from app_desktop.window import ExtrapolationWindow
+
+    class _Signal:
+        def connect(self, _callback: object) -> None:
+            return
+
+    class _DummyCalcWorker:
+        finished_ok = _Signal()
+        failed = _Signal()
+        finished = _Signal()
+        cancelled = _Signal()
+        log_ready = _Signal()
+
+        def __init__(self, job: CalcJob) -> None:
+            captured["job"] = job
+
+        def start(self) -> None:
+            captured["started"] = True
+
+        def isRunning(self) -> bool:  # noqa: N802 - Qt-style test double
+            return False
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(window_extrapolation_mixin, "CalcWorker", _DummyCalcWorker)
+
+    win = ExtrapolationWindow()
+    qtbot.addWidget(win)
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("error"))
+    win._data_stack.setCurrentIndex(1)
+    win.manual_data_edit.setPlainText("A B\n1 2\n")
+    win.formula_edit.setPlainText("A + B")
+    win.error_constants_editor.set_rows([{"name": "K", "value": "1.23(4)"}])
+    win.error_constants_editor.setChecked(False)
+
+    win.run_calculation()
+
+    job = captured["job"]
+    assert isinstance(job, CalcJob)
+    assert captured["started"] is True
+    assert win.error_constants_editor.constants_dict(validate=False) == {"K": "1.23(4)"}
+    assert job.constants_enabled is False
+    assert job.manual_constants == ""

@@ -11,8 +11,8 @@ waitress>=3.0.0
 flask-socketio>=5.3
 # Phase 3 #14 — CLI batch YAML loader (shared with desktop).
 pyyaml>=6.0
-# Phase 3 #12 — MCMC posterior refinement (used by both web "/api/fit"
-# and desktop auto-fit when the user opts in). emcee falls behind a
+# Phase 3 #12 — MCMC posterior refinement for explicit fitting flows.
+# emcee falls behind a
 # ``HAS_EMCEE`` runtime guard, so the web stack still imports cleanly
 # without these — but with them the "Refine with MCMC" toggle actually
 # works, matching the desktop behaviour.

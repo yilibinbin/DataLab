@@ -2,18 +2,10 @@
 concern.
 
 Methods extracted VERBATIM from the original ``window_fitting_mixin.py``.
-This is the largest split file because it owns every fit-execution
-path: custom Levenberg-Marquardt fits, polynomial / inverse / Padé /
-linear-named templates, auto-fit-across-all-models, plus the worker
-thread setup (``_execute_fit_async``, ``_execute_auto_fit_async``)
-and the central dispatcher ``_run_fitting_mode`` that decides which
-of the above to call based on the user's UI selection.
-
-The auto-fit summary renderer ``_render_auto_fit_summary`` lives
-here (it's the engine that builds an ``AutoFitRenderResult`` from a
-``summarize_auto_results`` output, which is then consumed by the
-Residuals mixin via signal). It is the single biggest method in
-this whole subsystem (~180 lines).
+This file owns fit-mode dispatch for custom Levenberg-Marquardt fits,
+polynomial / inverse / Padé / power-limit templates, self-consistent
+models, worker thread setup (``_execute_fit_async``), and the central
+dispatcher ``_run_fitting_mode``.
 
 Methods MOVED here from window_fitting_mixin.py (line numbers
 refer to the pre-Phase-7 monolith and are frozen as one-time
@@ -27,12 +19,8 @@ for canonical history):
 - _execute_template_custom_fit       (was line 909)
 - _execute_power_limit_model         (was line 1023)
 - _execute_pade_model                (was line 1026)
-- _execute_auto_fit                  (was line 1029)
-- _render_auto_fit_summary           (was line 1064)
-- _prepare_auto_fit_job              (was line 1249)
 - _prepare_fit_job                   (was line 1307)
 - _execute_fit_async                 (was line 1385)
-- _execute_auto_fit_async            (was line 1738)
 - _run_fitting_mode                  (was line 1808)
 
 Methods provided by sibling mixins (resolved via Python MRO):
@@ -45,9 +33,7 @@ Methods provided by sibling mixins (resolved via Python MRO):
 - ``self._fit_latex_preamble``, ``self._fit_latex_block`` — Formatters
 - worker-result handlers ``self._on_fit_finished``,
   ``self._on_fit_batches_finished``, ``self._on_fit_failed``,
-  ``self._on_fit_thread_done``, ``self._on_auto_fit_finished``,
-  ``self._on_auto_fit_failed``, ``self._on_auto_fit_thread_done``
-  — Residuals mixin
+  ``self._on_fit_thread_done`` — Residuals mixin
 
 Methods provided by the host class (``ExtrapolationWindow``):
 - ``self._localize_label`` — translate a model label per UI locale
@@ -58,10 +44,9 @@ Methods provided by the host class (``ExtrapolationWindow``):
   ``self._build_batches_from_segments``, ``self._peek_user_precision``
   — batch-mode helpers
 - ``self._append_log`` — log channel
-- ``self._auto_model_map`` — host-class lookup of registered AutoModelDefinition
 
 State variables OWNED:
-- ``self._fit_worker``, ``self._auto_fit_worker`` (worker handles)
+- ``self._fit_worker`` (worker handle)
 - ``self._fit_batch_context`` (batch-job metadata; written here,
   read + cleared by Residuals' result handlers)
 - ``self._last_result_kind``, ``self._last_result_payloads`` (cache)
@@ -88,12 +73,10 @@ from data_extrapolation_latex_latest import _dual_msg
 from fitting import (
     ImplicitModelDefinition,
     ImplicitSolveOptions,
-    auto_fit_dataset,
     build_model_specification,
     build_parameter_state,
     fit_custom_model,
     render_fitting_overview,
-    summarize_auto_results,
 )
 from fitting.auto_models import (
     AutoModelDefinition,
@@ -103,14 +86,12 @@ from fitting.auto_models import (
 )
 
 from .workers_core import (
-    AutoFitJob,
-    AutoFitRenderResult,
     FitBatchTask,
     FitJob,
     _mp_precision_guard,
 )
 from .parallel_preferences import current_parallel_config_from_widgets
-from .workers_qt import AutoFitWorker, FitBatchWorker, FitWorker
+from .workers_qt import FitBatchWorker, FitWorker
 
 
 class CustomFitConfig(TypedDict):
@@ -629,268 +610,6 @@ class WindowFittingModelsMixin:
     def _execute_pade_model(self, dataset, generate_latex: bool, output_path: str, batch_tag: str = ""):
         self._execute_template_custom_fit("pade", "Padé 拟合", dataset, generate_latex, output_path, batch_tag=batch_tag)
 
-    def _execute_auto_fit(self, dataset, generate_latex: bool, output_path: str, batch_tag: str = ""):
-        try:
-            verbose_mode = self.verbose_checkbox.isChecked()
-            job = self._prepare_auto_fit_job(dataset, verbose_mode)
-            with _mp_precision_guard(job.precision):
-                summary = auto_fit_dataset(
-                    job.x_series,
-                    job.y_series,
-                    precision=job.precision,
-                    custom_entries=job.custom_entries or None,
-                    extra_models=job.extra_models,
-                    weights=job.weights,
-                    data_sigmas=job.sigma_series,
-                )
-            self._render_auto_fit_summary(
-                summary,
-                job.headers,
-                job.data_rows,
-                job.sigma_rows,
-                job.x_series,
-                job.y_series,
-                job.sigma_series,
-                job.weights,
-                generate_latex,
-                output_path,
-                job.extra_models,
-                verbose_mode,
-                job_obj=job,
-                render_plots=job.render_plots,
-            )
-        except Exception as exc:
-            localized = self._localize_text(str(exc))
-            QMessageBox.critical(self, self._tr("自动拟合失败", "Auto fit failed"), localized)
-            self._append_log(self._tr(f"自动拟合失败: {localized}", f"Auto fit failed: {localized}"))
-
-    def _render_auto_fit_summary(
-        self,
-        summary,
-        headers: list[str],
-        data_rows: list[tuple[mp.mpf, ...]],
-        sigma_rows: list[tuple[mp.mpf | None, ...]],
-        x_series: list[mp.mpf],
-        y_series: list[mp.mpf],
-        sigma_series: list[mp.mpf | None],
-        weights: list[mp.mpf] | None,
-        generate_latex: bool,
-        output_path: str,
-        extra_models: list[AutoModelDefinition],
-        verbose_mode: bool,
-        job_obj=None,
-        return_payload: bool = False,
-        render_plots: bool = True,
-    ):
-        """Render the auto-fit summary and plots on the main thread."""
-        cached_payload = {
-            "summary": summary,
-            "headers": headers,
-            "data_rows": data_rows,
-            "sigma_rows": sigma_rows,
-            "x_series": x_series,
-            "y_series": y_series,
-            "sigma_series": sigma_series,
-            "weights": weights,
-            # Re-rendering should not regenerate LaTeX or plots
-            "generate_latex": False,
-            "output_path": "",
-            "extra_models": extra_models,
-            "verbose_mode": verbose_mode,
-            "job": job_obj,
-        }
-
-        def _translate_error(err: str) -> str:
-            if not err:
-                return "unknown"
-            return self._localize_text(err)
-
-        comparison_rows: list[tuple[str, float, float, float]] = []
-        detail_lines: list[str] = []
-        used_labels: set[str] = set()
-        for entry in summary.results:
-            raw_label = entry.label or ""
-            lbl = self._localize_label(raw_label)
-            if (not lbl or len(lbl.strip()) <= 1) and getattr(entry, "identifier", None):
-                lbl = entry.identifier
-            if lbl in used_labels:
-                lbl = f"{lbl}#{len(used_labels)+1}"
-            used_labels.add(lbl)
-            if entry.success and entry.fit_result:
-                comparison_rows.append(
-                    (
-                        lbl,
-                        float(entry.fit_result.aic),
-                        float(entry.fit_result.bic),
-                        float(entry.fit_result.r2),
-                    )
-                )
-                detail_lines.append(
-                    self._tr(
-                        f"{lbl}: 成功，AIC={self._format_display_value(entry.fit_result.aic)}, BIC={self._format_display_value(entry.fit_result.bic)}, R²={self._format_display_value(entry.fit_result.r2)}",
-                        f"{lbl}: success, AIC={self._format_display_value(entry.fit_result.aic)}, BIC={self._format_display_value(entry.fit_result.bic)}, R²={self._format_display_value(entry.fit_result.r2)}",
-                    )
-                )
-            else:
-                err = _translate_error(entry.error or "unknown")
-                detail_lines.append(self._tr(f"{lbl}: 失败 ({err})", f"{lbl}: failed ({err})"))
-
-        text_lines = detail_lines[:] if detail_lines else [summarize_auto_results(summary.results)]
-        if comparison_rows:
-            try:
-                sorted_comp = sorted(comparison_rows, key=lambda t: t[1])
-            except Exception:
-                sorted_comp = comparison_rows
-            text_lines.append(self._tr("模型比较 (AIC/BIC/R²)：", "Model comparison (AIC/BIC/R²):"))
-            for idx, (name, aic, bic, r2) in enumerate(sorted_comp):
-                marker = "*" if idx == 0 else " "
-                text_lines.append(
-                    f"{marker} {name}: AIC={self._format_display_value(aic)}, BIC={self._format_display_value(bic)}, R²={self._format_display_value(r2)}"
-                )
-        text = "\n".join(text_lines)
-        best = summary.best()
-        render = AutoFitRenderResult(text=text, plot_bytes=None, fit_result=None, expression=None, substituted=None)
-        if best and best.fit_result:
-            expression = best.fit_result.details.get("expression")
-            substituted = (
-                self._build_substituted_expression(expression, best.fit_result.params)
-                if expression
-                else None
-            )
-            with _mp_precision_guard(self._current_precision):
-                best_text = self._format_fit_result_text(best.fit_result, expression, substituted)
-            best_label = self._localize_label(best.label)
-            if (not best_label or len(best_label.strip()) <= 1) and getattr(best, "identifier", None):
-                best_label = best.identifier
-            text = text + "\n\n" + self._tr(f"最佳模型: {best_label}", f"Best model: {best_label}") + "\n" + best_text
-            log_scale = self._sanitize_log_scale(self._current_log_scale(), x_series, y_series)
-            plot_job = SimpleNamespace(
-                model_type="auto",
-                poly_degree=0,
-                inverse_min=1,
-                inverse_max=1,
-                auto_identifier=getattr(best, "identifier", None),
-                is_multidim=False,
-                label=best_label,
-                x_series=x_series,
-                y_series=y_series,
-                sigma_series=sigma_series,
-                render_plots=render_plots,
-            )
-            cached_payload["job"] = plot_job
-            render = AutoFitRenderResult(
-                text=text,
-                plot_bytes=None,
-                fit_result=best.fit_result,
-                expression=expression or "",
-                substituted=substituted or "",
-            )
-            plot_data = None
-            if render_plots:
-                plot_data = self._render_fit_plot_bytes(plot_job, best.fit_result, comparison=comparison_rows, log_scale=log_scale)
-            cached_payload.update(
-                {
-                    "fit_result": best.fit_result,
-                    "expression": expression or "",
-                    "substituted": substituted or "",
-                    "job": plot_job,
-                }
-            )
-            if return_payload:
-                return AutoFitRenderResult(
-                    text=text,
-                    plot_bytes=plot_data,
-                    fit_result=best.fit_result,
-                    expression=expression or "",
-                    substituted=substituted or "",
-                )
-            self._set_result_text(text)
-            csv_rows = self._build_fit_csv_rows(best.fit_result, expression, batch_idx=1)
-            if csv_rows:
-                self._set_csv_data(
-                    csv_rows,
-                    ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error", "note"],
-                    suggestion="fitting_results.csv",
-                )
-            else:
-                self._reset_csv_data()
-            warning_detail = best.fit_result.details.get("boundary_warning")
-            if warning_detail:
-                self._append_log(warning_detail)
-            if plot_data:
-                self._image_mode = "fit"
-                self.current_fit_figures = []
-                self.current_fit_index = 0
-                self._update_result_plot(plot_data)
-            if generate_latex and output_path:
-                self._write_fitting_latex(
-                    headers,
-                    data_rows,
-                    sigma_rows,
-                    best.fit_result,
-                    expression or "",
-                    substituted or "",
-                    plot_data if render_plots else None,
-                    output_path,
-                    self.dcolumn_checkbox.isChecked(),
-                )
-        else:
-            if return_payload:
-                return render
-            self._set_result_text(text)
-        if not return_payload:
-            self._remember_last_result("fit_auto", cached_payload)
-        self._set_result_text(text)
-        log_message = text if verbose_mode else self._tr("自动模型选择完成。", "Auto model selection finished.")
-        if not return_payload:
-            self._append_log(log_message)
-            self.tabs.setCurrentIndex(self.result_tab_index)
-            QMessageBox.information(self, self._tr("完成", "Done"), self._tr("自动拟合完成。", "Auto fit completed."))
-        return render
-
-    def _prepare_auto_fit_job(self, dataset, verbose: bool = False) -> AutoFitJob:
-        headers, data_rows, sigma_rows, x_series, y_series, sigma_series, weights = self._prepare_linear_fit_inputs(*dataset)
-        precision = self._read_precision()
-        self._current_precision = precision
-        self._set_fit_output_precision(precision)
-        custom_entries: list[tuple[str, Any, Any]] = []
-        parameter_config: dict[str, dict[str, str]] = {}
-        model_expr = self.fit_expr_edit.toPlainText().strip()
-        if model_expr:
-            custom_config = self._collect_custom_fit_config(
-                validate_parameters=False,
-                variable_names=["x"],
-            )
-            constants = custom_config["constants"]
-            parameter_config = custom_config["parameter_config"]
-            parameter_names = custom_config["parameter_names"]
-            spec = build_model_specification(model_expr, ["x"], parameter_names, constants)
-            state = build_parameter_state(parameter_config, parameter_names)
-            custom_entries.append(("自定义模型", spec, state))
-        custom_entries.extend(self._default_auto_custom_entries())
-        extra_models = self._default_auto_linear_definitions()
-        return AutoFitJob(
-            headers=headers,
-            data_rows=data_rows,
-            sigma_rows=sigma_rows,
-            x_series=x_series,
-            y_series=y_series,
-            sigma_series=sigma_series,
-            weights=weights,
-            precision=precision,
-            custom_entries=custom_entries,
-            extra_models=extra_models,
-            verbose=verbose,
-            render_plots=self.generate_plots_checkbox.isChecked() if hasattr(self, "generate_plots_checkbox") else True,
-            parallel_config=self._current_parallel_config(),
-            refine_with_mcmc=(
-                self.fit_mcmc_refine.isChecked()
-                if hasattr(self, "fit_mcmc_refine")
-                and self.fit_mcmc_refine.isEnabled()
-                else False
-            ),
-        )
-
     def _prepare_fit_job(self, dataset, generate_latex: bool, output_path: str, verbose: bool, render_plots: bool = True) -> FitJob:
         headers, data_rows, sigma_rows, x_series, y_series, sigma_series, weights = self._prepare_linear_fit_inputs(*dataset)
         precision = self._read_precision()
@@ -916,7 +635,6 @@ class WindowFittingModelsMixin:
         inverse_max = 3
         pade_m = 1
         pade_n = 1
-        auto_identifier: str | None = None
         if model_type == "custom":
             custom_config = self._collect_custom_fit_config(
                 validate_parameters=True,
@@ -946,12 +664,12 @@ class WindowFittingModelsMixin:
             )
             model_expr = str(implicit_config["output_expression"])
             timeout_seconds = float(implicit_config["timeout_seconds"])
-        elif model_type == "poly":
+        elif model_type == "polynomial":
             poly_degree = self.poly_degree_spin.value()
-            model_expr = self._mode_expression_preview("poly")
-        elif model_type == "inverse":
+            model_expr = self._mode_expression_preview("polynomial")
+        elif model_type == "inverse_power":
             inverse_min, inverse_max = self._inverse_power_range()
-            model_expr = self._mode_expression_preview("inverse")
+            model_expr = self._mode_expression_preview("inverse_power")
         elif model_type == "pade":
             pade_m = self.pade_m_spin.value()
             pade_n = self.pade_n_spin.value()
@@ -962,9 +680,6 @@ class WindowFittingModelsMixin:
         elif model_type == "power_limit":
             template_expr, template_params = self._power_limit_template()
             model_expr = template_expr
-        elif model_type in {"log_poly", "exp_combo"}:
-            auto_identifier = "M4B" if model_type == "log_poly" else "M7B"
-            model_expr = self._mode_expression_preview(model_type)
         else:
             # fallback to custom
             custom_config = self._collect_custom_fit_config(
@@ -997,7 +712,6 @@ class WindowFittingModelsMixin:
             inverse_max=inverse_max,
             pade_m=pade_m,
             pade_n=pade_n,
-            auto_identifier=auto_identifier,
             precision=precision,
             generate_latex=generate_latex,
             output_path=output_path,
@@ -1031,34 +745,6 @@ class WindowFittingModelsMixin:
         worker.start()
         self._append_log(self._tr("拟合已在后台运行…", "Fit running in background…"))
 
-    def _execute_auto_fit_async(self, dataset, generate_latex: bool, output_path: str, verbose: bool):
-        if self._auto_fit_worker and self._auto_fit_worker.isRunning():
-            QMessageBox.information(self, self._tr("提示", "Notice"), self._tr("自动拟合正在运行中。", "Auto fit already running."))
-            return
-        try:
-            job = self._prepare_auto_fit_job(dataset, verbose)
-        except Exception as exc:
-            localized = self._localize_text(str(exc))
-            QMessageBox.critical(self, self._tr("自动拟合失败", "Auto fit failed"), localized)
-            log_msg = self._tr(f"自动拟合失败: {localized}", f"Auto fit failed: {localized}")
-            self._append_log(log_msg)
-            return
-
-        worker = AutoFitWorker(job)
-        worker.result_ready.connect(
-            lambda payload, g=generate_latex, o=output_path, v=job.verbose: self._on_auto_fit_finished(payload, g, o, v)
-        )
-        worker.failed.connect(self._on_auto_fit_failed)
-        worker.finished.connect(self._on_auto_fit_thread_done)
-        worker.cancelled.connect(self._on_worker_cancelled)
-        worker.progress_changed.connect(self._on_auto_fit_progress)
-        if job.verbose:
-            worker.log_ready.connect(self._append_log)
-        self._auto_fit_worker = worker
-        self._set_button_to_stop_mode()
-        worker.start()
-        self._append_log(self._tr("自动拟合已在后台运行…", "Auto fit running in background…"))
-
     def _run_fitting_mode(self, generate_latex: bool, output_path: str, verbose: bool, render_plots: bool = True) -> bool:
         headers, rows, sigma_rows, segments, _ = self._collect_batched_fitting_dataset(precision_hint=self._peek_user_precision())
         batches = self._build_batches_from_segments(headers, rows, sigma_rows, segments)
@@ -1068,23 +754,14 @@ class WindowFittingModelsMixin:
         if len(batches) == 1:
             batch = batches[0]
             dataset = (batch["headers"], batch["rows"], batch["sigma_rows"])
-            if mode == "auto":
-                self._execute_auto_fit_async(dataset, generate_latex, output_path, verbose)
-                return True
             job = self._prepare_fit_job(dataset, generate_latex, output_path, verbose, render_plots=render_plots)
             self._execute_fit_async(job)
             return True
         tasks: list[FitBatchTask] = []
-        if mode == "auto":
-            for batch in batches:
-                dataset = (batch["headers"], batch["rows"], batch["sigma_rows"])
-                job = self._prepare_auto_fit_job(dataset, verbose)
-                tasks.append(FitBatchTask(index=batch.get("index", len(tasks) + 1), auto_job=job))
-        else:
-            for batch in batches:
-                dataset = (batch["headers"], batch["rows"], batch["sigma_rows"])
-                job = self._prepare_fit_job(dataset, False, output_path, verbose, render_plots=render_plots)
-                tasks.append(FitBatchTask(index=batch.get("index", len(tasks) + 1), fit_job=job))
+        for batch in batches:
+            dataset = (batch["headers"], batch["rows"], batch["sigma_rows"])
+            job = self._prepare_fit_job(dataset, False, output_path, verbose, render_plots=render_plots)
+            tasks.append(FitBatchTask(index=batch.get("index", len(tasks) + 1), fit_job=job))
         worker = FitBatchWorker(tasks, capture_output=verbose)
         worker.finished_ok.connect(self._on_fit_batches_finished)
         worker.failed.connect(self._on_fit_failed)

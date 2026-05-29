@@ -260,6 +260,15 @@ if (Test-Path $desktopDocsDir) {
     Write-Warning ("Desktop docs directory not found: {0}" -f $desktopDocsDir)
 }
 
+$exampleWorkspacesDir = Join-Path $projectRoot "examples\\workspaces"
+if (Test-Path $exampleWorkspacesDir) {
+    $exampleWorkspacesAbs = (Resolve-Path $exampleWorkspacesDir).Path
+    Write-Host ("[info] Including example workspaces: {0}" -f $exampleWorkspacesAbs)
+    $dataArgs += @("--add-data", ("{0};examples\\workspaces" -f $exampleWorkspacesAbs))
+} else {
+    Write-Warning ("Example workspaces directory not found: {0}" -f $exampleWorkspacesDir)
+}
+
 # Bundle shared help specs used by "?" help buttons.
 $helpSpecsFile = Join-Path $projectRoot "shared\\help_specs.json"
 if (Test-Path $helpSpecsFile) {

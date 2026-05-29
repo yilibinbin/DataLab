@@ -221,6 +221,14 @@ else
   echo "[warn] Desktop docs directory not found: $DESKTOP_DOCS_DIR"
 fi
 
+EXAMPLE_WORKSPACES_DIR="$PROJECT_ROOT/examples/workspaces"
+if [[ -d "$EXAMPLE_WORKSPACES_DIR" ]]; then
+  echo "[info] Including example workspaces: $EXAMPLE_WORKSPACES_DIR"
+  DOCS_DATA_FLAGS+=(--add-data "$EXAMPLE_WORKSPACES_DIR:examples/workspaces")
+else
+  echo "[warn] Example workspaces directory not found: $EXAMPLE_WORKSPACES_DIR"
+fi
+
 HELP_SPECS_FILE="$PROJECT_ROOT/shared/help_specs.json"
 if [[ -f "$HELP_SPECS_FILE" ]]; then
   echo "[info] Including help specs: $HELP_SPECS_FILE"

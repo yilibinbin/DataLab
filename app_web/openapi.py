@@ -268,56 +268,6 @@ def build_spec(
                     },
                 },
             },
-            "/api/auto-fit": {
-                "post": {
-                    "tags": ["fitting"],
-                    "summary": "Try every registered linear model and return them ranked.",
-                    "requestBody": {
-                        "required": True,
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "x": {"type": "array", "items": {"type": "number"}},
-                                        "y": {"type": "array", "items": {"type": "number"}},
-                                        "precision": {
-                                            "type": "integer",
-                                            "minimum": 10,
-                                            "maximum": 1000,
-                                        },
-                                    },
-                                    "required": ["x", "y"],
-                                }
-                            }
-                        },
-                    },
-                    "responses": {
-                        "200": {
-                            "description": "Ranked candidate models.",
-                            "content": {
-                                "application/json": {
-                                    "schema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "best": {
-                                                "$ref": "#/components/schemas/FitResult"
-                                            },
-                                            "candidates": {
-                                                "type": "array",
-                                                "items": {
-                                                    "$ref": "#/components/schemas/FitResult"
-                                                },
-                                            },
-                                        },
-                                    },
-                                }
-                            },
-                        },
-                        "400": _standard_error_response(),
-                    },
-                },
-            },
             "/api/error-propagation": {
                 "post": {
                     "tags": ["error-propagation"],

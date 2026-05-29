@@ -8,8 +8,8 @@ to integrate DataLab into automation pipelines.
 Contract pinned here:
 - ``cli.main.run_batch_file(path)`` parses a YAML config and dispatches
   per-entry to the pure-function workers from ``app_desktop.workers_core``.
-- Each entry specifies an ``operation`` (``calc`` / ``fit`` /
-  ``auto_fit``), input data (inline list or file path), and an
+- Each entry specifies an ``operation`` (``calc`` / ``fit``),
+  input data (inline list or file path), and an
   ``output`` directory.
 - The batch never touches PySide6; the CLI is import-safe from headless
   contexts (CI, SSH, containers).
@@ -41,7 +41,7 @@ def _data_csv(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def _batch_config(_data_csv: Path, tmp_path: Path) -> Path:
-    """Write a batch YAML invoking a single auto-fit."""
+    """Write a batch YAML invoking a single explicit fit."""
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     config = f"""
@@ -49,7 +49,7 @@ jobs:
   - name: linear-fit
     operation: fit
     data_path: {_data_csv}
-    model: linear
+    model: polynomial
     output_dir: {out_dir}
 """.strip()
     path = tmp_path / "batch.yml"
@@ -66,7 +66,7 @@ def test_load_batch_config_round_trips(_batch_config: Path):
     job = config.jobs[0]
     assert job.name == "linear-fit"
     assert job.operation == "fit"
-    assert job.model == "linear"
+    assert job.model == "polynomial"
 
 
 def test_load_batch_config_rejects_unknown_operation(tmp_path: Path):
@@ -96,7 +96,7 @@ jobs:
     operation: fit
     data_path: /definitely/does/not/exist.csv
     output_dir: /tmp
-    model: linear
+    model: polynomial
 """,
         encoding="utf-8",
     )
@@ -138,6 +138,89 @@ def test_run_batch_produces_json_artefact(_batch_config: Path, tmp_path: Path):
     # The JSON must be real JSON with at least a `model` field
     data = json.loads(json_files[0].read_text())
     assert "model" in data or "fit" in data or "params" in data
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_model"),
+    [
+        ("poly", "polynomial"),
+        ("inverse", "inverse_power"),
+    ],
+)
+def test_run_batch_maps_legacy_explicit_model_aliases(
+    _data_csv: Path,
+    tmp_path: Path,
+    model: str,
+    expected_model: str,
+):
+    from cli.main import run_batch_file
+
+    out_dir = tmp_path / f"out-{model}"
+    cfg = tmp_path / f"{model}.yml"
+    cfg.write_text(
+        f"""
+jobs:
+  - name: alias-fit
+    operation: fit
+    data_path: {_data_csv}
+    model: {model}
+    output_dir: {out_dir}
+""",
+        encoding="utf-8",
+    )
+
+    assert run_batch_file(cfg) == 0
+    payload = json.loads((out_dir / "alias-fit.json").read_text(encoding="utf-8"))
+    assert payload["model"] == expected_model
+
+
+@pytest.mark.parametrize("model", ["log_poly", "exp_combo", "auto"])
+def test_run_batch_rejects_removed_fit_models_without_output(
+    _data_csv: Path,
+    tmp_path: Path,
+    model: str,
+):
+    from cli.main import run_batch_file
+
+    out_dir = tmp_path / f"out-{model}"
+    cfg = tmp_path / f"{model}.yml"
+    cfg.write_text(
+        f"""
+jobs:
+  - name: removed-fit
+    operation: fit
+    data_path: {_data_csv}
+    model: {model}
+    output_dir: {out_dir}
+""",
+        encoding="utf-8",
+    )
+
+    assert run_batch_file(cfg) != 0
+    assert not (out_dir / "removed-fit.json").exists()
+
+
+def test_run_batch_rejects_removed_auto_fit_operation_without_output(
+    _data_csv: Path,
+    tmp_path: Path,
+):
+    from cli.main import run_batch_file
+
+    out_dir = tmp_path / "out-auto-fit"
+    cfg = tmp_path / "auto_fit.yml"
+    cfg.write_text(
+        f"""
+jobs:
+  - name: removed-operation
+    operation: auto_fit
+    data_path: {_data_csv}
+    output_dir: {out_dir}
+""",
+        encoding="utf-8",
+    )
+
+    assert run_batch_file(cfg) != 0
+    assert not (out_dir / "removed-operation.json").exists()
 
 
 def test_run_batch_returns_nonzero_on_error(tmp_path: Path):

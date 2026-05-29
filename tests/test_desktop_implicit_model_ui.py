@@ -54,9 +54,9 @@ def test_implicit_ui_is_formula_first_and_generic(window) -> None:
 
     assert not window.implicit_model_widget.isHidden()
     assert hasattr(window, "implicit_equation_edit")
-    assert hasattr(window, "implicit_equation_preview")
+    assert hasattr(window, "implicit_equation_preview_button")
     assert hasattr(window, "implicit_output_edit")
-    assert hasattr(window, "implicit_output_preview")
+    assert hasattr(window, "implicit_output_preview_button")
     assert window.implicit_equation_edit.minimumHeight() >= 70
     assert window.implicit_output_edit.minimumHeight() >= 70
 
@@ -345,6 +345,7 @@ def test_implicit_parameter_detection_ignores_custom_parameter_table(window) -> 
     detected = [
         table.item(row, 0).text()
         for row in range(table.rowCount())
+        if table.item(row, 0) is not None and table.item(row, 0).text() not in table.orphan_names()
     ]
     assert detected == ["d0", "En", "K"]
 

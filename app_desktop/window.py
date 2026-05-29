@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QFileDialog,
+    QInputDialog,
     QWidget,
     QVBoxLayout,
     QScrollArea,
@@ -107,12 +108,10 @@ from fitting import (
     build_model_specification,
     build_parameter_state,
     fit_custom_model,
-    auto_fit_dataset,
     infer_parameter_names,
     ModelSpecification,
     ParameterState,
     render_fitting_overview,
-    summarize_auto_results,
     sample_mp_function,
 )
 from fitting.auto_models import (
@@ -166,8 +165,6 @@ from .resources import (
     resolve_resource_path,
 )
 from .workers_core import (
-    AutoFitJob,
-    AutoFitRenderResult,
     CalcJob,
     CalcResult,
     FitBatchResultEntry,
@@ -180,7 +177,7 @@ from .workers_core import (
     _safe_resolve_path,
     split_extrapolation_result,
 )
-from .workers_qt import AutoFitWorker, CalcWorker, FitBatchWorker, FitWorker
+from .workers_qt import CalcWorker, FitBatchWorker, FitWorker
 
 from .window_latex_pdf_mixin import WindowLatexPdfMixin
 from .window_i18n_mixin import WindowI18nMixin
@@ -189,6 +186,13 @@ from .window_statistics_mixin import WindowStatisticsMixin
 from .window_data_mixin import WindowDataMixin
 from .window_fitting_mixin import WindowFittingMixin
 from .window_extrapolation_mixin import WindowExtrapolationMixin
+
+EXAMPLE_WORKSPACE_NAMES = (
+    "extrapolation.datalab",
+    "error-propagation.datalab",
+    "statistics.datalab",
+    "fitting.datalab",
+)
 
 
 # Per-mode example placeholder text. Maps the mode key from
@@ -238,6 +242,63 @@ def _qt_object_alive(obj) -> bool:
             return True
         except Exception:
             return False
+
+
+def _example_workspace_candidates(name: str) -> list[Path]:
+    rel = Path("examples") / "workspaces" / name
+    candidates: list[Path] = []
+    resolved = resolve_resource_path(rel)
+    if resolved is not None:
+        candidates.append(resolved)
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / rel)
+        candidates.append(Path(meipass) / "_internal" / rel)
+    module_root = Path(__file__).resolve().parent
+    candidates.extend(
+        [
+            module_root.parent / rel,
+            Path.cwd() / rel,
+        ]
+    )
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        try:
+            candidate = candidate.resolve()
+        except Exception:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        unique.append(candidate)
+    return unique
+
+
+def list_example_workspaces() -> list[Path]:
+    examples: list[Path] = []
+    for name in EXAMPLE_WORKSPACE_NAMES:
+        for candidate in _example_workspace_candidates(name):
+            if candidate.is_file():
+                examples.append(candidate)
+                break
+    return examples
+
+
+def copy_example_workspace(name: str, destination_dir: Path | None = None) -> Path:
+    clean_name = Path(name).name
+    if clean_name not in EXAMPLE_WORKSPACE_NAMES:
+        raise ValueError(f"unknown example workspace: {name}")
+    source = next((path for path in list_example_workspaces() if path.name == clean_name), None)
+    if source is None:
+        raise FileNotFoundError(f"example workspace not found: {clean_name}")
+    if destination_dir is None:
+        destination_dir = Path(tempfile.mkdtemp(prefix="datalab-example-"))
+    else:
+        destination_dir.mkdir(parents=True, exist_ok=True)
+    target = destination_dir / clean_name
+    shutil.copy2(source, target)
+    return target
 
 
 class _CornerExampleClickFilter(QObject):
@@ -344,6 +405,7 @@ class ExtrapolationWindow(
         self._workspace_snapshot_only = False
         self._workspace_snapshot_stale = False
         self._workspace_restoring = False
+        self._workspace_migration_warnings: list[str] = []
 
         self.current_fit_figures: list[Path] = []
         self.current_stats_figures: list[Path] = []
@@ -358,7 +420,6 @@ class ExtrapolationWindow(
         self.current_extrap_index: int = 0
 
         self._current_precision = mp.mp.dps
-        self._auto_fit_worker: AutoFitWorker | None = None
         self._fit_worker: FitWorker | None = None
         self._calc_worker: CalcWorker | None = None
         self._translations: list[tuple[object, str, str, str]] = []  # (widget, attr, zh, en)
@@ -565,6 +626,7 @@ class ExtrapolationWindow(
             self._workspace_path = None
             self._workspace_dirty = False
             self._workspace_degraded = False
+            self._workspace_migration_warnings = []
             self._workspace_snapshot_only = False
             self._workspace_snapshot_stale = False
             self.result_edit.clear()
@@ -654,6 +716,35 @@ class ExtrapolationWindow(
             return False
         return self._open_workspace_from_path(Path(filename))
 
+    def open_example_workspace(self, _checked: bool = False) -> bool:
+        if not self._workspace_guard_running() or not self._confirm_workspace_discard_or_save():
+            return False
+        examples = list_example_workspaces()
+        if not examples:
+            QMessageBox.critical(
+                self,
+                self._tr("打开失败", "Open failed"),
+                self._tr("未找到示例工作区。", "No example workspaces were found."),
+            )
+            return False
+        labels = [path.name for path in examples]
+        selected, ok = QInputDialog.getItem(
+            self,
+            self._tr("打开示例工作区", "Open Example Workspace"),
+            self._tr("选择示例工作区：", "Select an example workspace:"),
+            labels,
+            0,
+            False,
+        )
+        if not ok or not selected:
+            return False
+        try:
+            copied = copy_example_workspace(str(selected))
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, self._tr("打开失败", "Open failed"), str(exc))
+            return False
+        return self._open_workspace_from_path(copied)
+
     def _open_workspace_from_path(self, path: Path) -> bool:
         if not self._workspace_guard_running():
             return False
@@ -673,7 +764,6 @@ class ExtrapolationWindow(
             return False
         self._workspace_path = path
         self._workspace_dirty = False
-        self._workspace_degraded = False
         self._workspace_snapshot_stale = False
         self._update_workspace_window_title()
         return True
@@ -783,7 +873,7 @@ class ExtrapolationWindow(
             message = (
                 "1. Choose a data file or paste data in the manual input area (first row = headers).\n"
                 "2. Select extrapolation, error propagation, fitting, or statistics on the left; set power/constant options as needed.\n"
-                "3. In fitting mode, choose polynomial, Padé, 1/x^p, power-limit, custom, or auto; related controls appear below for expression/JSON.\n"
+                "3. In fitting mode, choose polynomial, Padé, 1/x^p, power-limit, custom, or self-consistent; related controls appear below for expression/model settings.\n"
                 "4. In fitting, the Stat./System row controls statistical weighting: when enabled, data sigmas are used as weights (stat only); when disabled but sigmas exist, they are treated as systematic only (no double counting). Uncertainties are auto-parsed (1.23(4)[-5] or sigma-like headers), no extra sigma field needed.\n"
                 "5. Enable “Generate LaTeX” to export tables/images; you can edit/compile in the LaTeX tab; right tabs show results, logs, LaTeX, and PDF preview."
             )
@@ -792,7 +882,7 @@ class ExtrapolationWindow(
             message = (
                 "1. 选择数据文件或在手动输入区域粘贴数据（首行为表头）。\n"
                 "2. 在左侧选择外推、误差传递、拟合或统计模式，并根据需要设置幂律/常数等参数。\n"
-                "3. 拟合模式使用下拉框选择多项式、Padé、1/x^p、power-limit、自定义或自动模型，相关参数控件会在下方即时显示，可写入表达式/JSON。\n"
+                "3. 拟合模式使用下拉框选择多项式、Padé、1/x^p、power-limit、自定义或自洽隐式模型，相关参数控件会在下方即时显示，可写入表达式或模型设置。\n"
                 "4. 拟合模块的“统计/系统”一行控制统计加权：勾选“统计误差加权”则数据 σ 作为统计权重；不勾选时若检测到 σ，则只作为系统误差来源（避免双计）。不再需要单独输入 σ 列，程序会自动解析 1.23(4)[-5] 或包含 sigma/err 的列，日志会提示 χ²、边界警告等。\n"
                 "5. 勾选“生成 LaTeX 文件”即可导出表格/图像，并可在 LaTeX 标签页编辑或编译；右侧标签页展示数值结果、日志、LaTeX 内容和 PDF 预览。"
             )
@@ -919,14 +1009,14 @@ class ExtrapolationWindow(
             return
         mode = self.fit_model_combo.currentData()
         if hasattr(self, "poly_degree_widget"):
-            self.poly_degree_widget.setVisible(mode == "poly")
+            self.poly_degree_widget.setVisible(mode == "polynomial")
         if hasattr(self, "inverse_power_widget"):
-            self.inverse_power_widget.setVisible(mode == "inverse")
+            self.inverse_power_widget.setVisible(mode == "inverse_power")
         if hasattr(self, "pade_widget"):
             self.pade_widget.setVisible(mode == "pade")
         if hasattr(self, "implicit_model_widget"):
             self.implicit_model_widget.setVisible(mode == "self_consistent")
-        show_expr = mode not in {"auto", "self_consistent"}
+        show_expr = mode != "self_consistent"
         self.fit_expr_edit.setVisible(show_expr)
         if show_expr:
             self.fit_expr_edit.setEnabled(True)
@@ -967,7 +1057,7 @@ class ExtrapolationWindow(
         mode = self.fit_model_combo.currentData()
         if mode in {"power_limit", "pade"}:
             self._apply_model_template(mode)
-        elif mode in {"poly", "inverse"}:
+        elif mode in {"polynomial", "inverse_power"}:
             self._refresh_mode_expression(mode)
         self._update_model_hint()
 
@@ -976,9 +1066,7 @@ class ExtrapolationWindow(
             return
         mode = self.fit_model_combo.currentData()
         hint = ""
-        if mode in {"log_poly", "exp_combo"}:
-            hint = self._tr("该模型要求 x>0。", "This model requires x>0.")
-        elif mode == "self_consistent":
+        if mode == "self_consistent":
             hint = self._tr(
                 "通用自洽模型中的符号默认都是变量或参数；常量请在表达式中显式处理。",
                 "Symbols in generic self-consistent models are variables or parameters by default; handle constants explicitly in the expression.",
@@ -995,18 +1083,14 @@ class ExtrapolationWindow(
             payload = self._pade_template(self.pade_m_spin.value(), self.pade_n_spin.value())
             if payload:
                 return payload[0]
-        if mode == "poly":
+        if mode == "polynomial":
             degree = self.poly_degree_spin.value()
             terms = [f"b{i}*x^{i}" if i > 0 else "b0" for i in range(degree + 1)]
             return " + ".join(terms)
-        if mode == "inverse":
+        if mode == "inverse_power":
             p_min, p_max = self._inverse_power_range()
             parts = [f"A{p}/x^{p}" for p in range(p_min, p_max + 1)]
             return " + ".join(parts) if parts else "A0"
-        if mode in {"log_poly", "exp_combo"}:
-            definition = self._auto_model_map.get("M4B" if mode == "log_poly" else "M7B")
-            if definition:
-                return " + ".join([f"{name}*({text})" for name, text in zip(definition.parameter_names, definition.basis_texts)])
         if mode == "self_consistent" and hasattr(self, "implicit_output_edit"):
             return self.implicit_output_edit.toPlainText().strip()
         if mode == "custom":
@@ -1794,33 +1878,13 @@ class ExtrapolationWindow(
                 else:
                     self._reset_csv_data()
             elif kind == "fit_auto":
-                auto_kwargs = {k: payload.get(k) for k in [
-                    "summary",
-                    "headers",
-                    "data_rows",
-                    "sigma_rows",
-                    "x_series",
-                    "y_series",
-                    "sigma_series",
-                    "weights",
-                    "generate_latex",
-                    "output_path",
-                    "extra_models",
-                    "verbose_mode",
-                ] if k in payload}
-                render = self._render_auto_fit_summary(return_payload=True, render_plots=False, job_obj=payload.get("job"), **auto_kwargs)
-                self._set_result_text(render.text)
-                csv_rows = []
-                if render.fit_result:
-                    csv_rows = self._build_fit_csv_rows(render.fit_result, render.expression or "", batch_idx=1)
-                if csv_rows:
-                    self._set_csv_data(
-                        csv_rows,
-                        ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error", "note"],
-                        suggestion="fitting_results.csv",
+                self._set_result_text(
+                    self._tr(
+                        "旧版自动拟合结果快照无法重新渲染；请选择一个显式拟合模型后重新运行。",
+                        "Legacy automatic fitting snapshots cannot be re-rendered; choose an explicit model and rerun.",
                     )
-                else:
-                    self._reset_csv_data()
+                )
+                self._reset_csv_data()
             elif kind == "fit_batches":
                 self._reformat_fit_batches(**payload)
             else:
@@ -1986,8 +2050,6 @@ class ExtrapolationWindow(
                         self._calc_worker.wait(100)
                     if self._fit_worker:
                         self._fit_worker.wait(100)
-                    if self._auto_fit_worker:
-                        self._auto_fit_worker.wait(100)
                     max_wait_ms -= 100
 
                 # Force terminate if still running
@@ -1997,10 +2059,6 @@ class ExtrapolationWindow(
                 if self._fit_worker and self._fit_worker.isRunning():
                     self._fit_worker.terminate()
                     self._fit_worker.wait()
-                if self._auto_fit_worker and self._auto_fit_worker.isRunning():
-                    self._auto_fit_worker.terminate()
-                    self._auto_fit_worker.wait()
-
                 event.accept()
             else:
                 event.ignore()

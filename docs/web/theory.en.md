@@ -149,7 +149,7 @@ Residuals: `r_i = y_model(x_i; p) - y_i`
 
 `dof = n - k` (n points, k free parameters).
 
-### 5.2 Linear models (AUTO_MODELS / polynomial / 1/x^p)
+### 5.2 Explicit linear models (polynomial / 1/x^p)
 
 Linear-in-parameters form `y ≈ Σ b_j φ_j(x)` solved via QR least squares (weighted by scaling rows with `sqrt(w_i)` when applicable).
 
