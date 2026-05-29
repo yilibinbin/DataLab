@@ -64,7 +64,7 @@ DataLab targets high-precision numerical data processing and provides Extrapolat
     \node[block, below=of parse] (engine) {\textbf{Core engines}\\
       Extrapolation: \texttt{extrapolation\_methods/} (power-law, Richardson, Shanks, Levin, Wynn-$\varepsilon$, custom formula, etc.)\\
       Uncertainty propagation: first-/higher-order Taylor and Monte Carlo (symbolic + numerical derivatives), sharing the same safe expression engine\\
-      Fitting: \texttt{fitting/} (custom models, auto models, parameter management, fit metrics)\\
+      Fitting: \texttt{fitting/} (polynomial, inverse-power, Padé, power-limit, custom, and self-consistent models; parameter management; fit metrics)\\
       Statistics: \texttt{statistics\_utils.py} (means/weights, variance, uncertainties)};
     \draw[arrow] (parse) -- (engine);
 
@@ -284,7 +284,7 @@ The core engines implement the four classes of computations and use a unified pr
 \begin{itemize}
   \item extrapolation: multiple acceleration/extrapolation methods plus custom three-point formulas, producing a limit estimate and uncertainty;
   \item uncertainty propagation: first-order, higher-order Taylor contributions, and Monte Carlo sampling; outputs values, uncertainties, and optional contribution breakdowns;
-  \item fitting: custom and auto models, producing parameter estimates, fitted curves, and metrics (e.g., covariance matrices and parameter uncertainties);
+  \item fitting: explicit polynomial, inverse-power, Padé, power-limit, custom, and self-consistent models, producing parameter estimates, fitted curves, and metrics (e.g., covariance matrices and parameter uncertainties);
   \item statistics: batch-aware and weighted statistics, producing mean/variance/standard error and related indicators.
 \end{itemize}
 

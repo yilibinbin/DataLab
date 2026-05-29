@@ -114,9 +114,15 @@ def test_docs_do_not_advertise_automatic_fitting_as_current_feature():
     root = Path(__file__).resolve().parents[1]
     checked_paths = [
         root / "README.md",
+        root / "docs" / "ARCHITECTURE.md",
+        root / "docs" / "PROGRAM_FRAMEWORK.en.tex",
+        root / "docs" / "PROGRAM_FRAMEWORK.tex",
+        root / "app_desktop" / "window_data_mixin.py",
+        root / "app_desktop" / "window_i18n_mixin.py",
         *sorted((root / "docs" / "desktop").glob("*.md")),
     ]
     banned_claims = (
+        "auto models",
         "automatic model selection",
         "auto model selection",
         "auto-fit",

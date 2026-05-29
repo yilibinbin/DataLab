@@ -71,7 +71,7 @@ A TeX distribution providing `pdflatex` or `xelatex` is required for PDF export.
 
 ### Two frontends, one core
 
-- **`app_desktop/`** — PySide6 GUI. Entry: `app_desktop/main.py`. The main window class `ExtrapolationWindow` (`app_desktop/window.py`) is composed of **domain mixins**: `window_data_mixin.py`, `window_extrapolation_mixin.py`, `window_fitting_mixin.py`, `window_statistics_mixin.py`, `window_latex_pdf_mixin.py`, `window_images_mixin.py`, `window_i18n_mixin.py`. Long-running work dispatches to background workers in `workers_core.py` (`CalcJob`, `FitJob`). Automatic fitting was removed; desktop fitting uses explicit `FitJob` / `FitWorker` paths only.
+- **`app_desktop/`** — PySide6 GUI. Entry: `app_desktop/main.py`. The main window class `ExtrapolationWindow` (`app_desktop/window.py`) is composed of **domain mixins**: `window_data_mixin.py`, `window_extrapolation_mixin.py`, `window_fitting_mixin.py`, `window_statistics_mixin.py`, `window_latex_pdf_mixin.py`, `window_images_mixin.py`, `window_i18n_mixin.py`. Long-running work dispatches to background workers in `workers_core.py` (`CalcJob`, `FitJob`). The former one-click model-selection workflow was removed; desktop fitting uses explicit `FitJob` / `FitWorker` paths only.
 - **`app_web/`** — Flask app using the application-factory pattern (`app_web/server.py`). Routes are split into Blueprints under `app_web/blueprints/` (`pages.py`, `api.py`, `docs.py`). Web-specific computation glue lives in `app_web/logic/` and **mirrors** desktop functionality but reuses the same shared modules below.
 - **Shared scientific modules** (used by both frontends): `extrapolation_methods/`, `fitting/`, `datalab_latex/`, `shared/`, `statistics_utils.py`, `formula_help.py`.
 

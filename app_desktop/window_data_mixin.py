@@ -379,8 +379,8 @@ class WindowDataMixin:
         if not target_column or not x_column:
             raise ValueError(
                 _dual_msg(
-                    "请指定自动模型所需的列。",
-                    "Please specify the columns required for auto models.",
+                    "请指定模板拟合模型所需的列。",
+                    "Please specify the columns required for template fitting models.",
                 )
             )
         x_series = self._column_series(headers, data_rows, x_column)
