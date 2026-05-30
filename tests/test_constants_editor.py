@@ -191,6 +191,30 @@ def test_enabled_custom_constants_are_excluded_and_injected_into_fit_job(qtbot):
     assert mp.almosteq(payload.fit_result.params["A"], mp.mpf("2"), abs_eps=mp.mpf("1e-20"))
 
 
+def test_prepare_fit_job_uses_normalized_weighted_custom_inputs(qtbot):
+    win = _prepare_custom_fit_window(qtbot, constants_enabled=True, constant_value="1")
+    win.fit_weighted_checkbox.setChecked(True)
+    dataset = (
+        ["x", "y", "y_sigma"],
+        [
+            (mp.mpf("0"), mp.mpf("1"), mp.mpf("0.5")),
+            (mp.mpf("1"), mp.mpf("3"), mp.mpf("0.25")),
+            (mp.mpf("2"), mp.mpf("5"), mp.mpf("0.125")),
+        ],
+        [(None, None, None), (None, None, None), (None, None, None)],
+    )
+
+    job = win._prepare_fit_job(dataset, generate_latex=False, output_path="", verbose=False, render_plots=False)
+
+    assert job.variable_map == {"x": "x"}
+    assert job.variable_data == {"x": [mp.mpf("0"), mp.mpf("1"), mp.mpf("2")]}
+    assert job.target_series == [mp.mpf("1"), mp.mpf("3"), mp.mpf("5")]
+    assert job.sigma_series == [mp.mpf("0.5"), mp.mpf("0.25"), mp.mpf("0.125")]
+    assert job.weights == [mp.mpf("4"), mp.mpf("16"), mp.mpf("64")]
+    assert job.custom_constants == {"K": "1"}
+    assert job.parameter_config == {"A": {"initial": "1"}}
+
+
 def test_custom_constants_reject_uncertainty_notation_before_backend(qtbot):
     win = _prepare_custom_fit_window(qtbot, constants_enabled=True, constant_value="1.23(4)")
     dataset = (

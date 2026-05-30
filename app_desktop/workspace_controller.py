@@ -8,6 +8,10 @@ from typing import Any
 
 from PySide6.QtWidgets import QComboBox, QTableWidget, QTableWidgetItem
 
+from app_desktop.fitting_input_normalization import (
+    normalize_constants_state,
+    normalize_parameter_rows,
+)
 from app_desktop.workers_core import _READ_FALLBACK_ENCODINGS
 from shared.update_checker import current_version
 from shared.workspace_schema import compute_workspace_hash, sha256_bytes
@@ -219,24 +223,29 @@ def _capture_data_section(window: Any, *, constants: bool = False) -> tuple[dict
     return section, attachments
 
 
-def _coerce_string_rows(raw_rows: Any, keys: tuple[str, ...]) -> list[dict[str, str]]:
-    if not isinstance(raw_rows, list):
+def _normalize_workspace_parameter_rows(raw_rows: Any) -> list[dict[str, str]]:
+    if raw_rows is None:
         return []
-    rows: list[dict[str, str]] = []
-    for raw_row in raw_rows:
-        if not isinstance(raw_row, dict):
-            continue
-        rows.append({key: str(raw_row.get(key) or "") for key in keys})
-    return rows
+    return normalize_parameter_rows(
+        raw_rows,
+        constraints_enabled=True,
+    ).persisted_rows()
+
+
+def _normalize_workspace_constant_rows(raw_rows: Any) -> list[dict[str, str]]:
+    if raw_rows is None:
+        return []
+    return normalize_constants_state(
+        enabled=True,
+        rows=raw_rows,
+        numeric_mode="uncertainty",
+    ).persisted_rows()
 
 
 def _param_rows(window: Any) -> list[dict[str, str]]:
     table = getattr(window, "custom_params_table", None)
     if table is not None and hasattr(table, "rows"):
-        return _coerce_string_rows(
-            table.rows(),
-            ("name", "initial", "fixed", "min", "max"),
-        )
+        return _normalize_workspace_parameter_rows(table.rows())
     return []
 
 
@@ -250,10 +259,7 @@ def _param_orphans(window: Any) -> list[str]:
 def _implicit_param_rows(window: Any) -> list[dict[str, str]]:
     table = getattr(window, "implicit_params_table", None)
     if table is not None and hasattr(table, "rows"):
-        return _coerce_string_rows(
-            table.rows(),
-            ("name", "initial", "fixed", "min", "max"),
-        )
+        return _normalize_workspace_parameter_rows(table.rows())
     return []
 
 
@@ -275,7 +281,7 @@ def _constants_editor_state(editor: Any) -> dict[str, Any]:
     return {
         "enabled": _checked(editor),
         "view": "text" if editor.using_text_view() else "table",
-        "rows": _coerce_string_rows(editor.rows(), ("name", "value")),
+        "rows": _normalize_workspace_constant_rows(editor.rows()),
         "text": str(editor.raw_text()),
     }
 
@@ -284,7 +290,7 @@ def _implicit_constants_rows(window: Any) -> list[dict[str, str]]:
     editor = getattr(window, "implicit_constants_editor", None)
     if editor is None:
         return []
-    return _coerce_string_rows(editor.rows(), ("name", "value"))
+    return _normalize_workspace_constant_rows(editor.rows())
 
 
 def _variable_rows(window: Any) -> list[dict[str, str]]:
@@ -352,16 +358,17 @@ def _restore_variable_rows(window: Any, rows: Any) -> None:
 
 
 def _restore_param_rows(window: Any, rows: Any, orphan_names: Any = None) -> None:
-    if not isinstance(rows, list):
+    if rows is None:
         return
+    normalized_rows = _normalize_workspace_parameter_rows(rows)
     table = getattr(window, "custom_params_table", None)
     if table is not None and hasattr(table, "set_rows"):
-        table.set_rows(rows)
+        table.set_rows(normalized_rows)
         if isinstance(orphan_names, list) and hasattr(table, "mark_orphans"):
             active = [
                 str(row.get("name") or "")
-                for row in rows
-                if isinstance(row, dict) and str(row.get("name") or "") not in set(map(str, orphan_names))
+                for row in normalized_rows
+                if str(row.get("name") or "") not in set(map(str, orphan_names))
             ]
             table.mark_orphans(active)
 
@@ -389,75 +396,26 @@ def _clean_optional_string(value: Any) -> str:
 
 
 def _implicit_rows_to_config(rows: Any) -> dict[str, dict[str, str]]:
-    if isinstance(rows, dict):
-        cleaned: dict[str, dict[str, str]] = {}
-        for raw_name, raw_entry in rows.items():
-            name = _clean_optional_string(raw_name)
-            if not name:
-                continue
-            if isinstance(raw_entry, dict):
-                entry = {
-                    key: _clean_optional_string(raw_entry.get(key))
-                    for key in ("initial", "fixed", "min", "max")
-                    if _clean_optional_string(raw_entry.get(key))
-                }
-            else:
-                initial = _clean_optional_string(raw_entry)
-                entry = {"initial": initial} if initial else {}
-            cleaned[name] = entry
-        return cleaned
-    if not isinstance(rows, list):
+    if rows is None:
         return {}
-    cleaned = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        name = _clean_optional_string(row.get("name"))
-        if not name:
-            continue
-        entry = {
-            key: _clean_optional_string(row.get(key))
-            for key in ("initial", "fixed", "min", "max")
-            if _clean_optional_string(row.get(key))
-        }
-        cleaned[name] = entry
-    return cleaned
+    state = normalize_parameter_rows(rows, constraints_enabled=True)
+    return state.compute_config(validate=False)
 
 
 def _parameter_rows_have_constraints(rows: Any) -> bool:
-    if isinstance(rows, dict):
-        rows = [
-            {"name": name, **entry}
-            for name, entry in rows.items()
-            if isinstance(entry, dict)
-        ]
-    if not isinstance(rows, list):
+    if rows is None:
         return False
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
+    state = normalize_parameter_rows(rows, constraints_enabled=True)
+    for row in state.persisted_rows():
         if any(_clean_optional_string(row.get(key)) for key in ("fixed", "min", "max")):
             return True
     return False
 
 
 def _implicit_constants_to_rows(constants: Any) -> list[dict[str, str]]:
-    if isinstance(constants, dict):
-        return [
-            {"name": str(name), "value": str(value)}
-            for name, value in constants.items()
-        ]
-    if not isinstance(constants, list):
+    if constants is None:
         return []
-    rows: list[dict[str, str]] = []
-    for row in constants:
-        if not isinstance(row, dict):
-            continue
-        name = str(row.get("name") or "")
-        value = str(row.get("value") or "")
-        if name or value:
-            rows.append({"name": name, "value": value})
-    return rows
+    return _normalize_workspace_constant_rows(constants)
 
 
 def _is_legacy_quantum_defect_implicit(equation: str, output_expression: str) -> bool:

@@ -27,6 +27,7 @@ import re
 
 import mpmath as mp
 from desktop_doc_loader import load_desktop_doc, load_desktop_manifest
+from app_desktop.fitting_input_normalization import normalize_fitting_input_from_widgets
 from app_desktop.update_controller import UpdateController
 from shared.update_checker import REPOSITORY_URL
 
@@ -1195,25 +1196,40 @@ class ExtrapolationWindow(
                 return {}
             raise ValueError(self._tr("请在参数列表中添加参数。", "Please add at least one parameter."))
         try:
-            config = table.parameter_config(validate=True)
+            normalized = normalize_fitting_input_from_widgets(
+                model_type="custom",
+                expression=self.fit_expr_edit.toPlainText().strip(),
+                variable_names=[
+                    var_edit.text().strip()
+                    for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
+                    if var_edit.text().strip()
+                ] or ["x"],
+                parameter_table=table,
+                validate=True,
+            )
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
+        config = {name: dict(values) for name, values in normalized.parameter_config.items()}
         if not config and not allow_empty:
             raise ValueError(self._tr("请在参数列表中添加参数。", "Please add at least one parameter."))
         return config
 
     def _collect_implicit_parameter_config(self, parameter_names: Sequence[str]) -> dict[str, dict[str, str]]:
         table = getattr(self, "implicit_params_table", None)
-        collected: dict[str, dict[str, str]] = {}
-        if table is not None:
-            collected = table.parameter_config(validate=True)
-            allowed = set(parameter_names)
-            collected = {name: value for name, value in collected.items() if name in allowed}
-        missing = [name for name in parameter_names if name not in collected]
-        if missing:
-            joined = ", ".join(missing)
-            raise ValueError(self._tr(f"隐式参数缺少初值或固定值：{joined}", f"Implicit parameters need initial or fixed values: {joined}"))
-        return collected
+        normalized = normalize_fitting_input_from_widgets(
+            model_type="self_consistent",
+            expression=self.implicit_output_edit.toPlainText().strip(),
+            variable_names=[
+                var_edit.text().strip()
+                for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
+                if var_edit.text().strip()
+            ] or ["n"],
+            parameter_table=table,
+            required_parameter_names=parameter_names,
+            validate=True,
+        )
+        allowed = set(parameter_names)
+        return {name: dict(value) for name, value in normalized.parameter_config.items() if name in allowed}
 
     def _refresh_implicit_parameter_rows(self):
         config = self._collect_implicit_config(validate_parameters=False)
@@ -1258,7 +1274,18 @@ class ExtrapolationWindow(
         editor = getattr(self, "implicit_constants_editor", None)
         if editor is None or not editor.isChecked():
             return {}
-        return editor.constants_dict(validate=True)
+        normalized = normalize_fitting_input_from_widgets(
+            model_type="self_consistent",
+            expression=self.implicit_output_edit.toPlainText().strip(),
+            variable_names=[
+                var_edit.text().strip()
+                for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
+                if var_edit.text().strip()
+            ] or ["n"],
+            constants_editor=editor,
+            validate=True,
+        )
+        return dict(normalized.constants_dict)
 
     def _collect_implicit_config(self, validate_parameters: bool = True) -> dict[str, object]:
         x_variables = [
@@ -1281,7 +1308,15 @@ class ExtrapolationWindow(
         max_iterations = self.implicit_max_iterations_spin.value()
         timeout_seconds = self.implicit_timeout_spin.value()
         expressions = f"{equation}\n{output_expression}"
-        constants = self._collect_implicit_constants()
+        editor = getattr(self, "implicit_constants_editor", None)
+        constants_probe = normalize_fitting_input_from_widgets(
+            model_type="self_consistent",
+            expression=expressions,
+            variable_names=x_variables + [implicit_variable],
+            constants_editor=editor,
+            validate=True,
+        )
+        constants = dict(constants_probe.constants_dict)
         constant_names = set(constants)
         parameter_names = self._infer_parameter_names(
             expressions,
@@ -1290,7 +1325,17 @@ class ExtrapolationWindow(
             constants=sorted(constant_names),
         )
         if validate_parameters:
-            self._collect_implicit_parameter_config(parameter_names)
+            table = getattr(self, "implicit_params_table", None)
+            normalized = normalize_fitting_input_from_widgets(
+                model_type="self_consistent",
+                expression=expressions,
+                variable_names=x_variables + [implicit_variable],
+                parameter_table=table,
+                constants_editor=editor,
+                required_parameter_names=parameter_names,
+                validate=True,
+            )
+            constants = dict(normalized.constants_dict)
         return {
             "x_variables": tuple(x_variables),
             "implicit_variable": implicit_variable,

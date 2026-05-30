@@ -13,7 +13,6 @@ from data_extrapolation_latex_latest import (
     calculate_dcolumn_format_for_column,
     format_result_with_uncertainty_latex,
     format_value_for_latex_file,
-    parse_uncertainty_format,
     siunitx_column_spec,
 )
 from datalab_latex.sisetup_block import build_sisetup_block
@@ -37,6 +36,7 @@ from .common import (
     _norm_token,
     _parse_int,
 )
+from shared.uncertainty import parse_uncertainty_format
 
 
 @dataclass

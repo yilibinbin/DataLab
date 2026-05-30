@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Sequence
 from typing import Any
 
-import mpmath as mp
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
+from app_desktop.fitting_input_normalization import ParameterRowsState, normalize_parameter_rows
 
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _COLUMNS = ("name", "initial", "fixed", "min", "max")
 _HEADERS = ("Name", "Init", "Fixed", "Min", "Max")
 
@@ -55,11 +53,7 @@ class ParameterTable(QWidget):
         return rows
 
     def compute_rows(self) -> list[dict[str, str]]:
-        return [
-            row
-            for row in self.rows()
-            if not row["name"].strip() or row["name"].strip() not in self._orphan_names
-        ]
+        return self._normalized_state().compute_rows()
 
     def orphan_names(self) -> set[str]:
         existing = {row["name"].strip() for row in self.rows() if row["name"].strip()}
@@ -113,36 +107,11 @@ class ParameterTable(QWidget):
         return not any(self._cell_text(row_index, column) for column in range(len(_COLUMNS)))
 
     def set_rows(self, rows: Iterable[dict[str, Any]] | dict[str, Any] | None) -> None:
-        if isinstance(rows, dict):
-            clean_rows = []
-            for name, value in rows.items():
-                if isinstance(value, dict):
-                    row_values = value
-                else:
-                    row_values = {"initial": value}
-                clean_rows.append(
-                    {
-                        "name": str(name),
-                        "initial": self._string_value(row_values.get("initial")),
-                        "fixed": self._string_value(row_values.get("fixed")),
-                        "min": self._string_value(row_values.get("min")),
-                        "max": self._string_value(row_values.get("max")),
-                    }
-                )
-        elif rows is None:
-            clean_rows = []
-        else:
-            clean_rows = [
-                {
-                    "name": self._string_value(row.get("name")),
-                    "initial": self._string_value(row.get("initial")),
-                    "fixed": self._string_value(row.get("fixed")),
-                    "min": self._string_value(row.get("min")),
-                    "max": self._string_value(row.get("max")),
-                }
-                for row in rows
-                if isinstance(row, dict)
-            ]
+        clean_rows = normalize_parameter_rows(
+            rows,
+            constraints_enabled=self._constraints_enabled,
+            orphan_names=self._orphan_names,
+        ).persisted_rows()
         self._set_table_rows(clean_rows)
         self.orphan_names()
 
@@ -178,49 +147,7 @@ class ParameterTable(QWidget):
         self.mark_orphans(seen)
 
     def parameter_config(self, *, validate: bool = True) -> dict[str, dict[str, str]]:
-        config: dict[str, dict[str, str]] = {}
-        for row in self.compute_rows():
-            name = row["name"].strip()
-            values = {key: row[key].strip() for key in _COLUMNS if key != "name"}
-            if not name and not any(values.values()):
-                continue
-            if not validate and not name:
-                continue
-            if not name:
-                raise ValueError("Parameter name cannot be empty.")
-            if not _IDENTIFIER_RE.fullmatch(name):
-                raise ValueError(f"Invalid parameter name: {name}")
-            if name in config:
-                raise ValueError(f"Duplicate parameter name: {name}")
-            active_values = {"initial": values["initial"]}
-            if self._constraints_enabled:
-                active_values.update(
-                    {
-                        "fixed": values["fixed"],
-                        "min": values["min"],
-                        "max": values["max"],
-                    }
-                )
-            if not validate:
-                draft_entry = {key: value for key, value in active_values.items() if value}
-                if draft_entry:
-                    config[name] = draft_entry
-                continue
-            has_initial = bool(active_values.get("initial"))
-            has_fixed = bool(active_values.get("fixed"))
-            if not has_initial and not has_fixed:
-                raise ValueError(f"Parameter {name} needs an initial or fixed value.")
-            validated_entry: dict[str, str] = {}
-            for key, value in active_values.items():
-                if not value:
-                    continue
-                try:
-                    mp.mpf(value)
-                except Exception as exc:  # noqa: BLE001
-                    raise ValueError(f"Invalid {key} for parameter {name}.") from exc
-                validated_entry[key] = value
-            config[name] = validated_entry
-        return config
+        return self._normalized_state().compute_config(validate=validate)
 
     def rowCount(self) -> int:  # noqa: N802 - compatibility with QTableWidget tests
         return self.table_view.rowCount()
@@ -263,6 +190,13 @@ class ParameterTable(QWidget):
             }
             for row_index in range(self.table_view.rowCount())
         ]
+
+    def _normalized_state(self) -> ParameterRowsState:
+        return normalize_parameter_rows(
+            self.rows(),
+            constraints_enabled=self._constraints_enabled,
+            orphan_names=self._orphan_names,
+        )
 
     @staticmethod
     def _string_value(value: Any) -> str:

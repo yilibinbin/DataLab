@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 
 import mpmath as mp
+import pytest
 from PySide6.QtWidgets import QTableWidgetItem
 
 from fitting.hp_fitter import FitResult
@@ -229,6 +230,65 @@ def test_workspace_restore_old_fitting_config_without_implicit(qtbot) -> None:
     assert target.implicit_equation_edit.toPlainText() == "a + b*Cos[u] + c*x"
     assert target.implicit_output_edit.toPlainText() == "u"
     assert [(row[0].text(), row[1].text()) for row in target.variable_rows] == [("x", "A")]
+
+
+def test_workspace_restore_rejects_malformed_custom_parameter_rows(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    source.custom_params_table.set_rows([{"name": "A", "initial": "1.0"}])
+    bundle = capture_workspace(source, title="malformed custom params")
+    bundle.manifest["workspace"]["config"]["fitting"]["parameter_rows"] = [
+        {"name": "A", "initial": "1.0"},
+        "bad-row",
+    ]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    with pytest.raises(ValueError, match="Parameter rows.*row 2|第 2 行"):
+        restore_workspace(target, bundle.manifest, bundle.attachments)
+
+
+def test_workspace_restore_rejects_malformed_custom_parameter_rows_top_level(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    source.custom_params_table.set_rows([{"name": "A", "initial": "1.0"}])
+    bundle = capture_workspace(source, title="malformed custom params")
+    bundle.manifest["workspace"]["config"]["fitting"]["parameter_rows"] = "bad-rows"
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    with pytest.raises(ValueError, match="Parameter rows.*list|必须是行对象列表"):
+        restore_workspace(target, bundle.manifest, bundle.attachments)
+
+
+def test_workspace_restore_rejects_malformed_implicit_constants(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "self_consistent")
+    source.implicit_constants_editor.setChecked(True)
+    source.implicit_constants_editor.set_rows([{"name": "K", "value": "1"}])
+    bundle = capture_workspace(source, title="malformed implicit constants")
+    bundle.manifest["workspace"]["config"]["fitting"]["implicit"]["constants"] = [
+        {"name": "K", "value": "1"},
+        3,
+    ]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    with pytest.raises(ValueError, match="Constant rows.*row 2|第 2 行"):
+        restore_workspace(target, bundle.manifest, bundle.attachments)
 
 
 def test_custom_fit_config_uses_parameter_table_and_constants_editor(qtbot) -> None:

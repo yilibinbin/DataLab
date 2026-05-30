@@ -3,12 +3,12 @@ from __future__ import annotations
 import ast
 import math
 import random
-import re
 from typing import Literal, overload
 
 from mpmath import mp
 
 from shared.bilingual import _dual_msg, _split_dual
+from shared.uncertainty import UncertainValue, parse_uncertainty_format
 
 from .derivatives import (
     _get_symbolic_hessian,
@@ -29,113 +29,6 @@ from .latex_tables_common import (
     _normalize_table_segments,
     _string_length_hint,
 )
-
-
-class UncertainValue:
-    """Class to represent a value with uncertainty."""
-
-    # ``_mp()`` (datalab_latex.expression_engine) accepts mp.mpf, int, float,
-    # or any value whose ``str()`` produces a number string. We name the
-    # union so the public surface stops looking like ``object`` while still
-    # matching what the body actually requires.
-    def __init__(
-        self,
-        value: mp.mpf | int | float | str,
-        uncertainty: mp.mpf | int | float | str,
-        uncertainty_digits: int | None = None,
-        contributions: dict[str, mp.mpf] | None = None,
-    ) -> None:
-        self.value: mp.mpf = _mp(value)
-        self.uncertainty: mp.mpf = _mp(uncertainty)
-        # Keep the significant digits of the uncertainty as provided by the user
-        self.uncertainty_digits: int | None = uncertainty_digits
-        # Optional variance contributions per variable/constant name
-        self.contributions: dict[str, mp.mpf] | None = contributions or None
-
-    def __str__(self) -> str:
-        return f"{self.value} ± {self.uncertainty}"
-
-    def __repr__(self) -> str:
-        return f"UncertainValue({self.value}, {self.uncertainty}, digits={self.uncertainty_digits})"
-
-
-def parse_uncertainty_format(number_str: str, lang: str = "en") -> UncertainValue:
-    """Parse a number in format 1.23(1)[-2] to value and uncertainty."""
-    number_str = number_str.strip()
-
-    # Normalize special Unicode minus signs to standard hyphen
-    number_str = number_str.replace("−", "-")  # U+2212 MINUS SIGN to U+002D HYPHEN-MINUS
-
-    pattern = (
-        r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
-        r"(?:\([+-]?(?:\d+(?:\.\d*)?|\.\d+)\))?"
-        r"(?:[eE][+-]?\d+)?"
-        r"(?:\[[+-]?\d+\])?$"
-    )
-
-    def _err(msg_en: str, msg_zh: str) -> str:
-        return msg_zh if lang == "zh" else msg_en
-
-    if not re.fullmatch(pattern, number_str):
-        raise ValueError(
-            _err(
-                f"Unrecognized uncertainty format: {number_str}",
-                f"无法识别的不确定度格式: {number_str}",
-            )
-        )
-
-    exponent = 0
-    if "[" in number_str and "]" in number_str:
-        bracket_match = re.search(r"\[([+-]?\d+)\]", number_str)
-        if bracket_match:
-            exponent = int(bracket_match.group(1))
-            number_str = number_str[: bracket_match.start()] + number_str[bracket_match.end() :]
-
-    uncertainty_digits: int | None = None
-
-    def _sig_digits_from_text(text: str) -> int:
-        raw = (text or "").strip()
-        if not raw:
-            return 1
-        if raw.startswith(("+", "-")):
-            raw = raw[1:]
-        if "e" in raw.lower():
-            mantissa, _exp = raw.lower().split("e", 1)
-        else:
-            mantissa = raw
-        mantissa = mantissa.replace(".", "").lstrip("0")
-        return max(1, len(mantissa))
-
-    uncertainty = mp.mpf("0")
-    if "(" in number_str and ")" in number_str:
-        paren_match = re.search(r"\(([+-]?(?:\d+(?:\.\d*)?|\.\d+))\)", number_str)
-        if paren_match:
-            paren_text = paren_match.group(1)
-            uncertainty_digits = _sig_digits_from_text(paren_text)
-            mantissa_str = number_str[: paren_match.start()]
-            suffix = number_str[paren_match.end() :]
-
-            if "." in paren_text or "e" in paren_text.lower():
-                uncertainty = _mp(paren_text)
-            else:
-                unc_value = _mp(paren_text)
-                if "." in mantissa_str:
-                    decimal_pos = mantissa_str.find(".")
-                    digits_after_decimal = len(mantissa_str) - decimal_pos - 1
-                    uncertainty = unc_value * mp.power(10, -digits_after_decimal)
-                else:
-                    uncertainty = unc_value
-
-            number_str = mantissa_str + suffix
-
-    value = _mp(number_str)
-
-    if exponent != 0:
-        factor = mp.power(10, exponent)
-        value *= factor
-        uncertainty *= factor
-
-    return UncertainValue(value, uncertainty, uncertainty_digits=uncertainty_digits)
 
 
 def _process_uncertainty_lines(

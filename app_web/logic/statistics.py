@@ -12,7 +12,6 @@ from data_extrapolation_latex_latest import (
     _dual_msg,
     _precision_guard,
     format_result_with_uncertainty_latex,
-    parse_uncertainty_format,
 )
 from statistics_utils import compute_statistics, generate_statistics_latex
 
@@ -27,6 +26,7 @@ from .common import (
     _parse_int,
 )
 from .plots import _render_statistics_plot
+from shared.uncertainty import parse_uncertainty_format
 
 
 @dataclass
@@ -290,4 +290,3 @@ def _run_statistics(data_text: str, form, lang: str = "zh") -> StatsResultBundle
         stats_mode=stats_mode,
         mp_precision=mp_precision,
     )
-
