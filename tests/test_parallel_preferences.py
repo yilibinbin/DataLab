@@ -40,7 +40,7 @@ class _FakeQSettings:
         return QSettings.Status.NoError
 
 
-def test_parallel_preferences_round_trip_all_public_desktop_fields_and_drops_legacy_implicit_flag() -> None:
+def test_parallel_preferences_round_trip_all_public_desktop_fields_and_drops_stale_implicit_flag() -> None:
     from app_desktop.parallel_preferences import (
         ParallelPreferencesStore,
         parallel_preferences_keys,

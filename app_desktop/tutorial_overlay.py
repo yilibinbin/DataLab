@@ -23,7 +23,7 @@ Design goals:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
