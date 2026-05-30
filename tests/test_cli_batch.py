@@ -49,7 +49,7 @@ jobs:
   - name: linear-fit
     operation: fit
     data_path: {_data_csv}
-    model: polynomial
+    model: linear
     output_dir: {out_dir}
 """.strip()
     path = tmp_path / "batch.yml"
@@ -66,7 +66,7 @@ def test_load_batch_config_round_trips(_batch_config: Path):
     job = config.jobs[0]
     assert job.name == "linear-fit"
     assert job.operation == "fit"
-    assert job.model == "polynomial"
+    assert job.model == "linear"
 
 
 def test_load_batch_config_rejects_unknown_operation(tmp_path: Path):
@@ -140,10 +140,32 @@ def test_run_batch_produces_json_artefact(_batch_config: Path, tmp_path: Path):
     assert "model" in data or "fit" in data or "params" in data
 
 
+def test_load_batch_config_allows_calc_without_model(_data_csv: Path, tmp_path: Path):
+    out_dir = tmp_path / "calc-out"
+    cfg = tmp_path / "calc.yml"
+    cfg.write_text(
+        f"""
+jobs:
+  - name: calc-job
+    operation: calc
+    data_path: {_data_csv}
+    output_dir: {out_dir}
+""",
+        encoding="utf-8",
+    )
+    from cli.batch_config import load_batch_config
+
+    job = load_batch_config(cfg).jobs[0]
+
+    assert job.operation == "calc"
+    assert job.model == ""
+
+
 @pytest.mark.parametrize(
     ("model", "expected_model"),
     [
         ("poly", "polynomial"),
+        ("linear", "polynomial"),
         ("inverse", "inverse_power"),
     ],
 )
@@ -174,6 +196,45 @@ jobs:
     assert payload["model"] == expected_model
 
 
+def test_load_batch_config_requires_explicit_fit_model(_data_csv: Path, tmp_path: Path):
+    cfg = tmp_path / "missing-model.yml"
+    cfg.write_text(
+        f"""
+jobs:
+  - name: missing-model
+    operation: fit
+    data_path: {_data_csv}
+    output_dir: {tmp_path / "out"}
+""",
+        encoding="utf-8",
+    )
+    from cli.batch_config import load_batch_config
+
+    with pytest.raises(ValueError, match="model"):
+        load_batch_config(cfg)
+
+
+def test_run_batch_rejects_ambiguous_polynomial_model(_data_csv: Path, tmp_path: Path):
+    from cli.main import run_batch_file
+
+    out_dir = tmp_path / "out-polynomial"
+    cfg = tmp_path / "polynomial.yml"
+    cfg.write_text(
+        f"""
+jobs:
+  - name: ambiguous-fit
+    operation: fit
+    data_path: {_data_csv}
+    model: polynomial
+    output_dir: {out_dir}
+""",
+        encoding="utf-8",
+    )
+
+    assert run_batch_file(cfg) != 0
+    assert not (out_dir / "ambiguous-fit.json").exists()
+
+
 @pytest.mark.parametrize("model", ["log_poly", "exp_combo", "auto"])
 def test_run_batch_rejects_removed_fit_models_without_output(
     _data_csv: Path,
@@ -198,6 +259,32 @@ jobs:
 
     assert run_batch_file(cfg) != 0
     assert not (out_dir / "removed-fit.json").exists()
+
+
+@pytest.mark.parametrize("model", ["pade", "power_limit", "custom"])
+def test_run_batch_rejects_models_not_supported_by_cli_runner(
+    _data_csv: Path,
+    tmp_path: Path,
+    model: str,
+):
+    from cli.main import run_batch_file
+
+    out_dir = tmp_path / f"out-{model}"
+    cfg = tmp_path / f"{model}.yml"
+    cfg.write_text(
+        f"""
+jobs:
+  - name: unsupported-fit
+    operation: fit
+    data_path: {_data_csv}
+    model: {model}
+    output_dir: {out_dir}
+""",
+        encoding="utf-8",
+    )
+
+    assert run_batch_file(cfg) != 0
+    assert not (out_dir / "unsupported-fit.json").exists()
 
 
 def test_run_batch_rejects_removed_auto_fit_operation_without_output(

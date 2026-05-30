@@ -1205,6 +1205,7 @@ class ExtrapolationWindow(
                     if var_edit.text().strip()
                 ] or ["x"],
                 parameter_table=table,
+                constants_editor=getattr(self, "custom_constants_editor", None),
                 validate=True,
             )
         except ValueError as exc:

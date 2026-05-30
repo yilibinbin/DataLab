@@ -10,6 +10,7 @@ import mpmath as mp
 
 from fitting.model_parser import is_reserved_expression_name
 from shared.bilingual import _dual_msg
+from shared.fitting_uncertainty import FitUncertaintyState, fit_uncertainty_policy
 from shared.uncertainty import parse_uncertainty_format
 
 
@@ -272,13 +273,6 @@ def normalize_constants_state(
         text=str(text or ""),
         numeric_mode=numeric_mode,
     )
-
-
-@dataclass(frozen=True)
-class FitUncertaintyState:
-    data_sigmas: tuple[mp.mpf | None, ...]
-    weights: tuple[mp.mpf, ...] | None
-    weighted: bool
 
 
 @dataclass(frozen=True)
@@ -578,38 +572,3 @@ def normalize_data_uncertainty(
             continue
         detected_sigmas.append(mp.fabs(mp.mpf(row[candidate_idx])))
     return detected_sigmas
-
-
-def fit_uncertainty_policy(
-    sigma_values: Sequence[mp.mpf | None],
-    *,
-    weighted: bool,
-) -> FitUncertaintyState:
-    data_sigmas = [None if sigma is None else mp.mpf(sigma) for sigma in sigma_values]
-    if not weighted:
-        return FitUncertaintyState(data_sigmas=tuple(data_sigmas), weights=None, weighted=False)
-    if not data_sigmas:
-        raise ValueError(
-            _dual_msg(
-                "未提供不确定度数据，无法执行加权拟合。",
-                "No uncertainty data provided; cannot perform weighted fitting.",
-            )
-        )
-    weights: list[mp.mpf] = []
-    for idx, sigma in enumerate(data_sigmas, 1):
-        if sigma is None:
-            raise ValueError(
-                _dual_msg(
-                    f"第 {idx} 行缺少不确定度，无法执行加权拟合；请在数据中提供带不确定度的数值或包含 sigma/err 列。",
-                    f"Row {idx} is missing uncertainty; cannot perform weighted fitting. Provide uncertainties or a sigma/err column.",
-                )
-            )
-        if sigma <= 0:
-            raise ValueError(
-                _dual_msg(
-                    f"第 {idx} 行的不确定度必须大于 0。",
-                    f"Uncertainty on row {idx} must be greater than 0.",
-                )
-            )
-        weights.append(mp.mpf("1") / (sigma * sigma))
-    return FitUncertaintyState(data_sigmas=tuple(data_sigmas), weights=tuple(weights), weighted=True)

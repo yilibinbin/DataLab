@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import warnings
 from dataclasses import dataclass, field
-from typing import Callable, Sequence, cast
+from typing import Any, Callable, Sequence, cast
 
 from mpmath import mp
 
@@ -628,7 +628,7 @@ def _seed_candidates_for_current_point(
         name: mp.mpf(value)
         for name, value in zip(definition.x_variables, var_tuple, strict=True)
     }
-    return seed_hint.candidates(variables, mp.mpf(target_data[point_index]))
+    return cast(tuple[Any, ...], seed_hint.candidates(variables, mp.mpf(target_data[point_index])))
 
 
 def _record_seed_attempt(
@@ -752,14 +752,14 @@ def _implicit_solve_failure_context(
 ) -> str:
     variable_values = {
         name: mp.nstr(value, 30)
-        for name, value in zip(definition.x_variables, var_tuple)
+        for name, value in zip(definition.x_variables, var_tuple, strict=True)
     }
     parameter_values = {
         name: mp.nstr(value, 30)
-        for name, value in zip(definition.parameters, param_tuple)
+        for name, value in zip(definition.parameters, param_tuple, strict=True)
     }
     diagnostics = cache.diagnostics
-    return _dual_msg(
+    return cast(str, _dual_msg(
         "隐式方程逐点求解失败: "
         f"point_index={cache.current_point_index}, variables={variable_values}, parameters={parameter_values}, "
         f"method={definition.solve_options.method}, residual={mp.nstr(diagnostics.max_residual, 30)}, "
@@ -768,7 +768,7 @@ def _implicit_solve_failure_context(
         f"point_index={cache.current_point_index}, variables={variable_values}, parameters={parameter_values}, "
         f"method={definition.solve_options.method}, residual={mp.nstr(diagnostics.max_residual, 30)}, "
         f"iterations={diagnostics.max_iterations_used}, error={exc}",
-    )
+    ))
 
 
 def _scope_for(
@@ -779,8 +779,8 @@ def _scope_for(
 ) -> dict[str, object]:
     scope: dict[str, object] = {}
     scope.update(_constant_values(definition.constants))
-    scope.update(zip(definition.x_variables, var_tuple))
-    scope.update(zip(definition.parameters, param_tuple))
+    scope.update(zip(definition.x_variables, var_tuple, strict=True))
+    scope.update(zip(definition.parameters, param_tuple, strict=True))
     if implicit_value is not None:
         scope[definition.implicit_variable] = implicit_value
     return scope
@@ -858,7 +858,7 @@ def _assert_linear_in_free_params(
         scope_base = _observed_scope_for(definition, variable_data, targets, row_index)
         actual = _eval_equation_with_params(definition, scope_base, trial_params)
         linear = offsets[row_index] + mp.fsum(
-            coeff * value for coeff, value in zip(basis_rows[row_index], trial_values)
+            coeff * value for coeff, value in zip(basis_rows[row_index], trial_values, strict=True)
         )
         scale = max(mp.mpf("1"), mp.fabs(actual), mp.fabs(linear), mp.fabs(target))
         if mp.fabs(actual - linear) > tolerance * scale:

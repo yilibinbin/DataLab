@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import zipfile
 from pathlib import Path
 
@@ -74,6 +75,26 @@ def test_workspace_write_read_round_trip_with_plot_attachment(tmp_path: Path) ->
     loaded = read_workspace(target)
     assert loaded.manifest["workspace"]["title"] == "Untitled"
     assert loaded.attachments["attachments/plots/plot-001.png"] == PNG_BYTES
+
+
+def test_workspace_writer_uses_byte_stable_archive_layout(tmp_path: Path) -> None:
+    from shared.workspace_io import write_workspace
+
+    target = tmp_path / "stable.datalab"
+    write_workspace(target, _minimal_manifest(), {})
+
+    with zipfile.ZipFile(target) as zf:
+        manifest_info = zf.getinfo("manifest.json")
+        manifest_text = zf.read("manifest.json").decode("utf-8")
+
+    assert manifest_info.compress_type == zipfile.ZIP_STORED
+    assert json.loads(manifest_text) == _minimal_manifest()
+    assert manifest_text == json.dumps(
+        _minimal_manifest(),
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
 
 
 def test_workspace_rejects_future_schema(tmp_path: Path) -> None:

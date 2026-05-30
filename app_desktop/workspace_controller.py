@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from PySide6.QtWidgets import QComboBox, QTableWidget, QTableWidgetItem
 
@@ -226,20 +226,20 @@ def _capture_data_section(window: Any, *, constants: bool = False) -> tuple[dict
 def _normalize_workspace_parameter_rows(raw_rows: Any) -> list[dict[str, str]]:
     if raw_rows is None:
         return []
-    return normalize_parameter_rows(
+    return cast(list[dict[str, str]], normalize_parameter_rows(
         raw_rows,
         constraints_enabled=True,
-    ).persisted_rows()
+    ).persisted_rows())
 
 
 def _normalize_workspace_constant_rows(raw_rows: Any) -> list[dict[str, str]]:
     if raw_rows is None:
         return []
-    return normalize_constants_state(
+    return cast(list[dict[str, str]], normalize_constants_state(
         enabled=True,
         rows=raw_rows,
         numeric_mode="uncertainty",
-    ).persisted_rows()
+    ).persisted_rows())
 
 
 def _param_rows(window: Any) -> list[dict[str, str]]:
@@ -399,7 +399,7 @@ def _implicit_rows_to_config(rows: Any) -> dict[str, dict[str, str]]:
     if rows is None:
         return {}
     state = normalize_parameter_rows(rows, constraints_enabled=True)
-    return state.compute_config(validate=False)
+    return cast(dict[str, dict[str, str]], state.compute_config(validate=False))
 
 
 def _parameter_rows_have_constraints(rows: Any) -> bool:
@@ -795,11 +795,17 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
         window.fit_target_edit.setText(str(fitting.get("target_column") or ""))
     _restore_variable_rows(window, fitting.get("variables"))
     parameter_rows = fitting.get("parameter_rows") or _legacy_parameter_text_rows(fitting.get("parameters"))
-    _restore_param_rows(window, parameter_rows, fitting.get("parameter_orphans"))
     if not parameter_rows and isinstance(fitting.get("parameters"), list):
-        _restore_param_rows(window, fitting.get("parameters"))
+        parameter_rows = fitting.get("parameters")
     if hasattr(window, "custom_constraints_checkbox"):
-        window.custom_constraints_checkbox.setChecked(bool(fitting.get("constraints_enabled")))
+        custom_had_constraints_flag = "constraints_enabled" in fitting
+        custom_constraints_enabled = (
+            bool(fitting.get("constraints_enabled"))
+            if custom_had_constraints_flag
+            else _parameter_rows_have_constraints(parameter_rows)
+        )
+        window.custom_constraints_checkbox.setChecked(custom_constraints_enabled)
+    _restore_param_rows(window, parameter_rows, fitting.get("parameter_orphans"))
     _restore_constants_editor_state(getattr(window, "custom_constants_editor", None), fitting.get("custom_constants"))
     _restore_implicit_config(window, fitting.get("implicit"), fitting)
 

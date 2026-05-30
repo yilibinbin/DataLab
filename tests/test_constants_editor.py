@@ -153,6 +153,20 @@ def test_disabled_custom_constants_do_not_hide_parameter_detection(qtbot):
     assert names == ["A", "K"]
 
 
+def test_enabled_custom_constants_are_excluded_when_collecting_parameter_config(qtbot):
+    win = _make_main_window(qtbot)
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("fitting"))
+    win.fit_model_combo.setCurrentIndex(win.fit_model_combo.findData("custom"))
+    win._reset_variable_rows(default_var="x", default_column="x")
+    win.fit_expr_edit.setPlainText("A*x + K")
+    win.custom_constraints_checkbox.setChecked(True)
+    win._reset_custom_param_rows({"A": {"initial": "1"}})
+    win.custom_constants_editor.setChecked(True)
+    win.custom_constants_editor.set_rows([{"name": "K", "value": "1"}])
+
+    assert win._collect_custom_parameter_config() == {"A": {"initial": "1"}}
+
+
 def _prepare_custom_fit_window(qtbot, *, constants_enabled: bool = True, constant_value: str = "1"):
     win = _make_main_window(qtbot)
     win.mode_combo.setCurrentIndex(win.mode_combo.findData("fitting"))

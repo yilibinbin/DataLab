@@ -359,6 +359,58 @@ def test_workspace_preserves_custom_fit_parameters_and_constants(qtbot) -> None:
     assert target.custom_constants_editor.rows() == [{"name": "K", "value": "1"}]
 
 
+def test_workspace_restore_enables_custom_constraints_before_parameter_rows(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "custom")
+    source.fit_expr_edit.setPlainText("A*x")
+    source.custom_constraints_checkbox.setChecked(True)
+    source.custom_params_table.set_rows([{"name": "A", "initial": "2", "min": "0", "max": "5"}])
+
+    bundle = capture_workspace(source, title="legacy custom constraints")
+    fitting = bundle.manifest["workspace"]["config"]["fitting"]
+    fitting.pop("constraints_enabled", None)
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.custom_constraints_checkbox.isChecked() is True
+    assert target.custom_params_table.rows() == [
+        {"name": "A", "initial": "2", "fixed": "", "min": "0", "max": "5"}
+    ]
+
+
+def test_workspace_restore_enables_custom_constraints_for_legacy_parameter_list(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "custom")
+    source.fit_expr_edit.setPlainText("A*x")
+
+    bundle = capture_workspace(source, title="legacy list constraints")
+    fitting = bundle.manifest["workspace"]["config"]["fitting"]
+    fitting.pop("constraints_enabled", None)
+    fitting.pop("parameter_rows", None)
+    fitting["parameters"] = [{"name": "A", "initial": "2", "min": "0", "max": "5"}]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.custom_constraints_checkbox.isChecked() is True
+    assert target.custom_params_table.rows() == [
+        {"name": "A", "initial": "2", "fixed": "", "min": "0", "max": "5"}
+    ]
+
+
 def test_workspace_preserves_custom_constants_table_rows(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace

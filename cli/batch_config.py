@@ -7,7 +7,7 @@ Schema:
         operation: str           # "fit" | "calc" (required)
         data_path: str           # path to 2-column CSV or .dat (required)
         output_dir: str          # where to write artefacts (required)
-        model: str               # for fit (default "polynomial")
+        model: str               # for fit (required)
         precision: int           # mpmath dps, default 50
         log_scale: str | null    # None / "x" / "y" / "xy"
 
@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 __all__ = [
     "ALLOWED_OPERATIONS",
@@ -72,7 +72,7 @@ class BatchJob:
     operation: str
     data_path: Path
     output_dir: Path
-    model: str = "polynomial"
+    model: str
     precision: int = 50
     log_scale: Optional[str] = None
 
@@ -103,7 +103,7 @@ def _require_int(
     if obj is None:
         return default
     try:
-        value = int(obj)
+        value = int(str(obj))
     except (TypeError, ValueError) as exc:
         raise ValueError(
             f"Job {job_label!r}: field {field_name!r} must be an integer"
@@ -116,7 +116,7 @@ def _require_int(
     return value
 
 
-def _coerce_job(raw: dict, index: int) -> BatchJob:
+def _coerce_job(raw: dict[str, Any], index: int) -> BatchJob:
     if not isinstance(raw, dict):
         raise ValueError(
             f"Job #{index}: entry must be a mapping, got {type(raw).__name__}"
@@ -156,10 +156,7 @@ def _coerce_job(raw: dict, index: int) -> BatchJob:
         )
 
     model_raw = raw.get("model")
-    if model_raw is None:
-        model = "polynomial"
-    else:
-        model = _require_str(model_raw, "model", name)
+    model = _require_str(model_raw, "model", name) if operation == "fit" else ""
 
     precision = _require_int(
         raw.get("precision"), "precision", name,

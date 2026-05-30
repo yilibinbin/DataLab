@@ -36,6 +36,7 @@ from .common import (
     _norm_token,
     _parse_int,
 )
+from shared.fitting_uncertainty import fit_uncertainty_policy
 from shared.uncertainty import parse_uncertainty_format
 
 
@@ -645,7 +646,14 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
         if any(val is not None for val in collected):
             sigma_list = collected
 
-    sigmas_for_fit = sigma_list if (use_weights and sigma_list) else None
+    sigmas_for_fit = None
+    fit_weights: list[mp.mpf] | None = None
+    if sigma_list:
+        uncertainty_policy = fit_uncertainty_policy(sigma_list, weighted=use_weights)
+        sigmas_for_fit = list(uncertainty_policy.data_sigmas)
+        fit_weights = list(uncertainty_policy.weights) if uncertainty_policy.weights is not None else None
+    elif use_weights:
+        fit_uncertainty_policy([], weighted=True)
     var_mapping: dict[str, str] = {}
     if var_mapping_text:
         for line in var_mapping_text.splitlines():
@@ -736,7 +744,7 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                 x_vals,
                 y_vals,
                 precision=mp_precision,
-                weights=None,
+                weights=fit_weights,
                 data_sigmas=sigmas_for_fit,
             )
             best_label = definition.label
@@ -754,7 +762,7 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                 x_vals,
                 y_vals,
                 precision=mp_precision,
-                weights=None,
+                weights=fit_weights,
                 data_sigmas=sigmas_for_fit,
             )
             best_label = definition.label
@@ -773,7 +781,7 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                 {"x": x_vals},
                 y_vals,
                 precision=mp_precision,
-                weights=None,
+                weights=fit_weights,
                 data_sigmas=sigmas_for_fit,
             )
             best_label = "幂律极限模型 / Power-law limit model"
@@ -795,7 +803,7 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                 {"x": x_vals},
                 y_vals,
                 precision=mp_precision,
-                weights=None,
+                weights=fit_weights,
                 data_sigmas=sigmas_for_fit,
             )
             best_label = f"Padé({pade_m}|{pade_n})"
@@ -850,7 +858,7 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                 data_mapping,
                 y_vals,
                 precision=mp_precision,
-                weights=None,
+                weights=fit_weights,
                 data_sigmas=sigmas_for_fit,
             )
             best_label = "自定义模型 / Custom model"
@@ -891,7 +899,7 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
         headers=headers,
         x=x_vals,
         y=y_vals,
-        sigma=sigma_list,  # type: ignore[arg-type]
+        sigma=sigma_list,
         best_label=best_label,
         params=params,
         metrics=metrics,

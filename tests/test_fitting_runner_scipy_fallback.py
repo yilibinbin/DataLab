@@ -114,3 +114,23 @@ def test_precision_16_unweighted_data_sigmas_keep_mpmath_systematic_refits() -> 
     note = result.details["uncertainty_note"]
     assert isinstance(note, dict)
     assert "systematic errors from" in str(note["en"]).lower()
+
+
+def test_precision_16_mismatched_variable_lengths_skip_scipy_validation_shortcut() -> None:
+    from fitting.problem import ModelProblem
+    from fitting.runner import FitRunner
+
+    problem = ModelProblem(
+        model_type="custom",
+        expression="a*x+b*z",
+        variables=("x", "z"),
+        parameter_config={"a": {"initial": "1"}, "b": {"initial": "1"}},
+    )
+
+    with pytest.raises(ValueError, match="All independent variables"):
+        FitRunner().fit(
+            problem,
+            {"x": [mp.mpf("0"), mp.mpf("1"), mp.mpf("2")], "z": [mp.mpf("1"), mp.mpf("2")]},
+            [mp.mpf("1"), mp.mpf("3"), mp.mpf("5")],
+            precision=16,
+        )

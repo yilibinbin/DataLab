@@ -68,9 +68,17 @@ def build_implicit_derivative_evaluator(
     names = [*definition.x_variables, definition.implicit_variable, *definition.parameters, *definition.constants]
     try:
         equation, symbols = parse_symbolic_expression(definition.equation, variables=names)
-        output, _ = parse_symbolic_expression(definition.output_expression, variables=names)
+        output, output_symbols = parse_symbolic_expression(definition.output_expression, variables=names)
     except Exception:
         return None
+    if output_symbols is not symbols:
+        output = output.subs(
+            {
+                output_symbols[name]: symbols[name]
+                for name in names
+                if name in output_symbols and name in symbols
+            }
+        )
 
     allowed = set(names)
     if {str(symbol) for symbol in equation.free_symbols}.difference(allowed):

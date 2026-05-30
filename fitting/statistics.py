@@ -52,7 +52,7 @@ def compute_fit_statistics(
         )
 
     if weights:
-        if validate_weights and any(weight <= 0 for weight in weights):
+        if validate_weights and any(mp.mpf(weight) <= 0 or not mp.isfinite(mp.mpf(weight)) for weight in weights):
             raise ValueError(
                 _dual_msg("权重必须为正。", "Weights must be positive.")
             )
@@ -76,7 +76,10 @@ def compute_fit_statistics(
         return FitStatistics(chi2, mp.nan, mp.nan, rmse, mp.nan, mp.nan, dof)
 
     reduced = chi2 / dof
-    r2 = mp.mpf("1") - (chi2 / sst if sst != 0 else mp.mpf("0"))
+    if sst == 0:
+        r2 = mp.mpf("1") if chi2 == 0 else mp.nan
+    else:
+        r2 = mp.mpf("1") - chi2 / sst
     eps = noise_floor()
     noise = chi2 / row_count if chi2 > eps else eps
     aic = 2 * free_param_count + row_count * mp.log(noise)

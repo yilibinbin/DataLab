@@ -40,6 +40,22 @@ def _has_unweighted_data_sigmas(
     return weights is None and data_sigmas is not None and any(sigma is not None for sigma in data_sigmas)
 
 
+def _series_lengths_match(
+    variable_data: dict[str, Sequence[mp.mpf]],
+    target_data: Sequence[mp.mpf],
+    weights: list[mp.mpf] | None,
+    data_sigmas: list[mp.mpf | None] | None,
+) -> bool:
+    target_len = len(target_data)
+    if any(len(values) != target_len for values in variable_data.values()):
+        return False
+    if weights is not None and len(weights) != target_len:
+        return False
+    if data_sigmas is not None and len(data_sigmas) != target_len:
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class _SciPyCandidate:
     result: FitResult
@@ -102,7 +118,15 @@ class FitRunner:
         state = build_parameter_state(problem.parameter_config, parameter_names)
         fallback_history: list[dict[str, object]] = []
         if _can_try_scipy(problem, precision):
-            if _has_unweighted_data_sigmas(weights, data_sigmas):
+            if not _series_lengths_match(variable_data, target_data, weights, data_sigmas):
+                fallback_history.append(
+                    {
+                        "from": "scipy_least_squares",
+                        "to": "mpmath_high_precision",
+                        "reason": "input series lengths require mpmath validation",
+                    }
+                )
+            elif _has_unweighted_data_sigmas(weights, data_sigmas):
                 fallback_history.append(
                     {
                         "from": "scipy_least_squares",

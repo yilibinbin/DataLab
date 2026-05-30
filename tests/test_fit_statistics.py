@@ -71,6 +71,15 @@ def test_compute_fit_statistics_dof_guard_and_constant_target_r2() -> None:
     assert mp.isnan(no_dof.aic)
     assert mp.isnan(no_dof.bic)
 
+    bad_constant = compute_fit_statistics(
+        [mp.mpf("2"), mp.mpf("2"), mp.mpf("2")],
+        [mp.mpf("1"), mp.mpf("0"), mp.mpf("-1")],
+        None,
+        free_param_count=1,
+    )
+    assert bad_constant.dof == 2
+    assert mp.isnan(bad_constant.r2)
+
 
 def test_compute_fit_statistics_validates_lengths_and_weights() -> None:
     with pytest.raises(ValueError, match="Residual count"):
@@ -84,6 +93,15 @@ def test_compute_fit_statistics_validates_lengths_and_weights() -> None:
             [mp.mpf("1")],
             [mp.mpf("0")],
             [mp.mpf("-1")],
+            free_param_count=1,
+            validate_weights=True,
+        )
+
+    with pytest.raises(ValueError, match="Weights must be positive"):
+        compute_fit_statistics(
+            [mp.mpf("1")],
+            [mp.mpf("0")],
+            [mp.inf],
             free_param_count=1,
             validate_weights=True,
         )

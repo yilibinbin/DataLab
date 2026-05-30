@@ -168,6 +168,15 @@ def test_uncertainty_policy_preserves_weighted_and_unweighted_semantics() -> Non
     assert weighted.weights == (mp.mpf("4"), mp.mpf("16"))
 
 
+@pytest.mark.parametrize("sigma", [mp.nan, mp.inf, -mp.mpf("0.1"), mp.mpf("0")])
+def test_uncertainty_policy_rejects_non_finite_or_non_positive_sigmas(sigma: mp.mpf) -> None:
+    with pytest.raises(ValueError, match="finite positive|有限正数"):
+        fit_uncertainty_policy([sigma], weighted=False)
+
+    with pytest.raises(ValueError, match="finite positive|有限正数"):
+        fit_uncertainty_policy([sigma], weighted=True)
+
+
 def test_data_uncertainty_normalization_prefers_embedded_then_sigma_columns() -> None:
     headers = ["x", "y", "y_sigma"]
     rows = [

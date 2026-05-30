@@ -91,6 +91,10 @@ def parse_uncertainty_format(number_str: str, lang: str = "en") -> UncertainValu
             uncertainty_digits = _sig_digits_from_text(paren_text)
             mantissa_str = number_str[: paren_match.start()]
             suffix = number_str[paren_match.end() :]
+            scientific_exponent = 0
+            sci_match = re.search(r"[eE]([+-]?\d+)$", suffix)
+            if sci_match:
+                scientific_exponent = int(sci_match.group(1))
 
             if "." in paren_text or "e" in paren_text.lower():
                 uncertainty = _mp(paren_text)
@@ -103,6 +107,8 @@ def parse_uncertainty_format(number_str: str, lang: str = "en") -> UncertainValu
                 else:
                     uncertainty = unc_value
 
+            if scientific_exponent:
+                uncertainty *= mp.power(10, scientific_exponent)
             number_str = mantissa_str + suffix
 
     value = _mp(number_str)
