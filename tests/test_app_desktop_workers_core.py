@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import ast
 import pickle
 import os
+import subprocess
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -24,9 +28,90 @@ from app_desktop.workers_core import (
 )
 from app_desktop.workers_qt import FitBatchWorker
 from fitting.hp_fitter import FitResult
-from fitting.implicit_model import ImplicitModelDefinition, ImplicitSolveOptions
+from fitting.implicit_model import (
+    ImplicitEvaluationCache,
+    ImplicitModelDefinition,
+    ImplicitSolveOptions,
+)
+from fitting.model_parser import ModelSpecification
 from shared.parallel_config import ParallelConfig
 from shared.parallel_backend import KillableProcessTaskRunner, current_parallel_depth
+
+
+_RAW_PAYLOAD_SCALAR_TYPES = (type(None), bool, int, float, str)
+_FORBIDDEN_PAYLOAD_TYPES = (ModelSpecification, ImplicitEvaluationCache, mp.mpf)
+_FIT_JOB_PAYLOAD_KEYS = {
+    "model_type",
+    "headers",
+    "data_rows",
+    "sigma_rows",
+    "x_series",
+    "y_series",
+    "sigma_series",
+    "weights",
+    "variable_map",
+    "variable_data",
+    "target_series",
+    "target_column",
+    "model_expr",
+    "parameter_config",
+    "parameter_names",
+    "template_expr",
+    "template_params",
+    "poly_degree",
+    "inverse_min",
+    "inverse_max",
+    "pade_m",
+    "pade_n",
+    "auto_identifier",
+    "precision",
+    "generate_latex",
+    "output_path",
+    "use_dcolumn",
+    "caption",
+    "verbose",
+    "render_plots",
+    "latex_digits",
+    "weighted",
+    "label",
+    "is_multidim",
+    "implicit_definition",
+    "timeout_seconds",
+    "custom_constants",
+    "parallel_config",
+}
+_FORBIDDEN_STATE_KEYS = {
+    "cache",
+    "current_point_index",
+    "diagnostics",
+    "evaluator",
+    "implicit_cache",
+    "model_specification",
+    "point_index",
+    "route_diagnostics",
+    "warm_start",
+    "warm_starts",
+}
+_PARALLEL_PRIMITIVES = {
+    "concurrent.futures.ProcessPoolExecutor",
+    "concurrent.futures.ThreadPoolExecutor",
+    "multiprocessing.Pool",
+    "multiprocessing.Process",
+}
+_PRODUCTION_PYTHON_PATHS = (
+    "app_desktop",
+    "app_web",
+    "cli",
+    "datalab_latex",
+    "extrapolation_methods",
+    "fitting",
+    "shared",
+    "data_extrapolation_gui.py",
+    "data_extrapolation_latex_latest.py",
+    "desktop_doc_loader.py",
+    "formula_help.py",
+    "statistics_utils.py",
+)
 
 
 def _small_self_consistent_fit_job(
@@ -85,6 +170,227 @@ def _depth_probe_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "payload": payload,
         "env_depth": os.environ.get("DATALAB_PARALLEL_DEPTH"),
         "current_depth": current_parallel_depth(),
+    }
+
+
+def _assert_raw_serializable_payload(value: object, *, path: str = "payload") -> None:
+    assert not isinstance(value, _FORBIDDEN_PAYLOAD_TYPES), path
+    assert not callable(value), path
+    if isinstance(value, _RAW_PAYLOAD_SCALAR_TYPES):
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _assert_raw_serializable_payload(item, path=f"{path}[{index}]")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            assert isinstance(key, str), f"{path} key {key!r}"
+            assert key not in _FORBIDDEN_STATE_KEYS, f"{path}.{key}"
+            _assert_raw_serializable_payload(item, path=f"{path}.{key}")
+        return
+    pytest.fail(f"{path} contains non-raw payload value {type(value)!r}: {value!r}")
+
+
+def _collect_import_aliases(tree: ast.AST) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in {"multiprocessing", "concurrent.futures"}:
+                    local = alias.asname or alias.name
+                    aliases[local] = alias.name
+                    if alias.asname is None and "." in alias.name:
+                        aliases[alias.name.split(".")[0]] = alias.name.split(".")[0]
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            for alias in node.names:
+                local = alias.asname or alias.name
+                if node.module == "multiprocessing" and alias.name in {
+                    "Pool",
+                    "Process",
+                    "get_context",
+                }:
+                    aliases[local] = f"multiprocessing.{alias.name}"
+                elif node.module == "concurrent.futures" and alias.name in {
+                    "ProcessPoolExecutor",
+                    "ThreadPoolExecutor",
+                }:
+                    aliases[local] = f"concurrent.futures.{alias.name}"
+                elif node.module == "concurrent" and alias.name == "futures":
+                    aliases[local] = "concurrent.futures"
+    return aliases
+
+
+def _call_qualname(node: ast.AST, aliases: dict[str, str]) -> str | None:
+    if isinstance(node, ast.Name):
+        return aliases.get(node.id, node.id)
+    if isinstance(node, ast.Attribute):
+        base = _call_qualname(node.value, aliases)
+        return f"{base}.{node.attr}" if base is not None else node.attr
+    if isinstance(node, ast.Call):
+        func = _call_qualname(node.func, aliases)
+        return f"{func}()" if func is not None else None
+    return None
+
+
+def _collect_multiprocessing_context_names(
+    tree: ast.AST,
+    aliases: dict[str, str],
+) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if _call_qualname(node.value, aliases) != "multiprocessing.get_context()":
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                names.add(target.id)
+    return names
+
+
+def _is_forbidden_parallel_call(qualname: str) -> bool:
+    if qualname in _PARALLEL_PRIMITIVES:
+        return True
+    if qualname in {
+        "multiprocessing.get_context().Pool",
+        "multiprocessing.get_context().Process",
+    }:
+        return True
+    if (
+        qualname.endswith((".get_context().Pool", ".get_context().Process"))
+        and qualname.startswith("multiprocessing.")
+    ):
+        return True
+    return False
+
+
+def _tracked_production_python_files(root: Path) -> list[Path]:
+    result = subprocess.run(
+        ["git", "ls-files", "--", *_PRODUCTION_PYTHON_PATHS],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return [
+        root / path
+        for path in result.stdout.splitlines()
+        if path.endswith(".py")
+    ]
+
+
+def test_no_ad_hoc_parallel_primitives_outside_shared_backend() -> None:
+    root = Path(__file__).resolve().parents[1]
+    allowed = {root / "shared" / "parallel_backend.py"}
+    violations: list[str] = []
+    for path in sorted(_tracked_production_python_files(root)):
+        if path in allowed:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        aliases = _collect_import_aliases(tree)
+        context_names = _collect_multiprocessing_context_names(tree, aliases)
+        get_context_names = {
+            name
+            for name, target in aliases.items()
+            if target == "multiprocessing.get_context"
+        }
+        process_names = {
+            name for name, target in aliases.items() if target == "multiprocessing.Process"
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            qualname = _call_qualname(node.func, aliases)
+            if qualname is not None and _is_forbidden_parallel_call(qualname):
+                violations.append(
+                    f"{path.relative_to(root)}:{node.lineno}: {qualname}"
+                )
+            if isinstance(node.func, ast.Name) and node.func.id in process_names:
+                violations.append(
+                    f"{path.relative_to(root)}:{node.lineno}: multiprocessing.Process"
+                )
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"Pool", "Process"}
+            ):
+                if (
+                    isinstance(node.func.value, ast.Call)
+                    and isinstance(node.func.value.func, ast.Name)
+                    and node.func.value.func.id in get_context_names
+                ):
+                    violations.append(
+                        f"{path.relative_to(root)}:{node.lineno}: "
+                        f"multiprocessing.get_context().{node.func.attr}"
+                    )
+                if (
+                    isinstance(node.func.value, ast.Name)
+                    and node.func.value.id in context_names
+                ):
+                    violations.append(
+                        f"{path.relative_to(root)}:{node.lineno}: "
+                        f"multiprocessing.get_context().{node.func.attr}"
+                    )
+
+    assert violations == []
+
+
+def test_parallel_boundary_guard_detects_alias_and_context_idioms() -> None:
+    source = """
+import concurrent.futures
+import multiprocessing as mp
+from concurrent.futures import ThreadPoolExecutor as Threads
+from concurrent import futures
+from multiprocessing import Process, get_context
+
+concurrent.futures.ProcessPoolExecutor()
+futures.ProcessPoolExecutor()
+mp.Process()
+Threads()
+Process()
+get_context("spawn").Process()
+ctx = mp.get_context("spawn")
+ctx.Process()
+ctx.Pool()
+"""
+    tree = ast.parse(source)
+    aliases = _collect_import_aliases(tree)
+    context_names = _collect_multiprocessing_context_names(tree, aliases)
+    violations: list[str] = []
+    get_context_names = {
+        name
+        for name, target in aliases.items()
+        if target == "multiprocessing.get_context"
+    }
+    process_names = {
+        name for name, target in aliases.items() if target == "multiprocessing.Process"
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        qualname = _call_qualname(node.func, aliases)
+        if qualname is not None and _is_forbidden_parallel_call(qualname):
+            violations.append(qualname)
+        if isinstance(node.func, ast.Name) and node.func.id in process_names:
+            violations.append("multiprocessing.Process")
+        if isinstance(node.func, ast.Attribute) and node.func.attr in {"Pool", "Process"}:
+            if (
+                isinstance(node.func.value, ast.Call)
+                and isinstance(node.func.value.func, ast.Name)
+                and node.func.value.func.id in get_context_names
+            ):
+                violations.append(f"multiprocessing.get_context().{node.func.attr}")
+            if (
+                isinstance(node.func.value, ast.Name)
+                and node.func.value.id in context_names
+            ):
+                violations.append(f"multiprocessing.get_context().{node.func.attr}")
+
+    assert set(violations) >= {
+        "concurrent.futures.ProcessPoolExecutor",
+        "concurrent.futures.ThreadPoolExecutor",
+        "multiprocessing.Process",
+        "multiprocessing.get_context().Process",
+        "multiprocessing.get_context().Pool",
     }
 
 
@@ -375,6 +681,145 @@ def test_self_consistent_fit_job_payload_is_spawn_picklable() -> None:
     assert restored.timeout_seconds == 10.0
     assert restored.parallel_config.process_start_method == "spawn"
     assert not hasattr(restored.parallel_config, "enable_new_implicit_backend")
+
+
+def test_fit_job_payload_contains_only_raw_serializable_inputs() -> None:
+    payload = _serialize_fit_job(_small_self_consistent_fit_job())
+
+    assert set(payload) == _FIT_JOB_PAYLOAD_KEYS
+    _assert_raw_serializable_payload(payload)
+
+
+def test_fit_job_payload_contract_covers_full_serialized_field_surface() -> None:
+    job = _small_self_consistent_fit_job()
+    high_precision_constant = mp.mpf(
+        "1.2345678901234567890123456789012345678901234567890123456789"
+    )
+    sigmas = [mp.mpf("0.1"), mp.mpf("0.2"), mp.mpf("0.3"), mp.mpf("0.4")]
+    job.sigma_rows = [(mp.mpf("0.01"), sigma) for sigma in sigmas]
+    job.sigma_series = sigmas
+    job.weights = [1 / (sigma * sigma) for sigma in sigmas]
+    job.parameter_config = {
+        "a": {
+            "initial": mp.mpf("0.8"),
+            "min": mp.mpf("-10"),
+            "max": mp.mpf("10"),
+            "fixed": False,
+        },
+        "b": {
+            "initial": mp.mpf("1.8"),
+            "bounds": (mp.mpf("-5"), mp.mpf("5")),
+        },
+    }
+    job.template_expr = "c0 + c1*x"
+    job.template_params = {
+        "c0": {"initial": mp.mpf("1.0")},
+        "nested": [mp.mpf("2.0"), (mp.mpf("3.0"), None)],
+    }
+    assert job.implicit_definition is not None
+    job.implicit_definition.constants["offset"] = high_precision_constant
+    job.custom_constants = {"scale": mp.mpf("2.5")}  # type: ignore[dict-item]
+    job.generate_latex = True
+    job.output_path = "fit-output.tex"
+    job.caption = "Fit output"
+    job.verbose = True
+    job.render_plots = False
+    job.weighted = True
+
+    payload = _serialize_fit_job(job)
+
+    assert set(payload) == _FIT_JOB_PAYLOAD_KEYS
+    _assert_raw_serializable_payload(payload)
+    assert mp.almosteq(
+        mp.mpf(payload["parameter_config"]["a"]["initial"]),
+        mp.mpf("0.8"),
+        abs_eps=mp.mpf("1e-15"),
+    )
+    assert [mp.mpf(value) for value in payload["parameter_config"]["b"]["bounds"]] == [
+        mp.mpf("-5"),
+        mp.mpf("5"),
+    ]
+    assert mp.mpf(payload["template_params"]["nested"][0]) == mp.mpf("2")
+    assert mp.mpf(payload["template_params"]["nested"][1][0]) == mp.mpf("3")
+    assert payload["template_params"]["nested"][1][1] is None
+    assert mp.almosteq(
+        mp.mpf(payload["implicit_definition"]["constants"]["offset"]),
+        high_precision_constant,
+        abs_eps=mp.mpf("1e-85"),
+    )
+    assert mp.mpf(payload["custom_constants"]["scale"]) == mp.mpf("2.5")
+    assert [mp.mpf(value) for value in payload["sigma_series"]] == sigmas
+    assert payload["weights"] is not None
+    assert [mp.mpf(value) for value in payload["weights"]] == [
+        1 / (sigma * sigma)
+        for sigma in sigmas
+    ]
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        pytest.param(lambda: None, id="callable"),
+        pytest.param(ImplicitEvaluationCache(), id="implicit-cache"),
+        pytest.param(
+            ModelSpecification(
+                expression="x",
+                variables=["x"],
+                parameters=[],
+                constants={},
+                evaluate_func=lambda variables, _params: variables[0],
+                gradient_funcs={},
+            ),
+            id="model-specification",
+        ),
+    ],
+)
+def test_fit_job_payload_rejects_non_raw_parameter_objects(bad_value: object) -> None:
+    job = _small_self_consistent_fit_job()
+    job.parameter_config = {"a": {"initial": bad_value}}
+
+    with pytest.raises(TypeError, match="Unsupported fit-job payload value"):
+        _serialize_fit_job(job)
+
+
+def test_fit_job_payload_rejects_non_raw_implicit_solve_option() -> None:
+    job = _small_self_consistent_fit_job()
+    assert job.implicit_definition is not None
+    job.implicit_definition = replace(
+        job.implicit_definition,
+        solve_options=replace(
+            job.implicit_definition.solve_options,
+            initial=ImplicitEvaluationCache(),  # type: ignore[arg-type]
+        ),
+    )
+
+    with pytest.raises(TypeError, match="Unsupported fit-job payload value"):
+        _serialize_fit_job(job)
+
+
+def test_fit_job_payload_round_trips_weight_values() -> None:
+    job = _small_self_consistent_fit_job()
+    job.weights = [mp.mpf("1.25"), mp.mpf("2.5"), mp.mpf("5"), mp.mpf("10")]
+
+    restored = _deserialize_fit_job(_serialize_fit_job(job))
+
+    assert restored.weights == job.weights
+
+
+def test_fit_job_payload_rejects_none_weight_values_at_serialize_time() -> None:
+    job = _small_self_consistent_fit_job()
+    job.weights = [mp.mpf("1"), None]  # type: ignore[list-item]
+
+    with pytest.raises(TypeError, match="weight values must not be None"):
+        _serialize_fit_job(job)
+
+
+def test_fit_job_payload_rejects_none_weight_values() -> None:
+    payload = _serialize_fit_job(_small_self_consistent_fit_job())
+    payload["weights"] = ["1", None]
+
+    with pytest.raises(TypeError, match="weight payload values must not be None"):
+        _deserialize_fit_job(payload)
 
 
 def test_stale_fit_job_payload_false_implicit_backend_is_ignored() -> None:

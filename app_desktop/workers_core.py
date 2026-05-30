@@ -935,6 +935,15 @@ def _serialize_mpf_sequence(values: list[Any] | tuple[Any, ...], keep_digits: in
     return [_serialize_optional_mpf(value, keep_digits) for value in values]
 
 
+def _serialize_weight_sequence(values: list[Any] | tuple[Any, ...], keep_digits: int) -> list[str]:
+    weights: list[str] = []
+    for value in values:
+        if value is None:
+            raise TypeError("Fit-job weight values must not be None")
+        weights.append(_mp_to_string(value, keep_digits))
+    return weights
+
+
 def _serialize_sigma_sequence(values: list[Any] | tuple[Any, ...], keep_digits: int) -> list[str | None]:
     return [_sigma_to_string(value, keep_digits) for value in values]
 
@@ -943,21 +952,40 @@ def _deserialize_mpf_sequence(values: list[str | None]) -> list[mp.mpf | None]:
     return [mp.mpf(value) if value is not None else None for value in values]
 
 
+def _deserialize_weight_sequence(values: list[str | None]) -> list[mp.mpf]:
+    weights: list[mp.mpf] = []
+    for value in values:
+        if value is None:
+            raise TypeError("Fit-job weight payload values must not be None")
+        weights.append(mp.mpf(value))
+    return weights
+
+
 def _serialize_mp_tree(value: Any, keep_digits: int) -> Any:
     if value is None:
         return None
     if hasattr(value, "_mpf_"):
         return _mp_to_string(value, keep_digits)
+    if isinstance(value, (bool, int, float, str)):
+        return value
     if isinstance(value, dict):
-        return {key: _serialize_mp_tree(item, keep_digits) for key, item in value.items()}
+        serialized: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError(f"Unsupported non-string payload key: {key!r}")
+            serialized[key] = _serialize_mp_tree(item, keep_digits)
+        return serialized
     if isinstance(value, tuple):
         return [_serialize_mp_tree(item, keep_digits) for item in value]
     if isinstance(value, list):
         return [_serialize_mp_tree(item, keep_digits) for item in value]
-    return value
+    raise TypeError(f"Unsupported fit-job payload value: {value!r}")
 
 
-def _serialize_implicit_definition(definition: ImplicitModelDefinition | None) -> dict[str, Any] | None:
+def _serialize_implicit_definition(
+    definition: ImplicitModelDefinition | None,
+    keep_digits: int,
+) -> dict[str, Any] | None:
     if definition is None:
         return None
     solve_options = definition.solve_options
@@ -967,12 +995,12 @@ def _serialize_implicit_definition(definition: ImplicitModelDefinition | None) -
         "equation": definition.equation,
         "output_expression": definition.output_expression,
         "parameters": list(definition.parameters),
-        "constants": dict(definition.constants),
+        "constants": _serialize_mp_tree(definition.constants, keep_digits),
         "solve_options": {
-            "method": solve_options.method,
-            "initial": solve_options.initial,
-            "tolerance": solve_options.tolerance,
-            "max_iterations": solve_options.max_iterations,
+            "method": _serialize_mp_tree(solve_options.method, keep_digits),
+            "initial": _serialize_mp_tree(solve_options.initial, keep_digits),
+            "tolerance": _serialize_mp_tree(solve_options.tolerance, keep_digits),
+            "max_iterations": _serialize_mp_tree(solve_options.max_iterations, keep_digits),
         },
     }
 
@@ -1007,7 +1035,7 @@ def _serialize_fit_job(job: FitJob) -> dict[str, Any]:
         "x_series": _serialize_mpf_sequence(job.x_series, keep_digits),
         "y_series": _serialize_mpf_sequence(job.y_series, keep_digits),
         "sigma_series": _serialize_sigma_sequence(job.sigma_series, keep_digits),
-        "weights": _serialize_mpf_sequence(job.weights, keep_digits) if job.weights is not None else None,
+        "weights": _serialize_weight_sequence(job.weights, keep_digits) if job.weights is not None else None,
         "variable_map": dict(job.variable_map),
         "variable_data": {
             key: _serialize_mpf_sequence(values, keep_digits)
@@ -1037,9 +1065,9 @@ def _serialize_fit_job(job: FitJob) -> dict[str, Any]:
         "weighted": job.weighted,
         "label": job.label,
         "is_multidim": job.is_multidim,
-        "implicit_definition": _serialize_implicit_definition(job.implicit_definition),
+        "implicit_definition": _serialize_implicit_definition(job.implicit_definition, keep_digits),
         "timeout_seconds": job.timeout_seconds,
-        "custom_constants": dict(job.custom_constants or {}),
+        "custom_constants": _serialize_mp_tree(dict(job.custom_constants or {}), keep_digits),
         "parallel_config": _serialize_parallel_config(job.parallel_config),
     }
 
@@ -1056,7 +1084,7 @@ def _deserialize_fit_job(payload: dict[str, Any]) -> FitJob:
             y_series=[mp.mpf(value) for value in payload["y_series"]],
             sigma_series=[mp.mpf(value) if value is not None else None for value in payload["sigma_series"]],
             weights=(
-                [mp.mpf(value) for value in payload["weights"]]
+                _deserialize_weight_sequence(payload["weights"])
                 if payload.get("weights") is not None else None
             ),
             variable_map=dict(payload["variable_map"]),
