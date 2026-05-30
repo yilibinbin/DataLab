@@ -186,6 +186,43 @@ def test_prepare_jobs_receive_current_parallel_config(window: Any) -> None:
     assert fit_job.parallel_config.enable_new_implicit_backend is True
 
 
+def test_text_to_table_preserves_parenthesized_uncertainty_tokens(window: Any) -> None:
+    from app_desktop.panels import _load_text_into_table, _serialize_table
+
+    _load_text_into_table(
+        window,
+        "A B\n4 -0.01161947382(2)\n5 -0.01182004861(4)",
+    )
+
+    serialized = _serialize_table(window)
+
+    assert "-0.01161947382(2)" in serialized
+    assert "-0.01182004861(4)" in serialized
+
+
+def test_fitting_dataset_preserves_uncertainty_objects_from_parenthesized_tokens(window: Any) -> None:
+    from app_desktop.panels import _load_text_into_table
+
+    _load_text_into_table(
+        window,
+        "A B\n4 -0.01161947382(2)\n5 -0.01182004861(4)",
+    )
+
+    headers, rows, sigma_rows = window._collect_fitting_dataset()
+
+    assert headers == ["A", "B"]
+    assert rows[0][0] == mp.mpf("4")
+    assert hasattr(sigma_rows[0][1], "uncertainty")
+    assert mp.mpf(sigma_rows[0][1].uncertainty) > 0
+
+
+def test_left_panel_minimum_width_is_not_formula_size_hint(window: Any) -> None:
+    left_scroll = window._main_splitter.widget(0)
+
+    assert left_scroll.minimumWidth() <= 360
+    assert window.left_container.sizeHint().width() >= left_scroll.minimumWidth()
+
+
 def test_current_parallel_config_defaults_when_controls_are_absent() -> None:
     from app_desktop.parallel_preferences import current_parallel_config_from_widgets
 

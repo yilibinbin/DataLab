@@ -127,7 +127,7 @@ class WindowDataMixin:
         self,
         headers: list[str],
         rows: list[tuple[mp.mpf, ...]],
-        sigma_rows: list[tuple[mp.mpf | None, ...]],
+        sigma_rows: list[tuple[object | None, ...]],
         segments: list[tuple[int, int]] | None,
     ) -> list[dict]:
         normalized = segments or [(0, len(rows))]
@@ -232,7 +232,7 @@ class WindowDataMixin:
 
     def _parse_generic_table(
         self, text: str
-    ) -> tuple[list[str], list[tuple[mp.mpf, ...]], list[tuple[mp.mpf | None, ...]]]:
+    ) -> tuple[list[str], list[tuple[mp.mpf, ...]], list[tuple[object | None, ...]]]:
         """Parse whitespace separated table text into numeric rows with optional sigmas."""
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if len(lines) < 2:
@@ -246,7 +246,7 @@ class WindowDataMixin:
         if len(headers) < 1:
             raise ValueError(_dual_msg("表头至少需要一列。", "Header must contain at least one column."))
         rows: list[tuple[mp.mpf, ...]] = []
-        sigma_rows: list[tuple[mp.mpf | None, ...]] = []
+        sigma_rows: list[tuple[object | None, ...]] = []
         for line_num, line in enumerate(lines[1:], 2):
             parts = line.split()
             if len(parts) != len(headers):
@@ -257,7 +257,7 @@ class WindowDataMixin:
                     )
                 )
             values: list[mp.mpf] = []
-            sigmas: list[mp.mpf | None | object] = []
+            sigmas: list[object | None] = []
             lang = "en" if self._is_en() else "zh"
             for token in parts:
                 try:
@@ -325,7 +325,7 @@ class WindowDataMixin:
     ) -> tuple[
         list[str],
         list[tuple[mp.mpf, ...]],
-        list[tuple[mp.mpf | None, ...]],
+        list[tuple[object | None, ...]],
         list[tuple[int, int]],
         str,
     ]:
@@ -353,7 +353,7 @@ class WindowDataMixin:
     def _collect_fitting_dataset(
         self,
         precision_hint: int | None = None,
-    ) -> tuple[list[str], list[tuple[mp.mpf, ...]], list[tuple[mp.mpf | None, ...]]]:
+    ) -> tuple[list[str], list[tuple[mp.mpf, ...]], list[tuple[object | None, ...]]]:
         headers, rows, sigma_rows, _, _ = self._collect_batched_fitting_dataset(precision_hint=precision_hint)
         return headers, rows, sigma_rows
 
@@ -361,11 +361,11 @@ class WindowDataMixin:
         self,
         headers: list[str],
         data_rows: list[tuple[mp.mpf, ...]],
-        sigma_rows: list[tuple[mp.mpf | None, ...]],
+        sigma_rows: list[tuple[object | None, ...]],
     ) -> tuple[
         list[str],
         list[tuple[mp.mpf, ...]],
-        list[tuple[mp.mpf | None, ...]],
+        list[tuple[object | None, ...]],
         list[mp.mpf],
         list[mp.mpf],
         list[mp.mpf | None],
@@ -441,7 +441,7 @@ class WindowDataMixin:
         self,
         headers: list[str],
         rows: list[tuple[mp.mpf, ...]],
-        sigma_rows: list[tuple[mp.mpf | None, ...]],
+        sigma_rows: list[tuple[object | None, ...]],
         target_column: str,
         sigma_column: str | None = None,
     ) -> list[mp.mpf | None]:
@@ -523,4 +523,3 @@ class WindowDataMixin:
                 )
             weights.append(mp.mpf("1") / (sigma * sigma))
         return weights
-

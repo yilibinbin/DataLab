@@ -97,6 +97,7 @@ class LocaleHint(enum.Enum):
 class ParseResult:
     headers: list[str] = field(default_factory=list)
     rows: list[list[Optional[float]]] = field(default_factory=list)
+    raw_rows: list[list[str]] = field(default_factory=list)
 
 
 # Unicode whitespace that Office/Numbers embed around cells. We strip
@@ -428,11 +429,11 @@ def parse_clipboard_tabular(
         has_headers = not _row_is_all_numeric(rows_padded[0], effective_locale)
     if not has_headers:
         headers = _synthetic_headers(max_cols)
-        data_rows_raw = rows_padded
+        data_rows_raw = [[_strip_whitespace(cell) for cell in row] for row in rows_padded]
     else:
         headers = [_strip_whitespace(c) or synth
                    for c, synth in zip(rows_padded[0], _synthetic_headers(max_cols))]
-        data_rows_raw = rows_padded[1:]
+        data_rows_raw = [[_strip_whitespace(cell) for cell in row] for row in rows_padded[1:]]
 
     # Parse every data cell.
     data_rows: list[list[Optional[float]]] = []
@@ -442,7 +443,7 @@ def parse_clipboard_tabular(
             parsed_row.append(_parse_numeric(cell, effective_locale))
         data_rows.append(parsed_row)
 
-    return ParseResult(headers=headers, rows=data_rows)
+    return ParseResult(headers=headers, rows=data_rows, raw_rows=data_rows_raw)
 
 
 def parse_name_value_pairs(text_or_lines: str | Iterable[str]) -> list[tuple[str, str]]:

@@ -1960,10 +1960,13 @@ def _load_text_into_table(self, text: str):
     _apply_equal_column_stretch(table)
 
     table.setRowCount(max(len(result.rows), 5))
+    raw_rows = result.raw_rows or [["" for _ in row] for row in result.rows]
     for r, row in enumerate(result.rows):
+        raw_row = raw_rows[r] if r < len(raw_rows) else []
         for c, val in enumerate(row):
+            raw_cell = raw_row[c].strip() if c < len(raw_row) else ""
             if val is None:
-                cell_text = ""
+                cell_text = raw_cell
             elif val.is_integer() and abs(val) <= 1e15:
                 # Prefer "1" over "1.0" for Excel-style integers;
                 # preserves the user's input fidelity for whole numbers

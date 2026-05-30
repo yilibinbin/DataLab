@@ -13,8 +13,6 @@ and the (future) Web-side mirror ``app_web/static/js/paste_parser.js``.
 
 from __future__ import annotations
 
-import pytest
-
 from shared.parsing import (
     LocaleHint,
     parse_clipboard_tabular,
@@ -26,6 +24,25 @@ def test_simple_tab_separated_two_columns():
     result = parse_clipboard_tabular(text)
     assert result.headers == ["x", "y"]
     assert result.rows == [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]]
+
+
+def test_parse_clipboard_tabular_preserves_raw_uncertainty_tokens() -> None:
+    result = parse_clipboard_tabular("A B\n4 -0.01161947382(2)\n5 -0.01182004861(4)")
+
+    assert result.headers == ["A", "B"]
+    assert result.raw_rows == [
+        ["4", "-0.01161947382(2)"],
+        ["5", "-0.01182004861(4)"],
+    ]
+    assert result.rows[0][0] == 4.0
+    assert result.rows[0][1] is None
+
+
+def test_parse_clipboard_tabular_raw_rows_strip_bidi_controls() -> None:
+    result = parse_clipboard_tabular("A B\n4 \u202e-0.01161947382(2)\u200b")
+
+    assert result.raw_rows == [["4", "-0.01161947382(2)"]]
+    assert result.rows[0][1] is None
 
 
 def test_comma_separated_us_locale():
@@ -231,8 +248,6 @@ def test_infinity_nan_excel_errors_return_none():
     """Excel error cells and Python-style float specials must return
     None — the parser must never emit math.inf or math.nan into the
     downstream float pipeline."""
-    import math
-
     text = "x\nInfinity\ninf\n-inf\nNaN\n#NUM!\n#DIV/0!"
     result = parse_clipboard_tabular(text)
     for row in result.rows:
