@@ -1182,6 +1182,8 @@ def build_left_panel(self):
         self.implicit_equation_edit,
         lhs=lambda: self.implicit_variable_edit.text(),
         title="Preview equation",
+        object_name="implicit_equation_preview_button",
+        tooltip_zh="预览方程",
     )
     implicit_equation_title_row.addWidget(self.implicit_equation_preview_button)
     implicit_layout.addLayout(implicit_equation_title_row)
@@ -1200,6 +1202,8 @@ def build_left_panel(self):
         self.implicit_output_edit,
         lhs="y",
         title="Preview output",
+        object_name="implicit_output_preview_button",
+        tooltip_zh="预览输出",
     )
     implicit_output_title_row.addWidget(self.implicit_output_preview_button)
     implicit_layout.addLayout(implicit_output_title_row)
@@ -2034,11 +2038,22 @@ def _update_formula_preview(self, edit_widget, label_widget, lhs=None):
     _render_formula_preview(label_widget, text, lhs=left_hand_side)
 
 
-def _make_formula_preview_button(self, edit_widget=None, lhs=None, title: str = "Preview formula"):
+def _make_formula_preview_button(
+    self,
+    edit_widget=None,
+    lhs=None,
+    title: str = "Preview formula",
+    *,
+    object_name: str = "",
+    tooltip_zh: str = "预览公式",
+):
     button = QPushButton("Preview")
+    if object_name:
+        button.setObjectName(object_name)
     button.setFocusPolicy(Qt.NoFocus)
     button.setToolTip(title)
     self._register_text(button, "预览", "Preview")
+    self._register_text(button, tooltip_zh, title, "setToolTip")
     if edit_widget is not None:
         button.clicked.connect(lambda: _open_formula_preview(self, edit_widget, lhs=lhs))
     return button

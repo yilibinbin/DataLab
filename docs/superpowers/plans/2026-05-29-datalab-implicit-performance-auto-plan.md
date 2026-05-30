@@ -212,6 +212,7 @@ Completed slice:
 - The quantum-defect example uses inline ionization-energy data and exercises the `analytic_implicit_output_space` route.
 - Checked-in/generated/Save As workspaces are tested not to persist GUI backend strategy selectors.
 - Opening a checked-in example through the examples menu, ordinary Open, or file-association-style `open_workspace_path()` treats it as a template; Save routes through Save As and saving to the bundled example path is refused.
+- Formula-preview layout and contrast regressions are covered: implicit previews are button/dialog-only, long formulas do not expand the left splitter, dark palettes keep a high-contrast preview surface, and non-self-consistent/MCMC UI states do not expose implicit preview controls.
 
 Purpose:
 

@@ -99,7 +99,10 @@ class FormulaPreviewDialog(QDialog):
         layout.addWidget(self.formula_surface)
 
         self.error_label = QLabel("")
-        self.error_label.setStyleSheet("color: #b42318;")
+        self.error_label.setStyleSheet(
+            "background: #fff4f2; color: #8a1c13; border: 1px solid #f2b8b5; "
+            "border-radius: 4px; padding: 8px;"
+        )
         self.error_label.setWordWrap(True)
         self.error_label.hide()
         layout.addWidget(self.error_label)
@@ -108,6 +111,9 @@ class FormulaPreviewDialog(QDialog):
         self.expression_text.setReadOnly(True)
         self.expression_text.setPlainText(self.expression)
         self.expression_text.setMinimumHeight(84)
+        self.expression_text.setStyleSheet(
+            "background: #ffffff; color: #111111; border: 1px solid #d0d7de;"
+        )
         layout.addWidget(self.expression_text)
 
         button_row = QHBoxLayout()
