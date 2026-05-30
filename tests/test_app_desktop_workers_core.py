@@ -981,16 +981,18 @@ def test_self_consistent_fit_job_is_marked_for_process_boundary() -> None:
     assert _fit_job_requires_process_boundary(direct_job) is False
 
 
-def test_fit_job_default_parallel_config_has_no_implicit_backend_gate() -> None:
+def test_fit_job_default_parallel_config_has_no_removed_backend_gates() -> None:
     job = _small_self_consistent_fit_job()
 
     assert isinstance(job.parallel_config, ParallelConfig)
     assert not hasattr(job.parallel_config, "enable_new_implicit_backend")
+    assert not hasattr(job.parallel_config, "enable_new_auto_fit_backend")
 
 
 def test_self_consistent_fit_job_payload_is_spawn_picklable() -> None:
     payload = _serialize_fit_job(_small_self_consistent_fit_job())
     assert "enable_new_implicit_backend" not in payload["parallel_config"]
+    assert "enable_new_auto_fit_backend" not in payload["parallel_config"]
     roundtrip = pickle.loads(pickle.dumps(payload))
     restored = _deserialize_fit_job(roundtrip)
 
@@ -1001,6 +1003,7 @@ def test_self_consistent_fit_job_payload_is_spawn_picklable() -> None:
     assert restored.timeout_seconds == 10.0
     assert restored.parallel_config.process_start_method == "spawn"
     assert not hasattr(restored.parallel_config, "enable_new_implicit_backend")
+    assert not hasattr(restored.parallel_config, "enable_new_auto_fit_backend")
 
 
 def test_fit_job_payload_contains_only_raw_serializable_inputs() -> None:
@@ -1142,13 +1145,15 @@ def test_fit_job_payload_rejects_none_weight_values() -> None:
         _deserialize_fit_job(payload)
 
 
-def test_stale_fit_job_payload_false_implicit_backend_is_ignored() -> None:
+def test_stale_fit_job_payload_false_backend_gates_are_ignored() -> None:
     payload = _serialize_fit_job(_small_self_consistent_fit_job())
     payload["parallel_config"]["enable_new_implicit_backend"] = False
+    payload["parallel_config"]["enable_new_auto_fit_backend"] = True
 
     restored = _deserialize_fit_job(payload)
 
     assert not hasattr(restored.parallel_config, "enable_new_implicit_backend")
+    assert not hasattr(restored.parallel_config, "enable_new_auto_fit_backend")
 
 
 def test_self_consistent_fit_subprocess_uses_killable_runner_and_forwards_timeout(
@@ -1217,6 +1222,7 @@ def test_self_consistent_fit_subprocess_ignores_stale_disabled_legacy_gate(
 ) -> None:
     payload = _serialize_fit_job(_small_self_consistent_fit_job())
     payload["parallel_config"]["enable_new_implicit_backend"] = False
+    payload["parallel_config"]["enable_new_auto_fit_backend"] = True
     job = _deserialize_fit_job(payload)
     calls: dict[str, object] = {}
 
@@ -1276,6 +1282,7 @@ def test_self_consistent_fit_subprocess_ignores_stale_disabled_legacy_gate(
 
 def test_legacy_implicit_backend_surfaces_are_removed() -> None:
     assert not hasattr(ParallelConfig, "enable_new_implicit_backend")
+    assert not hasattr(ParallelConfig, "enable_new_auto_fit_backend")
     assert not hasattr(workers_core, "_execute_fit_job_payload_subprocess_legacy")
     assert not hasattr(workers_core, "_fit_job_subprocess_queue_entry")
     assert not hasattr(workers_core, "_terminate_fit_subprocess")

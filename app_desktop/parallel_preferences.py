@@ -9,10 +9,8 @@ KEY_PARALLEL_MODE = "Preferences/Parallel/Mode"
 KEY_PARALLEL_MAX_WORKERS = "Preferences/Parallel/MaxWorkers"
 KEY_PARALLEL_RESERVE_CORES = "Preferences/Parallel/ReserveCores"
 KEY_PARALLEL_NESTED_POLICY = "Preferences/Parallel/NestedPolicy"
-KEY_PARALLEL_ENABLE_AUTO_FIT_BACKEND = (
-    "Preferences/Parallel/EnableNewAutoFitBackend"
-)
 _STALE_PARALLEL_ENABLE_IMPLICIT_BACKEND = "Preferences/Parallel/EnableNewImplicitBackend"
+_STALE_PARALLEL_ENABLE_AUTO_FIT_BACKEND = "Preferences/Parallel/EnableNewAutoFitBackend"
 
 
 def parallel_preferences_keys() -> tuple[str, ...]:
@@ -21,7 +19,6 @@ def parallel_preferences_keys() -> tuple[str, ...]:
         KEY_PARALLEL_MAX_WORKERS,
         KEY_PARALLEL_RESERVE_CORES,
         KEY_PARALLEL_NESTED_POLICY,
-        KEY_PARALLEL_ENABLE_AUTO_FIT_BACKEND,
     )
 
 
@@ -61,12 +58,9 @@ class ParallelPreferencesStore:
             min_process_tasks=default.min_process_tasks,
             nested_policy=nested_policy,
             process_start_method=default.process_start_method,
-            enable_new_auto_fit_backend=self.settings.load_bool(
-                KEY_PARALLEL_ENABLE_AUTO_FIT_BACKEND,
-                default.enable_new_auto_fit_backend,
-            ),
         )
         self.settings.remove(_STALE_PARALLEL_ENABLE_IMPLICIT_BACKEND)
+        self.settings.remove(_STALE_PARALLEL_ENABLE_AUTO_FIT_BACKEND)
         return config
 
     def save(self, config: ParallelConfig) -> None:
@@ -80,11 +74,8 @@ class ParallelPreferencesStore:
             KEY_PARALLEL_NESTED_POLICY,
             config.nested_policy.value,
         )
-        self.settings.save_bool(
-            KEY_PARALLEL_ENABLE_AUTO_FIT_BACKEND,
-            config.enable_new_auto_fit_backend,
-        )
         self.settings.remove(_STALE_PARALLEL_ENABLE_IMPLICIT_BACKEND)
+        self.settings.remove(_STALE_PARALLEL_ENABLE_AUTO_FIT_BACKEND)
 
 
 def current_parallel_config_from_widgets(owner: object) -> ParallelConfig:
@@ -111,7 +102,6 @@ def current_parallel_config_from_widgets(owner: object) -> ParallelConfig:
             ),
         ),
         nested_policy=nested_policy,
-        enable_new_auto_fit_backend=ParallelConfig().enable_new_auto_fit_backend,
     )
 
 

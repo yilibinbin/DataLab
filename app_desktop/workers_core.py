@@ -884,7 +884,6 @@ def _serialize_parallel_config(config: ParallelConfig) -> dict[str, Any]:
         "min_process_tasks": config.min_process_tasks,
         "nested_policy": config.nested_policy,
         "process_start_method": config.process_start_method,
-        "enable_new_auto_fit_backend": config.enable_new_auto_fit_backend,
     }
 
 
@@ -901,7 +900,6 @@ def _deserialize_parallel_config(payload: dict[str, Any] | None) -> ParallelConf
             payload.get("nested_policy", NestedParallelPolicy.SERIAL_WHEN_NESTED)
         ),
         process_start_method=str(payload.get("process_start_method", "spawn")),
-        enable_new_auto_fit_backend=bool(payload.get("enable_new_auto_fit_backend", False)),
     )
 
 

@@ -33,7 +33,6 @@ class ParallelConfig:
     min_process_tasks: int = 4
     nested_policy: NestedParallelPolicy = NestedParallelPolicy.SERIAL_WHEN_NESTED
     process_start_method: str = "spawn"
-    enable_new_auto_fit_backend: bool = False
 
 
 def should_use_serial_for_nested(config: ParallelConfig, *, depth: int) -> bool:
