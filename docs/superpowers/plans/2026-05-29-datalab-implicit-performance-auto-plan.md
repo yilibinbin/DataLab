@@ -25,7 +25,7 @@ Correctness is the first gate. A faster route may be selected only when validati
 - Constant-affine fast paths must reject non-finite, complex, parameter-dependent, x-dependent, or near-zero slopes.
 - Observed-variable and affine fast paths must skip or exactly preserve unweighted `data_sigmas` semantics. If +/- sigma systematic refits are required, use the general mpmath route.
 - Low precision (`precision <= 16`) only makes SciPy eligible. It does not force SciPy. SciPy may be accepted only when safety and benchmark/calibration gates prove it is correct and faster after validation cost is counted. Until such a gate exists, the full-comparator route must return or reuse the comparator result instead of accepting SciPy after paying both costs.
-- Build/release is not complete until release gates below are satisfied from a clean tracked archive or clean clone.
+- Build/release is not complete until release gates below are satisfied from a clean clone of the release commit. Archive-based releases require a separate reviewed manifest/hash verification procedure first.
 
 ## Current Implementation State
 
@@ -45,13 +45,16 @@ Implemented foundation on branch `codex/parallel-backend-implementation`:
 - SymPy is collected by `DataLab.spec`, `build_mac_data_gui.sh`, and `build_windows_data_gui.ps1`.
 - Worker sigma serialization, custom-fit unweighted `data_sigmas`, implicit SciPy net-cost accounting, implicit unweighted sigma fast-path policy, and pasted uncertainty token preservation have been fixed in recent commits.
 - Task 3b example-workspace synchronization and formula-preview layout/contrast slices were committed as `220c73b` and `19582f1`.
+- Task 2c implicit regression evidence and SciPy selection semantics were committed as `f670ce2`.
+- Task 4 legacy backend entry gate was committed as `fea5b14`.
+- User-facing auto-fit has been removed and is guarded by `tests/test_auto_fit_removed.py`; the remaining `enable_new_auto_fit_backend` config field is therefore a hidden stale compatibility surface to delete unless a reviewed ADR justifies keeping it.
 
 Current blockers:
 
-- Worktree still contains untracked duplicate `" 2"` files and local draft source files. Use strict allowlist staging only. Release builds must use a clean clone/archive and must fail on any untracked source artifact, not only duplicate `" 2"` paths.
-- Task 2c evidence matrix, behavioral cache-boundary matrix, and SciPy decision have passed review and are ready for the Task 2c commit.
+- Worktree still contains untracked duplicate `" 2"` files and local draft source files. Use strict allowlist staging only. Release builds must use a clean clone and must fail on any untracked source artifact, not only duplicate `" 2"` paths.
+- Task 2c evidence matrix, behavioral cache-boundary matrix, and SciPy decision have passed review and were committed as `f670ce2`.
 - Task 3c shared fitting-input normalization is complete as `9376da5`.
-- Task 4 cannot start until legacy backend compatibility surfaces are deleted or justified by a tracked ADR plus stale-input routing tests.
+- Task 4 entry gate is complete as `fea5b14`; remaining Task 4 work is blocked on direct cache identity/state-restoration proof and backend-boundary equivalence tests before any new parallel call site is added.
 - The release gate still needs concrete frozen-bundle smoke and signing/trust evidence.
 
 ## Task 0: Worktree Hygiene and Plan Repair
@@ -417,7 +420,7 @@ Review gate:
 
 ## Task 4: Parallel Backend Continuation
 
-Status: in progress. Entry gate implementation is in the current diff and pending review/commit.
+Status: in progress. Entry gate complete and committed as `fea5b14`; remaining work is backend-boundary and equivalence proof before any new parallel call site.
 
 Purpose:
 
@@ -428,12 +431,11 @@ Required work:
 - [x] Entry gate: delete `_execute_fit_job_payload_subprocess_legacy()` and remove `ParallelConfig.enable_new_implicit_backend`, or add a tracked ADR explaining the external compatibility requirement and a regression proving stale `enable_new_implicit_backend=False` inputs still route through the unified backend. This gate must be complete before adding new parallel call sites.
 - [x] Delete the legacy self-consistent hook branch (`_fit_self_consistent_with_legacy_hooks` / `_self_consistent_hooks_replaced`) so self-consistent fits always route through the unified `FitRunner` path.
 - [x] Preserve stale-input compatibility by ignoring old serialized/settings `enable_new_implicit_backend=False` fields and proving no public `ParallelConfig` attribute remains.
-- If `docs/superpowers/plans/2026-05-28-datalab-parallel-backend-implementation-plan.md` is committed by then, re-read it and reconcile it with current implicit backend changes.
-- If that parallel-backend plan is still untracked, either commit it through its own reviewed docs task or reconstruct the parallel-backend continuation requirements from tracked code, `task_plan.md`, `findings.md`, `progress.md`, and current git history before implementation.
+- Treat untracked `docs/superpowers/plans/2026-05-28-datalab-parallel-backend-implementation-plan.md` as historical reference only, not as executable input. Any still-valid requirement must be folded into this tracked plan through a reviewed docs task before implementation.
 - Keep resource controls centralized and reusable across modules.
 - Avoid per-module duplicate process/thread management.
 - Do not reintroduce GUI backend strategy toggles.
-- Name and enforce the shared backend boundary before adding new parallel call sites. New code must not create ad hoc process/thread pools or bypass the shared runner/config path.
+- `shared/parallel_backend.py` is the only production module permitted to create process/thread pools. New execution code must route through `KillableProcessTaskRunner` or `ParallelMapExecutor` and shared config, not ad hoc primitives.
 - Worker payloads, preferences, and stale workspace inputs must route through the unified backend even if they contain old `enable_new_implicit_backend=False` data.
 - Parallel worker payloads must be raw, serializable input payloads only. They must not pickle, pass, cache, or reuse:
   - `ModelSpecification`,
@@ -442,6 +444,7 @@ Required work:
   - route diagnostics,
   - mutable warm-start or point-index state.
 - Each worker execution must rebuild `ModelSpecification` and implicit caches inside the worker from normalized input payloads.
+- Complete the direct cache identity/state-restoration gate from Task 2c before adding any new parallel call site. The already-committed legacy deletion is the only Task 4 work exempt from this ordering rule.
 - Serial and process backends must produce equivalent results for direct custom fits and self-consistent fits across:
   - precision `<= 16` and high precision,
   - constants,
@@ -450,12 +453,36 @@ Required work:
   - cancellation followed by retry,
   - repeated runs proving no cache or diagnostics leakage.
 
+Task 4 slices:
+
+- Task 4a: synchronize this tracked plan with `f670ce2` and `fea5b14`; remove phantom test references and untracked-plan dependencies. Local recovery files (`task_plan.md`, `findings.md`, `progress.md`) may be updated for continuity but are ignored and not part of the public Task 4a commit unless explicitly requested.
+- Task 4b: add a committed static guard test, for example `test_no_ad_hoc_parallel_primitives_outside_shared_backend`, scanning tracked production source and allowing process/thread primitives only in `shared/parallel_backend.py`.
+- Task 4c: add worker payload contract tests, for example `test_fit_job_payload_contains_only_raw_serializable_inputs`, recursively asserting `_serialize_fit_job()` contains only raw `None/bool/int/float/str/list/tuple/dict` values and no `ModelSpecification`, `ImplicitEvaluationCache`, callables, Qt objects, `mp.mpf`, diagnostics objects, or mutable warm-start/point-index state.
+- Task 4d: add serial-vs-process equivalence tests:
+  - `test_custom_fit_serialized_payload_is_equivalent_low_precision_with_constants`,
+  - `test_custom_fit_serialized_payload_is_equivalent_high_precision_with_constants`,
+  - `test_self_consistent_serial_and_process_are_equivalent_low_precision_scipy_candidate_fallback`,
+  - `test_self_consistent_serial_and_process_are_equivalent_high_precision_mpmath`,
+  - `test_self_consistent_process_cancel_then_retry_matches_clean_serial_baseline`,
+  - `test_self_consistent_repeated_process_runs_do_not_leak_cache_or_diagnostics`,
+  - `test_self_consistent_worker_rebuilds_model_spec_and_cache_inside_child`,
+  - a worker DTO consistency test proving `variable_map`, `variable_data`, `target_series`, and single-variable `x_series/y_series/sigma_series` do not drift.
+- Task 4e: remove `enable_new_auto_fit_backend` if auto-fit remains deleted, or add a tracked ADR and stale-settings routing tests explaining why the hidden compatibility field remains.
+
+Required equivalence assertions:
+
+- Compare `params`, `param_errors`, `param_errors_sys`, covariance where available, `fitted_y`, residuals, chi-square, reduced chi-square, AIC, BIC, RMSE, R2, `details["implicit_strategy"]`, optimizer backend, fallback metadata, and residual sign/space.
+- Low precision (`precision <= 16`) must remain SciPy-eligible only, not SciPy-forced. Subprocess and serial paths must both return/reuse the comparator or mpmath fallback for current full-comparator runs.
+- Unweighted `data_sigmas` must skip SciPy where systematic refits are required and preserve nonzero systematic parameter-error behavior.
+- Cancellation followed by retry must prove worker budget/depth is released and `mp.dps`, route diagnostics, warm-start state, cache state, seed source, and point index do not leak into the retry.
+- Repeated process runs must prove diagnostics do not accumulate and results match a fresh serial baseline.
+
 Expected verification:
 
-- `pytest -q tests/test_parallel_backend*.py tests/test_app_desktop_workers_core.py tests/test_auto_fit_subprocess_orchestrator.py`
-- Focused implicit regression tests from Task 2c rerun under the shared backend boundary.
-- Static guard proving no new ad hoc `multiprocessing.Pool`, `ProcessPoolExecutor`, `ThreadPoolExecutor`, or raw `Process` use was introduced outside the shared backend modules.
-- `ruff check` and `python -m compileall -q` on changed backend/worker modules.
+- `pytest -q tests/test_parallel_backend.py tests/test_app_desktop_workers_core.py tests/test_implicit_fit_worker_cancellation.py tests/test_auto_fit_removed.py`
+- `pytest -q tests/test_implicit_scipy_backend.py tests/test_implicit_performance_regression.py tests/test_implicit_d8_runner_regression.py tests/test_fitting_runner_scipy_fallback.py`
+- The committed static guard test must replace the previous manual grep-only guard.
+- `ruff check` and `python -m compileall -q` on changed backend/worker/test modules.
 
 Review gate:
 
@@ -467,7 +494,7 @@ Review gate:
 
 Status: pending and blocking public release.
 
-Release builds must be produced from a clean tracked archive or clean clone. Release prep fails if any untracked source artifact or duplicate `" 2"` file is present in the build source.
+Release builds must be produced from a clean clone of the release commit. Release prep fails if any untracked source artifact or duplicate `" 2"` file is present in the build source. A `git archive` export may be used only after a separate manifest/hash verification procedure is written and reviewed; until then, use clean clones only.
 
 Release-only checks may be skipped only by marking the release blocked. An environment skip for macOS smoke, Windows smoke, signing, notarization, Authenticode verification, manifest signing, or pinned-download verification is not a pass and must not produce public release assets.
 
@@ -479,7 +506,7 @@ git ls-files --others --exclude-standard
 git diff --cached --name-only
 ```
 
-Acceptance: the release build source is a clean clone/archive with no untracked files. If using the development worktree for preflight only, any untracked source draft or path containing `" 2"` blocks release and must not be copied into the build source.
+Acceptance: the release build source is a clean clone with no untracked files. If using the development worktree for preflight only, any untracked source draft or path containing `" 2"` blocks release and must not be copied into the build source.
 
 Untracked-source guard for release sources:
 
@@ -492,16 +519,18 @@ Acceptance: the command exits successfully in the release source. Development-wo
 Release order is mandatory:
 
 1. Commit reviewed changes with explicit allowlist staging.
-2. Before any push or PR, run the pre-push source audit below against the staged diff and branch diff.
+2. Before any push or PR, run the staged/branch pre-push source audit below. In the dirty development worktree, untracked artifacts are a staging risk to inspect and must not be staged. A hard untracked-file gate applies only in a clean review worktree/clean clone and in release sources.
 3. Push branch and create/review PR only after the audit passes.
 4. Merge to `main`.
 5. Tag or otherwise identify the release commit on `main`.
-6. Build macOS and Windows assets from a clean clone or clean tracked archive of that release commit.
+6. Build macOS and Windows assets from a clean clone of that release commit.
 7. Sign, notarize, staple, and verify macOS assets.
 8. Authenticode-sign and verify Windows assets.
-9. Generate update metadata from final uploaded assets only.
-10. Verify uploaded asset size/hash by downloading from GitHub.
-11. Publish release notes without local paths, private hosts, or local-server descriptions.
+9. Upload signed assets to a draft release.
+10. Download the uploaded assets back from GitHub and verify size, hash, signature, notarization/staple status, and Authenticode signature.
+11. Generate update metadata only from the downloaded-back, verified assets.
+12. Sign or otherwise verify the update manifest, upload it, then download it back and verify hash/signature.
+13. Publish release notes without local paths, private hosts, or local-server descriptions.
 
 Pre-push source audit:
 
@@ -509,28 +538,15 @@ Pre-push source audit:
 - `git diff --name-only origin/main...HEAD` and the PR file list must contain only reviewed task files.
 - `git diff --cached --name-only` and the PR file list must contain no duplicate `" 2"` paths, `.superpowers/`, `dist/`, `build/`, `__pycache__/`, local full-review scratch lists, or unrelated update/packaging drafts.
 - Scan the staged diff and branch diff for local filesystem paths, private hosts, localhost release descriptions, secrets/tokens, internal AI/process artifacts, and temporary build machine paths. Any match blocks push until reviewed or removed.
+- Scan untracked artifacts in the development worktree before staging and record known unrelated hits in `progress.md`; these hits block staging/release-source copying, not necessarily branch push from this dirty development checkout.
+- For PR/release hard proof, repeat the branch audit in a clean review worktree or clean clone where `git ls-files --others --exclude-standard` must be empty.
 
-Current Task 2c exact allowlist:
-
-```text
-docs/superpowers/implicit_regression_evidence_matrix.md
-docs/superpowers/plans/2026-05-29-datalab-implicit-performance-auto-plan.md
-tests/test_implicit_performance_regression.py
-tests/test_implicit_scipy_backend.py
-```
-
-Local planning files `findings.md`, `progress.md`, and `task_plan.md` are intentionally ignored by `.gitignore`; update them for recovery, but do not include them in this public commit allowlist.
-
-Current Task 2c staged-name check:
+Per-task exact allowlist template:
 
 ```bash
+test -s "$TASK_ALLOWLIST" || { echo "TASK_ALLOWLIST must point to the reviewed current-task file list" >&2; exit 2; }
 tmp_allowed="$(mktemp)"
-cat >"$tmp_allowed" <<'EOF'
-docs/superpowers/implicit_regression_evidence_matrix.md
-docs/superpowers/plans/2026-05-29-datalab-implicit-performance-auto-plan.md
-tests/test_implicit_performance_regression.py
-tests/test_implicit_scipy_backend.py
-EOF
+cp "$TASK_ALLOWLIST" "$tmp_allowed"
 tmp_staged="$(mktemp)"
 tmp_diff="$(mktemp)"
 git diff --cached --name-only | sort > "$tmp_staged"
@@ -539,13 +555,14 @@ comm -3 "$tmp_allowed.sorted" "$tmp_staged" > "$tmp_diff"
 test ! -s "$tmp_diff"
 ```
 
-Current Task 2c staged, branch, and untracked artifact scan:
+Local planning files `findings.md`, `progress.md`, and `task_plan.md` are intentionally ignored by `.gitignore`; update them for recovery, but do not include them in public commit allowlists unless the user explicitly asks to publish process notes.
+
+Pre-push staged and branch artifact scan:
 
 ```bash
 artifact_name_pattern='(^|/)(\.superpowers|dist|build|__pycache__)(/|$)| 2(\.|$)|FULL_FILE_REVIEW_FILELIST|update_.* 2| 2\.md$'
 git diff --cached --name-only | rg "$artifact_name_pattern" && exit 1 || true
 git diff --name-only origin/main...HEAD | rg "$artifact_name_pattern" && exit 1 || true
-git ls-files --others --exclude-standard | rg "$artifact_name_pattern" && exit 1 || true
 
 content_pattern='(/Users/|/var/folders/|localhost|127\.0\.0\.1|apm8517|backup-windows|OPENAI_API_KEY|GITHUB_TOKEN|ghp_|private host|temporary local server)'
 git diff --cached -- . \
@@ -556,14 +573,25 @@ git diff origin/main...HEAD -- . \
   | rg -n "$content_pattern" && exit 1 || true
 ```
 
+Development-worktree untracked artifact inspection:
+
+```bash
+artifact_name_pattern='(^|/)(\.superpowers|dist|build|__pycache__)(/|$)| 2(\.|$)|FULL_FILE_REVIEW_FILELIST|update_.* 2| 2\.md$'
+git ls-files --others --exclude-standard | rg "$artifact_name_pattern" || true
+```
+
+Record any expected unrelated hits in `progress.md`. Do not stage them. In a clean review worktree, clean clone, or release source, this same command must produce no output.
+
 If a scan hit is intentionally confined to local planning files such as `progress.md` or `findings.md`, record the exception in `progress.md`; public docs, release notes, manifests, examples, and archives get no exception without removing or rewriting the content.
+
+Before PR, create or update a branch-wide reviewed-file manifest in the local planning files and compare it with `git diff --name-only origin/main...HEAD`. Per-commit allowlists are not enough for final PR/release readiness.
 
 Required release evidence:
 
 - Legacy backend cleanup:
   - Task 4 entry gate evidence showing legacy backend compatibility surfaces were deleted, or a tracked ADR plus stale-input routing regression explains why they remain.
 - Source verification:
-  - clean clone/archive checkout of the release commit,
+  - clean clone checkout of the release commit,
   - `git status --porcelain=v1 --untracked-files=all` returns empty output in the build source,
   - full or agreed broad test suite,
   - `ruff check`,
