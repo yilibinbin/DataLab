@@ -1,6 +1,6 @@
 # DataLab Implicit Performance Auto Optimization Plan
 
-> Status: resynchronized on 2026-05-30 after the latest multi-subagent review and Claude adversarial multi-lens review.
+> Status: resynchronized on 2026-05-30 after multi-subagent reviews, earlier Claude adversarial reviews, and the user-authorized Codex adversarial replacement gate for Task 4d/4e while the external Claude CLI gate was unavailable.
 > This file is now the only executable plan for the implicit-performance work. Older task sketches that contradicted the reviewed design have been removed.
 
 ## Goal
@@ -46,15 +46,15 @@ Implemented foundation on branch `codex/parallel-backend-implementation`:
 - Worker sigma serialization, custom-fit unweighted `data_sigmas`, implicit SciPy net-cost accounting, implicit unweighted sigma fast-path policy, and pasted uncertainty token preservation have been fixed in recent commits.
 - Task 3b example-workspace synchronization and formula-preview layout/contrast slices were committed as `220c73b` and `19582f1`.
 - Task 2c implicit regression evidence and SciPy selection semantics were committed as `f670ce2`.
-- Task 4 legacy backend entry gate was committed as `fea5b14`.
-- User-facing auto-fit has been removed and is guarded by `tests/test_auto_fit_removed.py`; the remaining `enable_new_auto_fit_backend` config field is therefore a hidden stale compatibility surface to delete unless a reviewed ADR justifies keeping it.
+- Task 4 fit-worker process-boundary guard/equivalence work is complete through `4414d58`: entry gate `fea5b14`, plan sync `c209f11`, payload/static guards `4050fb8`, serial/process equivalence `7571c65`, and stale auto-fit backend toggle removal `4414d58`.
+- User-facing auto-fit has been removed and is guarded by `tests/test_auto_fit_removed.py`; the stale `enable_new_auto_fit_backend` config field was removed in `4414d58`.
 
 Current blockers:
 
 - Worktree still contains untracked duplicate `" 2"` files and local draft source files. Use strict allowlist staging only. Release builds must use a clean clone and must fail on any untracked source artifact, not only duplicate `" 2"` paths.
 - Task 2c evidence matrix, behavioral cache-boundary matrix, and SciPy decision have passed review and were committed as `f670ce2`.
 - Task 3c shared fitting-input normalization is complete as `9376da5`.
-- Task 4 entry gate is complete as `fea5b14`; remaining Task 4 work is blocked on direct cache identity/state-restoration proof and backend-boundary equivalence tests before any new parallel call site is added.
+- Task 4 fit-worker backend-boundary and equivalence gates are complete through `4414d58`. This does not close the separate Task 2c direct cache identity/state-restoration release blocker, and it does not claim full-program migration of every existing thread helper to `shared/parallel_backend.py`.
 - The release gate still needs concrete frozen-bundle smoke and signing/trust evidence.
 
 ## Task 0: Worktree Hygiene and Plan Repair
@@ -420,7 +420,7 @@ Review gate:
 
 ## Task 4: Parallel Backend Continuation
 
-Status: in progress. Entry gate complete and committed as `fea5b14`; remaining work is backend-boundary and equivalence proof before any new parallel call site.
+Status: complete through `4414d58` for the scoped fit-worker process boundary. Entry gate, backend-boundary tests, raw worker payload tests, serial/process equivalence tests, and stale auto-fit backend toggle removal are committed. PR, merge, and release remain blocked by Task 5, including the still-open Task 2c direct cache identity/state-restoration proof.
 
 Purpose:
 
@@ -433,7 +433,7 @@ Required work:
 - [x] Preserve stale-input compatibility by ignoring old serialized/settings `enable_new_implicit_backend=False` fields and proving no public `ParallelConfig` attribute remains.
 - Treat untracked `docs/superpowers/plans/2026-05-28-datalab-parallel-backend-implementation-plan.md` as historical reference only, not as executable input. Any still-valid requirement must be folded into this tracked plan through a reviewed docs task before implementation.
 - Keep resource controls centralized and reusable across modules.
-- Avoid per-module duplicate process/thread management.
+- Avoid new per-module duplicate process/thread pool management. The Task 4 static guard covers process pools, executor pools, and fit-worker process primitives; it does not yet migrate every pre-existing helper such as direct `threading.Thread` usage in unrelated model-selection code.
 - Do not reintroduce GUI backend strategy toggles.
 - `shared/parallel_backend.py` is the only production module permitted to create process/thread pools. New execution code must route through `KillableProcessTaskRunner` or `ParallelMapExecutor` and shared config, not ad hoc primitives.
 - Worker payloads, preferences, and stale workspace inputs must route through the unified backend even if they contain old `enable_new_implicit_backend=False` data.
@@ -455,10 +455,10 @@ Required work:
 
 Task 4 slices:
 
-- Task 4a: synchronize this tracked plan with `f670ce2` and `fea5b14`; remove phantom test references and untracked-plan dependencies. Local recovery files (`task_plan.md`, `findings.md`, `progress.md`) may be updated for continuity but are ignored and not part of the public Task 4a commit unless explicitly requested.
-- Task 4b: add a committed static guard test, for example `test_no_ad_hoc_parallel_primitives_outside_shared_backend`, scanning tracked production source and allowing process/thread primitives only in `shared/parallel_backend.py`.
-- Task 4c: add worker payload contract tests, for example `test_fit_job_payload_contains_only_raw_serializable_inputs`, recursively asserting `_serialize_fit_job()` contains only raw `None/bool/int/float/str/list/tuple/dict` values and no `ModelSpecification`, `ImplicitEvaluationCache`, callables, Qt objects, `mp.mpf`, diagnostics objects, or mutable warm-start/point-index state.
-- Task 4d: add serial-vs-process equivalence tests:
+- [x] Task 4a: synchronize this tracked plan with `f670ce2` and `fea5b14`; remove phantom test references and untracked-plan dependencies. Committed as `c209f11`.
+- [x] Task 4b: add a committed static guard test, for example `test_no_ad_hoc_parallel_primitives_outside_shared_backend`, scanning tracked production fit-worker/process-pool surfaces and allowing new process/executor pool primitives only through `shared/parallel_backend.py`. Committed as part of `4050fb8`. Pre-existing unrelated helpers such as direct `threading.Thread` usage in model-selection code are out of this Task 4 scope unless they are promoted into a future full-program parallel-governance cleanup.
+- [x] Task 4c: add worker payload contract tests, for example `test_fit_job_payload_contains_only_raw_serializable_inputs`, recursively asserting `_serialize_fit_job()` contains only raw `None/bool/int/float/str/list/tuple/dict` values and no `ModelSpecification`, `ImplicitEvaluationCache`, callables, Qt objects, `mp.mpf`, diagnostics objects, or mutable warm-start/point-index state. Committed as part of `4050fb8`.
+- [x] Task 4d: add serial-vs-process equivalence tests. Committed as `7571c65` after the user-authorized Codex adversarial replacement gate because the external Claude CLI gate was unavailable:
   - `test_custom_fit_serialized_payload_is_equivalent_low_precision_with_constants`,
   - `test_custom_fit_serialized_payload_is_equivalent_high_precision_with_constants`,
   - `test_self_consistent_serial_and_process_are_equivalent_low_precision_scipy_candidate_fallback`,
@@ -467,11 +467,11 @@ Task 4 slices:
   - `test_self_consistent_repeated_process_runs_do_not_leak_cache_or_diagnostics`,
   - `test_self_consistent_worker_rebuilds_model_spec_and_cache_inside_child`,
   - a worker DTO consistency test proving `variable_map`, `variable_data`, `target_series`, and single-variable `x_series/y_series/sigma_series` do not drift.
-- Task 4e: remove `enable_new_auto_fit_backend` if auto-fit remains deleted, or add a tracked ADR and stale-settings routing tests explaining why the hidden compatibility field remains.
+- [x] Task 4e: remove `enable_new_auto_fit_backend` if auto-fit remains deleted, or add a tracked ADR and stale-settings routing tests explaining why the hidden compatibility field remains. Removed and committed as `4414d58`.
 
 Required equivalence assertions:
 
-- Compare `params`, `param_errors`, `param_errors_sys`, covariance where available, `fitted_y`, residuals, chi-square, reduced chi-square, AIC, BIC, RMSE, R2, `details["implicit_strategy"]`, optimizer backend, fallback metadata, and residual sign/space.
+- Compare `params`, `param_errors`, `param_errors_sys`, covariance where available, `fitted_curve`, residuals, chi-square, reduced chi-square, AIC, BIC, RMSE, R2, `details["implicit_strategy"]`, optimizer backend, fallback metadata, and residual sign/space.
 - Low precision (`precision <= 16`) must remain SciPy-eligible only, not SciPy-forced. Subprocess and serial paths must both return/reuse the comparator or mpmath fallback for current full-comparator runs.
 - Unweighted `data_sigmas` must skip SciPy where systematic refits are required and preserve nonzero systematic parameter-error behavior.
 - Cancellation followed by retry must prove worker budget/depth is released and `mp.dps`, route diagnostics, warm-start state, cache state, seed source, and point index do not leak into the retry.
@@ -479,16 +479,16 @@ Required equivalence assertions:
 
 Expected verification:
 
-- `pytest -q tests/test_parallel_backend.py tests/test_app_desktop_workers_core.py tests/test_implicit_fit_worker_cancellation.py tests/test_auto_fit_removed.py`
-- `pytest -q tests/test_implicit_scipy_backend.py tests/test_implicit_performance_regression.py tests/test_implicit_d8_runner_regression.py tests/test_fitting_runner_scipy_fallback.py`
-- The committed static guard test must replace the previous manual grep-only guard.
-- `ruff check` and `python -m compileall -q` on changed backend/worker/test modules.
+- `pytest -q tests/test_parallel_backend.py tests/test_app_desktop_workers_core.py tests/test_implicit_fit_worker_cancellation.py tests/test_auto_fit_removed.py tests/test_parallel_preferences.py` passed after Task 4e with 94 tests.
+- `pytest -q tests/test_implicit_scipy_backend.py tests/test_implicit_performance_regression.py tests/test_implicit_d8_runner_regression.py tests/test_fitting_runner_scipy_fallback.py` passed after Task 4e with 30 tests.
+- The committed static guard test replaces the previous manual grep-only guard.
+- `ruff check` and `python -m compileall -q` passed on the changed Task 4 backend/worker/test modules.
 
 Review gate:
 
-- deep architecture/spec review,
-- code-quality review,
-- Claude adversarial review.
+- deep architecture/spec review: passed for Task 4 slices.
+- code-quality review: passed for Task 4 slices.
+- adversarial review: passed for Task 4d/4e through the user-authorized Codex replacement gate because the external Claude CLI gate was unavailable. This substitution is task-local and does not imply external Claude passed.
 
 ## Task 5: Release Gate
 
