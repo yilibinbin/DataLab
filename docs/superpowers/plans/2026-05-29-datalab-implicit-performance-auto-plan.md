@@ -1,6 +1,6 @@
 # DataLab Implicit Performance Auto Optimization Plan
 
-> Status: resynchronized on 2026-05-30 after the Task 3b multi-subagent review and Claude adversarial review.
+> Status: resynchronized on 2026-05-30 after the latest multi-subagent review and Claude adversarial multi-lens review.
 > This file is now the only executable plan for the implicit-performance work. Older task sketches that contradicted the reviewed design have been removed.
 
 ## Goal
@@ -8,6 +8,8 @@
 Make self-consistent / implicit fitting automatically choose the fastest correct backend without exposing backend strategy controls in the GUI.
 
 The fitted objective must remain the user's original output-space residual. Exact residual-space transforms are allowed only for proven constant-affine output maps. Nonlinear inverse forms are seed hints only; they must never replace the original output-space residual.
+
+Correctness is the first gate. A faster route may be selected only when validation cost is included in the current-run decision or amortized by a documented cache/calibration mechanism. A SciPy candidate that already required a full mpmath comparator in the same run must reuse that comparator result or reject the candidate; reporting that route as the fastest executed backend is not allowed.
 
 ## Non-Negotiable Rules
 
@@ -22,7 +24,7 @@ The fitted objective must remain the user's original output-space residual. Exac
 - Row evaluation must contain or restore point-index state. Warm starts, seed diagnostics, and route diagnostics must not leak across independent specs/routes.
 - Constant-affine fast paths must reject non-finite, complex, parameter-dependent, x-dependent, or near-zero slopes.
 - Observed-variable and affine fast paths must skip or exactly preserve unweighted `data_sigmas` semantics. If +/- sigma systematic refits are required, use the general mpmath route.
-- Low precision (`precision <= 16`) only makes SciPy eligible. It does not force SciPy. SciPy may be accepted only when safety and full-route benchmark gates prove it is correct and not slower for the current route.
+- Low precision (`precision <= 16`) only makes SciPy eligible. It does not force SciPy. SciPy may be accepted only when safety and benchmark/calibration gates prove it is correct and faster after validation cost is counted. Until such a gate exists, the full-comparator route must return or reuse the comparator result instead of accepting SciPy after paying both costs.
 - Build/release is not complete until release gates below are satisfied from a clean tracked archive or clean clone.
 
 ## Current Implementation State
@@ -38,17 +40,18 @@ Implemented foundation on branch `codex/parallel-backend-implementation`:
 - Exact affine transform support exists behind conservative gates.
 - Seed hints are wired as root-solver hints, not objective transforms.
 - Analytic implicit derivatives exist behind parity, residual-quality, singularity, dependent-parameter, and mixed-Jacobian safeguards.
-- SciPy implicit support is candidate-gated and benchmarked; the real full-comparator route does not accept SciPy after paying comparator cost for the same run.
+- SciPy implicit support is candidate-gated and benchmarked; the current real full-comparator route does not accept SciPy after paying comparator cost for the same run. Task 2c below must either add a real low-net-cost acceptance/calibration mechanism or explicitly keep SciPy as a rejected candidate with evidence.
 - Visible GUI backend strategy controls were removed/neutralized.
 - SymPy is collected by `DataLab.spec`, `build_mac_data_gui.sh`, and `build_windows_data_gui.ps1`.
 - Worker sigma serialization, custom-fit unweighted `data_sigmas`, implicit SciPy net-cost accounting, implicit unweighted sigma fast-path policy, and pasted uncertainty token preservation have been fixed in recent commits.
+- Task 3b example-workspace synchronization and formula-preview layout/contrast slices were committed as `220c73b` and `19582f1`.
 
 Current blockers:
 
-- Worktree still contains untracked duplicate `" 2"` files. Use strict allowlist staging only.
-- Task 3b remains blocked by reviewed gaps in example-workspace synchronization, example read-only Save As semantics, formula-preview layout tests, and shared fitting-input normalization boundaries.
-- The current quantum-defect example generator diff is not enough: the checked-in archive, desktop example list, tests, no-strategy-field assertions, and example-template Save As behavior must move together.
-- The quantum-defect example must exercise the ionization-energy output-space route, not only the easy observed `delta` output route, unless a second clearly scoped `delta` example is intentionally added and tested.
+- Worktree still contains untracked duplicate `" 2"` files and local draft source files. Use strict allowlist staging only. Release builds must use a clean clone/archive and must fail on any untracked source artifact, not only duplicate `" 2"` paths.
+- Task 2c remains blocked on an explicit implicit regression evidence matrix, cache-lifecycle acceptance matrix, and a real SciPy acceptance/calibration decision.
+- Task 3c remains blocked on shared fitting-input normalization being wired into existing GUI/workspace/worker call sites. The untracked `app_desktop/fitting_input_normalization.py` is only a draft until it has production consumers and tests.
+- Task 4 cannot start until legacy backend compatibility surfaces are deleted or justified by a tracked ADR plus stale-input routing tests.
 - The release gate still needs concrete frozen-bundle smoke and signing/trust evidence.
 
 ## Task 0: Worktree Hygiene and Plan Repair
@@ -110,7 +113,7 @@ Review gate:
 
 ## Task 2: Complete Implicit Regression Frontier
 
-Status: complete for the reviewed hardening slice. Foundation committed as `a5e438f`; uncertainty and architecture-regression hardening committed as `6fca8b0`.
+Status: foundation complete for the reviewed hardening slices. Foundation committed as `a5e438f`; uncertainty and architecture-regression hardening committed as `6fca8b0`. The full release-blocking evidence matrix remains open and is tracked by Task 2c.
 
 Purpose:
 
@@ -163,6 +166,55 @@ Review gate:
 - code-quality review,
 - Claude adversarial review.
 
+## Task 2c: Close Implicit Regression Evidence and SciPy Selection Semantics
+
+Status: pending.
+
+Purpose:
+
+Turn the Task 2 regression frontier into an auditable evidence matrix and close the gap between "correctness-first candidate rejection" and the stated "fastest correct backend" goal.
+
+Required work:
+
+- Add an evidence matrix in this plan or a tracked companion artifact that maps every Task 2 required regression to:
+  - test file and test name,
+  - verification command,
+  - last observed result,
+  - commit or current diff that provides the evidence,
+  - whether it blocks release.
+  - Existing committed regressions should be cataloged rather than duplicated. New implementation in Task 2c is required only for missing oracle/cache rows and the SciPy acceptance/calibration decision.
+- Add a quantum-defect numerical oracle row to the matrix:
+  - direct `delta` and ionization-energy output-space scenarios,
+  - reference or synthetic known-parameter recovery tolerances,
+  - residual sign and unit assertion: residuals are fitted output minus observed target in the target's output space,
+  - weighted, unweighted `data_sigmas`, and no-sigma behavior,
+  - executed `details["implicit_strategy"]` and fallback metadata.
+- Add or update cache-lifecycle tests so each boundary is explicit:
+  - preflight vs production,
+  - production vs SciPy candidate,
+  - SciPy candidate vs spot-check,
+  - spot-check vs rematerialization,
+  - route/backend/precision/parameter/constant/data-row/seed-source invalidation.
+- Decide and implement the SciPy acceptance path:
+  - either add a real low-net-cost calibration gate, such as cached comparator reuse or sampled calibration whose validation cost is included in the decision,
+  - or explicitly keep SciPy as a rejected candidate for current full-comparator runs and update user/debug metadata so the plan no longer claims current-run fastest-route selection where it is not true.
+- Preserve output-space residuals, covariance, parameter errors, chi-square/AIC/BIC, fallback metadata, and unweighted `data_sigmas` behavior in every route.
+- Add tests proving any accepted SciPy route is faster after validation cost is counted, or proving the current route rejects SciPy and reuses/returns the comparator instead.
+
+Expected verification:
+
+- Focused implicit tests covering the evidence matrix rows.
+- `pytest -q tests/test_implicit_scipy_backend.py tests/test_implicit_performance_regression.py tests/test_implicit_d8_runner_regression.py tests/test_fitting_runner_scipy_fallback.py`
+- `ruff check fitting tests/test_implicit_scipy_backend.py tests/test_implicit_performance_regression.py`
+- scoped `mypy` on changed modules/tests where configured.
+- `python -m compileall -q fitting shared tests`
+
+Review gate:
+
+- deep numerical/spec review,
+- code-quality review,
+- Claude adversarial review.
+
 ## Task 3a: Parameter and Constants GUI Slice
 
 Status: complete. Committed as `13fe7fa`.
@@ -203,13 +255,13 @@ Review gate:
 
 ## Task 3b: GUI and Workspace Polish
 
-Status: in progress.
+Status: complete. Example-workspace synchronization and formula-preview layout/contrast slices were committed as `220c73b` and `19582f1`.
 
 Completed slice:
 
 - Example-workspace synchronization and read-only template Save As behavior are implemented and reviewed.
 - `quantum-defect-implicit.datalab` is generated, checked in, listed in the desktop examples menu, and tested byte-for-byte against the generator.
-- The quantum-defect example uses inline ionization-energy data and exercises the `analytic_implicit_output_space` route.
+- The quantum-defect example uses inline ionization-energy data and exercises the `analytic_implicit_output_space` route; that route is the self-consistent `delta` ionization-energy output-space fit, not the easy observed-`delta` target.
 - Checked-in/generated/Save As workspaces are tested not to persist GUI backend strategy selectors.
 - Opening a checked-in example through the examples menu, ordinary Open, or file-association-style `open_workspace_path()` treats it as a template; Save routes through Save As and saving to the bundled example path is refused.
 - Formula-preview layout and contrast regressions are covered: implicit previews are button/dialog-only, long formulas do not expand the left splitter, dark palettes keep a high-contrast preview surface, and non-self-consistent/MCMC UI states do not expose implicit preview controls.
@@ -226,13 +278,6 @@ Required work:
 - MCMC or unrelated sections must not show stray implicit formula previews.
 - Parameter table behavior from Task 3a remains accepted and covered while completing the broader workspace polish.
 - Constants editor behavior from Task 3a remains accepted and covered while completing the broader workspace polish.
-- Custom fitting and self-consistent fitting must use a named shared parameter/constant normalization API. The shared path must cover table view, text view, disabled constants, reserved-name validation, workspace restore, and compute-path serialization.
-- Custom fitting and self-consistent fitting must use a named shared fitting-input normalization API, not only a parameter/constant helper. The shared path must cover:
-  - parameter table rows, manual empty rows, unnamed draft rows, fixed values, bounds, and reserved-name validation,
-  - constants table and text views, disabled constants, and the same constant syntax accepted by error propagation,
-  - workspace capture, restore, migration, and round trip,
-  - compute job construction and worker payload serialization/deserialization,
-  - embedded uncertainty tokens, explicit sigma columns, weighted/unweighted `data_sigmas`, and no-sigma behavior.
 - Add or update a built-in quantum-defect implicit example workspace.
   - Generator, checked-in `.datalab` archive, desktop example list, and tests must stay synchronized.
   - The example must store data inline with no private/local file paths.
@@ -265,6 +310,110 @@ Review gate:
 - code-quality review,
 - Claude adversarial review.
 
+## Task 3c: Shared Fitting-Input Normalization
+
+Status: pending.
+
+Purpose:
+
+Replace duplicated custom-fit and self-consistent-fit input parsing with one named shared normalization boundary. This is a maintainability and correctness task; it must remove drift rather than adding another copy.
+
+Owner module:
+
+- `app_desktop/fitting_input_normalization.py` may be used only if it becomes the single production normalization boundary. It must not be committed as unwired draft code.
+
+Required API contract:
+
+- Provide one public entry point for full fitting-input preparation, for example `normalize_fitting_input(...) -> NormalizedFittingInput`. Parameter-only or constants-only helpers may exist only as internals or widget adapters; they are not sufficient to complete this task.
+- Define immutable DTOs for:
+  - model type,
+  - expression / implicit equation / output expression,
+  - variable mapping and target-column identity,
+  - parameter rows and compute config,
+  - constants rows/text state and compute dict,
+  - implicit definition draft state,
+  - uncertainty policy with `data_sigmas`, `weights`, and weighted/unweighted/no-sigma semantics,
+  - validation diagnostics and localized error text,
+  - workspace-serializable persisted state,
+  - worker-payload-safe serialized state where needed.
+- The API must distinguish persisted/draft state from compute state:
+  - manual empty rows and unnamed draft rows are preserved for the GUI/workspace,
+  - orphan rows do not enter compute config,
+  - disabled constants preserve draft rows/text but produce an empty compute dict,
+  - disabled parameter constraints ignore fixed/min/max for compute without deleting drafts.
+- Constants syntax must match the same uncertainty-aware grammar used by error propagation without making the normalization core depend on LaTeX/reporting modules. If `parse_uncertainty_format` remains in `datalab_latex`, move or wrap the shared grammar in `shared/` first.
+- Ordering requirement: before wiring `app_desktop/fitting_input_normalization.py` or any replacement module into production, relocate or wrap the uncertainty grammar in `shared/` and update the normalizer to import from that shared boundary. The current draft's direct `datalab_latex.latex_tables_error_propagation.parse_uncertainty_format` import is a known violation until fixed.
+- Validation errors must preserve the current bilingual behavior. Shared normalization may accept a message provider or return structured error codes, but it must not regress existing Chinese/English `_dual_msg()` cases to English-only messages.
+- Workspace migration and restore must be lossless for supported schemas. Malformed legacy rows must fail loudly or surface explicit migration diagnostics; the normalizer must not silently drop non-dict rows, falsy numeric values, constants text, disabled-state drafts, or constraint drafts.
+- Uncertainty handling has a single boundary, for example `normalize_data_uncertainty(headers, rows, sigma_rows, target_column, explicit_sigma_column, weighted)`.
+  - This boundary is the only code that interprets embedded uncertainty tokens, explicit sigma/err columns, weighted mode, unweighted `data_sigmas`, and no-sigma behavior.
+  - Worker serialization may preserve and round-trip normalized sigma values, but must not reinterpret token syntax or create a second uncertainty grammar.
+
+Replacement map:
+
+- `app_desktop/parameter_table.py`
+  - `parameter_config()` delegates to the shared API.
+  - UI-only row ownership, selection, and display behavior remain in `ParameterTable`.
+- `app_desktop/constants_editor.py`
+  - table/text parsing, `constants_dict()`, disabled state, and reserved-name validation delegate to the shared API.
+  - editor widgets remain responsible only for presentation and state capture.
+- `app_desktop/window_data_mixin.py`
+  - `_resolve_uncertainties()` and `_build_weight_vector()` either delegate to the shared uncertainty boundary or are reduced to UI/dataframe adapters that call it.
+- `app_web/logic/fitting.py`
+  - must use the same shared uncertainty grammar or be explicitly documented as out of scope with a tracked rationale before Task 3c can complete.
+  - direct parsing imports from report/LaTeX modules are not allowed after the shared grammar boundary exists.
+- `app_desktop/window.py` and `app_desktop/window_fitting_models_mixin.py`
+  - custom fitting and self-consistent fitting compute paths call the full fitting-input normalizer before building `ModelProblem`, `FitJob`, or worker payloads.
+  - `_collect_custom_parameter_config()`, `_collect_implicit_parameter_config()`, `_collect_custom_constants()`, and `_collect_implicit_constants()` may remain only as adapter methods that delegate to the normalized DTO.
+- Workspace capture/restore paths
+  - custom fitting and self-consistent fitting both serialize through the same persisted DTOs,
+  - stale workspaces migrate without losing draft rows/text or constraints-disabled state,
+  - round trips do not introduce backend strategy fields.
+- Fit job construction and worker payloads
+  - compute config, constants, `data_sigmas`, `weights`, and serialized uncertainty values are produced through the shared API,
+  - worker deserialization must not reimplement incompatible parsing.
+
+Required tests:
+
+- Failing-first unit tests for the shared API must be added before production wiring.
+- Unit tests for the shared API:
+  - constraints enabled/disabled,
+  - manual empty rows and unnamed drafts,
+  - orphan filtering,
+  - duplicate/invalid/reserved names,
+  - constants table/text views,
+  - disabled constants preserving drafts but computing `{}`,
+  - uncertainty tokens, explicit sigma columns, weighted/unweighted/no-sigma cases.
+- Tests for localized errors:
+  - missing uncertainty for weighted fitting,
+  - zero/negative uncertainty,
+  - no uncertainty data,
+  - invalid parameter/constant value,
+  - each case must preserve both language halves or structured message codes that the UI renders bilingually.
+- Integration tests proving both custom fitting and self-consistent fitting use the same normalized output for equivalent inputs.
+- Workspace tests for capture, restore, migration, Save As, and round trip.
+- Worker payload round-trip tests for uncertainty tokens and sigma values.
+- Architecture guard proving:
+  - the shared normalizer has production imports before it is committed,
+  - `ParameterTable.parameter_config()`, `ConstantsEditor.constants_dict()`, workspace coercion/config helpers, and data-uncertainty helpers are removed or reduced to delegation,
+  - custom and self-consistent fitting compute paths cannot bypass the shared normalizer.
+
+Expected verification:
+
+- `pytest -q tests/test_fitting_input_normalization.py tests/test_parameter_table.py tests/test_constants_editor.py tests/test_constants_text_view.py tests/test_workspace_implicit_round_trip.py tests/test_app_desktop_workers_core.py`
+- `QT_QPA_PLATFORM=offscreen pytest -q tests/test_desktop_implicit_model_ui.py tests/test_workspace_controller.py tests/test_example_workspaces.py tests/test_desktop_example_workspace_menu.py`
+- Web/logic tests covering `app_web/logic/fitting.py` if it remains a consumer of uncertainty-token parsing.
+- GUI tests touched by custom/self-consistent fitting collection.
+- `ruff check app_desktop/fitting_input_normalization.py app_desktop/parameter_table.py app_desktop/constants_editor.py app_desktop/window.py app_desktop/window_fitting_models_mixin.py app_desktop/window_data_mixin.py app_web/logic/fitting.py`
+- scoped `mypy` on changed modules where configured.
+- `python -m compileall -q shared app_web/logic/fitting.py app_desktop/fitting_input_normalization.py app_desktop/parameter_table.py app_desktop/constants_editor.py app_desktop/workspace_controller.py app_desktop/workers_core.py`
+
+Review gate:
+
+- deep architecture/spec review,
+- code-quality review,
+- Claude adversarial review.
+
 ## Task 4: Parallel Backend Continuation
 
 Status: pending.
@@ -275,6 +424,7 @@ Continue the broader backend parallelization plan only after implicit fitting is
 
 Required work:
 
+- Entry gate: delete `_execute_fit_job_payload_subprocess_legacy()` and remove `ParallelConfig.enable_new_implicit_backend`, or add a tracked ADR explaining the external compatibility requirement and a regression proving stale `enable_new_implicit_backend=False` inputs still route through the unified backend. This gate must be complete before adding new parallel call sites.
 - If `docs/superpowers/plans/2026-05-28-datalab-parallel-backend-implementation-plan.md` is committed by then, re-read it and reconcile it with current implicit backend changes.
 - If that parallel-backend plan is still untracked, either commit it through its own reviewed docs task or reconstruct the parallel-backend continuation requirements from tracked code, `task_plan.md`, `findings.md`, `progress.md`, and current git history before implementation.
 - Keep resource controls centralized and reusable across modules.
@@ -282,6 +432,27 @@ Required work:
 - Do not reintroduce GUI backend strategy toggles.
 - Name and enforce the shared backend boundary before adding new parallel call sites. New code must not create ad hoc process/thread pools or bypass the shared runner/config path.
 - Worker payloads, preferences, and stale workspace inputs must route through the unified backend even if they contain old `enable_new_implicit_backend=False` data.
+- Parallel worker payloads must be raw, serializable input payloads only. They must not pickle, pass, cache, or reuse:
+  - `ModelSpecification`,
+  - implicit evaluator closures,
+  - `ImplicitEvaluationCache`,
+  - route diagnostics,
+  - mutable warm-start or point-index state.
+- Each worker execution must rebuild `ModelSpecification` and implicit caches inside the worker from normalized input payloads.
+- Serial and process backends must produce equivalent results for direct custom fits and self-consistent fits across:
+  - precision `<= 16` and high precision,
+  - constants,
+  - configured seed, warm start, and hint-source cases,
+  - SciPy candidate/fallback and mpmath routes,
+  - cancellation followed by retry,
+  - repeated runs proving no cache or diagnostics leakage.
+
+Expected verification:
+
+- `pytest -q tests/test_parallel_backend*.py tests/test_app_desktop_workers_core.py tests/test_auto_fit_subprocess_orchestrator.py`
+- Focused implicit regression tests from Task 2c rerun under the shared backend boundary.
+- Static guard proving no new ad hoc `multiprocessing.Pool`, `ProcessPoolExecutor`, `ThreadPoolExecutor`, or raw `Process` use was introduced outside the shared backend modules.
+- `ruff check` and `python -m compileall -q` on changed backend/worker modules.
 
 Review gate:
 
@@ -293,9 +464,27 @@ Review gate:
 
 Status: pending and blocking public release.
 
-Release builds must be produced from a clean tracked archive or clean clone. Release prep fails if duplicate `" 2"` files are present in the build source.
+Release builds must be produced from a clean tracked archive or clean clone. Release prep fails if any untracked source artifact or duplicate `" 2"` file is present in the build source.
 
 Release-only checks may be skipped only by marking the release blocked. An environment skip for macOS smoke, Windows smoke, signing, notarization, Authenticode verification, manifest signing, or pinned-download verification is not a pass and must not produce public release assets.
+
+Source hygiene gate before any release build:
+
+```bash
+git status --porcelain=v1 --untracked-files=all
+git ls-files --others --exclude-standard
+git diff --cached --name-only
+```
+
+Acceptance: the release build source is a clean clone/archive with no untracked files. If using the development worktree for preflight only, any untracked source draft or path containing `" 2"` blocks release and must not be copied into the build source.
+
+Untracked-source guard for release sources:
+
+```bash
+test -z "$(git ls-files --others --exclude-standard)"
+```
+
+Acceptance: the command exits successfully in the release source. Development-worktree preflight may additionally grep for duplicate `" 2"` paths for convenience, but release acceptance is the stronger rule: no untracked source files at all. The draft `app_desktop/fitting_input_normalization.py` check belongs to Task 3c's exit criteria, not to a permanent release regex.
 
 Release order is mandatory:
 
@@ -313,10 +502,10 @@ Release order is mandatory:
 Required release evidence:
 
 - Legacy backend cleanup:
-  - delete `_execute_fit_job_payload_subprocess_legacy()` and remove `ParallelConfig.enable_new_implicit_backend`, or add a short tracked ADR explaining why each compatibility surface must remain and how it is tested,
-  - an ADR instead of deletion must be gated by an existing or new regression proving stale `enable_new_implicit_backend=False` inputs route through the unified backend,
-  - stale workspaces/preferences/payloads with `enable_new_implicit_backend=False` must still route through the unified backend until the compatibility field is removed.
+  - Task 4 entry gate evidence showing legacy backend compatibility surfaces were deleted, or a tracked ADR plus stale-input routing regression explains why they remain.
 - Source verification:
+  - clean clone/archive checkout of the release commit,
+  - `git status --porcelain=v1 --untracked-files=all` returns empty output in the build source,
   - full or agreed broad test suite,
   - `ruff check`,
   - scoped/broad `mypy` where configured,
@@ -326,13 +515,19 @@ Required release evidence:
   - launch app,
   - open an implicit example workspace,
   - run direct `delta` and ionization-energy implicit fits,
+  - paste or open uncertainty-token data such as `1.23(4)` and `±` forms and verify parsing in the frozen app,
+  - run a low-precision SciPy-eligible case and verify the app either selects a validated faster route or records a comparator fallback with correct metadata,
+  - run an unweighted-sigma case and verify mpmath systematic refits are preserved,
+  - verify frozen runtime actually imports and uses `scipy`, `mpmath`, and `sympy`,
   - verify no extra GUI process opens during fitting,
   - verify formula preview and workspace Save As behavior.
+  - command evidence must include `codesign --verify --deep --strict --verbose=2 <app>`, `spctl --assess --type execute --verbose <app>`, notarization submit/result, and `xcrun stapler validate <app-or-dmg>` where applicable.
 - Windows frozen smoke:
   - build remotely on Windows from clean source,
   - launch `.exe`/installer result,
-  - run the same implicit example smoke,
+  - run the same implicit example, uncertainty-token, SciPy-eligible, and unweighted-sigma smokes,
   - verify no extra GUI process opens during fitting.
+  - command evidence must include `signtool verify /pa /v <exe-or-installer>` and a clean remote `git status --porcelain=v1 --untracked-files=all` before build.
 - Signing/trust:
   - macOS Developer ID signing and notarization evidence, including `spctl` and package/app verification where applicable,
   - Windows Authenticode signing evidence, including `signtool verify`,
@@ -341,6 +536,11 @@ Required release evidence:
 - Build-time downloads:
   - release builds must use pre-provisioned dependencies or pinned hash/signature verification for every external download.
   - release prep must record dependency provenance for standalone Python, wheel caches or lockfiles, and any build-time downloads; missing provenance blocks public release.
+- Final artifact audit:
+  - scan release notes, `updates.json`, public docs, bundled example workspaces, and uploaded archives for local filesystem paths, private hosts, temporary localhost descriptions, secrets, duplicate `" 2"` artifacts, and internal AI/process artifacts,
+  - record the audit command/output before publishing.
+  - generate `updates.json` only after final signed assets are uploaded, downloaded back, and size/hash-verified.
+  - unsigned or unverifiable platforms may be listed only as manual release-page links, not silent/automatic install targets.
 
 Review gate:
 
