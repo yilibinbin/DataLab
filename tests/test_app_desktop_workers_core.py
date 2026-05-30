@@ -193,6 +193,7 @@ def test_execute_fit_job_payload_self_consistent_wires_definition_and_details(
         "build_implicit_model_specification",
         fake_build_implicit_model_specification,
     )
+    monkeypatch.setattr(workers_core, "can_fit_observed_implicit_variable", lambda _definition: False)
     monkeypatch.setattr(workers_core, "fit_custom_model", fake_fit_custom_model)
 
     job = FitJob(
@@ -276,6 +277,65 @@ def test_execute_fit_job_payload_self_consistent_requires_definition() -> None:
                 label="missing-definition-test",
             )
         )
+
+
+def test_execute_fit_job_payload_self_consistent_observed_implicit_linear_fast_path() -> None:
+    with mp.workdps(80):
+        n_series = [mp.mpf(n) for n in range(12, 22)]
+        params = {
+            "d0": mp.mpf("-0.012"),
+            "d2": mp.mpf("0.0075"),
+            "d4": mp.mpf("0.013"),
+            "d6": mp.mpf("0.021"),
+            "d8": mp.mpf("-0.11"),
+        }
+        y_series = [
+            params["d0"]
+            + params["d2"] / n**2
+            + params["d4"] / n**4
+            + params["d6"] / n**6
+            + params["d8"] / n**8
+            for n in n_series
+        ]
+    sigma_series = [mp.mpf("1e-9")] * len(y_series)
+    weights = [1 / (sigma * sigma) for sigma in sigma_series]
+    definition = ImplicitModelDefinition(
+        x_variables=("n",),
+        implicit_variable="delta",
+        equation="d0 + d2/n**2 + d4/n**4 + d6/n**6 + d8/n**8",
+        output_expression="delta",
+        parameters=("d0", "d2", "d4", "d6", "d8"),
+        constants={},
+        solve_options=ImplicitSolveOptions(method="root", initial="0", tolerance="1e-40"),
+    )
+    job = FitJob(
+        model_type="self_consistent",
+        headers=["n", "delta"],
+        data_rows=list(zip(n_series, y_series)),
+        sigma_rows=[(None, sigma) for sigma in sigma_series],
+        x_series=n_series,
+        y_series=y_series,
+        sigma_series=sigma_series,
+        weights=weights,
+        variable_map={"n": "n"},
+        variable_data={"n": n_series, "delta": y_series},
+        target_series=y_series,
+        target_column="delta",
+        model_expr="delta",
+        parameter_config={name: {"initial": "0"} for name in params},
+        parameter_names=list(params),
+        precision=80,
+        weighted=True,
+        label="observed-implicit-linear",
+        implicit_definition=definition,
+    )
+
+    payload = _execute_fit_job_payload(job)
+
+    assert payload.fit_result.details["implicit_fast_path"] == "observed_implicit_linear"
+    assert payload.fit_result.details["implicit_diagnostics"]["points_solved"] == 0
+    for name, expected in params.items():
+        assert mp.almosteq(payload.fit_result.params[name], expected, abs_eps=mp.mpf("1e-30"))
 
 
 def test_self_consistent_fit_job_is_marked_for_process_boundary() -> None:
