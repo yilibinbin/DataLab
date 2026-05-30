@@ -291,6 +291,13 @@ def fit_observed_implicit_variable_linear_model(
                     )
                 )
         weight_vec = _normalise_weights(weights, len(targets))
+        if weight_vec is None and data_sigmas is not None and any(sigma is not None for sigma in data_sigmas):
+            raise ValueError(
+                _dual_msg(
+                    "未加权的数据不确定度需要执行 ±σ 系统重拟合，不能使用线性快路径。",
+                    "Unweighted data uncertainties require +/- sigma systematic refits; the linear fast path is disabled.",
+                )
+            )
 
         offsets: list[mp.mpf] = []
         basis_rows: list[list[mp.mpf]] = []
@@ -936,17 +943,11 @@ def _solve_observed_linear_least_squares(
     }
     if weights:
         details["weighted"] = True
-    if data_sigmas is not None:
-        if weights:
-            details["uncertainty_note"] = {
-                "zh": "已用数据不确定度进行加权，仅统计误差；为避免双计，未单独计算系统误差。",
-                "en": "Data uncertainties were used for weighting (statistical only); to avoid double-counting, no separate systematic error was added.",
-            }
-        else:
-            details["uncertainty_note"] = {
-                "zh": "已保存数据不确定度；该线性快路径当前未执行 ±σ 系统重拟合。",
-                "en": "Data uncertainties were retained; this linear fast path does not currently run +/- sigma systematic refits.",
-            }
+    if data_sigmas is not None and weights:
+        details["uncertainty_note"] = {
+            "zh": "已用数据不确定度进行加权，仅统计误差；为避免双计，未单独计算系统误差。",
+            "en": "Data uncertainties were used for weighting (statistical only); to avoid double-counting, no separate systematic error was added.",
+        }
     if cov_warning:
         details["covariance_warning"] = cov_warning
     return FitResult(

@@ -199,7 +199,7 @@ class FitRunner:
         plan = plan_implicit_fit(definition, precision=precision)
         fallback_history: list[dict[str, object]] = []
         if plan.kind is ImplicitPlanKind.OBSERVED_LINEAR:
-            if weights is None and data_sigmas is not None and any(sigma is not None for sigma in data_sigmas):
+            if _has_unweighted_data_sigmas(weights, data_sigmas):
                 fallback_history.append(
                     {
                         "from": "observed_linear",
@@ -227,7 +227,7 @@ class FitRunner:
                     fallback_history.append({"from": "observed_linear", "to": "general", "reason": str(exc)})
 
         if plan.kind is ImplicitPlanKind.EXACT_AFFINE_OUTPUT and plan.transform is not None:
-            if weights is None and data_sigmas is not None and any(sigma is not None for sigma in data_sigmas):
+            if _has_unweighted_data_sigmas(weights, data_sigmas):
                 fallback_history.append(
                     {
                         "from": "exact_affine_output",

@@ -189,6 +189,33 @@ def test_observed_linear_implicit_skips_fast_path_for_unweighted_data_sigmas() -
     )
 
 
+def test_observed_linear_helper_rejects_unweighted_data_sigmas() -> None:
+    from fitting.constraints import build_parameter_state
+    from fitting.implicit_model import fit_observed_implicit_variable_linear_model
+
+    xs = [mp.mpf("1"), mp.mpf("2"), mp.mpf("3"), mp.mpf("4")]
+    ys = [mp.mpf("0.2") + mp.mpf("0.1") * x for x in xs]
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*x",
+        output_expression="u",
+        parameters=("a", "b"),
+        solve_options=ImplicitSolveOptions(method="fixed_point", initial="0", tolerance="1e-30", max_iterations=20),
+    )
+    state = build_parameter_state({"a": {"initial": "0.2"}, "b": {"initial": "0.1"}}, ["a", "b"])
+
+    with pytest.raises(ValueError, match="systematic refits"):
+        fit_observed_implicit_variable_linear_model(
+            definition,
+            state,
+            {"x": xs},
+            ys,
+            precision=50,
+            data_sigmas=[mp.mpf("0.01")] * len(xs),
+        )
+
+
 def test_runner_disables_analytic_derivatives_for_dependent_parameters() -> None:
     from fitting.problem import ModelProblem
     from fitting.runner import FitRunner
