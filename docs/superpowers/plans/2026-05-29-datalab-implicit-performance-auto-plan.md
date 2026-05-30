@@ -5,7 +5,7 @@
 
 ## Goal
 
-Make self-consistent / implicit fitting automatically choose the fastest correct backend without exposing backend strategy controls in the GUI.
+Make self-consistent / implicit fitting automatically choose the fastest correct backend when a route can prove correctness and net runtime benefit without exposing backend strategy controls in the GUI.
 
 The fitted objective must remain the user's original output-space residual. Exact residual-space transforms are allowed only for proven constant-affine output maps. Nonlinear inverse forms are seed hints only; they must never replace the original output-space residual.
 
@@ -49,8 +49,8 @@ Implemented foundation on branch `codex/parallel-backend-implementation`:
 Current blockers:
 
 - Worktree still contains untracked duplicate `" 2"` files and local draft source files. Use strict allowlist staging only. Release builds must use a clean clone/archive and must fail on any untracked source artifact, not only duplicate `" 2"` paths.
-- Task 2c remains blocked on an explicit implicit regression evidence matrix, cache-lifecycle acceptance matrix, and a real SciPy acceptance/calibration decision.
-- Task 3c remains blocked on shared fitting-input normalization being wired into existing GUI/workspace/worker call sites. The untracked `app_desktop/fitting_input_normalization.py` is only a draft until it has production consumers and tests.
+- Task 2c evidence matrix, behavioral cache-boundary matrix, and SciPy decision have passed review and are ready for the Task 2c commit.
+- Task 3c shared fitting-input normalization is complete as `9376da5`.
 - Task 4 cannot start until legacy backend compatibility surfaces are deleted or justified by a tracked ADR plus stale-input routing tests.
 - The release gate still needs concrete frozen-bundle smoke and signing/trust evidence.
 
@@ -168,7 +168,7 @@ Review gate:
 
 ## Task 2c: Close Implicit Regression Evidence and SciPy Selection Semantics
 
-Status: pending.
+Status: complete for the reviewed Task 2c slice. Release and new parallel-backend expansion remain blocked by the direct cache identity/state-restoration gate below.
 
 Purpose:
 
@@ -176,30 +176,31 @@ Turn the Task 2 regression frontier into an auditable evidence matrix and close 
 
 Required work:
 
-- Add an evidence matrix in this plan or a tracked companion artifact that maps every Task 2 required regression to:
+- [x] Add an evidence matrix in this plan or a tracked companion artifact that maps every Task 2 required regression to:
   - test file and test name,
   - verification command,
   - last observed result,
   - commit or current diff that provides the evidence,
   - whether it blocks release.
   - Existing committed regressions should be cataloged rather than duplicated. New implementation in Task 2c is required only for missing oracle/cache rows and the SciPy acceptance/calibration decision.
-- Add a quantum-defect numerical oracle row to the matrix:
+- [x] Add a quantum-defect numerical oracle row to the matrix:
   - direct `delta` and ionization-energy output-space scenarios,
   - reference or synthetic known-parameter recovery tolerances,
   - residual sign and unit assertion: residuals are fitted output minus observed target in the target's output space,
   - weighted, unweighted `data_sigmas`, and no-sigma behavior,
   - executed `details["implicit_strategy"]` and fallback metadata.
-- Add or update cache-lifecycle tests so each boundary is explicit:
+- [x] Add or update the cache-lifecycle evidence matrix so each boundary is explicit:
   - preflight vs production,
   - production vs SciPy candidate,
   - SciPy candidate vs spot-check,
   - spot-check vs rematerialization,
   - route/backend/precision/parameter/constant/data-row/seed-source invalidation.
-- Decide and implement the SciPy acceptance path:
+- [ ] Add direct object-identity/state-leak tests for preflight, production, SciPy candidate, spot-check, and rematerialization before release or before expanding new parallel-backend call sites. Current Task 2c evidence covers behavior and fresh factory threading; it does not claim exhaustive identity proof for every mutable cache instance.
+- [x] Decide and implement the SciPy acceptance path:
   - either add a real low-net-cost calibration gate, such as cached comparator reuse or sampled calibration whose validation cost is included in the decision,
   - or explicitly keep SciPy as a rejected candidate for current full-comparator runs and update user/debug metadata so the plan no longer claims current-run fastest-route selection where it is not true.
-- Preserve output-space residuals, covariance, parameter errors, chi-square/AIC/BIC, fallback metadata, and unweighted `data_sigmas` behavior in every route.
-- Add tests proving any accepted SciPy route is faster after validation cost is counted, or proving the current route rejects SciPy and reuses/returns the comparator instead.
+- [x] Preserve output-space residuals, covariance, parameter errors, chi-square/AIC/BIC, fallback metadata, and unweighted `data_sigmas` behavior in covered routes. The non-perfect ionization-energy regression compares analytic output-space fit statistics, fitted curve, and residuals against a forced numeric output-space route.
+- [x] Add tests proving any accepted SciPy route is faster after validation cost is counted, or proving the current route rejects SciPy and reuses/returns the comparator instead.
 
 Expected verification:
 
@@ -312,7 +313,7 @@ Review gate:
 
 ## Task 3c: Shared Fitting-Input Normalization
 
-Status: pending.
+Status: complete. Committed as `9376da5`.
 
 Purpose:
 
@@ -320,7 +321,7 @@ Replace duplicated custom-fit and self-consistent-fit input parsing with one nam
 
 Owner module:
 
-- `app_desktop/fitting_input_normalization.py` may be used only if it becomes the single production normalization boundary. It must not be committed as unwired draft code.
+- `app_desktop/fitting_input_normalization.py` is the committed production normalization boundary from `9376da5`; future changes must keep it wired rather than reintroducing parallel parsing paths.
 
 Required API contract:
 
@@ -341,8 +342,8 @@ Required API contract:
   - orphan rows do not enter compute config,
   - disabled constants preserve draft rows/text but produce an empty compute dict,
   - disabled parameter constraints ignore fixed/min/max for compute without deleting drafts.
-- Constants syntax must match the same uncertainty-aware grammar used by error propagation without making the normalization core depend on LaTeX/reporting modules. If `parse_uncertainty_format` remains in `datalab_latex`, move or wrap the shared grammar in `shared/` first.
-- Ordering requirement: before wiring `app_desktop/fitting_input_normalization.py` or any replacement module into production, relocate or wrap the uncertainty grammar in `shared/` and update the normalizer to import from that shared boundary. The current draft's direct `datalab_latex.latex_tables_error_propagation.parse_uncertainty_format` import is a known violation until fixed.
+- Constants syntax must match the same uncertainty-aware grammar used by error propagation without making the normalization core depend on LaTeX/reporting modules. This was resolved in `9376da5` by moving the shared grammar behind `shared/uncertainty.py`.
+- Ordering requirement for future rewrites: keep the uncertainty grammar in `shared/` or an equivalent non-reporting boundary before wiring desktop, web, workspace, or worker consumers to it.
 - Validation errors must preserve the current bilingual behavior. Shared normalization may accept a message provider or return structured error codes, but it must not regress existing Chinese/English `_dual_msg()` cases to English-only messages.
 - Workspace migration and restore must be lossless for supported schemas. Malformed legacy rows must fail loudly or surface explicit migration diagnostics; the normalizer must not silently drop non-dict rows, falsy numeric values, constants text, disabled-state drafts, or constraint drafts.
 - Uncertainty handling has a single boundary, for example `normalize_data_uncertainty(headers, rows, sigma_rows, target_column, explicit_sigma_column, weighted)`.
@@ -484,20 +485,76 @@ Untracked-source guard for release sources:
 test -z "$(git ls-files --others --exclude-standard)"
 ```
 
-Acceptance: the command exits successfully in the release source. Development-worktree preflight may additionally grep for duplicate `" 2"` paths for convenience, but release acceptance is the stronger rule: no untracked source files at all. The draft `app_desktop/fitting_input_normalization.py` check belongs to Task 3c's exit criteria, not to a permanent release regex.
+Acceptance: the command exits successfully in the release source. Development-worktree preflight may additionally grep for duplicate `" 2"` paths for convenience, but release acceptance is the stronger rule: no untracked source files at all.
 
 Release order is mandatory:
 
 1. Commit reviewed changes with explicit allowlist staging.
-2. Push branch and create/review PR.
-3. Merge to `main`.
-4. Tag or otherwise identify the release commit on `main`.
-5. Build macOS and Windows assets from a clean clone or clean tracked archive of that release commit.
-6. Sign, notarize, staple, and verify macOS assets.
-7. Authenticode-sign and verify Windows assets.
-8. Generate update metadata from final uploaded assets only.
-9. Verify uploaded asset size/hash by downloading from GitHub.
-10. Publish release notes without local paths, private hosts, or local-server descriptions.
+2. Before any push or PR, run the pre-push source audit below against the staged diff and branch diff.
+3. Push branch and create/review PR only after the audit passes.
+4. Merge to `main`.
+5. Tag or otherwise identify the release commit on `main`.
+6. Build macOS and Windows assets from a clean clone or clean tracked archive of that release commit.
+7. Sign, notarize, staple, and verify macOS assets.
+8. Authenticode-sign and verify Windows assets.
+9. Generate update metadata from final uploaded assets only.
+10. Verify uploaded asset size/hash by downloading from GitHub.
+11. Publish release notes without local paths, private hosts, or local-server descriptions.
+
+Pre-push source audit:
+
+- `git diff --cached --name-only` must exactly match the task-specific allowlist before commit.
+- `git diff --name-only origin/main...HEAD` and the PR file list must contain only reviewed task files.
+- `git diff --cached --name-only` and the PR file list must contain no duplicate `" 2"` paths, `.superpowers/`, `dist/`, `build/`, `__pycache__/`, local full-review scratch lists, or unrelated update/packaging drafts.
+- Scan the staged diff and branch diff for local filesystem paths, private hosts, localhost release descriptions, secrets/tokens, internal AI/process artifacts, and temporary build machine paths. Any match blocks push until reviewed or removed.
+
+Current Task 2c exact allowlist:
+
+```text
+docs/superpowers/implicit_regression_evidence_matrix.md
+docs/superpowers/plans/2026-05-29-datalab-implicit-performance-auto-plan.md
+tests/test_implicit_performance_regression.py
+tests/test_implicit_scipy_backend.py
+```
+
+Local planning files `findings.md`, `progress.md`, and `task_plan.md` are intentionally ignored by `.gitignore`; update them for recovery, but do not include them in this public commit allowlist.
+
+Current Task 2c staged-name check:
+
+```bash
+tmp_allowed="$(mktemp)"
+cat >"$tmp_allowed" <<'EOF'
+docs/superpowers/implicit_regression_evidence_matrix.md
+docs/superpowers/plans/2026-05-29-datalab-implicit-performance-auto-plan.md
+tests/test_implicit_performance_regression.py
+tests/test_implicit_scipy_backend.py
+EOF
+tmp_staged="$(mktemp)"
+tmp_diff="$(mktemp)"
+git diff --cached --name-only | sort > "$tmp_staged"
+sort "$tmp_allowed" > "$tmp_allowed.sorted"
+comm -3 "$tmp_allowed.sorted" "$tmp_staged" > "$tmp_diff"
+test ! -s "$tmp_diff"
+```
+
+Current Task 2c staged, branch, and untracked artifact scan:
+
+```bash
+artifact_name_pattern='(^|/)(\.superpowers|dist|build|__pycache__)(/|$)| 2(\.|$)|FULL_FILE_REVIEW_FILELIST|update_.* 2| 2\.md$'
+git diff --cached --name-only | rg "$artifact_name_pattern" && exit 1 || true
+git diff --name-only origin/main...HEAD | rg "$artifact_name_pattern" && exit 1 || true
+git ls-files --others --exclude-standard | rg "$artifact_name_pattern" && exit 1 || true
+
+content_pattern='(/Users/|/var/folders/|localhost|127\.0\.0\.1|apm8517|backup-windows|OPENAI_API_KEY|GITHUB_TOKEN|ghp_|private host|temporary local server)'
+git diff --cached -- . \
+  ':(exclude)docs/superpowers/plans/2026-05-29-datalab-implicit-performance-auto-plan.md' \
+  | rg -n "$content_pattern" && exit 1 || true
+git diff origin/main...HEAD -- . \
+  ':(exclude)docs/superpowers/plans/2026-05-29-datalab-implicit-performance-auto-plan.md' \
+  | rg -n "$content_pattern" && exit 1 || true
+```
+
+If a scan hit is intentionally confined to local planning files such as `progress.md` or `findings.md`, record the exception in `progress.md`; public docs, release notes, manifests, examples, and archives get no exception without removing or rewriting the content.
 
 Required release evidence:
 
@@ -555,7 +612,9 @@ Review gate:
 - Before every commit:
   - `git status --short`,
   - `git diff --cached --name-only`,
-  - verify no `" 2"` duplicate file is staged.
+  - compare staged names against the exact task allowlist,
+  - verify no `" 2"` duplicate file, `.superpowers/`, `dist/`, `build/`, `__pycache__/`, scratch review list, or unrelated draft file is staged,
+  - scan staged content for local paths, private hosts, localhost release notes, secrets/tokens, and internal AI/process artifacts.
 
 ## Completion Definition
 

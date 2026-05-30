@@ -152,15 +152,18 @@ def test_scipy_implicit_spotcheck_uses_fresh_implicit_cache(monkeypatch: pytest.
         fresh_model_factory: Callable[[], ModelSpecification] | None = None,
     ) -> bool:
         assert fresh_model_factory is not None
-        fresh_model_factory()
-        seen_fresh_factory["called"] = True
-        return original_spotcheck(
+
+        def observing_fresh_model_factory() -> ModelSpecification:
+            seen_fresh_factory["called"] = True
+            return fresh_model_factory()
+
+        return bool(original_spotcheck(
             model,
             observations,
             params,
             fitted_curve,
-            fresh_model_factory=fresh_model_factory,
-        )
+            fresh_model_factory=observing_fresh_model_factory,
+        ))
 
     monkeypatch.setattr("fitting.runner._spotcheck_scipy_solution", wrapped_spotcheck)
     xs = [mp.mpf(i) for i in range(1, 8)]

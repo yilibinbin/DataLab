@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# mypy: disable-error-code=untyped-decorator
+
 from typing import Any
 
 import mpmath as mp
@@ -109,6 +111,123 @@ def _assert_error_maps_are_finite(result: Any, parameter_names: tuple[str, ...])
     assert all(mp.isfinite(value) for row in result.covariance for value in row)
 
 
+def _assert_fit_statistics_are_finite(result: Any) -> None:
+    for attr in ("chi2", "reduced_chi2", "aic", "bic", "r2", "rmse"):
+        assert mp.isfinite(getattr(result, attr))
+
+
+def _synthetic_quantum_defect_rows() -> tuple[list[mp.mpf], list[mp.mpf], dict[str, mp.mpf]]:
+    true_params = {
+        "d0": mp.mpf("-0.01214"),
+        "d2": mp.mpf("0.0018"),
+        "d4": mp.mpf("-0.00035"),
+    }
+
+    def solve_delta(n_value: mp.mpf) -> mp.mpf:
+        delta = true_params["d0"]
+        for _ in range(80):
+            denom = n_value - delta
+            next_delta = true_params["d0"] + true_params["d2"] / denom**2 + true_params["d4"] / denom**4
+            if mp.fabs(next_delta - delta) < mp.mpf("1e-60"):
+                return +next_delta
+            delta = next_delta
+        return +delta
+
+    n_values = [mp.mpf(index) for index in range(5, 15)]
+    return n_values, [solve_delta(n_value) for n_value in n_values], true_params
+
+
+def _assert_recovers_synthetic_quantum_defect_params(result: Any, true_params: dict[str, mp.mpf]) -> None:
+    assert mp.fabs(result.params["d0"] - true_params["d0"]) < mp.mpf("1e-28")
+    assert mp.fabs(result.params["d2"] - true_params["d2"]) < mp.mpf("1e-26")
+    assert mp.fabs(result.params["d4"] - true_params["d4"]) < mp.mpf("1e-24")
+
+
+def test_synthetic_direct_delta_oracle_recovers_quantum_defect_parameters() -> None:
+    from fitting.implicit_model import ImplicitModelDefinition
+    from fitting.problem import ModelProblem
+    from fitting.runner import FitRunner
+
+    with mp.workdps(90):
+        n_values, delta_values, true_params = _synthetic_quantum_defect_rows()
+        parameter_names = ("d0", "d2", "d4")
+        problem = ModelProblem(
+            model_type="self_consistent",
+            expression="delta",
+            variables=("n",),
+            parameter_config={
+                "d0": {"initial": "-0.0120"},
+                "d2": {"initial": "0.001"},
+                "d4": {"initial": "0"},
+            },
+            implicit_definition=ImplicitModelDefinition(
+                x_variables=("n",),
+                implicit_variable="delta",
+                equation="d0 + d2/(n-delta)^2 + d4/(n-delta)^4",
+                output_expression="delta",
+                parameters=parameter_names,
+            ),
+        )
+
+        result = FitRunner().fit(problem, {"n": n_values}, delta_values, precision=80)
+
+        assert result.details["implicit_strategy"] == "observed_linear"
+        assert result.details["optimizer_backend"] == "mpmath_qr"
+        _assert_recovers_synthetic_quantum_defect_params(result, true_params)
+        _assert_fit_statistics_are_finite(result)
+        assert all(
+            mp.almosteq(residual, fit - observed, rel_eps=mp.mpf("1e-30"), abs_eps=mp.mpf("1e-50"))
+            for residual, fit, observed in zip(result.residuals, result.fitted_curve, delta_values, strict=True)
+        )
+        _assert_error_maps_are_finite(result, parameter_names)
+
+
+@pytest.mark.slow
+def test_synthetic_ionization_energy_oracle_recovers_quantum_defect_parameters() -> None:
+    from fitting.implicit_model import ImplicitModelDefinition
+    from fitting.problem import ModelProblem
+    from fitting.runner import FitRunner
+
+    with mp.workdps(90):
+        n_values, delta_values, true_params = _synthetic_quantum_defect_rows()
+        r_const = mp.mpf("100")
+        energy_values = [r_const / (n_value - delta) ** 2 for n_value, delta in zip(n_values, delta_values, strict=True)]
+        parameter_names = ("d0", "d2", "d4")
+        problem = ModelProblem(
+            model_type="self_consistent",
+            expression="R/(n-delta)^2",
+            variables=("n",),
+            parameter_config={
+                "d0": {"initial": "-0.0120"},
+                "d2": {"initial": "0.001"},
+                "d4": {"initial": "0"},
+            },
+            implicit_definition=ImplicitModelDefinition(
+                x_variables=("n",),
+                implicit_variable="delta",
+                equation="d0 + d2/(n-delta)^2 + d4/(n-delta)^4",
+                output_expression="R/(n-delta)^2",
+                parameters=parameter_names,
+                constants={"R": str(r_const)},
+            ),
+        )
+
+        result = FitRunner().fit(problem, {"n": n_values}, energy_values, precision=80)
+
+        assert result.details["implicit_strategy"] in {
+            "analytic_implicit_output_space",
+            "general_implicit_numeric_finite_difference",
+        }
+        assert result.details.get("output_transform") is None
+        _assert_recovers_synthetic_quantum_defect_params(result, true_params)
+        _assert_fit_statistics_are_finite(result)
+        assert all(
+            mp.almosteq(residual, fit - observed, rel_eps=mp.mpf("1e-24"), abs_eps=mp.mpf("1e-36"))
+            for residual, fit, observed in zip(result.residuals, result.fitted_curve, energy_values, strict=True)
+        )
+        _assert_error_maps_are_finite(result, parameter_names)
+
+
 def test_direct_delta_uncertainty_modes_preserve_error_contracts() -> None:
     from fitting.implicit_model import ImplicitModelDefinition
     from fitting.problem import ModelProblem
@@ -157,6 +276,7 @@ def test_direct_delta_uncertainty_modes_preserve_error_contracts() -> None:
     assert any(item.get("skipped") == "unweighted_data_sigmas" for item in fallback_history if isinstance(item, dict))
     for result in (no_sigma, weighted, unweighted):
         _assert_error_maps_are_finite(result, parameter_names)
+        _assert_fit_statistics_are_finite(result)
         assert all(
             mp.almosteq(residual, fit - target, rel_eps=mp.mpf("1e-20"), abs_eps=mp.mpf("1e-22"))
             for residual, fit, target in zip(result.residuals, result.fitted_curve, delta, strict=True)
@@ -216,6 +336,7 @@ def test_nonlinear_output_uses_output_space_backend_without_transforming_objecti
         for residual, fit, target in zip(energy_result.residuals, energy_result.fitted_curve, energy, strict=True)
     )
     assert all(mp.isfinite(value) for value in energy_result.params.values())
+    _assert_fit_statistics_are_finite(energy_result)
     diagnostics = energy_result.details.get("implicit_diagnostics", {})
     assert isinstance(diagnostics, dict)
     assert int(diagnostics.get("points_solved", 10**9)) < len(n) * 500
@@ -273,6 +394,7 @@ def test_ionization_energy_uncertainty_modes_preserve_output_space_errors() -> N
         }
         assert result.details.get("output_transform") is None
         _assert_error_maps_are_finite(result, parameter_names)
+        _assert_fit_statistics_are_finite(result)
         assert all(
             mp.almosteq(residual, fit - target, rel_eps=mp.mpf("1e-20"), abs_eps=mp.mpf("1e-22"))
             for residual, fit, target in zip(result.residuals, result.fitted_curve, energy, strict=True)
@@ -319,6 +441,8 @@ def test_nonlinear_output_analytic_strategy_matches_forced_numeric_errors() -> N
         precision=50,
     )
 
+    _assert_fit_statistics_are_finite(analytic)
+    _assert_fit_statistics_are_finite(numeric)
     for name in definition.parameters:
         assert mp.almosteq(analytic.params[name], numeric.params[name], rel_eps=mp.mpf("1e-16"), abs_eps=mp.mpf("1e-24"))
         assert mp.almosteq(
@@ -326,4 +450,25 @@ def test_nonlinear_output_analytic_strategy_matches_forced_numeric_errors() -> N
             numeric.param_errors_total[name],
             rel_eps=mp.mpf("1e-10"),
             abs_eps=mp.mpf("1e-20"),
+        )
+    for attr in ("chi2", "reduced_chi2", "aic", "bic", "r2", "rmse"):
+        assert mp.almosteq(
+            getattr(analytic, attr),
+            getattr(numeric, attr),
+            rel_eps=mp.mpf("1e-16"),
+            abs_eps=mp.mpf("1e-24"),
+        )
+    for analytic_residual, numeric_residual in zip(analytic.residuals, numeric.residuals, strict=True):
+        assert mp.almosteq(
+            analytic_residual,
+            numeric_residual,
+            rel_eps=mp.mpf("1e-16"),
+            abs_eps=mp.mpf("1e-24"),
+        )
+    for analytic_fit, numeric_fit in zip(analytic.fitted_curve, numeric.fitted_curve, strict=True):
+        assert mp.almosteq(
+            analytic_fit,
+            numeric_fit,
+            rel_eps=mp.mpf("1e-16"),
+            abs_eps=mp.mpf("1e-24"),
         )
