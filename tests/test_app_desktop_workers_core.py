@@ -8,7 +8,7 @@ from typing import Any, Callable
 import mpmath as mp
 import pytest
 
-from data_extrapolation_latex_latest import ExtrapolationOptions
+from data_extrapolation_latex_latest import ExtrapolationOptions, parse_uncertainty_format
 
 import app_desktop.workers_core as workers_core
 from app_desktop.workers_core import (
@@ -568,6 +568,23 @@ def test_self_consistent_fit_job_serialization_preserves_high_precision_values()
         assert mp.almosteq(restored.x_series[0], precise, abs_eps=mp.mpf("1e-70"))
         assert mp.almosteq(restored.data_rows[0][0], precise, abs_eps=mp.mpf("1e-70"))
         assert mp.almosteq(restored.variable_data["x"][0], precise, abs_eps=mp.mpf("1e-70"))
+
+
+def test_self_consistent_fit_job_serialization_unwraps_uncertainty_sigmas() -> None:
+    job = _small_self_consistent_fit_job(precision=50)
+    uncertain = parse_uncertainty_format("1.23(4)", lang="en")
+    job.sigma_rows[0] = (None, uncertain)
+    job.sigma_series[0] = uncertain  # type: ignore[list-item]
+
+    payload = _serialize_fit_job(job)
+
+    assert mp.almosteq(mp.mpf(payload["sigma_rows"][0][1]), mp.mpf("0.04"), abs_eps=mp.mpf("1e-18"))
+    assert mp.almosteq(mp.mpf(payload["sigma_series"][0]), mp.mpf("0.04"), abs_eps=mp.mpf("1e-18"))
+
+    restored = _deserialize_fit_job(payload)
+
+    assert restored.sigma_rows[0][1] == mp.mpf("0.04")
+    assert restored.sigma_series[0] == mp.mpf("0.04")
 
 
 def test_self_consistent_fit_result_deserialization_preserves_high_precision_values() -> None:

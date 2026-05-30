@@ -831,7 +831,7 @@ class FitJob:
     model_type: str
     headers: list[str]
     data_rows: list[tuple[mp.mpf, ...]]
-    sigma_rows: list[tuple[mp.mpf | None, ...]]
+    sigma_rows: list[tuple[object | None, ...]]
     x_series: list[mp.mpf]
     y_series: list[mp.mpf]
     sigma_series: list[mp.mpf | None]
@@ -934,8 +934,21 @@ def _deserialize_parallel_config(payload: dict[str, Any] | None) -> ParallelConf
 def _mp_to_string(value: Any, keep_digits: int) -> str:
     try:
         return mp.nstr(mp.mpf(value), keep_digits)
-    except (TypeError, ValueError):
-        return str(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"Unsupported numeric payload value: {value!r}") from exc
+
+
+def _sigma_to_string(value: Any, keep_digits: int) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "uncertainty"):
+        # Worker payloads only need numeric sigma values; display precision stays in the main process.
+        value = getattr(value, "uncertainty")
+    try:
+        sigma = mp.mpf(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"Unsupported sigma payload value: {value!r}") from exc
+    return mp.nstr(sigma, keep_digits) if sigma > 0 else None
 
 
 def _serialize_optional_mpf(value: Any, keep_digits: int) -> str | None:
@@ -946,6 +959,10 @@ def _serialize_optional_mpf(value: Any, keep_digits: int) -> str | None:
 
 def _serialize_mpf_sequence(values: list[Any] | tuple[Any, ...], keep_digits: int) -> list[str | None]:
     return [_serialize_optional_mpf(value, keep_digits) for value in values]
+
+
+def _serialize_sigma_sequence(values: list[Any] | tuple[Any, ...], keep_digits: int) -> list[str | None]:
+    return [_sigma_to_string(value, keep_digits) for value in values]
 
 
 def _deserialize_mpf_sequence(values: list[str | None]) -> list[mp.mpf | None]:
@@ -1012,10 +1029,10 @@ def _serialize_fit_job(job: FitJob) -> dict[str, Any]:
         "model_type": job.model_type,
         "headers": list(job.headers),
         "data_rows": [_serialize_mpf_sequence(row, keep_digits) for row in job.data_rows],
-        "sigma_rows": [_serialize_mpf_sequence(row, keep_digits) for row in job.sigma_rows],
+        "sigma_rows": [_serialize_sigma_sequence(row, keep_digits) for row in job.sigma_rows],
         "x_series": _serialize_mpf_sequence(job.x_series, keep_digits),
         "y_series": _serialize_mpf_sequence(job.y_series, keep_digits),
-        "sigma_series": _serialize_mpf_sequence(job.sigma_series, keep_digits),
+        "sigma_series": _serialize_sigma_sequence(job.sigma_series, keep_digits),
         "weights": _serialize_mpf_sequence(job.weights, keep_digits) if job.weights is not None else None,
         "variable_map": dict(job.variable_map),
         "variable_data": {
