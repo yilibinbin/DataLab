@@ -12,13 +12,16 @@ preserves the relative-path discipline (the build scripts pass
 Input scope (kept in sync with build_mac_data_gui.sh / build_windows_
 data_gui.ps1):
 - entry script: ``data_extrapolation_gui.py`` at the project root
-- data assets: ``docs/desktop/`` (manuals) + ``shared/help_specs.json``
+- data assets: ``docs/desktop/`` (manuals), ``examples/workspaces/``,
+  and ``shared/help_specs.json``
 - icon: ``build/macos_gui_build/app_icon.icns`` (created by the
   build script before PyInstaller runs; absent on first invocation —
   guarded with ``Path.is_file()``)
-- hidden imports + ``collect_all`` for mpmath, emcee, corner — these
-  ship behind ``HAS_EMCEE`` runtime guards so PyInstaller's static
-  analyser drops them without explicit declaration
+- hidden imports + ``collect_all`` for mpmath and sympy — numerical and
+  symbolic backends used by fitting and constraints
+- hidden imports + ``collect_all`` for emcee and corner — these ship
+  behind ``HAS_EMCEE`` runtime guards so PyInstaller's static analyser
+  drops them without explicit declaration
 """
 from pathlib import Path
 
@@ -45,17 +48,19 @@ datas = [
     (_rel("pyproject.toml"), "."),
     (_rel("DataLab.png"), "."),
     (_rel("docs", "desktop"), "docs/desktop"),
+    (_rel("examples", "workspaces"), "examples/workspaces"),
     (_rel("shared", "help_specs.json"), "shared"),
 ]
 binaries = []
 hiddenimports = [
     "mpmath",
+    "sympy",
     "emcee",
     "emcee.moves",
     "emcee.backends",
     "corner",
 ]
-for _pkg in ("mpmath", "emcee", "corner"):
+for _pkg in ("mpmath", "sympy", "emcee", "corner"):
     _d, _b, _h = collect_all(_pkg)
     datas += _d
     binaries += _b

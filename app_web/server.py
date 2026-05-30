@@ -18,10 +18,12 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from flask import Flask, request
+from flask import Flask, request  # noqa: E402
 
-from app_web._security_shim import configure_app_security, get_csrf_token
-from app_web.logic import _generate_fitting_latex  # re-exported for tests/backward-compat
+from app_web._security_shim import configure_app_security, get_csrf_token  # noqa: E402
+from app_web.logic import _generate_fitting_latex  # noqa: E402
+
+__all__ = ["_generate_fitting_latex", "create_app", "create_app_with_socketio"]
 
 
 def _resolve_secret_key() -> str:
@@ -105,9 +107,8 @@ def create_app() -> Flask:
     app.register_blueprint(pages_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(docs_bp)
-    # SSE streaming endpoints (/api/fit/stream, /api/auto-fit/stream) —
-    # registered after the regular API blueprint so the POST-form
-    # alternatives continue to work; SSE callers use GET.
+    # SSE streaming endpoints are registered after the regular API
+    # blueprint so POST-form alternatives continue to work; SSE callers use GET.
     app.register_blueprint(sse_bp)
 
     return app

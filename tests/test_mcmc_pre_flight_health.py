@@ -26,10 +26,9 @@ Both warnings are bilingual (zh / en) per project convention.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -38,7 +37,11 @@ import pytest
 # We import lazily so a missing PySide6 (e.g. on a headless CI without
 # Qt) doesn't tank collection — the test file itself doesn't need Qt.
 def _import_target():
-    from app_desktop.workers_core import _attach_mcmc_refinement
+    from app_desktop import workers_core
+
+    _attach_mcmc_refinement = getattr(workers_core, "_attach_mcmc_refinement", None)
+    if _attach_mcmc_refinement is None:
+        pytest.skip("MCMC refinement attachment is not present in the current fitting worker path.")
     return _attach_mcmc_refinement
 
 

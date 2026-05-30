@@ -37,7 +37,7 @@ DataLab Web is a browser-based, high-precision numerical tool that provides four
   - Polynomial fitting
   - Inverse-power series fitting
   - Padé approximation
-  - Built-in model library (log/exp combinations, etc.)
+  - Power-limit template
   - Custom models
 
 #### 1.4 Statistics
@@ -162,10 +162,10 @@ Log[x1/x2] + Sqrt[x3]          # log and sqrt
    3.0  6.0(5)
    ```
 2. **Choose a fitting mode**
-   - **Auto selection**: try multiple models and pick the best fit
-   - **Preset models**: choose a model from the library
    - **Polynomial fit**: specify degree
    - **Inverse-power series**: specify power range
+   - **Padé fit**: specify numerator and denominator order
+   - **Power-limit fit**: use the `A*x**(-p)+C` template
    - **Custom model**: enter a custom expression
 3. **Set options**
    - **Weighted fitting**: use uncertainties as weights

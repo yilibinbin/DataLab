@@ -5,18 +5,29 @@ from __future__ import annotations
 import re
 import warnings
 from dataclasses import dataclass, field
-from typing import Callable, Sequence, cast
+from typing import Any, Callable, Sequence, cast
 
 from mpmath import mp
 
 from datalab_latex.expression_engine import safe_eval
 from fitting.model_parser import ModelSpecification, MpfCallable
+from fitting.constraints import ParameterState
+from fitting.hp_fitter import FitResult, combine_error_components
+from fitting.implicit_derivatives import ImplicitDerivativeEvaluator, build_implicit_derivative_evaluator
+from fitting.implicit_seed_hints import ImplicitSeedHint
+from fitting.statistics import compute_fit_statistics
 from shared.bilingual import _dual_msg
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MpfKey = tuple[int, int, int, int]
 _CacheKey = tuple[int, int, tuple[_MpfKey, ...], tuple[_MpfKey, ...]]
+
+
+@dataclass(frozen=True)
+class ImplicitSolveStatus:
+    used_fallback: bool
+    residual: mp.mpf
 
 
 @dataclass(frozen=True)
@@ -44,12 +55,19 @@ class ImplicitSolveDiagnostics:
     root_fallbacks: int = 0
     max_iterations_used: int = 0
     max_residual: mp.mpf = field(default_factory=lambda: mp.mpf("0"))
+    warm_start_uses: int = 0
+    analytic_derivative_fallbacks: int = 0
+    seed_sources: dict[str, int] = field(default_factory=dict)
+    seed_attempts: list[dict[str, object]] = field(default_factory=list)
 
 
 class ImplicitEvaluationCache:
     def __init__(self) -> None:
         self.diagnostics = ImplicitSolveDiagnostics()
         self._values: dict[_CacheKey, mp.mpf] = {}
+        self._statuses: dict[_CacheKey, ImplicitSolveStatus] = {}
+        self._warm_starts: dict[tuple[int, int, tuple[_MpfKey, ...]], mp.mpf] = {}
+        self.current_point_index: int | None = None
 
     def get(
         self,
@@ -63,8 +81,22 @@ class ImplicitEvaluationCache:
         var_tuple: tuple[mp.mpf, ...],
         param_tuple: tuple[mp.mpf, ...],
         value: mp.mpf,
+        status: ImplicitSolveStatus,
     ) -> None:
-        self._values[self._key(var_tuple, param_tuple)] = value
+        key = self._key(var_tuple, param_tuple)
+        self._values[key] = value
+        self._statuses[key] = status
+        self._warm_starts[self._warm_key(param_tuple)] = value
+
+    def status(
+        self,
+        var_tuple: tuple[mp.mpf, ...],
+        param_tuple: tuple[mp.mpf, ...],
+    ) -> ImplicitSolveStatus | None:
+        return self._statuses.get(self._key(var_tuple, param_tuple))
+
+    def get_warm_start(self, param_tuple: tuple[mp.mpf, ...]) -> mp.mpf | None:
+        return self._warm_starts.get(self._warm_key(param_tuple))
 
     @staticmethod
     def _key(
@@ -78,14 +110,27 @@ class ImplicitEvaluationCache:
             tuple(cast(_MpfKey, value._mpf_) for value in param_tuple),
         )
 
+    @staticmethod
+    def _warm_key(param_tuple: tuple[mp.mpf, ...]) -> tuple[int, int, tuple[_MpfKey, ...]]:
+        return (
+            int(mp.dps),
+            int(mp.prec),
+            tuple(cast(_MpfKey, value._mpf_) for value in param_tuple),
+        )
+
 
 def build_implicit_model_specification(
     definition: ImplicitModelDefinition,
+    target_data: Sequence[mp.mpf] | None = None,
+    *,
+    seed_hint: ImplicitSeedHint | None = None,
+    use_analytic_derivatives: bool = False,
 ) -> ModelSpecification:
     """Build a `ModelSpecification` for a one-variable implicit equation."""
 
     _validate_definition(definition)
     cache = ImplicitEvaluationCache()
+    derivative_evaluator = build_implicit_derivative_evaluator(definition) if use_analytic_derivatives else None
     x_names = list(definition.x_variables)
     param_names = list(definition.parameters)
 
@@ -93,17 +138,49 @@ def build_implicit_model_specification(
         var_tuple: tuple[mp.mpf, ...],
         param_tuple: tuple[mp.mpf, ...],
     ) -> mp.mpf:
-        solved = _solve_implicit_value(definition, cache, var_tuple, param_tuple)
+        try:
+            seed_candidates = _seed_candidates_for_current_point(
+                definition,
+                cache,
+                var_tuple,
+                target_data,
+                seed_hint,
+            )
+            solved = _solve_implicit_value(
+                definition,
+                cache,
+                var_tuple,
+                param_tuple,
+                initial_guesses=seed_candidates,
+            )
+        except ValueError as exc:
+            raise ValueError(_implicit_solve_failure_context(definition, cache, var_tuple, param_tuple, exc)) from exc
         scope = _scope_for(definition, var_tuple, param_tuple, solved)
         return mp.mpf(safe_eval(definition.output_expression, scope))
 
+    def _set_point_index(row_index: int | None) -> None:
+        cache.current_point_index = row_index
+
     gradient_funcs: dict[str, MpfCallable] = {}
     for parameter_index, parameter_name in enumerate(param_names):
-        gradient_funcs[parameter_name] = _build_numeric_partial(
-            definition,
-            cache,
-            parameter_index=parameter_index,
-        )
+        if derivative_evaluator is not None:
+            gradient_funcs[parameter_name] = _build_analytic_partial(
+                definition,
+                cache,
+                derivative_evaluator,
+                target_data=target_data,
+                seed_hint=seed_hint,
+                parameter_index=parameter_index,
+                parameter_name=parameter_name,
+            )
+        else:
+            gradient_funcs[parameter_name] = _build_numeric_partial(
+                definition,
+                cache,
+                target_data=target_data,
+                seed_hint=seed_hint,
+                parameter_index=parameter_index,
+            )
 
     spec = ModelSpecification(
         expression=definition.output_expression.strip(),
@@ -115,7 +192,139 @@ def build_implicit_model_specification(
     )
     setattr(spec, "implicit_definition", definition)
     setattr(spec, "implicit_diagnostics", cache.diagnostics)
+    setattr(
+        spec,
+        "implicit_derivative_strategy",
+        "analytic_implicit" if derivative_evaluator is not None else "numeric_finite_difference",
+    )
+    setattr(spec, "implicit_seed_hint", seed_hint)
+    setattr(spec, "set_implicit_point_index", _set_point_index)
     return spec
+
+
+def can_fit_observed_implicit_variable(
+    definition: ImplicitModelDefinition,
+) -> bool:
+    """Return true when the target column is the implicit variable itself.
+
+    For data such as quantum-defect tables where the observed y column is
+    already ``delta`` and the model is ``delta = rhs(n, delta, params)``, the
+    statistically useful residual is ``rhs(n, delta_obs, params) - delta_obs``.
+    That form does not require solving an inner implicit equation for every
+    point and parameter perturbation.
+    """
+
+    return (
+        definition.output_expression.strip() == definition.implicit_variable
+        and definition.implicit_variable not in definition.x_variables
+    )
+
+
+def fit_observed_implicit_variable_linear_model(
+    definition: ImplicitModelDefinition,
+    parameter_state: ParameterState,
+    variable_data: dict[str, Sequence[mp.mpf]],
+    target_data: Sequence[mp.mpf],
+    precision: int = 80,
+    weights: list[mp.mpf] | None = None,
+    data_sigmas: list[mp.mpf | None] | None = None,
+) -> FitResult:
+    """Fit an implicit-variable target through a direct linear least-squares path.
+
+    This covers the common self-consistent residual
+    ``u_obs ~= equation(x, u_obs, params)`` when the equation is linear in the
+    free parameters. It intentionally refuses bounded/dependent free-parameter
+    configurations because direct QR cannot honor nonlinear constraints; those
+    cases should use the generic implicit solver path.
+    """
+
+    if not can_fit_observed_implicit_variable(definition):
+        raise ValueError(
+            _dual_msg(
+                "该隐式模型不能使用观测隐变量快路径。",
+                "This implicit model cannot use the observed-implicit-variable fast path.",
+            )
+        )
+    _validate_definition(definition)
+    if parameter_state.dependent_defs:
+        raise ValueError(
+            _dual_msg(
+                "带参数表达式约束的隐式模型暂不支持线性快路径。",
+                "Implicit models with dependent parameter constraints do not support the linear fast path.",
+            )
+        )
+    bounded = [
+        name
+        for name in parameter_state.free_params
+        if parameter_state.bounds.get(name, (None, None)) != (None, None)
+    ]
+    if bounded:
+        raise ValueError(
+            _dual_msg(
+                "带边界约束的隐式模型暂不支持线性快路径。",
+                "Implicit models with bounded parameters do not support the linear fast path.",
+            )
+        )
+
+    with mp.workdps(precision):
+        targets = [mp.mpf(value) for value in target_data]
+        if not targets:
+            raise ValueError(
+                _dual_msg(
+                    "未找到任何可用于拟合的数据行。",
+                    "No data rows available for fitting.",
+                )
+            )
+        for name in definition.x_variables:
+            if name not in variable_data:
+                raise ValueError(
+                    _dual_msg(
+                        f"缺少自变量数据: {name}",
+                        f"Missing independent variable data: {name}",
+                    )
+                )
+            if len(variable_data[name]) != len(targets):
+                raise ValueError(
+                    _dual_msg(
+                        "所有自变量的点数必须一致。",
+                        "All independent variables must have the same length.",
+                    )
+                )
+        weight_vec = _normalise_weights(weights, len(targets))
+        if weight_vec is None and data_sigmas is not None and any(sigma is not None for sigma in data_sigmas):
+            raise ValueError(
+                _dual_msg(
+                    "未加权的数据不确定度需要执行 ±σ 系统重拟合，不能使用线性快路径。",
+                    "Unweighted data uncertainties require +/- sigma systematic refits; the linear fast path is disabled.",
+                )
+            )
+
+        offsets: list[mp.mpf] = []
+        basis_rows: list[list[mp.mpf]] = []
+        zero_vector = tuple(mp.mpf("0") for _ in parameter_state.free_params)
+        offset_params = parameter_state.compose(zero_vector)
+        for row_index, target in enumerate(targets):
+            scope_base = _observed_scope_for(definition, variable_data, targets, row_index)
+            offset = _eval_equation_with_params(definition, scope_base, offset_params)
+            offsets.append(offset)
+            row: list[mp.mpf] = []
+            for free_index, _name in enumerate(parameter_state.free_params):
+                unit = list(zero_vector)
+                unit[free_index] = mp.mpf("1")
+                unit_params = parameter_state.compose(tuple(unit))
+                row.append(_eval_equation_with_params(definition, scope_base, unit_params) - offset)
+            basis_rows.append(row)
+
+        _assert_linear_in_free_params(definition, parameter_state, variable_data, targets, offsets, basis_rows)
+        return _solve_observed_linear_least_squares(
+            definition=definition,
+            parameter_state=parameter_state,
+            targets=targets,
+            offsets=offsets,
+            basis_rows=basis_rows,
+            weights=weight_vec,
+            data_sigmas=data_sigmas,
+        )
 
 
 def default_implicit_template() -> ImplicitModelDefinition:
@@ -170,6 +379,8 @@ def _build_numeric_partial(
     definition: ImplicitModelDefinition,
     cache: ImplicitEvaluationCache,
     *,
+    target_data: Sequence[mp.mpf] | None,
+    seed_hint: ImplicitSeedHint | None,
     parameter_index: int,
 ) -> MpfCallable:
     options = definition.solve_options
@@ -189,9 +400,103 @@ def _build_numeric_partial(
         minus_params = list(param_tuple)
         plus_params[parameter_index] = base + step
         minus_params[parameter_index] = base - step
-        plus_value = _evaluate_output(definition, cache, var_tuple, tuple(plus_params))
-        minus_value = _evaluate_output(definition, cache, var_tuple, tuple(minus_params))
+        seed_candidates = _seed_candidates_for_current_point(
+            definition,
+            cache,
+            var_tuple,
+            target_data,
+            seed_hint,
+        )
+        plus_value = _evaluate_output(
+            definition,
+            cache,
+            var_tuple,
+            tuple(plus_params),
+            initial_guesses=seed_candidates,
+        )
+        minus_value = _evaluate_output(
+            definition,
+            cache,
+            var_tuple,
+            tuple(minus_params),
+            initial_guesses=seed_candidates,
+        )
         return mp.mpf((plus_value - minus_value) / (2 * step))
+
+    return _call
+
+
+def _build_analytic_partial(
+    definition: ImplicitModelDefinition,
+    cache: ImplicitEvaluationCache,
+    derivative_evaluator: ImplicitDerivativeEvaluator,
+    *,
+    target_data: Sequence[mp.mpf] | None,
+    seed_hint: ImplicitSeedHint | None,
+    parameter_index: int,
+    parameter_name: str,
+) -> MpfCallable:
+    numeric_partial = _build_numeric_partial(
+        definition,
+        cache,
+        target_data=target_data,
+        seed_hint=seed_hint,
+        parameter_index=parameter_index,
+    )
+
+    def _call(
+        var_tuple: tuple[mp.mpf, ...],
+        param_tuple: tuple[mp.mpf, ...],
+    ) -> mp.mpf:
+        _validate_tuple_lengths(definition, var_tuple, param_tuple, derivative=True)
+        seed_candidates = _seed_candidates_for_current_point(
+            definition,
+            cache,
+            var_tuple,
+            target_data,
+            seed_hint,
+        )
+        solved = _solve_implicit_value(
+            definition,
+            cache,
+            var_tuple,
+            param_tuple,
+            initial_guesses=seed_candidates,
+        )
+        try:
+            status = cache.status(var_tuple, param_tuple)
+            if status is None:
+                raise ValueError("Implicit root solve status is unavailable; analytic derivative disabled.")
+            residual = status.residual
+            tolerance = mp.mpf(definition.solve_options.tolerance)
+            residual_limit = tolerance * mp.mpf("10")
+            if status is not None and status.used_fallback:
+                raise ValueError("Implicit root solve used fallback; analytic derivative disabled.")
+            if not mp.isfinite(residual) or residual > residual_limit:
+                raise ValueError(
+                    f"Implicit root residual {mp.nstr(residual, 12)} exceeds analytic derivative limit."
+                )
+            variables = {
+                name: mp.mpf(value)
+                for name, value in zip(definition.x_variables, var_tuple, strict=True)
+            }
+            params = {
+                name: mp.mpf(value)
+                for name, value in zip(definition.parameters, param_tuple, strict=True)
+            }
+            constants = {name: mp.mpf(value) for name, value in definition.constants.items()}
+            min_abs_residual_u = max(mp.sqrt(mp.eps), tolerance)
+            return derivative_evaluator.partial(
+                parameter_name,
+                variables,
+                params,
+                constants,
+                solved,
+                min_abs_residual_u=min_abs_residual_u,
+            )
+        except (ArithmeticError, KeyError, TypeError, ValueError):
+            cache.diagnostics.analytic_derivative_fallbacks += 1
+            return numeric_partial(var_tuple, param_tuple)
 
     return _call
 
@@ -201,9 +506,28 @@ def _evaluate_output(
     cache: ImplicitEvaluationCache,
     var_tuple: tuple[mp.mpf, ...],
     param_tuple: tuple[mp.mpf, ...],
+    *,
+    initial_guesses: Sequence[mp.mpf] = (),
 ) -> mp.mpf:
-    solved = _solve_implicit_value(definition, cache, var_tuple, param_tuple)
+    solved = _solve_implicit_value(
+        definition,
+        cache,
+        var_tuple,
+        param_tuple,
+        initial_guesses=initial_guesses,
+    )
     return mp.mpf(safe_eval(definition.output_expression, _scope_for(definition, var_tuple, param_tuple, solved)))
+
+
+def _implicit_residual(
+    definition: ImplicitModelDefinition,
+    var_tuple: tuple[mp.mpf, ...],
+    param_tuple: tuple[mp.mpf, ...],
+    implicit_value: mp.mpf,
+) -> mp.mpf:
+    scope = _scope_for(definition, var_tuple, param_tuple, implicit_value)
+    rhs = mp.mpf(safe_eval(definition.equation, scope))
+    return mp.fabs(mp.mpf(implicit_value) - rhs)
 
 
 def _solve_implicit_value(
@@ -211,6 +535,8 @@ def _solve_implicit_value(
     cache: ImplicitEvaluationCache,
     var_tuple: tuple[mp.mpf, ...],
     param_tuple: tuple[mp.mpf, ...],
+    *,
+    initial_guesses: Sequence[mp.mpf] = (),
 ) -> mp.mpf:
     _validate_tuple_lengths(definition, var_tuple, param_tuple, derivative=False)
     cached = cache.get(var_tuple, param_tuple)
@@ -220,13 +546,141 @@ def _solve_implicit_value(
     options = definition.solve_options
     tol = mp.mpf(options.tolerance)
     seed_scope = _scope_for(definition, var_tuple, param_tuple, None)
-    seed = mp.mpf(safe_eval(options.initial, seed_scope))
+    configured_seed = mp.mpf(safe_eval(options.initial, seed_scope))
+    warm_seed = cache.get_warm_start(param_tuple)
+    prefer_warm_start = warm_seed is not None and not _initial_depends_on_variables(definition)
 
     def rhs(value: mp.mpf) -> mp.mpf:
         scope = _scope_for(definition, var_tuple, param_tuple, mp.mpf(value))
         return mp.mpf(safe_eval(definition.equation, scope))
 
-    solved: mp.mpf
+    seeds: list[tuple[mp.mpf, str]] = [(configured_seed, "configured")]
+    if warm_seed is not None and prefer_warm_start:
+        seeds.append((warm_seed, "warm"))
+    anchor = warm_seed if warm_seed is not None and prefer_warm_start else configured_seed
+    sorted_hints = sorted(
+        (mp.mpf(seed) for seed in initial_guesses),
+        key=lambda value: mp.fabs(value - anchor),
+    )
+    for seed in sorted_hints:
+        seeds.append((seed, "hint"))
+    seeds = _dedupe_solve_seeds(seeds)
+
+    last_error: ValueError | None = None
+    used_seed_source = "configured"
+    for seed, seed_source in seeds:
+        try:
+            solved, iterations_used, used_fallback, residual = _solve_from_seed(
+                rhs,
+                seed,
+                options,
+                tol,
+            )
+            _record_seed_attempt(
+                cache,
+                seed_source,
+                True,
+                iterations_used,
+                residual,
+                seed=seed,
+                solved=solved,
+            )
+            if seed_source == "warm":
+                cache.diagnostics.warm_start_uses += 1
+            used_seed_source = seed_source
+            break
+        except ValueError as exc:
+            _record_seed_attempt(cache, seed_source, False, None, None, seed=seed, error=str(exc))
+            last_error = exc
+    else:
+        assert last_error is not None
+        raise last_error
+
+    diagnostics = cache.diagnostics
+    diagnostics.points_solved += 1
+    diagnostics.seed_sources[used_seed_source] = diagnostics.seed_sources.get(used_seed_source, 0) + 1
+    if used_fallback:
+        diagnostics.root_fallbacks += 1
+    diagnostics.max_iterations_used = max(diagnostics.max_iterations_used, iterations_used)
+    diagnostics.max_residual = max(diagnostics.max_residual, residual)
+    cache.set(
+        var_tuple,
+        param_tuple,
+        solved,
+        ImplicitSolveStatus(used_fallback=used_fallback, residual=mp.mpf(residual)),
+    )
+    return solved
+
+
+def _seed_candidates_for_current_point(
+    definition: ImplicitModelDefinition,
+    cache: ImplicitEvaluationCache,
+    var_tuple: tuple[mp.mpf, ...],
+    target_data: Sequence[mp.mpf] | None,
+    seed_hint: ImplicitSeedHint | None,
+) -> tuple[mp.mpf, ...]:
+    if seed_hint is None or target_data is None or cache.current_point_index is None:
+        return ()
+    point_index = cache.current_point_index
+    if point_index < 0 or point_index >= len(target_data):
+        return ()
+    variables = {
+        name: mp.mpf(value)
+        for name, value in zip(definition.x_variables, var_tuple, strict=True)
+    }
+    return cast(tuple[Any, ...], seed_hint.candidates(variables, mp.mpf(target_data[point_index])))
+
+
+def _record_seed_attempt(
+    cache: ImplicitEvaluationCache,
+    source: str,
+    success: bool,
+    iterations: int | None,
+    residual: mp.mpf | None,
+    *,
+    seed: mp.mpf | None = None,
+    solved: mp.mpf | None = None,
+    error: str | None = None,
+) -> None:
+    # Keep the payload bounded; aggregate seed_sources still covers the whole fit.
+    if len(cache.diagnostics.seed_attempts) >= 50:
+        return
+    attempt: dict[str, object] = {
+        "point_index": cache.current_point_index,
+        "source": source,
+        "success": success,
+    }
+    if iterations is not None:
+        attempt["iterations"] = int(iterations)
+    if residual is not None:
+        attempt["residual"] = str(residual)
+    if seed is not None:
+        attempt["seed"] = str(seed)
+    if solved is not None:
+        attempt["solved"] = str(solved)
+    if error is not None:
+        attempt["error"] = error
+    cache.diagnostics.seed_attempts.append(attempt)
+
+
+def _dedupe_solve_seeds(seeds: Sequence[tuple[mp.mpf, str]]) -> list[tuple[mp.mpf, str]]:
+    unique: list[tuple[mp.mpf, str]] = []
+    seen: set[tuple[int, int, _MpfKey]] = set()
+    for seed, source in seeds:
+        key = (int(mp.dps), int(mp.prec), cast(_MpfKey, mp.mpf(seed)._mpf_))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((mp.mpf(seed), source))
+    return unique
+
+
+def _solve_from_seed(
+    rhs: Callable[[mp.mpf], mp.mpf],
+    seed: mp.mpf,
+    options: ImplicitSolveOptions,
+    tol: mp.mpf,
+) -> tuple[mp.mpf, int, bool, mp.mpf]:
     iterations_used = 0
     used_fallback = False
     if options.method == "fixed_point":
@@ -258,15 +712,12 @@ def _solve_implicit_value(
         used_fallback = True
         solved = _find_root(rhs, solved, options)
         residual = mp.fabs(solved - rhs(solved))
+    return solved, iterations_used, used_fallback, residual
 
-    diagnostics = cache.diagnostics
-    diagnostics.points_solved += 1
-    if used_fallback:
-        diagnostics.root_fallbacks += 1
-    diagnostics.max_iterations_used = max(diagnostics.max_iterations_used, iterations_used)
-    diagnostics.max_residual = max(diagnostics.max_residual, residual)
-    cache.set(var_tuple, param_tuple, solved)
-    return solved
+
+def _initial_depends_on_variables(definition: ImplicitModelDefinition) -> bool:
+    identifiers = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", definition.solve_options.initial))
+    return any(name in identifiers for name in definition.x_variables)
 
 
 def _find_root(
@@ -292,6 +743,34 @@ def _find_root(
         ) from exc
 
 
+def _implicit_solve_failure_context(
+    definition: ImplicitModelDefinition,
+    cache: ImplicitEvaluationCache,
+    var_tuple: tuple[mp.mpf, ...],
+    param_tuple: tuple[mp.mpf, ...],
+    exc: ValueError,
+) -> str:
+    variable_values = {
+        name: mp.nstr(value, 30)
+        for name, value in zip(definition.x_variables, var_tuple, strict=True)
+    }
+    parameter_values = {
+        name: mp.nstr(value, 30)
+        for name, value in zip(definition.parameters, param_tuple, strict=True)
+    }
+    diagnostics = cache.diagnostics
+    return cast(str, _dual_msg(
+        "隐式方程逐点求解失败: "
+        f"point_index={cache.current_point_index}, variables={variable_values}, parameters={parameter_values}, "
+        f"method={definition.solve_options.method}, residual={mp.nstr(diagnostics.max_residual, 30)}, "
+        f"iterations={diagnostics.max_iterations_used}, error={exc}",
+        "Per-point implicit solve failed: "
+        f"point_index={cache.current_point_index}, variables={variable_values}, parameters={parameter_values}, "
+        f"method={definition.solve_options.method}, residual={mp.nstr(diagnostics.max_residual, 30)}, "
+        f"iterations={diagnostics.max_iterations_used}, error={exc}",
+    ))
+
+
 def _scope_for(
     definition: ImplicitModelDefinition,
     var_tuple: tuple[mp.mpf, ...],
@@ -300,8 +779,8 @@ def _scope_for(
 ) -> dict[str, object]:
     scope: dict[str, object] = {}
     scope.update(_constant_values(definition.constants))
-    scope.update(zip(definition.x_variables, var_tuple))
-    scope.update(zip(definition.parameters, param_tuple))
+    scope.update(zip(definition.x_variables, var_tuple, strict=True))
+    scope.update(zip(definition.parameters, param_tuple, strict=True))
     if implicit_value is not None:
         scope[definition.implicit_variable] = implicit_value
     return scope
@@ -309,6 +788,217 @@ def _scope_for(
 
 def _constant_values(constants: dict[str, str]) -> dict[str, mp.mpf]:
     return {name: mp.mpf(value) for name, value in constants.items()}
+
+
+def _observed_scope_for(
+    definition: ImplicitModelDefinition,
+    variable_data: dict[str, Sequence[mp.mpf]],
+    targets: Sequence[mp.mpf],
+    row_index: int,
+) -> dict[str, object]:
+    scope: dict[str, object] = {}
+    scope.update(_constant_values(definition.constants))
+    for name in definition.x_variables:
+        scope[name] = mp.mpf(variable_data[name][row_index])
+    scope[definition.implicit_variable] = mp.mpf(targets[row_index])
+    return scope
+
+
+def _eval_equation_with_params(
+    definition: ImplicitModelDefinition,
+    scope_base: dict[str, object],
+    params: dict[str, mp.mpf],
+) -> mp.mpf:
+    scope = dict(scope_base)
+    scope.update(params)
+    return mp.mpf(safe_eval(definition.equation, scope))
+
+
+def _normalise_weights(
+    weights: list[mp.mpf] | None,
+    row_count: int,
+) -> list[mp.mpf] | None:
+    if not weights:
+        return None
+    if len(weights) != row_count:
+        raise ValueError(
+            _dual_msg(
+                "权重数量必须与数据点数量一致。",
+                "Weight count must match number of data points.",
+            )
+        )
+    weight_vec = [mp.mpf(weight) for weight in weights]
+    if any(weight <= 0 or mp.isnan(weight) for weight in weight_vec):
+        raise ValueError(
+            _dual_msg(
+                "权重必须为正且有限。",
+                "Weights must be positive and finite.",
+            )
+        )
+    return weight_vec
+
+
+def _assert_linear_in_free_params(
+    definition: ImplicitModelDefinition,
+    parameter_state: ParameterState,
+    variable_data: dict[str, Sequence[mp.mpf]],
+    targets: Sequence[mp.mpf],
+    offsets: Sequence[mp.mpf],
+    basis_rows: Sequence[Sequence[mp.mpf]],
+) -> None:
+    if not parameter_state.free_params:
+        return
+    trial_values = tuple(
+        mp.mpf(idx + 2) / mp.mpf("3")
+        for idx, _name in enumerate(parameter_state.free_params)
+    )
+    trial_params = parameter_state.compose(trial_values)
+    tolerance = mp.sqrt(mp.eps) * mp.mpf("100")
+    for row_index, target in enumerate(targets):
+        scope_base = _observed_scope_for(definition, variable_data, targets, row_index)
+        actual = _eval_equation_with_params(definition, scope_base, trial_params)
+        linear = offsets[row_index] + mp.fsum(
+            coeff * value for coeff, value in zip(basis_rows[row_index], trial_values, strict=True)
+        )
+        scale = max(mp.mpf("1"), mp.fabs(actual), mp.fabs(linear), mp.fabs(target))
+        if mp.fabs(actual - linear) > tolerance * scale:
+            raise ValueError(
+                _dual_msg(
+                    "隐式方程对自由参数不是线性的，不能使用线性快路径。",
+                    "Implicit equation is not linear in free parameters; cannot use the linear fast path.",
+                )
+            )
+
+
+def _solve_observed_linear_least_squares(
+    *,
+    definition: ImplicitModelDefinition,
+    parameter_state: ParameterState,
+    targets: list[mp.mpf],
+    offsets: list[mp.mpf],
+    basis_rows: list[list[mp.mpf]],
+    weights: list[mp.mpf] | None,
+    data_sigmas: list[mp.mpf | None] | None,
+) -> FitResult:
+    row_count = len(targets)
+    free_params = list(parameter_state.free_params)
+    col_count = len(free_params)
+    if row_count < col_count:
+        raise ValueError(
+            _dual_msg(
+                "数据点数量不足以拟合该模型。",
+                "Not enough data points for this model.",
+            )
+        )
+    design = mp.matrix(row_count, col_count)
+    rhs = mp.matrix(row_count, 1)
+    for i in range(row_count):
+        weight_scale = mp.sqrt(weights[i]) if weights else mp.mpf("1")
+        for j in range(col_count):
+            design[i, j] = mp.mpf(basis_rows[i][j]) * weight_scale
+        rhs[i] = (mp.mpf(targets[i]) - mp.mpf(offsets[i])) * weight_scale
+    try:
+        q_matrix, r_matrix = mp.qr(design)
+        qt_rhs = q_matrix.T * rhs
+        r_top = r_matrix[:col_count, :col_count]
+        rhs_top = qt_rhs[:col_count, :]
+        coeff_matrix = mp.lu_solve(r_top, rhs_top)
+    except ZeroDivisionError as exc:
+        raise ValueError(
+            _dual_msg(
+                "设计矩阵奇异，无法拟合。",
+                "Design matrix is singular, cannot fit.",
+            )
+        ) from exc
+    free_solution = tuple(mp.mpf(coeff_matrix[i, 0]) for i in range(col_count))
+    params = parameter_state.compose(free_solution)
+    fitted_curve = [
+        offsets[i] + mp.fsum(basis_rows[i][j] * free_solution[j] for j in range(col_count))
+        for i in range(row_count)
+    ]
+    residuals = [fitted_curve[i] - targets[i] for i in range(row_count)]
+    stats = compute_fit_statistics(targets, residuals, weights, free_param_count=col_count)
+    chi2 = stats.chi2
+    reduced = stats.reduced_chi2
+    r2 = stats.r2
+    rmse = stats.rmse
+    aic = stats.aic
+    bic = stats.bic
+    dof = stats.dof
+
+    covariance, stat_errors, cov_warning = _linear_covariance(
+        design=design,
+        free_params=free_params,
+        chi2=chi2,
+        dof=dof if dof > 0 else 1,
+    )
+    for name in definition.parameters:
+        stat_errors.setdefault(name, mp.mpf("0"))
+    sys_errors: dict[str, mp.mpf] = {}
+    stat_errors, sys_errors, total_errors = combine_error_components(params, stat_errors, sys_errors)
+    details: dict[str, object] = {
+        "expression": definition.equation,
+        "dof": int(dof),
+        "implicit_fast_path": "observed_implicit_linear",
+    }
+    if weights:
+        details["weighted"] = True
+    if data_sigmas is not None and weights:
+        details["uncertainty_note"] = {
+            "zh": "已用数据不确定度进行加权，仅统计误差；为避免双计，未单独计算系统误差。",
+            "en": "Data uncertainties were used for weighting (statistical only); to avoid double-counting, no separate systematic error was added.",
+        }
+    if cov_warning:
+        details["covariance_warning"] = cov_warning
+    return FitResult(
+        params=params,
+        param_errors=total_errors,
+        chi2=chi2,
+        reduced_chi2=reduced,
+        aic=aic,
+        bic=bic,
+        r2=r2,
+        rmse=rmse,
+        residuals=residuals,
+        fitted_curve=fitted_curve,
+        covariance=covariance,
+        param_errors_stat=stat_errors,
+        param_errors_sys=sys_errors,
+        param_errors_total=total_errors,
+        details=details,
+    )
+
+
+def _linear_covariance(
+    *,
+    design: mp.matrix,
+    free_params: list[str],
+    chi2: mp.mpf,
+    dof: int,
+) -> tuple[list[list[mp.mpf]], dict[str, mp.mpf], str | None]:
+    col_count = len(free_params)
+    try:
+        inv = (design.T * design) ** -1
+    except ZeroDivisionError:
+        return (
+            [[mp.nan for _ in range(col_count)] for _ in range(col_count)],
+            {name: mp.nan for name in free_params},
+            "协方差矩阵奇异，参数不确定度不可用。 / Covariance matrix is singular; parameter uncertainties unavailable.",
+        )
+    sigma2 = chi2 / dof if dof > 0 else mp.nan
+    covariance = [[inv[i, j] * sigma2 for j in range(col_count)] for i in range(col_count)]
+    errors = {
+        name: (
+            mp.sqrt(covariance[idx][idx])
+            if not mp.isnan(covariance[idx][idx]) and covariance[idx][idx] >= 0
+            else mp.nan
+        )
+        for idx, name in enumerate(free_params)
+    }
+    warning = None
+    if any(mp.isnan(value) or mp.isinf(value) for row in covariance for value in row):
+        warning = "协方差矩阵病态或奇异，参数不确定度可能不可靠。 / Covariance matrix is ill-conditioned or singular; parameter uncertainties may be unreliable."
+    return covariance, errors, warning
 
 
 def _validate_definition(definition: ImplicitModelDefinition) -> None:

@@ -8,11 +8,11 @@ from typing import Callable, Sequence
 from mpmath import mp
 
 from shared.bilingual import _dual_msg
-from shared.numerics import noise_floor
 from shared.precision import precision_guard
 
 from .constraints import ParameterState
 from .model_parser import ModelSpecification
+from .statistics import compute_fit_statistics
 
 
 @dataclass
@@ -156,6 +156,7 @@ def _gradient_builder(
         params = state.compose(tuple(free_values))
         total = mp.mpf("0")
         for idx, (obs, target) in enumerate(zip(observations, targets)):
+            _set_model_point_index(model, idx)
             y_model = model.evaluate(obs, params)
             derivative = model.partial(parameter_name, obs, params)
             weight = weights[idx] if weights else mp.mpf("1")
@@ -177,44 +178,29 @@ def _compute_statistics(
 ]:
     fitted: list[mp.mpf] = []
     residuals: list[mp.mpf] = []
-    for obs, target in zip(observations, targets):
+    for idx, (obs, target) in enumerate(zip(observations, targets)):
+        _set_model_point_index(model, idx)
         value = model.evaluate(obs, params)
         fitted.append(value)
         residuals.append(value - target)
-    if weights:
-        if any(w <= 0 for w in weights):
-            raise ValueError(
-                _dual_msg("权重必须为正。", "Weights must be positive.")
-            )
-        chi2 = sum(weight * (r * r) for weight, r in zip(weights, residuals))
-        total_weight = sum(weights)
-        if total_weight > 0:
-            mean_target = sum(weight * target for weight, target in zip(weights, targets)) / total_weight
-        else:
-            mean_target = sum(targets) / len(targets)
-        sst = sum(weight * (y - mean_target) ** 2 for weight, y in zip(weights, targets))
-        rmse = mp.sqrt(chi2 / total_weight)
-    else:
-        chi2 = sum((r * r) for r in residuals)
-        mean_target = sum(targets) / len(targets)
-        sst = sum((y - mean_target) ** 2 for y in targets)
-        rmse = mp.sqrt(chi2 / len(targets))
-    n = len(targets)
-    dof = n - free_param_count
-    if dof <= 0:
-        reduced = mp.nan
-        r2 = mp.nan
-        noise = mp.nan
-        aic = mp.nan
-        bic = mp.nan
-    else:
-        reduced = chi2 / dof
-        r2 = mp.mpf("1") - (chi2 / sst if sst != 0 else mp.mpf("0"))
-        eps = noise_floor()
-        noise = chi2 / n if chi2 > eps else eps
-        aic = 2 * free_param_count + n * mp.log(noise)
-        bic = free_param_count * mp.log(n) + n * mp.log(noise)
-    return fitted, residuals, chi2, reduced, r2, rmse, aic, bic, dof
+    stats = compute_fit_statistics(
+        targets,
+        residuals,
+        weights,
+        free_param_count=free_param_count,
+        validate_weights=True,
+    )
+    return (
+        fitted,
+        residuals,
+        stats.chi2,
+        stats.reduced_chi2,
+        stats.r2,
+        stats.rmse,
+        stats.aic,
+        stats.bic,
+        stats.dof,
+    )
 
 
 def _compute_covariance(
@@ -240,6 +226,7 @@ def _compute_covariance(
                 )
     sqrt_weights = [mp.sqrt(w) for w in weights] if weights else None
     for idx, (obs, target) in enumerate(zip(observations, targets)):
+        _set_model_point_index(model, idx)
         for jdx, name in enumerate(free_params):
             derivative = model.partial(name, obs, params)
             if sqrt_weights:
@@ -274,6 +261,12 @@ def _compute_covariance(
     if any(mp.isnan(val) or mp.isinf(val) for row in covariance for val in row):
         cov_warning = "协方差矩阵病态或奇异，参数不确定度可能不可靠。 / Covariance matrix is ill-conditioned or singular; parameter uncertainties may be unreliable."
     return covariance, errors, cov_warning
+
+
+def _set_model_point_index(model: ModelSpecification, row_index: int) -> None:
+    setter = getattr(model, "set_implicit_point_index", None)
+    if setter is not None:
+        setter(row_index)
 
 
 def _propagate_dependent_errors(

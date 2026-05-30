@@ -40,22 +40,29 @@ class _FakeQSettings:
         return QSettings.Status.NoError
 
 
-def test_parallel_preferences_round_trip_all_public_desktop_fields() -> None:
+def test_parallel_preferences_round_trip_all_public_desktop_fields_and_drops_stale_backend_flags() -> None:
     from app_desktop.parallel_preferences import (
         ParallelPreferencesStore,
         parallel_preferences_keys,
     )
     from shared.settings_store import SettingsStore
 
-    settings = SettingsStore(store=_FakeQSettings())
+    fake_store = _FakeQSettings()
+    settings = SettingsStore(store=fake_store)
     prefs = ParallelPreferencesStore(settings)
     config = ParallelConfig(
         mode=ParallelMode.PROCESS,
         max_workers=7,
         reserve_cores=2,
         nested_policy=NestedParallelPolicy.ALLOW,
-        enable_new_auto_fit_backend=True,
-        enable_new_implicit_backend=False,
+    )
+    settings.save_bool(
+        "Preferences/Parallel/EnableNewImplicitBackend",
+        False,
+    )
+    settings.save_bool(
+        "Preferences/Parallel/EnableNewAutoFitBackend",
+        True,
     )
 
     prefs.save(config)
@@ -65,15 +72,23 @@ def test_parallel_preferences_round_trip_all_public_desktop_fields() -> None:
     assert restored.max_workers == 7
     assert restored.reserve_cores == 2
     assert restored.nested_policy == NestedParallelPolicy.ALLOW
-    assert restored.enable_new_auto_fit_backend is True
-    assert restored.enable_new_implicit_backend is False
+    assert not hasattr(restored, "enable_new_implicit_backend")
+    assert not hasattr(restored, "enable_new_auto_fit_backend")
+    assert "Preferences/Parallel/EnableNewImplicitBackend" not in fake_store._data
+    assert "Preferences/Parallel/EnableNewAutoFitBackend" not in fake_store._data
+    assert settings.load_bool(
+        "Preferences/Parallel/EnableNewImplicitBackend",
+        True,
+    ) is True
+    assert settings.load_bool(
+        "Preferences/Parallel/EnableNewAutoFitBackend",
+        False,
+    ) is False
     assert parallel_preferences_keys() == (
         "Preferences/Parallel/Mode",
         "Preferences/Parallel/MaxWorkers",
         "Preferences/Parallel/ReserveCores",
         "Preferences/Parallel/NestedPolicy",
-        "Preferences/Parallel/EnableNewAutoFitBackend",
-        "Preferences/Parallel/EnableNewImplicitBackend",
     )
 
 
@@ -135,6 +150,8 @@ def test_desktop_parallel_controls_exist_and_save_current_config(window: Any) ->
     assert window.parallel_mode_combo.findData(ParallelMode.PROCESS.value) >= 0
     assert window.parallel_max_workers_spin.minimum() == 0
     assert window.parallel_nested_policy_combo.findData(NestedParallelPolicy.ALLOW.value) >= 0
+    assert not hasattr(window, "parallel_auto_fit_backend_checkbox")
+    assert not hasattr(window, "parallel_implicit_backend_checkbox")
 
     window.parallel_mode_combo.setCurrentIndex(
         window.parallel_mode_combo.findData(ParallelMode.THREAD.value)
@@ -144,17 +161,14 @@ def test_desktop_parallel_controls_exist_and_save_current_config(window: Any) ->
     window.parallel_nested_policy_combo.setCurrentIndex(
         window.parallel_nested_policy_combo.findData(NestedParallelPolicy.ALLOW.value)
     )
-    window.parallel_auto_fit_backend_checkbox.setChecked(True)
-    window.parallel_implicit_backend_checkbox.setChecked(False)
-
     config = window._current_parallel_config()
 
     assert config.mode == ParallelMode.THREAD
     assert config.max_workers == 3
     assert config.reserve_cores == 2
     assert config.nested_policy == NestedParallelPolicy.ALLOW
-    assert config.enable_new_auto_fit_backend is True
-    assert config.enable_new_implicit_backend is False
+    assert not hasattr(config, "enable_new_implicit_backend")
+    assert not hasattr(config, "enable_new_auto_fit_backend")
 
 
 def test_prepare_jobs_receive_current_parallel_config(window: Any) -> None:
@@ -162,11 +176,8 @@ def test_prepare_jobs_receive_current_parallel_config(window: Any) -> None:
         window.parallel_mode_combo.findData(ParallelMode.SERIAL.value)
     )
     window.parallel_max_workers_spin.setValue(5)
-    window.parallel_auto_fit_backend_checkbox.setChecked(True)
-    window.parallel_implicit_backend_checkbox.setChecked(False)
-    window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("poly"))
+    window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("polynomial"))
 
-    auto_job = window._prepare_auto_fit_job(_dataset(), verbose=False)
     fit_job = window._prepare_fit_job(
         _dataset(),
         generate_latex=False,
@@ -175,12 +186,47 @@ def test_prepare_jobs_receive_current_parallel_config(window: Any) -> None:
         render_plots=False,
     )
 
-    assert auto_job.parallel_config.mode == ParallelMode.SERIAL
-    assert auto_job.parallel_config.max_workers == 5
-    assert auto_job.parallel_config.enable_new_auto_fit_backend is True
     assert fit_job.parallel_config.mode == ParallelMode.SERIAL
     assert fit_job.parallel_config.max_workers == 5
-    assert fit_job.parallel_config.enable_new_implicit_backend is False
+    assert not hasattr(fit_job.parallel_config, "enable_new_implicit_backend")
+    assert not hasattr(fit_job.parallel_config, "enable_new_auto_fit_backend")
+
+
+def test_text_to_table_preserves_parenthesized_uncertainty_tokens(window: Any) -> None:
+    from app_desktop.panels import _load_text_into_table, _serialize_table
+
+    _load_text_into_table(
+        window,
+        "A B\n4 -0.01161947382(2)\n5 -0.01182004861(4)",
+    )
+
+    serialized = _serialize_table(window)
+
+    assert "-0.01161947382(2)" in serialized
+    assert "-0.01182004861(4)" in serialized
+
+
+def test_fitting_dataset_preserves_uncertainty_objects_from_parenthesized_tokens(window: Any) -> None:
+    from app_desktop.panels import _load_text_into_table
+
+    _load_text_into_table(
+        window,
+        "A B\n4 -0.01161947382(2)\n5 -0.01182004861(4)",
+    )
+
+    headers, rows, sigma_rows = window._collect_fitting_dataset()
+
+    assert headers == ["A", "B"]
+    assert rows[0][0] == mp.mpf("4")
+    assert hasattr(sigma_rows[0][1], "uncertainty")
+    assert mp.mpf(sigma_rows[0][1].uncertainty) > 0
+
+
+def test_left_panel_minimum_width_is_not_formula_size_hint(window: Any) -> None:
+    left_scroll = window._main_splitter.widget(0)
+
+    assert left_scroll.minimumWidth() <= 360
+    assert window.left_container.sizeHint().width() >= left_scroll.minimumWidth()
 
 
 def test_current_parallel_config_defaults_when_controls_are_absent() -> None:

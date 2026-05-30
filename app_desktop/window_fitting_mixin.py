@@ -16,7 +16,7 @@ in a single editor view (~200-700 lines):
   LaTeX file output, batch-result re-formatting.
 - ``window_fitting_models_mixin.py`` — pre-compute / dispatch
   side: every fit-mode execution path (custom, polynomial,
-  inverse, Padé, linear-named, auto), worker thread setup, and
+  inverse, Padé, power-limit, self-consistent), worker thread setup, and
   the ``_run_fitting_mode`` dispatcher.
 
 The composition order below pins MRO. Python resolves attribute
@@ -26,8 +26,7 @@ natural call flow (left = "called more often", right = "called by
 others"):
 
   Params       (leaf — no calls into other mixins)
-  Residuals    (calls Models.``_render_auto_fit_summary`` for batch
-                  re-renders; calls Formatters for display)
+  Residuals    (calls Formatters for display)
   Models       (calls Params, calls Formatters)
   Formatters   (called by all three above; rightmost so a future
                   override in any of the above can shadow a formatter
@@ -61,3 +60,12 @@ class WindowFittingMixin(
     imports (``from app_desktop.window_fitting_mixin import
     WindowFittingMixin``) keep working without any caller changes.
     """
+
+    def _on_fit_finished(self, payload):
+        super()._on_fit_finished(payload)
+        details = getattr(payload.fit_result, "details", {}) or {}
+        if details.get("fallback_history"):
+            self.statusBar().showMessage(
+                self._tr("已回退到高精度求解器。", "Fell back to high-precision solver."),
+                8000,
+            )

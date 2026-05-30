@@ -92,7 +92,7 @@ class WindowI18nMixin:
             "Levin u-transform": "Levin u-transform",
             "自定义公式(三点外推) (A,B,C)": "Custom (A,B,C)",
             "自定义模型": "Custom model",
-            "自动模型选择": "Auto model selection",
+            "显式模型拟合": "Explicit model fitting",
         }
         if self._is_en() and label in mapping:
             return mapping[label]

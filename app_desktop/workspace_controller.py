@@ -4,10 +4,14 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from PySide6.QtWidgets import QComboBox, QTableWidget, QTableWidgetItem
 
+from app_desktop.fitting_input_normalization import (
+    normalize_constants_state,
+    normalize_parameter_rows,
+)
 from app_desktop.workers_core import _READ_FALLBACK_ENCODINGS
 from shared.update_checker import current_version
 from shared.workspace_schema import compute_workspace_hash, sha256_bytes
@@ -28,6 +32,15 @@ def _combo_data(combo: QComboBox | None, default: str = "") -> str:
         return default
     data = combo.currentData()
     return str(data if data is not None else combo.currentText())
+
+
+def _normalize_fitting_model(value: Any) -> str:
+    model = str(value or "custom")
+    aliases = {
+        "poly": "polynomial",
+        "inverse": "inverse_power",
+    }
+    return aliases.get(model, model)
 
 
 def _set_combo_data(combo: QComboBox | None, value: str) -> None:
@@ -210,34 +223,50 @@ def _capture_data_section(window: Any, *, constants: bool = False) -> tuple[dict
     return section, attachments
 
 
-def _coerce_string_rows(raw_rows: Any, keys: tuple[str, ...]) -> list[dict[str, str]]:
-    if not isinstance(raw_rows, list):
+def _normalize_workspace_parameter_rows(raw_rows: Any) -> list[dict[str, str]]:
+    if raw_rows is None:
         return []
-    rows: list[dict[str, str]] = []
-    for raw_row in raw_rows:
-        if not isinstance(raw_row, dict):
-            continue
-        rows.append({key: str(raw_row.get(key) or "") for key in keys})
-    return rows
+    return cast(list[dict[str, str]], normalize_parameter_rows(
+        raw_rows,
+        constraints_enabled=True,
+    ).persisted_rows())
+
+
+def _normalize_workspace_constant_rows(raw_rows: Any) -> list[dict[str, str]]:
+    if raw_rows is None:
+        return []
+    return cast(list[dict[str, str]], normalize_constants_state(
+        enabled=True,
+        rows=raw_rows,
+        numeric_mode="uncertainty",
+    ).persisted_rows())
 
 
 def _param_rows(window: Any) -> list[dict[str, str]]:
     table = getattr(window, "custom_params_table", None)
     if table is not None and hasattr(table, "rows"):
-        return _coerce_string_rows(
-            table.rows(),
-            ("name", "initial", "fixed", "min", "max"),
-        )
+        return _normalize_workspace_parameter_rows(table.rows())
+    return []
+
+
+def _param_orphans(window: Any) -> list[str]:
+    table = getattr(window, "custom_params_table", None)
+    if table is not None and hasattr(table, "orphan_names"):
+        return sorted(str(name) for name in table.orphan_names())
     return []
 
 
 def _implicit_param_rows(window: Any) -> list[dict[str, str]]:
     table = getattr(window, "implicit_params_table", None)
     if table is not None and hasattr(table, "rows"):
-        return _coerce_string_rows(
-            table.rows(),
-            ("name", "initial", "fixed", "min", "max"),
-        )
+        return _normalize_workspace_parameter_rows(table.rows())
+    return []
+
+
+def _implicit_param_orphans(window: Any) -> list[str]:
+    table = getattr(window, "implicit_params_table", None)
+    if table is not None and hasattr(table, "orphan_names"):
+        return sorted(str(name) for name in table.orphan_names())
     return []
 
 
@@ -252,7 +281,7 @@ def _constants_editor_state(editor: Any) -> dict[str, Any]:
     return {
         "enabled": _checked(editor),
         "view": "text" if editor.using_text_view() else "table",
-        "rows": _coerce_string_rows(editor.rows(), ("name", "value")),
+        "rows": _normalize_workspace_constant_rows(editor.rows()),
         "text": str(editor.raw_text()),
     }
 
@@ -261,7 +290,7 @@ def _implicit_constants_rows(window: Any) -> list[dict[str, str]]:
     editor = getattr(window, "implicit_constants_editor", None)
     if editor is None:
         return []
-    return _coerce_string_rows(editor.rows(), ("name", "value"))
+    return _normalize_workspace_constant_rows(editor.rows())
 
 
 def _variable_rows(window: Any) -> list[dict[str, str]]:
@@ -292,6 +321,7 @@ def _capture_implicit_config(window: Any, model: str) -> dict[str, Any]:
         "timeout_seconds": _value(getattr(window, "implicit_timeout_spin", None), 300),
         "constraints_enabled": _checked(getattr(window, "implicit_constraints_checkbox", None)),
         "parameters": _implicit_param_rows(window),
+        "parameter_orphans": _implicit_param_orphans(window),
         "constants": _implicit_constants_rows(window),
         "constants_enabled": _checked(getattr(window, "implicit_constants_editor", None)),
         "constants_view": "text"
@@ -327,12 +357,20 @@ def _restore_variable_rows(window: Any, rows: Any) -> None:
                 window._add_variable_row(default_var=row["name"], default_column=row["column"])
 
 
-def _restore_param_rows(window: Any, rows: Any) -> None:
-    if not isinstance(rows, list):
+def _restore_param_rows(window: Any, rows: Any, orphan_names: Any = None) -> None:
+    if rows is None:
         return
+    normalized_rows = _normalize_workspace_parameter_rows(rows)
     table = getattr(window, "custom_params_table", None)
     if table is not None and hasattr(table, "set_rows"):
-        table.set_rows(rows)
+        table.set_rows(normalized_rows)
+        if isinstance(orphan_names, list) and hasattr(table, "mark_orphans"):
+            active = [
+                str(row.get("name") or "")
+                for row in normalized_rows
+                if str(row.get("name") or "") not in set(map(str, orphan_names))
+            ]
+            table.mark_orphans(active)
 
 
 def _restore_constants_editor_state(editor: Any, state: Any) -> None:
@@ -358,75 +396,26 @@ def _clean_optional_string(value: Any) -> str:
 
 
 def _implicit_rows_to_config(rows: Any) -> dict[str, dict[str, str]]:
-    if isinstance(rows, dict):
-        cleaned: dict[str, dict[str, str]] = {}
-        for raw_name, raw_entry in rows.items():
-            name = _clean_optional_string(raw_name)
-            if not name:
-                continue
-            if isinstance(raw_entry, dict):
-                entry = {
-                    key: _clean_optional_string(raw_entry.get(key))
-                    for key in ("initial", "fixed", "min", "max")
-                    if _clean_optional_string(raw_entry.get(key))
-                }
-            else:
-                initial = _clean_optional_string(raw_entry)
-                entry = {"initial": initial} if initial else {}
-            cleaned[name] = entry
-        return cleaned
-    if not isinstance(rows, list):
+    if rows is None:
         return {}
-    cleaned = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        name = _clean_optional_string(row.get("name"))
-        if not name:
-            continue
-        entry = {
-            key: _clean_optional_string(row.get(key))
-            for key in ("initial", "fixed", "min", "max")
-            if _clean_optional_string(row.get(key))
-        }
-        cleaned[name] = entry
-    return cleaned
+    state = normalize_parameter_rows(rows, constraints_enabled=True)
+    return cast(dict[str, dict[str, str]], state.compute_config(validate=False))
 
 
 def _parameter_rows_have_constraints(rows: Any) -> bool:
-    if isinstance(rows, dict):
-        rows = [
-            {"name": name, **entry}
-            for name, entry in rows.items()
-            if isinstance(entry, dict)
-        ]
-    if not isinstance(rows, list):
+    if rows is None:
         return False
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
+    state = normalize_parameter_rows(rows, constraints_enabled=True)
+    for row in state.persisted_rows():
         if any(_clean_optional_string(row.get(key)) for key in ("fixed", "min", "max")):
             return True
     return False
 
 
 def _implicit_constants_to_rows(constants: Any) -> list[dict[str, str]]:
-    if isinstance(constants, dict):
-        return [
-            {"name": str(name), "value": str(value)}
-            for name, value in constants.items()
-        ]
-    if not isinstance(constants, list):
+    if constants is None:
         return []
-    rows: list[dict[str, str]] = []
-    for row in constants:
-        if not isinstance(row, dict):
-            continue
-        name = str(row.get("name") or "")
-        value = str(row.get("value") or "")
-        if name or value:
-            rows.append({"name": name, "value": value})
-    return rows
+    return _normalize_workspace_constant_rows(constants)
 
 
 def _is_legacy_quantum_defect_implicit(equation: str, output_expression: str) -> bool:
@@ -504,6 +493,16 @@ def _restore_implicit_config(window: Any, config: Any, fitting: dict[str, Any] |
         window.implicit_constraints_checkbox.setChecked(constraints_enabled)
     if hasattr(window, "_reset_implicit_param_rows"):
         window._reset_implicit_param_rows(restore_parameters)
+        table = getattr(window, "implicit_params_table", None)
+        orphan_names = config.get("parameter_orphans")
+        if isinstance(orphan_names, list) and table is not None and hasattr(table, "mark_orphans"):
+            orphan_set = set(map(str, orphan_names))
+            active = [
+                str(row.get("name") or "")
+                for row in table.rows()
+                if isinstance(row, dict) and str(row.get("name") or "") not in orphan_set
+            ]
+            table.mark_orphans(active)
     constants = config.get("constants")
     editor = getattr(window, "implicit_constants_editor", None)
     if editor is not None:
@@ -534,7 +533,9 @@ def _legacy_parameter_text_rows(parameter_text: Any) -> list[dict[str, str]]:
 
 
 def _capture_config(window: Any) -> dict[str, Any]:
-    fitting_model = _combo_data(getattr(window, "fit_model_combo", None), "custom")
+    fitting_model = _normalize_fitting_model(_combo_data(getattr(window, "fit_model_combo", None), "custom"))
+    if fitting_model == "auto":
+        fitting_model = "custom"
     return {
         "common": {
             "mpmath_precision": _value(getattr(window, "mpmath_precision_spin", None), 16),
@@ -594,6 +595,7 @@ def _capture_config(window: Any) -> dict[str, Any]:
             "variables": _variable_rows(window),
             "constraints_enabled": _checked(getattr(window, "custom_constraints_checkbox", None)),
             "parameter_rows": _param_rows(window),
+            "parameter_orphans": _param_orphans(window),
             "custom_constants": _constants_editor_state(getattr(window, "custom_constants_editor", None)),
             "implicit": _capture_implicit_config(window, fitting_model),
             "poly_degree": _value(getattr(window, "poly_degree_spin", None), 3),
@@ -611,6 +613,39 @@ def _capture_config(window: Any) -> dict[str, Any]:
             },
         },
     }
+
+
+def _workspace_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    workspace = manifest.get("workspace")
+    if isinstance(workspace, dict):
+        return workspace
+    return {
+        "title": manifest.get("title") or "Untitled",
+        "current_mode": manifest.get("current_mode") or "fitting",
+        "ui": manifest.get("ui") or {},
+        "data": (manifest.get("data") or {}).get("input") or manifest.get("data") or {},
+        "constants": (manifest.get("data") or {}).get("constants") or manifest.get("constants") or {},
+        "config": manifest.get("config") or {},
+        "result_snapshot": manifest.get("result_snapshot") or {"present": False},
+    }
+
+
+def _degrade_obsolete_auto_fit_config(window: Any, fitting: dict[str, Any]) -> bool:
+    has_obsolete_auto = fitting.get("model") == "auto" or "auto_fit" in fitting
+    if not has_obsolete_auto:
+        return False
+
+    fitting.pop("auto_fit", None)
+    if fitting.get("model") == "auto":
+        fitting["model"] = "custom"
+
+    warnings = list(getattr(window, "_workspace_migration_warnings", []) or [])
+    warnings.append(
+        "Automatic fitting is no longer supported; obsolete automatic fitting "
+        "workspace settings were ignored."
+    )
+    window._workspace_migration_warnings = warnings
+    return True
 
 
 def _capture_ui(window: Any) -> dict[str, Any]:
@@ -692,6 +727,7 @@ def capture_workspace(window: Any, *, title: str = "Untitled") -> WorkspaceBundl
             "app": {"name": "DataLab", "version": current_version()},
             "created_at": now,
             "updated_at": now,
+            "config": workspace["config"],
             "workspace": workspace,
         },
         attachments=attachments,
@@ -743,25 +779,33 @@ def _restore_data_section(window: Any, section: dict[str, Any], *, constants: bo
 
 
 def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[str, bytes]) -> None:
-    workspace = manifest["workspace"]
+    workspace = _workspace_from_manifest(manifest)
     _set_combo_data(getattr(window, "mode_combo", None), str(workspace.get("current_mode") or "fitting"))
     _restore_data_section(window, workspace.get("data") or {}, constants=False)
     _restore_data_section(window, workspace.get("constants") or {}, constants=True)
 
     config = workspace.get("config") or {}
     fitting = config.get("fitting") or {}
-    _set_combo_data(getattr(window, "fit_model_combo", None), str(fitting.get("model") or "custom"))
+    degraded = _degrade_obsolete_auto_fit_config(window, fitting)
+    fitting["model"] = _normalize_fitting_model(fitting.get("model") or "custom")
+    _set_combo_data(getattr(window, "fit_model_combo", None), str(fitting["model"]))
     if hasattr(window, "fit_expr_edit"):
         window.fit_expr_edit.setPlainText(str(fitting.get("expression") or ""))
     if hasattr(window, "fit_target_edit"):
         window.fit_target_edit.setText(str(fitting.get("target_column") or ""))
     _restore_variable_rows(window, fitting.get("variables"))
     parameter_rows = fitting.get("parameter_rows") or _legacy_parameter_text_rows(fitting.get("parameters"))
-    _restore_param_rows(window, parameter_rows)
     if not parameter_rows and isinstance(fitting.get("parameters"), list):
-        _restore_param_rows(window, fitting.get("parameters"))
+        parameter_rows = fitting.get("parameters")
     if hasattr(window, "custom_constraints_checkbox"):
-        window.custom_constraints_checkbox.setChecked(bool(fitting.get("constraints_enabled")))
+        custom_had_constraints_flag = "constraints_enabled" in fitting
+        custom_constraints_enabled = (
+            bool(fitting.get("constraints_enabled"))
+            if custom_had_constraints_flag
+            else _parameter_rows_have_constraints(parameter_rows)
+        )
+        window.custom_constraints_checkbox.setChecked(custom_constraints_enabled)
+    _restore_param_rows(window, parameter_rows, fitting.get("parameter_orphans"))
     _restore_constants_editor_state(getattr(window, "custom_constants_editor", None), fitting.get("custom_constants"))
     _restore_implicit_config(window, fitting.get("implicit"), fitting)
 
@@ -786,6 +830,6 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
     window._last_result_payloads = {}
     window._workspace_snapshot_only = bool(snapshot.get("present"))
     window._workspace_dirty = False
-    window._workspace_degraded = False
+    window._workspace_degraded = degraded
     if hasattr(window, "_set_snapshot_controls_enabled"):
         window._set_snapshot_controls_enabled(not window._workspace_snapshot_only)

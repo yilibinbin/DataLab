@@ -1,6 +1,6 @@
 # Fitting (Desktop)
 
-The fitting module fits models to your data or runs auto model selection. It outputs parameters, uncertainties, and goodness-of-fit metrics, and can generate curve/residual plots.
+The fitting module fits explicit models to your data. It outputs parameters, uncertainties, and goodness-of-fit metrics, and can generate curve/residual plots.
 
 ## Data and Uncertainties
 
@@ -9,10 +9,12 @@ The fitting module fits models to your data or runs auto model selection. It out
 
 ## Model Selection
 
-The desktop app can provide:
+The desktop app provides explicit fitting models:
 
-- Auto model selection over a preset model library
-- Manual model selection (e.g., polynomial, Padé, inverse series, custom models)
+- Polynomial models
+- Inverse-power series
+- Padé and power-limit models
+- Custom nonlinear and self-consistent/implicit models
 
 Model-specific parameters appear dynamically on the left.
 
@@ -31,4 +33,3 @@ You can also enable `log-x` / `log-y`:
 
 - Parameters and metrics are shown and can be exported as CSV
 - LaTeX table generation and optional PDF compilation are available (depending on the TeX engine and settings)
-

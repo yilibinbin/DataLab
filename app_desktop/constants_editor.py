@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 from typing import Any
 
-import mpmath as mp
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -18,11 +16,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from datalab_latex.latex_tables_error_propagation import parse_uncertainty_format
-from fitting.model_parser import is_reserved_expression_name
+from app_desktop.fitting_input_normalization import (
+    constants_rows_to_text,
+    normalize_constants_state,
+    parse_constants_text,
+)
 
 
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TABLE_VIEW = 0
 _TEXT_VIEW = 1
 
@@ -47,6 +47,8 @@ class ConstantsEditor(QWidget):
         self._numeric_mode = numeric_mode
         self._table_revision = 0
         self._text_source_table_revision = -1
+        self._inputs_visible = True
+        self._constructed = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -97,6 +99,7 @@ class ConstantsEditor(QWidget):
         layout.addWidget(self.stack)
 
         self._on_checked_changed(self.checkbox.isChecked())
+        self._constructed = True
 
     def setChecked(self, checked: bool) -> None:  # noqa: N802 - Qt-style API
         self.checkbox.setChecked(bool(checked))
@@ -106,6 +109,9 @@ class ConstantsEditor(QWidget):
 
     def using_text_view(self) -> bool:
         return self.stack.currentIndex() == _TEXT_VIEW
+
+    def numeric_mode(self) -> str:
+        return self._numeric_mode
 
     def use_text_view(self, enabled: bool) -> None:
         if enabled and self.stack.currentIndex() != _TEXT_VIEW:
@@ -119,8 +125,8 @@ class ConstantsEditor(QWidget):
         self._update_toggle_label()
 
     def set_inputs_visible(self, visible: bool) -> None:
-        self.controls_widget.setVisible(bool(visible))
-        self.stack.setVisible(bool(visible))
+        self._inputs_visible = bool(visible)
+        self._apply_inputs_visibility()
 
     def rows(self) -> list[dict[str, str]]:
         if self.using_text_view():
@@ -128,16 +134,11 @@ class ConstantsEditor(QWidget):
         return self._table_rows()
 
     def set_rows(self, rows: Iterable[dict[str, Any]] | dict[str, Any] | None) -> None:
-        if isinstance(rows, dict):
-            clean_rows = [{"name": str(name), "value": str(value)} for name, value in rows.items()]
-        elif rows is None:
-            clean_rows = []
-        else:
-            clean_rows = [
-                {"name": str(row.get("name") or ""), "value": str(row.get("value") or "")}
-                for row in rows
-                if isinstance(row, dict)
-            ]
+        clean_rows = normalize_constants_state(
+            enabled=True,
+            rows=rows,
+            numeric_mode=self._numeric_mode,
+        ).persisted_rows()
         self._set_table_rows(clean_rows)
         if self.using_text_view():
             self.text_view.setPlainText(self._rows_to_text(clean_rows))
@@ -163,42 +164,26 @@ class ConstantsEditor(QWidget):
         self._emit_changed()
 
     def constants_dict(self, *, validate: bool = True) -> dict[str, str]:
-        constants: dict[str, str] = {}
-        for row in self.rows():
-            name = row["name"].strip()
-            value = row["value"].strip()
-            if not name and not value:
-                continue
-            if not validate and (not name or not value):
-                continue
-            if not name:
-                raise ValueError("Constant name cannot be empty.")
-            if not _IDENTIFIER_RE.fullmatch(name):
-                raise ValueError(f"Invalid constant name: {name}")
-            if is_reserved_expression_name(name):
-                raise ValueError(f"Constant name is reserved: {name}")
-            if not value:
-                raise ValueError(f"Constant {name} needs a value.")
-            if name in constants:
-                raise ValueError(f"Duplicate constant name: {name}")
-            if validate:
-                self._validate_value(name, value)
-            constants[name] = value
-        return constants
-
-    def _validate_value(self, name: str, value: str) -> None:
-        try:
-            if self._numeric_mode == "mpmath":
-                mp.mpf(value)
-            else:
-                parse_uncertainty_format(value)
-        except Exception as exc:  # noqa: BLE001
-            raise ValueError(f"Invalid value for constant {name}.") from exc
+        return normalize_constants_state(
+            enabled=True,
+            view="text" if self.using_text_view() else "table",
+            rows=self.rows(),
+            text=self.text_view.toPlainText(),
+            numeric_mode=self._numeric_mode,
+        ).compute_dict(validate=validate)
 
     def _on_checked_changed(self, checked: bool) -> None:
-        self.controls_widget.setEnabled(bool(checked))
-        self.stack.setEnabled(bool(checked))
+        if self._constructed and checked and self.parentWidget() is None and not self.isVisible():
+            self.show()
+        self._apply_inputs_visibility()
         self._emit_changed()
+
+    def _apply_inputs_visibility(self) -> None:
+        visible = self._inputs_visible and self.checkbox.isChecked()
+        self.controls_widget.setVisible(visible)
+        self.stack.setVisible(visible)
+        self.controls_widget.setEnabled(visible)
+        self.stack.setEnabled(visible)
 
     def _emit_changed(self, *_args: object) -> None:
         if not self._syncing:
@@ -276,31 +261,8 @@ class ConstantsEditor(QWidget):
 
     @staticmethod
     def _rows_to_text(rows: Iterable[dict[str, str]]) -> str:
-        lines = []
-        for row in rows:
-            name = str(row.get("name") or "").strip()
-            value = str(row.get("value") or "").strip()
-            if name or value:
-                lines.append(f"{name} {value}".strip())
-        return "\n".join(lines)
+        return constants_rows_to_text(rows)
 
     @staticmethod
     def _text_rows(text: str) -> list[dict[str, str]]:
-        rows: list[dict[str, str]] = []
-        for line in (text or "").splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            if "=" in stripped:
-                name, value = stripped.split("=", 1)
-                name = name.strip()
-                value = value.strip()
-            else:
-                parts = stripped.split(None, 1)
-                if len(parts) == 1:
-                    name, value = parts[0].strip(), ""
-                else:
-                    name, value = parts[0].strip(), parts[1].strip()
-            if name or value:
-                rows.append({"name": name, "value": value})
-        return rows
+        return parse_constants_text(text)

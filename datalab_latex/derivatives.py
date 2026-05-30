@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from mpmath import mp
-from typing import Any, Callable
+from typing import Callable
 
 import sympy as sp
-from sympy.parsing.sympy_parser import parse_expr
 
 from .expression_engine import _normalize_expression, safe_eval
+from shared.symbolic_math import (
+    build_sympy_local_dict as _build_sympy_local_dict,
+    parse_symbolic_expression,
+)
 
 
 _SymbolicCallable = Callable[..., object]
@@ -18,83 +21,6 @@ _SYMBOLIC_PARTIALS_CACHE_MAX = 64
 
 _SYMBOLIC_HESSIAN_CACHE: "OrderedDict[tuple[str, tuple[str, ...]], list[list[_SymbolicCallable | None]] | None]" = OrderedDict()
 _SYMBOLIC_HESSIAN_CACHE_MAX = 32
-
-
-_SYMPY_GLOBALS: dict[str, object] = {
-    "__builtins__": {},
-    "Integer": sp.Integer,
-    "Rational": sp.Rational,
-    "Float": sp.Float,
-    "Symbol": sp.Symbol,
-    "Add": sp.Add,
-    "Mul": sp.Mul,
-    "Pow": sp.Pow,
-    "Mod": sp.Mod,
-}
-
-
-def _build_sympy_local_dict(variables: list[str]) -> tuple[list[sp.Symbol], dict[str, object]]:
-    symbols: list[sp.Symbol] = []
-    local_dict: dict[str, object] = {}
-    for name in variables:
-        sym = sp.Symbol(name)
-        symbols.append(sym)
-        local_dict[name] = sym
-
-    if "Pi" not in local_dict:
-        local_dict["Pi"] = sp.pi
-    if "E" not in local_dict:
-        local_dict["E"] = sp.E
-
-    def _maybe_add(name: str, obj: object) -> None:
-        if name not in local_dict:
-            local_dict[name] = obj
-
-    _maybe_add("Sin", sp.sin)
-    _maybe_add("Cos", sp.cos)
-    _maybe_add("Tan", sp.tan)
-    _maybe_add("Asin", sp.asin)
-    _maybe_add("Acos", sp.acos)
-    _maybe_add("Atan", sp.atan)
-    _maybe_add("Sinh", sp.sinh)
-    _maybe_add("Cosh", sp.cosh)
-    _maybe_add("Tanh", sp.tanh)
-    _maybe_add("Asinh", sp.asinh)
-    _maybe_add("Acosh", sp.acosh)
-    _maybe_add("Atanh", sp.atanh)
-    _maybe_add("Exp", sp.exp)
-    _maybe_add("Log", sp.log)
-    _maybe_add("Ln", sp.log)
-
-    def _log10(x: Any) -> Any:  # sympy.Expr — no stubs, so Any (see pyproject mypy overrides).
-        return sp.log(x, 10)
-
-    _maybe_add("Log10", _log10)
-    _maybe_add("Sqrt", sp.sqrt)
-    _maybe_add("Power", sp.Pow)
-    _maybe_add("Abs", sp.Abs)
-    _maybe_add("Erf", sp.erf)
-    _maybe_add("Gamma", sp.gamma)
-    _maybe_add("Zeta", sp.zeta)
-    _maybe_add("PolyLog", sp.polylog)
-    _maybe_add("BesselJ", sp.besselj)
-    _maybe_add("BesselY", sp.bessely)
-    _maybe_add("Airy", sp.airyai)
-
-    def _hyp0f1(b: Any, z: Any) -> Any:  # sympy.Expr — no stubs, so Any (see pyproject mypy overrides).
-        return sp.hyper([], [b], z)
-
-    def _hyp1f1(a: Any, b: Any, z: Any) -> Any:
-        return sp.hyper([a], [b], z)
-
-    def _hyp2f1(a: Any, b: Any, c: Any, z: Any) -> Any:
-        return sp.hyper([a, b], [c], z)
-
-    _maybe_add("Hyp0f1", _hyp0f1)
-    _maybe_add("Hyp1f1", _hyp1f1)
-    _maybe_add("Hyp2f1", _hyp2f1)
-
-    return symbols, local_dict
 
 
 def _auto_finite_diff_step(x_value: object, derivative_order: int) -> mp.mpf:
@@ -215,13 +141,13 @@ def _build_symbolic_hessian(
 
     normalized = _normalize_expression(formula_str)
 
-    symbols, local_dict = _build_sympy_local_dict(variables)
+    symbols, _ = _build_sympy_local_dict(variables)
 
     try:
-        expr = parse_expr(
+        expr, _ = parse_symbolic_expression(
             normalized,
-            local_dict=local_dict,
-            global_dict=_SYMPY_GLOBALS,
+            variables=variables,
+            normalize=False,
             evaluate=True,
         )
     except Exception:
@@ -289,13 +215,13 @@ def _build_symbolic_partials(
     normalized = _normalize_expression(formula_str)
 
     # Build a restricted Sympy environment that mirrors safe_eval's registry
-    symbols, local_dict = _build_sympy_local_dict(variables)
+    symbols, _ = _build_sympy_local_dict(variables)
 
     try:
-        expr = parse_expr(
+        expr, _ = parse_symbolic_expression(
             normalized,
-            local_dict=local_dict,
-            global_dict=_SYMPY_GLOBALS,
+            variables=variables,
+            normalize=False,
             evaluate=True,
         )
     except Exception:

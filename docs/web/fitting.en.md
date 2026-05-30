@@ -1,6 +1,6 @@
 # Fitting
 
-Fit a model to data and obtain best-fit parameters and goodness-of-fit metrics.
+Fit an explicit model to data and obtain best-fit parameters and goodness-of-fit metrics.
 
 ## Quick Workflow
 
@@ -13,10 +13,10 @@ Fit a model to data and obtain best-fit parameters and goodness-of-fit metrics.
    ```
 
 2. **Choose fitting mode**:
-   - **Auto**: try multiple candidate models and pick the best
-   - **Preset models**: choose from the model library
    - **Polynomial**: set degree
    - **Inverse power series**: set power range
+   - **Padé**: set numerator and denominator order
+   - **Power-limit**: use the `A*x**(-p)+C` template
    - **Custom model**: provide a custom expression
 
 3. **Options**:
@@ -33,6 +33,8 @@ Fit a model to data and obtain best-fit parameters and goodness-of-fit metrics.
 - polynomial fits
 - inverse power series
 - Padé approximants
-- preset model library (log/exp combinations, etc.)
+- power-limit template
 - custom models
 
+The desktop GUI also supports self-consistent/implicit fitting. The web page
+currently exposes the explicit model subset listed above.

@@ -8,8 +8,18 @@ from typing import Callable, Iterable, List, Optional, cast
 
 from mpmath import mp
 
+from extrapolation_methods import (
+    SequenceAcceleratorConfig,
+    SequenceAccelerationError,
+    apply_sequence_accelerator,
+)
 from shared.bilingual import _dual_msg
 from shared.numerics import noise_floor
+
+from .auto_models import AUTO_MODELS, AutoModelDefinition, fit_linear_model
+from .constraints import ParameterState
+from .hp_fitter import FitResult, combine_error_components, fit_custom_model
+from .model_parser import ModelSpecification
 
 
 class AutoFitCancelled(Exception):
@@ -86,17 +96,6 @@ def _run_with_timeout(
     if err:
         raise err[0]
     return holder[0]
-
-from extrapolation_methods import (
-    SequenceAcceleratorConfig,
-    SequenceAccelerationError,
-    apply_sequence_accelerator,
-)
-
-from .auto_models import AUTO_MODELS, AutoModelDefinition, fit_linear_model
-from .hp_fitter import FitResult, combine_error_components, fit_custom_model
-from .model_parser import ModelSpecification
-from .constraints import ParameterState
 
 SEQUENCE_MODEL_ID = "SEQ"
 CUSTOM_MODEL_ID = "CUSTOM"

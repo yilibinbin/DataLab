@@ -221,6 +221,14 @@ else
   echo "[warn] Desktop docs directory not found: $DESKTOP_DOCS_DIR"
 fi
 
+EXAMPLE_WORKSPACES_DIR="$PROJECT_ROOT/examples/workspaces"
+if [[ -d "$EXAMPLE_WORKSPACES_DIR" ]]; then
+  echo "[info] Including example workspaces: $EXAMPLE_WORKSPACES_DIR"
+  DOCS_DATA_FLAGS+=(--add-data "$EXAMPLE_WORKSPACES_DIR:examples/workspaces")
+else
+  echo "[warn] Example workspaces directory not found: $EXAMPLE_WORKSPACES_DIR"
+fi
+
 HELP_SPECS_FILE="$PROJECT_ROOT/shared/help_specs.json"
 if [[ -f "$HELP_SPECS_FILE" ]]; then
   echo "[info] Including help specs: $HELP_SPECS_FILE"
@@ -247,14 +255,16 @@ if [[ "${DATALAB_BUNDLE_TINYTEX:-0}" == "1" ]]; then
   fi
 fi
 
-# Hidden imports — modules that the static analyzer can miss because they
-# are imported lazily / conditionally. emcee and corner sit behind
-# ``HAS_EMCEE`` guards in fitting.mcmc_fitter, so PyInstaller's import
-# graph won't pick them up automatically; declare them explicitly so the
-# bundled .app actually ships MCMC support.
+# Hidden imports and package collections for numerical/symbolic backends.
+# SymPy is collected for formula parsing, symbolic fitting, and constraints.
+# emcee and corner sit behind ``HAS_EMCEE`` guards in fitting.mcmc_fitter, so
+# PyInstaller's import graph won't pick them up automatically; declare them
+# explicitly so the bundled .app actually ships MCMC support.
 HIDDEN_IMPORT_FLAGS=(
   --hidden-import "mpmath"
   --collect-all "mpmath"
+  --hidden-import "sympy"
+  --collect-all "sympy"
   --hidden-import "emcee"
   --hidden-import "emcee.moves"
   --hidden-import "emcee.backends"

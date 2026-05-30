@@ -1,10 +1,10 @@
-"""#3 SSE endpoint — regression tests for /api/fit/stream and /api/auto-fit/stream.
+"""SSE endpoint regression tests for explicit fit streaming.
 
 The helper in ``app_web/streaming.py`` has been wired to a Flask
-blueprint that yields progress events during long-running auto-fit
-and single-model fit jobs. The client's ``EventSource`` receives
-``started`` → ``progress`` (per-model) → ``result`` (final) events
-rather than a single blocking HTTP response.
+blueprint that yields progress events during long-running single-model
+fit jobs. The client's ``EventSource`` receives ``started`` →
+``progress`` → ``result`` events rather than a single blocking HTTP
+response.
 """
 
 from __future__ import annotations
@@ -63,43 +63,30 @@ def _parse_sse_stream(body: bytes) -> list[dict]:
 
 def test_fit_stream_endpoint_exists(_client):
     """GET /api/fit/stream?data=... should return text/event-stream."""
-    resp = _client.get("/api/fit/stream?x=1,2,3,4,5&y=2,4,6,8,10&model=M1")
-    assert resp.status_code == 200
-    assert resp.headers["Content-Type"].startswith("text/event-stream")
-
-
-def test_auto_fit_stream_endpoint_exists(_client):
-    resp = _client.get("/api/auto-fit/stream?x=1,2,3,4,5&y=2,4,6,8,10")
-    assert resp.status_code == 200
-    assert resp.headers["Content-Type"].startswith("text/event-stream")
-
-
-def test_auto_fit_stream_emits_progress_events(_client):
-    """Auto-fit stream should emit: started → progress (per model) → result."""
-    resp = _client.get("/api/auto-fit/stream?x=1,2,3,4,5,6&y=2,4,6,8,10,12")
-    events = _parse_sse_stream(resp.data)
-
-    # Must have at least: 1 started, multiple progress, 1 result
-    event_types = [e["event"] for e in events]
-    assert "started" in event_types
-    assert "result" in event_types
-    assert event_types.count("progress") >= 1, (
-        f"Expected multiple progress events, got {event_types}"
+    resp = _client.get(
+        "/api/fit/stream?x=1,2,3,4,5&y=2,4,6,8,10&model=polynomial"
     )
-    # started event must come first, result last
-    assert event_types[0] == "started"
-    assert event_types[-1] == "result"
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"].startswith("text/event-stream")
 
 
-def test_auto_fit_stream_result_has_best_model(_client):
+def test_legacy_auto_fit_stream_endpoint_rejects_with_deprecation(_client):
     resp = _client.get("/api/auto-fit/stream?x=1,2,3,4,5&y=2,4,6,8,10")
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"].startswith("text/event-stream")
     events = _parse_sse_stream(resp.data)
-    result_events = [e for e in events if e["event"] == "result"]
-    assert result_events, "missing final result event"
-    result = result_events[-1]["data"]
-    assert isinstance(result, dict)
-    # Expected shape: {best: {...}, candidates: [...]}
-    assert "best" in result or "candidates" in result
+    assert events == [
+        {
+            "event": "error",
+            "data": {
+                "error": "Deprecated",
+                "message": (
+                    "Automatic fitting is no longer supported. Use "
+                    "/api/fit/stream with an explicit model."
+                ),
+            },
+        }
+    ]
 
 
 def test_fit_stream_rejects_missing_params(_client):
@@ -113,7 +100,7 @@ def test_fit_stream_rejects_missing_params(_client):
 
 def test_fit_stream_rejects_mismatched_xy(_client):
     """x=[1,2,3] + y=[1,2] must yield a clear error event."""
-    resp = _client.get("/api/fit/stream?x=1,2,3&y=1,2&model=M1")
+    resp = _client.get("/api/fit/stream?x=1,2,3&y=1,2&model=polynomial")
     if resp.status_code == 200:
         events = _parse_sse_stream(resp.data)
         error_events = [e for e in events if e["event"] == "error"]
@@ -123,7 +110,8 @@ def test_fit_stream_rejects_mismatched_xy(_client):
 def test_fit_stream_clamps_precision(_client):
     """precision=10_000_000 must not crash — clamp at 1000."""
     resp = _client.get(
-        "/api/fit/stream?x=1,2,3,4,5&y=2,4,6,8,10&model=M1&precision=10000000"
+        "/api/fit/stream?x=1,2,3,4,5&y=2,4,6,8,10&model=polynomial"
+        "&precision=10000000"
     )
     assert resp.status_code == 200
     events = _parse_sse_stream(resp.data)
@@ -132,20 +120,9 @@ def test_fit_stream_clamps_precision(_client):
     assert result_events, "precision clamp should still produce a result"
 
 
-def test_auto_fit_stream_progress_has_model_id(_client):
-    """Each progress event should carry the model identifier being tried."""
-    resp = _client.get("/api/auto-fit/stream?x=1,2,3,4,5&y=2,4,6,8,10")
-    events = _parse_sse_stream(resp.data)
-    progress = [e for e in events if e["event"] == "progress"]
-    assert progress
-    for p in progress:
-        assert isinstance(p["data"], dict)
-        assert "model" in p["data"], f"progress missing model id: {p}"
-
-
 def test_fit_stream_error_event_has_json_payload(_client):
     """Error events must parse as JSON with 'error' and 'message' keys."""
-    resp = _client.get("/api/fit/stream?x=bad,stuff&y=2,4&model=M1")
+    resp = _client.get("/api/fit/stream?x=bad,stuff&y=2,4&model=polynomial")
     events = _parse_sse_stream(resp.data)
     errors = [e for e in events if e["event"] == "error"]
     if errors:
@@ -164,7 +141,9 @@ def test_fit_stream_rejects_oversized_input():
     app.config["TESTING"] = True
     client = app.test_client()
     oversized = ",".join(str(i) for i in range(MAX_SSE_INPUT_POINTS + 10))
-    resp = client.get(f"/api/fit/stream?x={oversized}&y={oversized}&model=M1")
+    resp = client.get(
+        f"/api/fit/stream?x={oversized}&y={oversized}&model=polynomial"
+    )
     events = _parse_sse_stream(resp.data)
     errors = [e for e in events if e["event"] == "error"]
     assert errors, "oversized input must produce an error event"
@@ -188,7 +167,9 @@ def test_rate_limiter_fires_when_testing_flag_off(monkeypatch):
     client = app.test_client()
     rate_limited_seen = False
     for _ in range(sse_mod.RATE_MAX_REQUESTS + 3):
-        resp = client.get("/api/fit/stream?x=1,2,3&y=2,4,6&model=M1")
+        resp = client.get(
+            "/api/fit/stream?x=1,2,3&y=2,4,6&model=polynomial"
+        )
         evs = _parse_sse_stream(resp.data)
         if any(
             e["event"] == "error"
@@ -201,6 +182,50 @@ def test_rate_limiter_fires_when_testing_flag_off(monkeypatch):
     assert rate_limited_seen, (
         "expected a RateLimited SSE error after exceeding the budget"
     )
+
+
+@pytest.mark.parametrize("model", ["log_poly", "exp_combo", "auto", "auto_fit"])
+def test_fit_stream_rejects_removed_public_models(_client, model):
+    resp = _client.get(
+        f"/api/fit/stream?x=1,2,3,4,5&y=2,4,6,8,10&model={model}"
+    )
+    assert resp.status_code == 200
+    events = _parse_sse_stream(resp.data)
+    assert not any(e["event"] == "result" for e in events)
+    errors = [e for e in events if e["event"] == "error"]
+    assert errors, f"expected error event for removed model {model!r}"
+    assert errors[0]["data"]["error"] == "BadRequest"
+    assert "removed" in errors[0]["data"]["message"].lower()
+
+
+@pytest.mark.parametrize("model", ["pade", "power_limit", "custom"])
+def test_fit_stream_recognizes_non_linear_explicit_models_without_fitting(
+    _client, model
+):
+    resp = _client.get(
+        f"/api/fit/stream?x=1,2,3,4,5&y=2,4,6,8,10&model={model}"
+    )
+    assert resp.status_code == 200
+    events = _parse_sse_stream(resp.data)
+    assert not any(e["event"] == "result" for e in events)
+    errors = [e for e in events if e["event"] == "error"]
+    assert errors, f"expected unsupported event for model {model!r}"
+    assert errors[0]["data"]["error"] == "UnsupportedModel"
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [("poly", "polynomial"), ("inverse", "inverse_power")],
+)
+def test_fit_stream_accepts_legacy_explicit_aliases(_client, model, expected):
+    resp = _client.get(
+        f"/api/fit/stream?x=1,2,3,4,5&y=1,0.5,0.333,0.25,0.2&model={model}"
+    )
+    assert resp.status_code == 200
+    events = _parse_sse_stream(resp.data)
+    result_events = [e for e in events if e["event"] == "result"]
+    assert result_events, f"expected successful result, got {events}"
+    assert result_events[0]["data"]["model"] == expected
 
 
 def test_rate_limiter_fires_on_auto_fit_endpoint(monkeypatch):

@@ -14,7 +14,7 @@
 | 模式 | 用途 | 算法 |
 |------|------|------|
 | **序列外推** | 把数值方法在不同步长下的近似值外推到极限 | Richardson、Wynn-ε(Shanks)、Levin u-transform、自定义公式 |
-| **曲线拟合** | 带不确定度的非线性最小二乘拟合 + 自动模型选择(AIC/BIC) | 多项式、Padé、自定义表达式;可选 MCMC 后验优化 |
+| **曲线拟合** | 带不确定度的显式模型最小二乘拟合 | 多项式、倒数幂级数、Padé、幂律极限、自定义/自洽模型;可选 MCMC 后验优化 |
 | **误差传递** | 对 `1.23(4)[-2]` 形式数据按公式自动传播 1σ 不确定度 | SymPy 偏导数 + Monte Carlo |
 | **统计平均** | 加权 / 算术平均 + 标准误差 + RMS 散度 | 单边 / 双边、加权方差 |
 
@@ -124,7 +124,7 @@ QT_QPA_PLATFORM=offscreen pytest -q   # 770+ tests
 | Mode | Purpose | Methods |
 |------|---------|---------|
 | **Extrapolation** | Take a numerical method's approximations at decreasing step sizes and extrapolate to the limit | Richardson, Wynn-ε (Shanks), Levin u-transform, custom formulas |
-| **Curve Fitting** | Non-linear least-squares with measurement uncertainties + automatic model selection (AIC/BIC) | Polynomial, Padé, arbitrary expression; optional MCMC posterior refinement |
+| **Curve Fitting** | Explicit model least-squares with measurement uncertainties and model-comparison metrics (AIC/BIC) | Polynomial, inverse-power series, Padé, power-limit, custom/self-consistent models; optional MCMC posterior refinement |
 | **Error Propagation** | Propagate 1σ uncertainties from `1.23(4)[-2]`-style data through user formulas | SymPy partial derivatives + Monte Carlo cross-check |
 | **Statistics** | Weighted / arithmetic mean + standard error + RMS scatter | One-sided / two-sided, weighted variance |
 

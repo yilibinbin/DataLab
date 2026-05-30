@@ -13,14 +13,36 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import sys
 import traceback
 from pathlib import Path
 from typing import Optional, Sequence
 
+from cli.batch_config import BatchJob
+
 __all__ = ["main", "run_batch_file"]
 
 _logger = logging.getLogger(__name__)
+
+
+_REMOVED_FIT_MODELS = frozenset({"auto", "auto_fit", "log_poly", "exp_combo"})
+_CLI_MODEL_ALIASES = {
+    "poly": "polynomial",
+    "polynomial": "polynomial",
+    "linear": "polynomial",
+    "quadratic": "polynomial",
+    "cubic": "polynomial",
+    "inverse": "inverse_power",
+    "inverse_power": "inverse_power",
+}
+_POLYNOMIAL_DEGREES = {
+    "linear": 1,
+    "poly": 1,
+    "quadratic": 2,
+    "cubic": 3,
+}
+_SUPPORTED_CLI_MODEL_INPUTS = frozenset(
+    {"linear", "poly", "quadratic", "cubic", "inverse", "inverse_power"}
+)
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -62,30 +84,47 @@ def _read_xy_csv(path: Path) -> tuple[list[float], list[float]]:
     return xs, ys
 
 
-def _run_fit(job) -> dict:
-    """Execute a single-model fit via ``fitting.auto_models.fit_linear_model``.
-
-    ``job.model`` is the model identifier from ``AUTO_MODELS``
-    (e.g., ``"M1"`` for linear, ``"M2"`` for quadratic) or the
-    friendly alias ``"linear"`` / ``"quadratic"`` / ``"cubic"``.
-    """
+def _run_fit(job: BatchJob) -> dict[str, object]:
+    """Execute a single explicit CLI fit."""
+    from fitting import build_inverse_series_definition, build_polynomial_definition
     from fitting.auto_models import (
-        AUTO_MODELS,
-        MODEL_ID_ALIASES,
         fit_linear_model,
-        resolve_model_identifier,
     )
     from shared.precision import precision_guard
 
-    requested = resolve_model_identifier(job.model)
-    by_id = {d.identifier: d for d in AUTO_MODELS}
-    definition = by_id.get(requested)
-    if definition is None:
-        available = ", ".join(sorted(by_id.keys()))
+    raw_model = job.model.strip()
+    model_key = raw_model.lower()
+    if model_key in _REMOVED_FIT_MODELS:
+        raise ValueError(
+            f"Job {job.name!r}: model {raw_model!r} has been removed. "
+            "Choose a CLI-supported explicit model: linear, poly, quadratic, "
+            "cubic, inverse, or inverse_power."
+        )
+
+    canonical_model = _CLI_MODEL_ALIASES.get(model_key, model_key)
+    if model_key not in _SUPPORTED_CLI_MODEL_INPUTS:
+        available = ", ".join(sorted(_SUPPORTED_CLI_MODEL_INPUTS))
         raise ValueError(
             f"Job {job.name!r}: unknown model {job.model!r}. "
-            f"Available identifiers: {available} (aliases: "
-            f"{', '.join(sorted(MODEL_ID_ALIASES))})"
+            f"Supported CLI batch models: {available}. "
+            "Use the desktop or web UI for other explicit DataLab models."
+        )
+    if canonical_model == "polynomial":
+        degree = _POLYNOMIAL_DEGREES.get(model_key)
+        if degree is None:
+            raise ValueError(
+                f"Job {job.name!r}: model {raw_model!r} is ambiguous in CLI batch mode. "
+                "Use 'linear', 'quadratic', or 'cubic'."
+            )
+        definition = build_polynomial_definition(degree)
+    elif canonical_model == "inverse_power":
+        definition = build_inverse_series_definition(1, 3)
+    else:
+        raise ValueError(
+            f"Job {job.name!r}: model {canonical_model!r} is an explicit "
+            "DataLab model, but this CLI batch runner currently supports "
+            "only polynomial and inverse_power fits. Use the desktop or web "
+            "UI for this model."
         )
 
     xs, ys = _read_xy_csv(job.data_path)
@@ -101,7 +140,7 @@ def _run_fit(job) -> dict:
     return {
         "job_name": job.name,
         "operation": "fit",
-        "model": definition.identifier,
+        "model": canonical_model,
         "model_label": definition.label,
         "data_path": str(job.data_path),
         "n_points": len(xs),
@@ -111,80 +150,7 @@ def _run_fit(job) -> dict:
     }
 
 
-def _run_auto_fit(job) -> dict:
-    """Execute an auto-fit via ``fitting.model_selector.auto_fit_dataset``.
-
-    Returns the top 5 models ranked by AIC (ascending; lower is
-    better). Reads ``AutoModelResult.fit_result`` — the real
-    dataclass field — NOT ``entry.fit`` which doesn't exist and
-    would crash 100 % of calls (the prior bug).
-
-    Routes ``auto_fit_dataset`` inside a ``precision_guard`` so
-    concurrent CLI jobs don't race on ``mp.dps`` (which is
-    process-global in mpmath).
-    """
-    from fitting.model_selector import auto_fit_dataset
-    from shared.precision import precision_guard
-
-    xs, ys = _read_xy_csv(job.data_path)
-    with precision_guard(job.precision):
-        summary = auto_fit_dataset(xs, ys, precision=job.precision)
-
-    ranked = [
-        r for r in summary.results
-        if r.success and r.fit_result is not None
-    ]
-
-    def _aic(entry) -> float:
-        """Extract the AIC score from a successful AutoModelResult.
-
-        FitResult exposes ``aic`` as a first-class mpmath field; fall
-        back to ``details['aic']`` then to +inf so failed/NaN models
-        rank last without crashing the sort.
-        """
-        fit = entry.fit_result
-        # FitResult.aic is mpmath.mpf; mp.nan is falsy-weird so guard
-        # isnan before float-cast.
-        try:
-            from mpmath import mp as _mp
-
-            if fit.aic is not None and not _mp.isnan(fit.aic):
-                return float(fit.aic)
-        except (TypeError, ValueError, AttributeError):
-            pass
-        details = fit.details or {}
-        for key in ("aic", "AIC", "information_criterion_aic"):
-            if key in details:
-                try:
-                    return float(details[key])
-                except (TypeError, ValueError):
-                    pass
-        return float("inf")
-
-    ranked.sort(key=_aic)
-    top = []
-    for entry in ranked[:5]:
-        params = {
-            k: float(v) for k, v in (entry.fit_result.params or {}).items()
-        }
-        top.append({
-            "model": entry.identifier,
-            "label": entry.label,
-            "aic": _aic(entry),
-            "params": params,
-        })
-    return {
-        "job_name": job.name,
-        "operation": "auto_fit",
-        "data_path": str(job.data_path),
-        "n_points": len(xs),
-        "precision": job.precision,
-        "best": top[0] if top else None,
-        "top": top,
-    }
-
-
-def _run_calc(job) -> dict:
+def _run_calc(job: BatchJob) -> dict[str, object]:
     """Execute a sequence-extrapolation calc via the Wynn-ε accelerator.
 
     For the CLI we keep this minimal — richer options (Richardson,
@@ -218,12 +184,10 @@ def _run_calc(job) -> dict:
     }
 
 
-def _dispatch(job) -> dict:
+def _dispatch(job: BatchJob) -> dict[str, object]:
     """Route to the operation-specific runner."""
     if job.operation == "fit":
         return _run_fit(job)
-    if job.operation == "auto_fit":
-        return _run_auto_fit(job)
     if job.operation == "calc":
         return _run_calc(job)
     # load_batch_config already rejects unknown operations, but

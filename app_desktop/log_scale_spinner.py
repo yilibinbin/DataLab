@@ -28,7 +28,6 @@ forces a linear-step API that can't be cleanly subclassed on PySide6
 from __future__ import annotations
 
 import math
-import re
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal

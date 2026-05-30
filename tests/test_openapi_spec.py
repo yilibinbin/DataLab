@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 
 def test_build_spec_returns_openapi_3():
     from app_web.openapi import OPENAPI_VERSION, build_spec
@@ -46,7 +44,6 @@ def test_spec_has_core_endpoints():
         "/api/ui-specs",
         "/api/extrapolate",
         "/api/fit",
-        "/api/auto-fit",
         "/api/error-propagation",
         "/api/spec.json",
     ]

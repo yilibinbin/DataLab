@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
-import multiprocessing
-import queue
-import time
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -35,28 +32,23 @@ from statistics_utils import compute_statistics, generate_statistics_latex_batch
 from fitting import (
     ImplicitModelDefinition,
     ImplicitSolveOptions,
-    auto_fit_dataset,
-    build_implicit_model_specification,
     build_model_specification,
     build_parameter_state,
+    FitRunner,
+    ModelProblem,
     fit_custom_model,
 )
 from fitting.auto_models import (
-    AUTO_MODELS,
-    AutoModelDefinition,
     build_inverse_series_definition,
     build_polynomial_definition,
     fit_linear_model,
 )
 from fitting.hp_fitter import FitResult
-from fitting.model_selector import AutoFitSummary
-
 # Private-by-convention logger name — matches the rest of DataLab
 # (_logger in sse.py, collaborate.py, mcmc_fitter.py, etc.). The
 # leading underscore prevents ``from app_desktop.workers_core import
 # logger`` from accidentally exposing the handle as a public API.
 _logger = logging.getLogger(__name__)
-
 
 @contextmanager
 def _mp_precision_guard(dps: int | None):
@@ -201,519 +193,6 @@ def _render_extrapolation_plot_bytes(
     except Exception:
         return None
 
-
-@dataclass
-class AutoFitJob:
-    headers: list[str]
-    data_rows: list[tuple[mp.mpf, ...]]
-    sigma_rows: list[tuple[mp.mpf | None, ...]]
-    x_series: list[mp.mpf]
-    y_series: list[mp.mpf]
-    sigma_series: list[mp.mpf | None]
-    weights: list[mp.mpf] | None
-    precision: int
-    custom_entries: list[tuple[str, Any, Any]]
-    extra_models: list[AutoModelDefinition]
-    verbose: bool = False
-    render_plots: bool = True
-    # Phase 3 #12 — when True, run MCMC posterior refinement on the
-    # best-AIC candidate after least-squares completes. Opt-in because
-    # emcee typically takes 10–60 s on modest problems. Silently
-    # skipped if emcee isn't installed (mcmc_fitter.HAS_EMCEE=False).
-    refine_with_mcmc: bool = False
-    # Per-model wall-clock cap (seconds). When set, any model whose
-    # fit exceeds this budget is recorded as a failure ("model timed
-    # out") and the loop continues. Defends against ill-conditioned
-    # datasets (e.g. weighted χ² with σ ≈ 1e-19) where a single
-    # non-linear LM fit can exceed a minute and freeze the GUI.
-    #
-    # ``None`` (set by the GUI builder when the job's dps is unknown)
-    # delegates the cap calculation to ``_resolve_timeout_seconds``,
-    # which scales it linearly with ``precision``: 15 s at dps=80 is
-    # the empirical baseline; users running at dps=200 get 37.5 s,
-    # at dps=500 get 93 s. This keeps the cap proportional to
-    # legitimate fit time while still stopping runaway dps-80 fits.
-    # CLI / batch callers can pass a numeric value to override.
-    per_model_timeout_seconds: float | None = None
-    parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
-
-
-def _resolve_timeout_seconds(
-    explicit: float | None, precision: int,
-) -> float | None:
-    """Pick the per-model timeout: explicit value if set, else a
-    dps-scaled default.
-
-    The scaling factor (15 s per 80 dps = 0.1875 s per dps) was
-    derived empirically: well-conditioned non-linear LM fits at
-    dps=80 complete in ≤5 s, ill-conditioned ones in ≥30 s. 15 s is
-    the line where "patient user" turns into "is this thing frozen?"
-    A user pumping precision up to dps=200 expects longer fits, so
-    the cap rises to 37.5 s.
-
-    Returning ``None`` (only when ``explicit is None`` AND precision
-    is non-positive) keeps the historical unbounded behaviour as a
-    safety valve.
-    """
-    if explicit is not None:
-        return explicit if explicit > 0 else None
-    if precision <= 0:
-        return None
-    return max(5.0, precision * 0.1875)
-
-
-def _execute_auto_fit_job_subprocess(
-    job: AutoFitJob,
-    should_cancel: Callable[[], bool] | None = None,
-    progress_callback: Callable[[Any], None] | None = None,
-) -> AutoFitSummary:
-    """GUI execution path: run auto-fit through the hard-cancel subprocess path."""
-    if job.parallel_config.enable_new_auto_fit_backend:
-        return _execute_auto_fit_job_subprocess_backend_adapter(
-            job,
-            should_cancel=should_cancel,
-            progress_callback=progress_callback,
-        )
-    return _execute_auto_fit_job_subprocess_proven(
-        job,
-        should_cancel=should_cancel,
-        progress_callback=progress_callback,
-    )
-
-
-def _execute_auto_fit_job_subprocess_backend_adapter(
-    job: AutoFitJob,
-    should_cancel: Callable[[], bool] | None = None,
-    progress_callback: Callable[[Any], None] | None = None,
-) -> AutoFitSummary:
-    """Adapter gate for future backend work.
-
-    First-stage behavior intentionally delegates to the proven per-model
-    subprocess orchestrator so progress, timeout, and hard cancellation stay
-    unchanged while callers can opt into the hook.
-    """
-    return _execute_auto_fit_job_subprocess_proven(
-        job,
-        should_cancel=should_cancel,
-        progress_callback=progress_callback,
-    )
-
-
-def _execute_auto_fit_job_subprocess_proven(
-    job: AutoFitJob,
-    should_cancel: Callable[[], bool] | None = None,
-    progress_callback: Callable[[Any], None] | None = None,
-) -> AutoFitSummary:
-    """GUI execution path: run each model in its own subprocess.
-
-    True immediate cancellation — when ``should_cancel`` returns
-    True, the running subprocess is killed via ``Process.kill()``
-    (SIGKILL), so CPU is freed within milliseconds. Compare to
-    ``_execute_auto_fit_job`` (the in-process path used by CLI /
-    tests) where cancellation only takes effect at the next model
-    boundary.
-
-    ``progress_callback(ProgressEvent)`` is invoked at every state
-    transition so the GUI status bar can show "(3/19) Fitting
-    Padé(1|1)…" between models.
-    """
-    from app_desktop.auto_fit_subprocess import (
-        SubprocessAutoFitOrchestrator,
-        task_from_custom_entry,
-        task_from_definition,
-    )
-
-    timeout_seconds = _resolve_timeout_seconds(
-        job.per_model_timeout_seconds, job.precision,
-    )
-
-    # Convert the in-process AutoFitJob (which carries non-picklable
-    # closures inside ``extra_models`` / ``custom_entries``) into a
-    # flat list of pickle-safe ``ModelTask`` descriptors. The order
-    # mirrors the in-process path: AUTO_MODELS → extras → customs.
-    from fitting.auto_models import AUTO_MODELS
-
-    tasks = []
-    # Pre-flight failures — collected here and prepended to results
-    # AFTER the orchestrator runs the rest. Lets a single bad custom
-    # entry (e.g. one with dependent parameters) surface as a clear
-    # per-model failure instead of crashing the entire auto-fit run.
-    pre_flight_failures: list[Any] = []
-
-    for definition in AUTO_MODELS:
-        tasks.append(task_from_definition(definition))
-    seen = {d.identifier for d in AUTO_MODELS}
-    for extra in (job.extra_models or []):
-        if extra.identifier in seen:
-            continue
-        seen.add(extra.identifier)
-        try:
-            tasks.append(task_from_definition(extra))
-        except ValueError as exc:
-            pre_flight_failures.append((extra.identifier, extra.label, str(exc)))
-    for label, spec, state in (job.custom_entries or []):
-        try:
-            tasks.append(task_from_custom_entry(label, spec, state))
-        except ValueError as exc:
-            # ``ValueError`` here is the documented "this entry has
-            # a feature the subprocess path can't transport"
-            # (currently only ``dependent_defs``). Record as a
-            # failure so the user sees the exact message and the
-            # other tasks still run.
-            pre_flight_failures.append(("CUSTOM", label, str(exc)))
-
-    orchestrator = SubprocessAutoFitOrchestrator(
-        precision=job.precision,
-        per_model_timeout_seconds=timeout_seconds,
-    )
-    summary = orchestrator.run(
-        tasks=tasks,
-        x_data=job.x_series,
-        y_data=job.y_series,
-        sigma_data=job.sigma_series,
-        weights=job.weights,
-        should_cancel=should_cancel,
-        progress_callback=progress_callback,
-    )
-
-    # Splice pre-flight failures into the results list so the GUI
-    # shows them in the same place as orchestrator-recorded failures.
-    # ``AutoFitSummary`` is frozen-ish — rebuild with the merged
-    # results list rather than mutating in place.
-    if pre_flight_failures:
-        from fitting.model_selector import AutoFitSummary, AutoModelResult
-        merged = list(summary.results) + [
-            AutoModelResult(ident, label, False, None, err)
-            for ident, label, err in pre_flight_failures
-        ]
-        summary = AutoFitSummary(
-            best_model=summary.best_model, results=merged,
-        )
-
-    if getattr(job, "refine_with_mcmc", False):
-        try:
-            _attach_mcmc_refinement(summary, job)
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning(
-                "MCMC refinement failed (%s); "
-                "falling back to LSQ-only result",
-                exc,
-            )
-    return summary
-
-
-
-def _execute_auto_fit_job(
-    job: AutoFitJob,
-    should_cancel: Callable[[], bool] | None = None,
-):
-    """Run the auto-fit pipeline for ``job``.
-
-    ``should_cancel`` is polled between models so the GUI's Stop
-    button takes effect without waiting for the current model to
-    finish. mpmath holds the GIL through long arithmetic, so we
-    cannot interrupt mid-fit; the cancellation point at the model
-    boundary is the best the runtime offers.
-
-    NOTE: this is the **in-process** path used by CLI / batch /
-    tests. The GUI uses ``_execute_auto_fit_job_subprocess`` for
-    true immediate cancellation.
-    """
-    timeout_seconds = _resolve_timeout_seconds(
-        job.per_model_timeout_seconds, job.precision,
-    )
-    with _mp_precision_guard(job.precision):
-        summary = auto_fit_dataset(
-            job.x_series,
-            job.y_series,
-            precision=job.precision,
-            custom_entries=job.custom_entries or None,
-            extra_models=job.extra_models,
-            weights=job.weights,
-            data_sigmas=job.sigma_series,
-            should_cancel=should_cancel,
-            per_model_timeout_seconds=timeout_seconds,
-        )
-        # Phase 3 #12 — MCMC refinement pass on the best-AIC candidate
-        # when the user ticked "Refine with MCMC". Attaches
-        # ``mcmc_refinement`` + ``mcmc_corner_png`` to
-        # ``summary.best().fit_result.details`` so the renderer can
-        # display credible intervals + corner plot alongside the LSQ
-        # output. Silently skipped when emcee is missing or the MCMC
-        # stage raises — LSQ results remain valid either way.
-        if getattr(job, "refine_with_mcmc", False):
-            try:
-                _attach_mcmc_refinement(summary, job)
-            except Exception as exc:  # noqa: BLE001
-                _logger.warning(
-                    "MCMC refinement failed (%s); "
-                    "falling back to LSQ-only result",
-                    exc,
-                    exc_info=True,
-                )
-        return summary
-
-
-def _attach_mcmc_refinement(summary, job: AutoFitJob) -> None:
-    """Run emcee on the best-AIC candidate and attach results.
-
-    Correctness contract (post review-round-1):
-    - Uses ``summary.best()`` (the public method on AutoFitSummary) —
-      NOT ``summary.best_result`` which doesn't exist. That bug made
-      the entire refinement branch a silent no-op.
-    - Re-parameterises the model per-theta by calling
-      ``build_linear_evaluator(definition, new_params)`` and invoking
-      the returned ``evaluator(x)`` with the single-arg signature.
-      The prior call ``evaluator(new_params, x)`` raised TypeError
-      on every evaluation, which was swallowed into -inf — emcee saw
-      a flat likelihood and produced noise. This is CRITICAL correctness.
-    - Wraps every log-probability call in ``precision_guard(precision)``
-      to keep concurrent jobs from racing on ``mp.dps``. emcee calls
-      the closure thousands of times on its own threads, so the outer
-      guard in ``_execute_auto_fit_job`` is insufficient — each
-      call must re-enter.
-    - Reads residuals from ``best_fit.residuals`` (the real dataclass
-      field) — ``details['residuals']`` is unreachable because
-      ``_LinearFitComputation._solve`` never puts it there.
-
-    Degrades gracefully:
-    - emcee absent → log + skip
-    - best candidate None → skip with info log
-    - Best model isn't a built-in linear basis → skip (the evaluator
-      rebuild only works for ``AUTO_MODEL_MAP`` definitions)
-    - log_probability raises for any reason → walker rejected
-      (returns -inf); the run continues
-    - run_mcmc raises → log at WARNING with exc_info; LSQ result
-      remains intact
-    """
-    from fitting.auto_models import AUTO_MODEL_MAP, build_linear_evaluator
-    from fitting.mcmc_fitter import HAS_EMCEE, render_corner_plot, run_mcmc
-    from shared.precision import precision_guard as _pg
-
-    if not HAS_EMCEE:
-        _logger.info(
-            "refine_with_mcmc=True but emcee not installed; skipping"
-        )
-        return
-    # ``AutoFitSummary`` exposes ``best()`` (a method that walks the
-    # results list looking for the entry whose identifier matches
-    # ``best_model``), NOT a ``best_result`` attribute — older code
-    # using ``getattr(summary, "best_result", None)`` always silently
-    # resolved to None and skipped MCMC entirely. See review HIGH #1.
-    best = summary.best() if summary.best_model is not None else None
-    if best is None or best.fit_result is None:
-        _logger.info(
-            "refine_with_mcmc=True but no best candidate; skipping"
-        )
-        return
-
-    best_fit = best.fit_result
-    param_names = list(best_fit.params.keys()) if best_fit.params else []
-    if not param_names:
-        _logger.info("best candidate has no parameters; skipping MCMC")
-        return
-
-    # The reparameterisation path works only for models registered
-    # in AUTO_MODEL_MAP (built-in linear basis). Custom non-linear
-    # fits return FitResults whose identifiers aren't in the map —
-    # we decline to refine them rather than silently producing
-    # wrong posteriors.
-    #
-    # Escape hatch (used by tests): if ``best_fit.details`` already
-    # carries an ``evaluator`` callable with signature
-    # ``evaluator(params_dict, x)``, we use it directly and skip
-    # ``build_linear_evaluator``. Production fits don't currently
-    # populate this slot — it's there to make the pre-flight + health-
-    # check unit tests independent from AUTO_MODEL_MAP's parameter
-    # naming conventions.
-    definition = AUTO_MODEL_MAP.get(best.identifier)
-    detail_evaluator = (best_fit.details or {}).get("evaluator")
-    if definition is None and detail_evaluator is None:
-        _logger.info(
-            "MCMC refinement skipped: model %r is not a linear basis "
-            "(custom models not supported by this refinement path)",
-            best.identifier,
-        )
-        return
-
-    initial_guess = [float(best_fit.params[name]) for name in param_names]
-    rmse = _estimate_rmse(job.y_series, best_fit)
-    xs_f = [float(x) for x in job.x_series]
-    ys_f = [float(y) for y in job.y_series]
-    precision = int(getattr(job, "precision", 50) or 50)
-
-    def _log_probability(theta):
-        """Gaussian log-likelihood around the reparameterised model.
-
-        Returns ``-math.inf`` (NEVER NaN) on any invalid input.
-        emcee's red-blue move computes ``lnpdiff = f + nlp -
-        state.log_prob[j]`` and a single NaN poisons all subsequent
-        acceptance decisions (RuntimeWarning floods on ill-
-        conditioned data). Every call enters its own
-        ``precision_guard`` — mp.dps is process-global and emcee
-        invokes this closure many thousands of times on its thread
-        pool, so the outer guard isn't sufficient.
-        """
-        import math as _math
-
-        if not param_names or rmse <= 0:
-            return float("-inf")
-        try:
-            new_params = {
-                name: float(v) for name, v in zip(param_names, theta)
-            }
-            with _pg(precision):
-                if detail_evaluator is not None:
-                    def evaluator(
-                        x,
-                        _e=detail_evaluator,
-                        _p=new_params,
-                    ):
-                        return _e(_p, x)
-                else:
-                    evaluator = build_linear_evaluator(definition, new_params)
-                residuals_sq = 0.0
-                for x_val, y_val in zip(xs_f, ys_f):
-                    pred = float(evaluator(x_val))
-                    # Defensive: a model that returns NaN/inf for some
-                    # parameter regions (e.g. log of negative) must not
-                    # poison the residual sum.
-                    if not _math.isfinite(pred):
-                        return float("-inf")
-                    diff = y_val - pred
-                    residuals_sq += diff * diff
-                    if not _math.isfinite(residuals_sq):
-                        return float("-inf")
-            if not _math.isfinite(residuals_sq):
-                return float("-inf")
-            return -0.5 * residuals_sq / (rmse * rmse)
-        except (TypeError, ValueError, ArithmeticError, OverflowError):
-            # Restricting the except clause keeps real bugs (KeyError
-            # from a typo in evaluator's parameter dict, etc.) loud
-            # instead of silently returning -inf forever.
-            return float("-inf")
-
-    # Pre-flight health check: sample log_probability at the LSQ
-    # best-fit and at a handful of perturbed starts so we know
-    # whether the MCMC has any chance of mixing. If every sample is
-    # -inf, the chain will produce noise; surface that to the user
-    # rather than running 800 wasted iterations.
-    import math as _math_pre
-    proposal_scale = max(1e-4, rmse * 1e-2)
-    pre_flight_lps = [_log_probability(initial_guess)]
-    for sign in (-1, +1):
-        perturbed = [v + sign * proposal_scale for v in initial_guess]
-        pre_flight_lps.append(_log_probability(perturbed))
-    n_finite = sum(1 for lp in pre_flight_lps if _math_pre.isfinite(lp))
-    if n_finite == 0:
-        _logger.info(
-            "MCMC pre-flight: all %d sample log-probabilities were -inf; "
-            "skipping MCMC refinement (data is too ill-conditioned for "
-            "Gaussian-walker exploration).",
-            len(pre_flight_lps),
-        )
-        if best_fit.details is None:
-            best_fit.details = {}
-        best_fit.details["mcmc_warning"] = (
-            "MCMC 跳过：初始 log-probability 全部 -inf（数据过于病态）。 / "
-            "MCMC skipped: all initial log-probabilities are -inf "
-            "(data is too ill-conditioned for Gaussian sampling)."
-        )
-        return
-
-    try:
-        mcmc_result = run_mcmc(
-            _log_probability,
-            initial_guess,
-            param_names,
-            n_walkers=max(32, 2 * len(param_names) + 2),
-            n_steps=800,
-            n_burn_in=200,
-            proposal_scale=proposal_scale,
-        )
-    except Exception as exc:  # noqa: BLE001
-        _logger.warning("MCMC run failed: %s", exc, exc_info=True)
-        if best_fit.details is None:
-            best_fit.details = {}
-        best_fit.details["mcmc_warning"] = (
-            f"MCMC 运行失败：{exc}。仅使用最小二乘结果。 / "
-            f"MCMC run failed: {exc}. Using LSQ-only result."
-        )
-        return
-
-    # Health-check the chain. Acceptance fraction outside [0.1, 0.7]
-    # is emcee's documented "your chain isn't mixing" signal.
-    acc = mcmc_result.acceptance_fraction
-    chain_warning: str | None = None
-    if not _math_pre.isfinite(acc) or acc < 0.05:
-        chain_warning = (
-            f"MCMC 接受率 {acc:.2f} 过低（<0.05），结果可能不可靠。 / "
-            f"MCMC acceptance fraction {acc:.2f} is very low (<0.05); "
-            "credible intervals may be unreliable."
-        )
-    elif acc > 0.85:
-        chain_warning = (
-            f"MCMC 接受率 {acc:.2f} 过高（>0.85），proposal_scale 可能太小。 / "
-            f"MCMC acceptance fraction {acc:.2f} is very high (>0.85); "
-            "proposal_scale may be too small."
-        )
-
-    corner_png = b""
-    try:
-        corner_png = render_corner_plot(mcmc_result)
-    except Exception as exc:  # noqa: BLE001
-        _logger.warning("corner plot render failed: %s", exc, exc_info=True)
-
-    # Build the new details dict via spread rather than in-place
-    # update — matches DataLab's immutability convention ("ALWAYS
-    # create new objects, NEVER mutate existing ones"). The
-    # AutoModelResult / FitResult objects in ``summary`` retain the
-    # updated reference; callers holding a pre-refinement reference
-    # to ``best_fit.details`` are unaffected.
-    previous_details = best_fit.details or {}
-    mcmc_block: dict[str, Any] = {
-        "medians": mcmc_result.medians,
-        "lo_ci": mcmc_result.lo_ci,
-        "hi_ci": mcmc_result.hi_ci,
-        "acceptance_fraction": mcmc_result.acceptance_fraction,
-    }
-    new_details: dict[str, Any] = {
-        **previous_details,
-        "mcmc_refinement": mcmc_block,
-    }
-    if chain_warning:
-        new_details["mcmc_warning"] = chain_warning
-    if corner_png:
-        new_details["mcmc_corner_png"] = corner_png
-    best_fit.details = new_details
-
-
-def _estimate_rmse(y_series, best_fit) -> float:
-    """Rough RMSE estimator used to scale the MCMC proposal step.
-
-    Uses ``best_fit.residuals`` — the real dataclass field — NOT
-    ``best_fit.details['residuals']`` which _LinearFitComputation
-    never populates. Falls back to the y-series standard deviation
-    and finally to ``1.0`` so downstream step-size calculations
-    always have a strictly-positive scale.
-    """
-    residuals = getattr(best_fit, "residuals", None)
-    if residuals:
-        try:
-            n = len(residuals)
-            ss = sum(float(r) ** 2 for r in residuals)
-            return max(1e-8, (ss / max(1, n)) ** 0.5)
-        except (TypeError, ValueError):
-            pass
-    try:
-        ys = [float(y) for y in y_series]
-        if len(ys) < 2:
-            return 1.0
-        mean = sum(ys) / len(ys)
-        var = sum((v - mean) ** 2 for v in ys) / len(ys)
-        return max(1e-8, var ** 0.5)
-    except (TypeError, ValueError):
-        return 1.0
 
 
 @dataclass
@@ -1331,7 +810,7 @@ class FitJob:
     model_type: str
     headers: list[str]
     data_rows: list[tuple[mp.mpf, ...]]
-    sigma_rows: list[tuple[mp.mpf | None, ...]]
+    sigma_rows: list[tuple[object | None, ...]]
     x_series: list[mp.mpf]
     y_series: list[mp.mpf]
     sigma_series: list[mp.mpf | None]
@@ -1381,30 +860,15 @@ class FitResultPayload:
 class FitBatchTask:
     index: int
     fit_job: FitJob | None = None
-    auto_job: AutoFitJob | None = None
 
 
 @dataclass
 class FitBatchResultEntry:
     index: int
-    kind: str  # "fit", "auto", or "error"
+    kind: str  # "fit" or "error"
     fit_payload: FitResultPayload | None = None
-    auto_payload: tuple | None = None  # (summary, job)
     error: str | None = None
     captured_log: str = ""
-
-
-@dataclass
-class AutoFitRenderResult:
-    text: str
-    plot_bytes: bytes | None
-    fit_result: FitResult | None
-    expression: str | None
-    substituted: str | None
-
-
-_FIT_SUBPROCESS_POLL_INTERVAL = 0.05
-_FIT_SUBPROCESS_TIMEOUT_SLACK = 0.05
 
 
 def _fit_job_requires_process_boundary(job: FitJob) -> bool:
@@ -1420,8 +884,6 @@ def _serialize_parallel_config(config: ParallelConfig) -> dict[str, Any]:
         "min_process_tasks": config.min_process_tasks,
         "nested_policy": config.nested_policy,
         "process_start_method": config.process_start_method,
-        "enable_new_auto_fit_backend": config.enable_new_auto_fit_backend,
-        "enable_new_implicit_backend": config.enable_new_implicit_backend,
     }
 
 
@@ -1438,16 +900,27 @@ def _deserialize_parallel_config(payload: dict[str, Any] | None) -> ParallelConf
             payload.get("nested_policy", NestedParallelPolicy.SERIAL_WHEN_NESTED)
         ),
         process_start_method=str(payload.get("process_start_method", "spawn")),
-        enable_new_auto_fit_backend=bool(payload.get("enable_new_auto_fit_backend", False)),
-        enable_new_implicit_backend=bool(payload.get("enable_new_implicit_backend", True)),
     )
 
 
 def _mp_to_string(value: Any, keep_digits: int) -> str:
     try:
         return mp.nstr(mp.mpf(value), keep_digits)
-    except (TypeError, ValueError):
-        return str(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"Unsupported numeric payload value: {value!r}") from exc
+
+
+def _sigma_to_string(value: Any, keep_digits: int) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "uncertainty"):
+        # Worker payloads only need numeric sigma values; display precision stays in the main process.
+        value = getattr(value, "uncertainty")
+    try:
+        sigma = mp.mpf(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"Unsupported sigma payload value: {value!r}") from exc
+    return mp.nstr(sigma, keep_digits) if sigma > 0 else None
 
 
 def _serialize_optional_mpf(value: Any, keep_digits: int) -> str | None:
@@ -1460,8 +933,30 @@ def _serialize_mpf_sequence(values: list[Any] | tuple[Any, ...], keep_digits: in
     return [_serialize_optional_mpf(value, keep_digits) for value in values]
 
 
+def _serialize_weight_sequence(values: list[Any] | tuple[Any, ...], keep_digits: int) -> list[str]:
+    weights: list[str] = []
+    for value in values:
+        if value is None:
+            raise TypeError("Fit-job weight values must not be None")
+        weights.append(_mp_to_string(value, keep_digits))
+    return weights
+
+
+def _serialize_sigma_sequence(values: list[Any] | tuple[Any, ...], keep_digits: int) -> list[str | None]:
+    return [_sigma_to_string(value, keep_digits) for value in values]
+
+
 def _deserialize_mpf_sequence(values: list[str | None]) -> list[mp.mpf | None]:
     return [mp.mpf(value) if value is not None else None for value in values]
+
+
+def _deserialize_weight_sequence(values: list[str | None]) -> list[mp.mpf]:
+    weights: list[mp.mpf] = []
+    for value in values:
+        if value is None:
+            raise TypeError("Fit-job weight payload values must not be None")
+        weights.append(mp.mpf(value))
+    return weights
 
 
 def _serialize_mp_tree(value: Any, keep_digits: int) -> Any:
@@ -1469,16 +964,26 @@ def _serialize_mp_tree(value: Any, keep_digits: int) -> Any:
         return None
     if hasattr(value, "_mpf_"):
         return _mp_to_string(value, keep_digits)
+    if isinstance(value, (bool, int, float, str)):
+        return value
     if isinstance(value, dict):
-        return {key: _serialize_mp_tree(item, keep_digits) for key, item in value.items()}
+        serialized: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError(f"Unsupported non-string payload key: {key!r}")
+            serialized[key] = _serialize_mp_tree(item, keep_digits)
+        return serialized
     if isinstance(value, tuple):
         return [_serialize_mp_tree(item, keep_digits) for item in value]
     if isinstance(value, list):
         return [_serialize_mp_tree(item, keep_digits) for item in value]
-    return value
+    raise TypeError(f"Unsupported fit-job payload value: {value!r}")
 
 
-def _serialize_implicit_definition(definition: ImplicitModelDefinition | None) -> dict[str, Any] | None:
+def _serialize_implicit_definition(
+    definition: ImplicitModelDefinition | None,
+    keep_digits: int,
+) -> dict[str, Any] | None:
     if definition is None:
         return None
     solve_options = definition.solve_options
@@ -1488,12 +993,12 @@ def _serialize_implicit_definition(definition: ImplicitModelDefinition | None) -
         "equation": definition.equation,
         "output_expression": definition.output_expression,
         "parameters": list(definition.parameters),
-        "constants": dict(definition.constants),
+        "constants": _serialize_mp_tree(definition.constants, keep_digits),
         "solve_options": {
-            "method": solve_options.method,
-            "initial": solve_options.initial,
-            "tolerance": solve_options.tolerance,
-            "max_iterations": solve_options.max_iterations,
+            "method": _serialize_mp_tree(solve_options.method, keep_digits),
+            "initial": _serialize_mp_tree(solve_options.initial, keep_digits),
+            "tolerance": _serialize_mp_tree(solve_options.tolerance, keep_digits),
+            "max_iterations": _serialize_mp_tree(solve_options.max_iterations, keep_digits),
         },
     }
 
@@ -1524,11 +1029,11 @@ def _serialize_fit_job(job: FitJob) -> dict[str, Any]:
         "model_type": job.model_type,
         "headers": list(job.headers),
         "data_rows": [_serialize_mpf_sequence(row, keep_digits) for row in job.data_rows],
-        "sigma_rows": [_serialize_mpf_sequence(row, keep_digits) for row in job.sigma_rows],
+        "sigma_rows": [_serialize_sigma_sequence(row, keep_digits) for row in job.sigma_rows],
         "x_series": _serialize_mpf_sequence(job.x_series, keep_digits),
         "y_series": _serialize_mpf_sequence(job.y_series, keep_digits),
-        "sigma_series": _serialize_mpf_sequence(job.sigma_series, keep_digits),
-        "weights": _serialize_mpf_sequence(job.weights, keep_digits) if job.weights is not None else None,
+        "sigma_series": _serialize_sigma_sequence(job.sigma_series, keep_digits),
+        "weights": _serialize_weight_sequence(job.weights, keep_digits) if job.weights is not None else None,
         "variable_map": dict(job.variable_map),
         "variable_data": {
             key: _serialize_mpf_sequence(values, keep_digits)
@@ -1558,9 +1063,9 @@ def _serialize_fit_job(job: FitJob) -> dict[str, Any]:
         "weighted": job.weighted,
         "label": job.label,
         "is_multidim": job.is_multidim,
-        "implicit_definition": _serialize_implicit_definition(job.implicit_definition),
+        "implicit_definition": _serialize_implicit_definition(job.implicit_definition, keep_digits),
         "timeout_seconds": job.timeout_seconds,
-        "custom_constants": dict(job.custom_constants or {}),
+        "custom_constants": _serialize_mp_tree(dict(job.custom_constants or {}), keep_digits),
         "parallel_config": _serialize_parallel_config(job.parallel_config),
     }
 
@@ -1577,7 +1082,7 @@ def _deserialize_fit_job(payload: dict[str, Any]) -> FitJob:
             y_series=[mp.mpf(value) for value in payload["y_series"]],
             sigma_series=[mp.mpf(value) if value is not None else None for value in payload["sigma_series"]],
             weights=(
-                [mp.mpf(value) for value in payload["weights"]]
+                _deserialize_weight_sequence(payload["weights"])
                 if payload.get("weights") is not None else None
             ),
             variable_map=dict(payload["variable_map"]),
@@ -1704,41 +1209,11 @@ def _fit_job_subprocess_entry(job_payload: dict[str, Any]) -> dict[str, Any]:
         return _serialize_fit_result_payload(payload)
 
 
-def _fit_job_subprocess_queue_entry(result_queue: Any, job_payload: dict[str, Any]) -> None:
-    try:
-        result_queue.put({"ok": True, "payload": _fit_job_subprocess_entry(job_payload)})
-    except BaseException as exc:  # noqa: BLE001
-        with suppress(Exception):
-            result_queue.put({"ok": False, "error": str(exc)})
-
-
-def _terminate_fit_subprocess(proc: multiprocessing.Process) -> None:
-    if not proc.is_alive():
-        proc.join(timeout=0.2)
-        return
-    try:
-        proc.terminate()
-        proc.join(timeout=1.0)
-        if proc.is_alive():
-            proc.kill()
-            proc.join(timeout=1.0)
-    except Exception:
-        with suppress(Exception):
-            proc.kill()
-            proc.join(timeout=1.0)
-
-
 def _execute_fit_job_payload_subprocess(
     job: FitJob,
     timeout_seconds: float | None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> FitResultPayload:
-    if not job.parallel_config.enable_new_implicit_backend:
-        return _execute_fit_job_payload_subprocess_legacy(
-            job,
-            timeout_seconds=timeout_seconds,
-            should_cancel=should_cancel,
-        )
     job_payload = _serialize_fit_job(job)
     timeout = timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None
     try:
@@ -1765,79 +1240,6 @@ def _execute_fit_job_payload_subprocess(
         return _deserialize_fit_result_payload(payload)
 
 
-def _execute_fit_job_payload_subprocess_legacy(
-    job: FitJob,
-    timeout_seconds: float | None,
-    should_cancel: Callable[[], bool] | None = None,
-) -> FitResultPayload:
-    ctx = multiprocessing.get_context("spawn")
-    result_queue = ctx.Queue()
-    job_payload = _serialize_fit_job(job)
-    proc = ctx.Process(
-        target=_fit_job_subprocess_queue_entry,
-        args=(result_queue, job_payload),
-        name=f"datalab-fit-{job.model_type}",
-    )
-    proc.start()
-
-    timeout = timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None
-    deadline = (
-        time.monotonic() + timeout + _FIT_SUBPROCESS_TIMEOUT_SLACK
-        if timeout is not None else None
-    )
-    try:
-        while True:
-            if should_cancel is not None and should_cancel():
-                _terminate_fit_subprocess(proc)
-                raise InterruptedError(_dual_msg(
-                    "自洽隐式拟合已取消。",
-                    "Self-consistent fit cancelled.",
-                ))
-
-            try:
-                payload = result_queue.get(timeout=_FIT_SUBPROCESS_POLL_INTERVAL)
-                proc.join(timeout=1.0)
-                return _deserialize_fit_subprocess_queue_payload(job, payload)
-            except queue.Empty:
-                pass
-
-            if deadline is not None and time.monotonic() > deadline:
-                _terminate_fit_subprocess(proc)
-                raise TimeoutError(_dual_msg(
-                    f"自洽隐式拟合超过 {timeout:.0f}s 仍未完成，已停止。",
-                    f"Self-consistent fit exceeded {timeout:.0f}s and was stopped.",
-                ))
-
-            if not proc.is_alive():
-                proc.join(timeout=0.2)
-                try:
-                    payload = result_queue.get(timeout=0.2)
-                    return _deserialize_fit_subprocess_queue_payload(job, payload)
-                except queue.Empty:
-                    pass
-                raise RuntimeError(_dual_msg(
-                    "自洽隐式拟合子进程退出但未返回结果。",
-                    "Self-consistent fit subprocess exited without returning a result.",
-                ))
-    finally:
-        if proc.is_alive():
-            _terminate_fit_subprocess(proc)
-        with suppress(Exception):
-            result_queue.close()
-            result_queue.join_thread()
-
-
-def _deserialize_fit_subprocess_queue_payload(
-    job: FitJob,
-    payload: object,
-) -> FitResultPayload:
-    if isinstance(payload, dict) and payload.get("ok"):
-        with _mp_precision_guard(job.precision):
-            return _deserialize_fit_result_payload(payload["payload"])
-    error = payload.get("error", "unknown error") if isinstance(payload, dict) else str(payload)
-    raise RuntimeError(error)
-
-
 def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
     logs: list[str] = []
     warnings: list[str] = []
@@ -1858,16 +1260,11 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
         model_type = job.model_type
         fit_result: FitResult | None = None
         expression = job.model_expr
-        if model_type in {"poly", "inverse", "log_poly", "exp_combo"}:
-            if model_type == "poly":
+        if model_type in {"polynomial", "inverse_power"}:
+            if model_type == "polynomial":
                 definition = build_polynomial_definition(job.poly_degree)
-            elif model_type == "inverse":
-                definition = build_inverse_series_definition(job.inverse_min, job.inverse_max)
             else:
-                identifier = job.auto_identifier or ("M4B" if model_type == "log_poly" else "M7B")
-                definition = next((d for d in AUTO_MODELS if d.identifier == identifier), None)
-                if definition is None:
-                    raise ValueError(_dual_msg(f"未找到模型 {identifier}", f"Model not found: {identifier}"))
+                definition = build_inverse_series_definition(job.inverse_min, job.inverse_max)
             fit_result = fit_linear_model(
                 definition,
                 job.x_series,
@@ -1886,27 +1283,24 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
                         "Self-consistent fit model requires an implicit definition.",
                     )
                 )
-            spec = build_implicit_model_specification(job.implicit_definition)
-            state = build_parameter_state(
-                job.parameter_config or {},
-                list(job.implicit_definition.parameters),
+            problem = ModelProblem(
+                model_type="self_consistent",
+                expression=job.implicit_definition.output_expression,
+                variables=tuple(job.implicit_definition.x_variables),
+                target_name=job.target_column,
+                parameter_config=job.parameter_config or {},
+                constants=job.implicit_definition.constants,
+                constants_enabled=True,
+                implicit_definition=job.implicit_definition,
             )
-            fit_result = fit_custom_model(
-                spec,
-                state,
+            fit_result = FitRunner().fit(
+                problem,
                 job.variable_data,
                 job.target_series,
                 precision=job.precision,
                 weights=job.weights,
                 data_sigmas=job.sigma_series,
             )
-            diagnostics = getattr(spec, "implicit_diagnostics")
-            fit_result.details["implicit_diagnostics"] = {
-                "points_solved": int(diagnostics.points_solved),
-                "root_fallbacks": int(diagnostics.root_fallbacks),
-                "max_iterations_used": int(diagnostics.max_iterations_used),
-                "max_residual": str(diagnostics.max_residual),
-            }
             fit_result.details["implicit_variable"] = job.implicit_definition.implicit_variable
             fit_result.details["equation"] = job.implicit_definition.equation
             fit_result.details["output_expression"] = job.implicit_definition.output_expression
@@ -1926,22 +1320,41 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
                 seen.add(name)
             if not parameter_names:
                 parameter_names = param_keys
-            spec = build_model_specification(
-                expr,
-                var_names,
-                parameter_names,
-                job.custom_constants if model_type == "custom" else None,
-            )
-            state = build_parameter_state(params or {}, parameter_names)
-            fit_result = fit_custom_model(
-                spec,
-                state,
-                job.variable_data,
-                job.target_series,
-                precision=job.precision,
-                weights=job.weights,
-                data_sigmas=job.sigma_series,
-            )
+            if model_type == "custom":
+                problem = ModelProblem(
+                    model_type="custom",
+                    expression=expr,
+                    variables=tuple(var_names),
+                    target_name=job.target_column,
+                    parameter_config={name: (params or {}).get(name, {}) for name in parameter_names},
+                    constants=job.custom_constants or {},
+                    constants_enabled=True,
+                )
+                fit_result = FitRunner().fit(
+                    problem,
+                    job.variable_data,
+                    job.target_series,
+                    precision=job.precision,
+                    weights=job.weights,
+                    data_sigmas=job.sigma_series,
+                )
+            else:
+                spec = build_model_specification(
+                    expr,
+                    var_names,
+                    parameter_names,
+                    None,
+                )
+                state = build_parameter_state(params or {}, parameter_names)
+                fit_result = fit_custom_model(
+                    spec,
+                    state,
+                    job.variable_data,
+                    job.target_series,
+                    precision=job.precision,
+                    weights=job.weights,
+                    data_sigmas=job.sigma_series,
+                )
             expression = expr
             logs.append(f"{model_type} 拟合完成。")
         else:
@@ -1966,8 +1379,6 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
 
 
 __all__ = [
-    "AutoFitJob",
-    "AutoFitRenderResult",
     "CalcJob",
     "CalcResult",
     "FitBatchResultEntry",
