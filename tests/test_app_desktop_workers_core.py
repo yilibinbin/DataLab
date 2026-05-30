@@ -7,7 +7,7 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import mpmath as mp
 import pytest
@@ -34,8 +34,12 @@ from fitting.implicit_model import (
     ImplicitSolveOptions,
 )
 from fitting.model_parser import ModelSpecification
-from shared.parallel_config import ParallelConfig
-from shared.parallel_backend import KillableProcessTaskRunner, current_parallel_depth
+from shared.parallel_config import ParallelConfig, ParallelMode
+from shared.parallel_backend import (
+    KillableProcessTaskRunner,
+    LocalWorkerBudget,
+    current_parallel_depth,
+)
 
 
 _RAW_PAYLOAD_SCALAR_TYPES = (type(None), bool, int, float, str)
@@ -165,11 +169,327 @@ def _small_self_consistent_fit_job(
     )
 
 
+def _custom_fit_job(*, precision: int) -> FitJob:
+    x_series = [mp.mpf(v) for v in ["0", "1", "2", "3", "4"]]
+    offset = mp.mpf("0.375")
+    y_series = [mp.mpf("1.25") + mp.mpf("2.5") * x + offset for x in x_series]
+    return FitJob(
+        model_type="custom",
+        headers=["x", "y"],
+        data_rows=list(zip(x_series, y_series)),
+        sigma_rows=[(None, None) for _ in x_series],
+        x_series=x_series,
+        y_series=y_series,
+        sigma_series=[None] * len(y_series),
+        weights=None,
+        variable_map={"x": "x"},
+        variable_data={"x": x_series},
+        target_series=y_series,
+        target_column="y",
+        model_expr="a*x + b + offset",
+        parameter_config={
+            "a": {"initial": "2.0"},
+            "b": {"initial": "1.0"},
+        },
+        parameter_names=["a", "b"],
+        precision=precision,
+        weighted=False,
+        label=f"custom-equivalence-{precision}",
+        custom_constants={"offset": offset},
+        parallel_config=ParallelConfig(mode=ParallelMode.SERIAL),
+    )
+
+
+def _general_self_consistent_fit_job(
+    *,
+    precision: int,
+    data_sigmas: bool = False,
+) -> FitJob:
+    x_series = [mp.mpf(v) for v in ["1", "2", "3", "4", "5"]]
+    y_series = [(mp.mpf("0.2") + mp.mpf("0.45") * x) ** 2 for x in x_series]
+    sigma_series = [mp.mpf("0.01") for _ in y_series] if data_sigmas else [None] * len(y_series)
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*x",
+        output_expression="u*u",
+        parameters=("a", "b"),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="fixed_point",
+            initial="0",
+            tolerance="1e-20",
+            max_iterations=40,
+        ),
+    )
+    return FitJob(
+        model_type="self_consistent",
+        headers=["x", "y"],
+        data_rows=list(zip(x_series, y_series)),
+        sigma_rows=[(None, sigma) for sigma in sigma_series],
+        x_series=x_series,
+        y_series=y_series,
+        sigma_series=sigma_series,
+        weights=None,
+        variable_map={"x": "x"},
+        variable_data={"x": x_series},
+        target_series=y_series,
+        target_column="y",
+        model_expr="u*u",
+        parameter_config={
+            "a": {"initial": "0.18"},
+            "b": {"initial": "0.42"},
+        },
+        parameter_names=["a", "b"],
+        precision=precision,
+        weighted=False,
+        label=f"self-consistent-equivalence-{precision}",
+        implicit_definition=definition,
+        timeout_seconds=20.0,
+        parallel_config=ParallelConfig(mode=ParallelMode.SERIAL),
+    )
+
+
+def _seed_hint_self_consistent_fit_job() -> FitJob:
+    n_series = [mp.mpf("4"), mp.mpf("5"), mp.mpf("6"), mp.mpf("7")]
+    delta_series = [mp.mpf("-0.01"), mp.mpf("-0.011"), mp.mpf("-0.012"), mp.mpf("-0.0125")]
+    target_series = [
+        mp.mpf("100") / (n - delta) ** 2
+        for n, delta in zip(n_series, delta_series, strict=True)
+    ]
+    definition = ImplicitModelDefinition(
+        x_variables=("n",),
+        implicit_variable="delta",
+        equation="d0",
+        output_expression="R/(n-delta)^2",
+        parameters=("d0",),
+        constants={"R": "100"},
+        solve_options=ImplicitSolveOptions(
+            method="fixed_point",
+            initial="0",
+            tolerance="1e-30",
+            max_iterations=20,
+        ),
+    )
+    return FitJob(
+        model_type="self_consistent",
+        headers=["n", "E"],
+        data_rows=list(zip(n_series, target_series)),
+        sigma_rows=[(None, None) for _ in n_series],
+        x_series=n_series,
+        y_series=target_series,
+        sigma_series=[None] * len(target_series),
+        weights=None,
+        variable_map={"n": "n"},
+        variable_data={"n": n_series},
+        target_series=target_series,
+        target_column="E",
+        model_expr="R/(n-delta)^2",
+        parameter_config={"d0": {"initial": "-0.012"}},
+        parameter_names=["d0"],
+        precision=50,
+        weighted=False,
+        label="self-consistent-seed-hint-equivalence",
+        implicit_definition=definition,
+        timeout_seconds=20.0,
+        parallel_config=ParallelConfig(mode=ParallelMode.SERIAL),
+    )
+
+
+def _mp_almosteq(left: mp.mpf, right: mp.mpf, *, abs_eps: str = "1e-18") -> bool:
+    return bool(mp.almosteq(left, right, abs_eps=mp.mpf(abs_eps), rel_eps=mp.mpf(abs_eps)))
+
+
+def _assert_mpf_sequence_equivalent(
+    left: list[mp.mpf],
+    right: list[mp.mpf],
+    *,
+    abs_eps: str = "1e-18",
+) -> None:
+    assert len(left) == len(right)
+    for index, (left_value, right_value) in enumerate(zip(left, right, strict=True)):
+        assert _mp_almosteq(left_value, right_value, abs_eps=abs_eps), (
+            index,
+            left_value,
+            right_value,
+        )
+
+
+def _assert_mpf_mapping_equivalent(
+    left: dict[str, mp.mpf],
+    right: dict[str, mp.mpf],
+    *,
+    abs_eps: str = "1e-18",
+) -> None:
+    assert set(left) == set(right)
+    for key in sorted(left):
+        assert _mp_almosteq(left[key], right[key], abs_eps=abs_eps), (
+            key,
+            left[key],
+            right[key],
+        )
+
+
+def _normalize_details_for_equivalence(value: object) -> object:
+    if isinstance(value, mp.mpf):
+        return mp.nstr(value, 50)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, dict):
+        return {
+            str(key): _normalize_details_for_equivalence(item)
+            for key, item in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, list):
+        return [_normalize_details_for_equivalence(item) for item in value]
+    return value
+
+
+def _assert_fit_result_equivalent(
+    serial: FitResult,
+    process: FitResult,
+    *,
+    abs_eps: str = "1e-18",
+) -> None:
+    _assert_mpf_mapping_equivalent(serial.params, process.params, abs_eps=abs_eps)
+    _assert_mpf_mapping_equivalent(serial.param_errors, process.param_errors, abs_eps=abs_eps)
+    _assert_mpf_mapping_equivalent(serial.param_errors_stat, process.param_errors_stat, abs_eps=abs_eps)
+    _assert_mpf_mapping_equivalent(serial.param_errors_sys, process.param_errors_sys, abs_eps=abs_eps)
+    _assert_mpf_mapping_equivalent(serial.param_errors_total, process.param_errors_total, abs_eps=abs_eps)
+    for attr in ("chi2", "reduced_chi2", "aic", "bic", "rmse", "r2"):
+        assert _mp_almosteq(getattr(serial, attr), getattr(process, attr), abs_eps=abs_eps), attr
+    _assert_mpf_sequence_equivalent(serial.fitted_curve, process.fitted_curve, abs_eps=abs_eps)
+    _assert_mpf_sequence_equivalent(serial.residuals, process.residuals, abs_eps=abs_eps)
+    assert len(serial.covariance) == len(process.covariance)
+    for serial_row, process_row in zip(serial.covariance, process.covariance, strict=True):
+        _assert_mpf_sequence_equivalent(serial_row, process_row, abs_eps=abs_eps)
+    assert _normalize_details_for_equivalence(serial.details) == _normalize_details_for_equivalence(process.details)
+
+
+def _assert_implicit_metadata_contract(result: FitResult) -> dict[str, Any]:
+    assert "implicit_strategy" in result.details
+    assert "optimizer_backend" in result.details
+    diagnostics = result.details.get("implicit_diagnostics")
+    assert isinstance(diagnostics, dict)
+    assert isinstance(diagnostics.get("points_solved"), int)
+    assert isinstance(diagnostics.get("seed_sources"), dict)
+    assert isinstance(diagnostics.get("seed_attempts"), list)
+    for attempt in diagnostics["seed_attempts"]:
+        assert isinstance(attempt, dict)
+        assert "point_index" in attempt
+        assert "source" in attempt
+        assert "success" in attempt
+    return diagnostics
+
+
+def _assert_configured_seed_state_is_not_leaked(result: FitResult) -> None:
+    diagnostics = _assert_implicit_metadata_contract(result)
+    points_solved = diagnostics["points_solved"]
+    seed_sources = diagnostics["seed_sources"]
+    seed_attempts = diagnostics["seed_attempts"]
+    assert points_solved > 0
+    assert seed_sources == {"configured": points_solved}
+    assert all(attempt["source"] == "configured" for attempt in seed_attempts)
+    assert {attempt["point_index"] for attempt in seed_attempts} <= {0, 1, 2, 3, 4}
+
+
 def _depth_probe_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "payload": payload,
         "env_depth": os.environ.get("DATALAB_PARALLEL_DEPTH"),
         "current_depth": current_parallel_depth(),
+    }
+
+
+def _implicit_seed_diagnostic_probe(payload: dict[str, str]) -> dict[str, object]:
+    from fitting.implicit_model import build_implicit_model_specification
+    import fitting.implicit_model as implicit_model
+    from fitting.implicit_seed_hints import ImplicitSeedHint
+
+    mode = payload["mode"]
+    original_solve = implicit_model._solve_from_seed
+    calls = 0
+
+    def fail_selected_configured_seed(
+        rhs: Callable[[mp.mpf], mp.mpf],
+        seed: mp.mpf,
+        options: ImplicitSolveOptions,
+        tol: mp.mpf,
+    ) -> tuple[mp.mpf, int, bool, mp.mpf]:
+        nonlocal calls
+        calls += 1
+        if (mode == "warm" and calls == 2) or (mode == "hint" and calls == 1):
+            raise ValueError("forced configured seed failure")
+        return original_solve(rhs, seed, options, tol)
+
+    implicit_model._solve_from_seed = fail_selected_configured_seed
+    try:
+        if mode == "warm":
+            definition = ImplicitModelDefinition(
+                x_variables=("x",),
+                implicit_variable="u",
+                equation="0.1*x + a",
+                output_expression="u",
+                parameters=("a",),
+                solve_options=ImplicitSolveOptions(
+                    method="fixed_point",
+                    initial="0",
+                    tolerance="1e-30",
+                    max_iterations=5,
+                ),
+            )
+            spec = build_implicit_model_specification(definition)
+            params = {"a": mp.mpf("1")}
+            for point_index, x_value in enumerate((mp.mpf("3"), mp.mpf("4"))):
+                getattr(spec, "set_implicit_point_index")(point_index)
+                spec.evaluate({"x": x_value}, params)
+        elif mode == "hint":
+            definition = ImplicitModelDefinition(
+                x_variables=("x",),
+                implicit_variable="u",
+                equation="u**2 - 4",
+                output_expression="u",
+                parameters=("a",),
+                solve_options=ImplicitSolveOptions(
+                    method="root",
+                    initial="0",
+                    tolerance="1e-30",
+                    max_iterations=20,
+                ),
+            )
+            hint = ImplicitSeedHint(
+                reason="test rescue branch",
+                candidates=lambda _variables, _target: (mp.mpf("3"),),
+            )
+            spec = build_implicit_model_specification(
+                definition,
+                target_data=[mp.mpf("2")],
+                seed_hint=hint,
+            )
+            getattr(spec, "set_implicit_point_index")(0)
+            spec.evaluate({"x": mp.mpf("0")}, {"a": mp.mpf("0")})
+        else:
+            raise ValueError(f"Unknown seed diagnostic probe mode: {mode}")
+    finally:
+        implicit_model._solve_from_seed = original_solve
+
+    diagnostics = getattr(spec, "implicit_diagnostics")
+    return {
+        "points_solved": int(diagnostics.points_solved),
+        "warm_start_uses": int(diagnostics.warm_start_uses),
+        "seed_sources": dict(diagnostics.seed_sources),
+        "attempt_sources": [
+            str(attempt["source"])
+            for attempt in diagnostics.seed_attempts
+        ],
+        "attempt_success": [
+            bool(attempt["success"])
+            for attempt in diagnostics.seed_attempts
+        ],
+        "point_indexes": [
+            int(attempt["point_index"])
+            for attempt in diagnostics.seed_attempts
+        ],
     }
 
 
@@ -1048,6 +1368,35 @@ def test_fit_killable_runner_child_depth_marker_is_visible(
     assert payload["env_depth"] == "1" or payload["current_depth"] >= 1
 
 
+@pytest.mark.parametrize(
+    ("mode", "expected_source"),
+    [
+        ("warm", "warm"),
+        ("hint", "hint"),
+    ],
+)
+def test_implicit_seed_sources_match_across_serial_and_process_worker_probe(
+    mode: str,
+    expected_source: str,
+) -> None:
+    serial = _implicit_seed_diagnostic_probe({"mode": mode})
+    process = KillableProcessTaskRunner(config=ParallelConfig()).run_killable(
+        _implicit_seed_diagnostic_probe,
+        {"mode": mode},
+        timeout_seconds=5.0,
+    )
+
+    assert process == serial
+    seed_sources = process["seed_sources"]
+    assert isinstance(seed_sources, dict)
+    assert seed_sources[expected_source] == 1
+    assert expected_source in process["attempt_sources"]
+    if mode == "warm":
+        assert set(process["point_indexes"]) == {0, 1}
+    else:
+        assert set(process["point_indexes"]) == {0}
+
+
 def test_self_consistent_fit_job_serialization_preserves_high_precision_values() -> None:
     with mp.workdps(100):
         precise = mp.mpf("1.234567890123456789012345678901234567890123456789")
@@ -1135,6 +1484,156 @@ def test_self_consistent_subprocess_executes_real_fit_roundtrip() -> None:
     assert mp.almosteq(fit.params["b"], mp.mpf("2"), abs_eps=mp.mpf("1e-20"))
     assert payload.job.model_type == "self_consistent"
     assert payload.expression == "u"
+
+
+def test_custom_fit_serialized_payload_is_equivalent_low_precision_with_constants() -> None:
+    job = _custom_fit_job(precision=16)
+
+    serial = _execute_fit_job_payload(job)
+    process = _execute_fit_job_payload_subprocess(job, timeout_seconds=20.0)
+
+    _assert_fit_result_equivalent(serial.fit_result, process.fit_result, abs_eps="1e-10")
+    assert process.fit_result.details["optimizer_backend"] == serial.fit_result.details["optimizer_backend"]
+
+
+def test_custom_fit_serialized_payload_is_equivalent_high_precision_with_constants() -> None:
+    job = _custom_fit_job(precision=50)
+
+    serial = _execute_fit_job_payload(job)
+    process = _execute_fit_job_payload_subprocess(job, timeout_seconds=20.0)
+
+    _assert_fit_result_equivalent(serial.fit_result, process.fit_result, abs_eps="1e-30")
+    assert process.fit_result.details["optimizer_backend"] == "mpmath_high_precision"
+
+
+def test_self_consistent_serial_and_process_are_equivalent_low_precision_scipy_candidate_fallback() -> None:
+    job = _general_self_consistent_fit_job(precision=16, data_sigmas=True)
+
+    serial = _execute_fit_job_payload(job)
+    process = _execute_fit_job_payload_subprocess(job, timeout_seconds=20.0)
+
+    _assert_fit_result_equivalent(serial.fit_result, process.fit_result, abs_eps="1e-8")
+    _assert_configured_seed_state_is_not_leaked(process.fit_result)
+    assert process.fit_result.details["optimizer_backend"] == "mpmath_high_precision"
+    assert process.fit_result.details["scipy_safety_passed"] is False
+    history = process.fit_result.details.get("fallback_history", [])
+    assert isinstance(history, list)
+    assert any(
+        isinstance(item, dict)
+        and item.get("from") == "scipy_implicit_least_squares"
+        and "unweighted data_sigmas" in str(item.get("reason", ""))
+        for item in history
+    )
+
+
+def test_self_consistent_serial_and_process_are_equivalent_high_precision_mpmath() -> None:
+    job = _general_self_consistent_fit_job(precision=50)
+
+    serial = _execute_fit_job_payload(job)
+    process = _execute_fit_job_payload_subprocess(job, timeout_seconds=20.0)
+
+    _assert_fit_result_equivalent(serial.fit_result, process.fit_result, abs_eps="1e-25")
+    _assert_configured_seed_state_is_not_leaked(process.fit_result)
+    assert process.fit_result.details["optimizer_backend"] == "mpmath_high_precision"
+
+
+def test_self_consistent_serial_and_process_preserve_seed_hint_metadata() -> None:
+    job = _seed_hint_self_consistent_fit_job()
+
+    serial = _execute_fit_job_payload(job)
+    process = _execute_fit_job_payload_subprocess(job, timeout_seconds=20.0)
+
+    _assert_fit_result_equivalent(serial.fit_result, process.fit_result, abs_eps="1e-25")
+    _assert_implicit_metadata_contract(process.fit_result)
+    assert process.fit_result.details["implicit_seed_hint"] == "validated inverse-square output seed"
+
+
+def test_self_consistent_process_cancel_then_retry_matches_clean_serial_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATALAB_PARALLEL_DEPTH", raising=False)
+    job = _small_self_consistent_fit_job()
+    budget = LocalWorkerBudget(1)
+    ambient_dps = mp.mp.dps
+
+    class BudgetedRunner:
+        def __init__(self, *, config: ParallelConfig) -> None:
+            self._runner = KillableProcessTaskRunner(config=config, worker_budget=budget)
+
+        def run_killable(
+            self,
+            target: Callable[[dict[str, Any]], dict[str, Any]],
+            payload: dict[str, Any],
+            *,
+            timeout_seconds: float | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> dict[str, Any]:
+            result = self._runner.run_killable(
+                target,
+                payload,
+                timeout_seconds=timeout_seconds,
+                should_cancel=should_cancel,
+            )
+            return cast(dict[str, Any], result)
+
+    monkeypatch.setattr(workers_core, "KillableProcessTaskRunner", BudgetedRunner)
+
+    with pytest.raises(InterruptedError, match="cancel"):
+        _execute_fit_job_payload_subprocess(job, timeout_seconds=10.0, should_cancel=lambda: True)
+
+    assert budget.available == 1
+    assert current_parallel_depth() == 0
+    assert mp.mp.dps == ambient_dps
+
+    serial = _execute_fit_job_payload(job)
+    retry = _execute_fit_job_payload_subprocess(job, timeout_seconds=10.0)
+
+    _assert_fit_result_equivalent(serial.fit_result, retry.fit_result, abs_eps="1e-18")
+    assert budget.available == 1
+    assert current_parallel_depth() == 0
+
+
+def test_self_consistent_repeated_process_runs_do_not_leak_cache_or_diagnostics() -> None:
+    job = _general_self_consistent_fit_job(precision=30)
+    serial = _execute_fit_job_payload(job)
+
+    first = _execute_fit_job_payload_subprocess(job, timeout_seconds=20.0)
+    second = _execute_fit_job_payload_subprocess(job, timeout_seconds=20.0)
+
+    _assert_fit_result_equivalent(serial.fit_result, first.fit_result, abs_eps="1e-18")
+    _assert_fit_result_equivalent(serial.fit_result, second.fit_result, abs_eps="1e-18")
+    _assert_configured_seed_state_is_not_leaked(first.fit_result)
+    _assert_configured_seed_state_is_not_leaked(second.fit_result)
+    assert first.fit_result.details["implicit_diagnostics"] == second.fit_result.details["implicit_diagnostics"]
+
+
+def test_self_consistent_worker_rebuilds_model_spec_and_cache_inside_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ParentOnlyFailingRunner:
+        def fit(self, *_args: object, **_kwargs: object) -> FitResult:
+            raise AssertionError("parent FitRunner should not execute inside spawned child")
+
+    monkeypatch.setattr(workers_core, "FitRunner", lambda: ParentOnlyFailingRunner())
+    job = _general_self_consistent_fit_job(precision=30)
+
+    process = _execute_fit_job_payload_subprocess(job, timeout_seconds=20.0)
+
+    _assert_configured_seed_state_is_not_leaked(process.fit_result)
+    assert process.fit_result.details["implicit_strategy"] == "analytic_implicit_output_space"
+
+
+def test_fit_job_worker_dto_preserves_variable_target_and_single_series_consistency() -> None:
+    job = _small_self_consistent_fit_job()
+
+    restored = _deserialize_fit_job(_serialize_fit_job(job))
+
+    assert restored.variable_map == {"x": "x"}
+    assert restored.variable_data["x"] == restored.x_series
+    assert restored.target_series == restored.y_series
+    assert restored.sigma_series == [None] * len(restored.y_series)
+    assert [row[0] for row in restored.data_rows] == restored.x_series
+    assert [row[1] for row in restored.data_rows] == restored.target_series
 
 
 def test_fit_batch_worker_routes_self_consistent_fit_through_subprocess(
