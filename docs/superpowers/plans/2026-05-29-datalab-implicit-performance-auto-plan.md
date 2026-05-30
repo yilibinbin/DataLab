@@ -10,6 +10,33 @@
 
 ---
 
+## 2026-05-30 Final Review Gate
+
+This section is the current execution gate after the latest Codex subagent review set and Claude adversarial review set. If any older checkbox task, code block, or expected test output below conflicts with this gate, the older text is historical context only and must not be copied into code.
+
+Current verdict: **CONTESTED / not yet release-safe**, but Task 6 is now complete. The next implementation must close the following blockers in order:
+
+1. **Synchronize and isolate the worktree before any code commit.** `task_plan.md`, `findings.md`, and `progress.md` must identify the same current phase. Do not stage duplicate local files whose names contain `" 2."`; either quarantine them outside the repo or use strict allowlist staging and verify with `git diff --cached --name-only`.
+2. **Task 5b SymPy packaging must be committed as its own small changeset.** Current packaging edits are in `DataLab.spec`, `build_mac_data_gui.sh`, `build_windows_data_gui.ps1`, and `tests/test_implicit_packaging.py`. Re-run the packaging/source smoke checks, review, then commit before Task 7 so release packaging work is not mixed with later performance regressions.
+3. **Task 7 must add regression coverage for the real performance frontier.** Do not use wall-clock thresholds as CI gates, but add deterministic diagnostics proving output-space residual correctness, accepted strategy/fallback metadata, bounded implicit solve counts, and SciPy candidate accounting. The test may accept analytic or numeric fallback strategy when safety gates downgrade correctly.
+4. **SciPy implicit remains candidate-gated.** Low precision (`precision <= 16`) only makes SciPy eligible. The gate must account for full accepted-route cost, including candidate fit, spot-check, rematerialization, and covariance when applicable. If analytic derivatives are unavailable, compare against numeric finite-difference mpmath rather than rejecting SciPy by definition.
+5. **Seed-hint branch diagnostics must be auditable.** Solver diagnostics or fallback history must record selected seed source and configured/warm/hint failures well enough to prove hints did not silently steal a root branch. Add regressions for: configured/warm convergence beats hints; configured/warm failure followed by hint success is explicitly reported.
+6. **Observed-linear implicit fast paths must not drop unweighted uncertainty semantics.** If `data_sigmas` are provided without explicit weights, either run equivalent +/- sigma refits or skip the fast path and use the general path, matching the affine fast-path guard.
+7. **Release security is a separate blocking gate before public release.** Automatic update packages need a signing/trust plan beyond same-release SHA256: macOS Developer ID + notarization, Windows Authenticode, and preferably signed update manifests. Build-time external downloads must be pinned and verified before release builds. Real macOS and Windows frozen-bundle smoke tests are required before release.
+8. **Track cleanup of inert legacy code.** `_execute_fit_job_payload_subprocess_legacy()` and `ParallelConfig.enable_new_implicit_backend` are now compatibility/dead-code surfaces; delete or document them in a small follow-up after the stale-payload migration window.
+
+Accepted current design remains:
+
+- Strategy selection is fully automatic and diagnostic-only.
+- The GUI must expose compute resource controls, not implicit backend strategy controls.
+- Exact residual-space transforms are limited to proven constant-affine output maps.
+- Nonlinear inverse forms are seed hints only; they never replace output-space residuals.
+- Task 6 already removed the visible implicit-backend strategy selector and forces stale `enable_new_implicit_backend=False` inputs onto the unified backend.
+- Analytic implicit derivatives are used only behind fresh-cache preflight, analytic-vs-numeric parity, residual quality, `F_u` singularity, dependent-parameter, and mixed-Jacobian rerun gates.
+- Frozen-app builds must explicitly collect SymPy in `DataLab.spec`, `build_mac_data_gui.sh`, and `build_windows_data_gui.ps1`, followed by real bundle smoke tests before release.
+
+---
+
 ## 2026-05-30 Review-Reconciled Execution Rules
 
 This section is authoritative when it conflicts with older snippets below. It incorporates the multi-subagent review and Claude adversarial reviews run on 2026-05-30.
@@ -316,6 +343,7 @@ from enum import Enum
 
 from .implicit_classifier import ImplicitProblemClassifier, ImplicitStrategy
 from .implicit_model import ImplicitModelDefinition
+from .implicit_seed_hints import ImplicitSeedHint, detect_seed_hint
 from .implicit_transforms import OutputTransform, detect_output_transform
 
 
@@ -324,7 +352,6 @@ class ImplicitPlanKind(Enum):
     OBSERVED_NONLINEAR = "observed_nonlinear"
     EXACT_AFFINE_OUTPUT = "exact_affine_output"
     ANALYTIC_IMPLICIT_JACOBIAN = "analytic_implicit_jacobian"
-    SCIPY_IMPLICIT = "scipy_implicit"
     GENERAL = "general"
 
 
@@ -333,9 +360,8 @@ class ImplicitPlan:
     kind: ImplicitPlanKind
     reason: str
     transform: OutputTransform | None = None
-    seed_hint: object | None = None
+    seed_hint: ImplicitSeedHint | None = None
     use_analytic_derivatives: bool = False
-    try_scipy: bool = False
 
 
 def plan_implicit_fit(definition: ImplicitModelDefinition, *, precision: int) -> ImplicitPlan:
@@ -351,7 +377,7 @@ def plan_implicit_fit(definition: ImplicitModelDefinition, *, precision: int) ->
             reason="observed implicit variable with nonlinear parameter equation",
         )
 
-    transform = detect_output_transform(definition)
+    transform = detect_output_transform(definition, precision=precision)
     if transform is not None:
         return ImplicitPlan(
             kind=ImplicitPlanKind.EXACT_AFFINE_OUTPUT,
@@ -359,19 +385,16 @@ def plan_implicit_fit(definition: ImplicitModelDefinition, *, precision: int) ->
             transform=transform,
         )
 
-    if precision <= 16:
-        return ImplicitPlan(
-            kind=ImplicitPlanKind.SCIPY_IMPLICIT,
-            reason="double precision requested; try SciPy implicit least_squares before mpmath fallback",
-            try_scipy=True,
-        )
-
+    seed_hint = detect_seed_hint(definition, precision=precision)
     return ImplicitPlan(
         kind=ImplicitPlanKind.ANALYTIC_IMPLICIT_JACOBIAN,
-        reason="high precision implicit output fit; future runner task may use analytic implicit Jacobian before numeric fallback",
+        reason="general implicit output fit; use analytic implicit Jacobian when preflight succeeds",
+        seed_hint=seed_hint,
         use_analytic_derivatives=True,
     )
 ```
+
+Do not add a `SCIPY_IMPLICIT` planner kind here. SciPy implicit is an execution candidate inside the runner's low-precision safety/benchmark gate, not a planner kind selected solely by `precision <= 16`.
 
 - [ ] **Step 4: Add transform stub so planner imports**
 
@@ -1133,6 +1156,16 @@ git commit -m "perf: add exact affine implicit output fast path"
 
 ## Task 3: Add Nonlinear Inverse Seed Hints Without Changing Residual Space
 
+**Current instruction:** seed hints are root-solver candidates only. Any older snippet in this task that puts hints before the configured seed/warm start, hard-codes `evalf(80)`, or omits selected-seed/source diagnostics is obsolete and must not be copied.
+
+The current Task 3 contract is:
+
+- Try configured initial seed first, then compatible warm start, then validated hint candidates sorted by distance to the configured/warm anchor.
+- Use the active precision context or requested precision; do not hard-code 80-digit symbolic evaluation.
+- Pass seed hints into numeric finite-difference partial solves as well as objective evaluation when claiming Jacobian/root-solve speedup.
+- Record enough diagnostics to audit branch behavior: selected seed source, configured/warm/hint failure counts or sources, and explicit fallback history when hints rescue a failed configured/warm solve.
+- Add regressions for both branch cases: configured/warm convergence must not be overridden by a hint; configured/warm failure followed by hint success must be visible in diagnostics.
+
 **Files:**
 - Create: `fitting/implicit_seed_hints.py`
 - Modify: `fitting/implicit_model.py`
@@ -1440,6 +1473,17 @@ git commit -m "perf: add implicit output seed hints"
 ```
 
 ## Task 4: Add Analytic Implicit Jacobian for General Path
+
+**Current instruction:** analytic derivatives are enabled only behind the safety gates in the 2026-05-30 final review sections. Any older snippet in this task that checks only finiteness at the initial vector, uses the production implicit cache for preflight, or silently mixes analytic and numeric Jacobian entries without rerunning numeric is obsolete and must not be copied.
+
+The current Task 4 contract is:
+
+- Build fresh analytic and numeric specs for preflight/parity; do not mutate the production cache.
+- Compare analytic partials against numeric finite-difference partials through the same forward model at representative rows.
+- Gate analytic partials on solved-root residual quality, fallback status, nonfinite values, and runtime `F_u` near-singularity.
+- Disable analytic derivatives when dependent parameter expressions are present until full chain-rule support is implemented and tested.
+- If any analytic fallback occurs during fit or covariance, rerun the result with numeric finite differences or explicitly downgrade diagnostics; do not report a clean analytic strategy after mixed Jacobians.
+- Preserve fallback diagnostics from the failed analytic attempt so the final result is auditable.
 
 **Files:**
 - Create: `fitting/implicit_derivatives.py`
@@ -1908,7 +1952,29 @@ git add fitting/implicit_derivatives.py fitting/implicit_model.py tests/test_imp
 git commit -m "perf: use analytic implicit derivatives when available"
 ```
 
-## Task 5: Add SciPy Implicit Backend for Double Precision
+## Task 5: Add Gated SciPy Implicit Candidate for Double Precision
+
+**Current instruction:** the implementation for this task is a candidate path, not a mandatory backend. Any older code block in this section that refers to `ImplicitPlanKind.SCIPY_IMPLICIT`, requires `precision <= 16` to execute SciPy, or asserts unconditional `optimizer_backend == "scipy_implicit_least_squares"` is obsolete and must not be copied.
+
+The current Task 5 contract is:
+
+- Low precision (`precision <= 16`) only makes SciPy eligible.
+- Dependent parameter expressions disable the SciPy implicit candidate unless a tested chain-rule path exists.
+- A benchmark gate must compare the total candidate route cost against the actual mpmath route that would otherwise run. Include candidate fit, spot-check, rematerialization, and covariance overhead in the candidate cost.
+- If analytic derivatives are unavailable, the fallback comparison is numeric finite-difference mpmath, not automatic SciPy rejection.
+- The SciPy residual loop, weighted norm, spot-check, and accepted-result rematerialization must set the implicit row index and must use fresh implicit specs/caches where stale cache reuse could affect correctness.
+- Accepted candidates may report `optimizer_backend="scipy_implicit_least_squares"` and `implicit_strategy="scipy_general_implicit"`.
+- Rejected or slower candidates must fall back to analytic mpmath or numeric finite-difference mpmath, set `scipy_safety_passed=False`, and preserve an explicit `fallback_history` reason.
+- Tests should assert: candidate eligibility/attempt metadata, acceptance when the full safety+benchmark gate passes, rejection/fallback when it fails, fresh-cache spot-check behavior, row-index correctness, and no GUI-visible backend strategy selector.
+
+**Current RED/GREEN test direction:**
+
+1. Write a test that forces the SciPy candidate safety/benchmark gate to accept and asserts SciPy metadata.
+2. Write a test that forces the gate to reject and asserts mpmath fallback metadata.
+3. Write a fresh-cache regression for implicit spot-check/rematerialization.
+4. Write a benchmark-accounting regression proving the gate records or considers total candidate overhead, not only a one-shot residual probe.
+
+**Historical snippets below this paragraph are retained only as implementation archaeology. Do not copy or execute their tests/code verbatim. Known-obsolete patterns below include unconditional `optimizer_backend == "scipy_implicit_least_squares"`, `ImplicitPlanKind.SCIPY_IMPLICIT`, and `precision <= 16` as an execution selector. Rewrite from the current contract above and current `fitting/runner.py` behavior.**
 
 **Files:**
 - Modify: `fitting/runner.py`
@@ -2448,7 +2514,10 @@ def test_nonlinear_output_uses_output_space_backend_without_transforming_objecti
         data_sigmas=sigma_energy,
     )
 
-    assert energy_result.details["implicit_strategy"] == "analytic_implicit_output_space"
+    assert energy_result.details["implicit_strategy"] in {
+        "analytic_implicit_output_space",
+        "general_implicit_numeric_finite_difference",
+    }
     assert energy_result.details.get("output_transform") is None
     assert all(
         mp.almosteq(residual, fit - target, rel_eps=mp.mpf("1e-20"), abs_eps=mp.mpf("1e-30"))
@@ -2457,6 +2526,7 @@ def test_nonlinear_output_uses_output_space_backend_without_transforming_objecti
     assert all(mp.isfinite(value) for value in energy_result.params.values())
     diagnostics = energy_result.details.get("implicit_diagnostics", {})
     assert int(diagnostics.get("points_solved", 10**9)) < len(n) * (len(base_config) + 2)
+    assert "seed_sources" in diagnostics or "seed_attempts" in diagnostics
 
 
 def test_nonlinear_output_analytic_strategy_matches_forced_numeric_errors() -> None:
@@ -2514,7 +2584,7 @@ Run:
 pytest -q tests/test_implicit_performance_regression.py
 ```
 
-Expected: pass with deterministic output-space strategy, residual-quality, and diagnostic assertions. Do not make this test depend on a hard wall-clock threshold; if wall-clock timing is useful locally, print or log it as non-gating diagnostic output.
+Expected: pass with deterministic output-space residual-quality and diagnostic assertions. Do not require one exact strategy label when the analytic safety gate can correctly downgrade to numeric finite differences. Do not make this test depend on a hard wall-clock threshold; if wall-clock timing is useful locally, print or log it as non-gating diagnostic output.
 
 - [ ] **Step 3: Document in test matrix**
 
@@ -2529,6 +2599,55 @@ Append to `docs/TEST_MATRIX.md`:
 ```bash
 git add tests/test_implicit_performance_regression.py docs/TEST_MATRIX.md
 git commit -m "test: pin implicit fitting performance strategies"
+```
+
+## Task 7a: Close Numerical Review Gaps for Automatic Backend Selection
+
+**Files:**
+- Modify: `fitting/runner.py`
+- Modify: `fitting/implicit_model.py`
+- Test: `tests/test_implicit_scipy_backend.py`
+- Test: `tests/test_implicit_seed_hints.py`
+- Test: `tests/test_implicit_model.py`
+
+This task exists because the 2026-05-30 numerical review found that the current code is directionally correct but not yet strong enough to claim "fastest correct backend" for general tasks.
+
+- [ ] **Step 1: Add total-route SciPy candidate accounting tests**
+
+Extend `tests/test_implicit_scipy_backend.py` with a deterministic regression proving the candidate gate records or compares all accepted-route stages: candidate fit, spot-check, accepted-result rematerialization, and covariance or covariance-equivalent finalization. The test must fail if `_implicit_scipy_benchmark_gate()` only times a one-shot residual probe.
+
+- [ ] **Step 2: Add numeric-fallback comparator coverage**
+
+Add a test where analytic implicit derivatives are deliberately unavailable or rejected, but the low-precision SciPy candidate is still compared against the numeric finite-difference mpmath route. Expected behavior: SciPy is eligible; if rejected, fallback history says it lost the safety/benchmark gate, not that analytic derivatives were unavailable.
+
+- [ ] **Step 3: Add seed-source audit regressions**
+
+Extend `tests/test_implicit_seed_hints.py` or `tests/test_implicit_model.py` to assert per-point or compact diagnostics for seed attempts. Required labels: configured, warm, hint, selected source, success/failure, and residual or failure reason. Include both branch cases: configured/warm convergence beats hints; configured/warm failure followed by hint success is visible.
+
+- [ ] **Step 4: Preserve unweighted uncertainty semantics**
+
+Add a regression for observed-linear implicit fits with `data_sigmas` and no explicit weights. Expected behavior: either the fast path performs equivalent +/- sigma refits and returns nonempty systematic errors, or it skips the observed-linear fast path and uses the general path. It must not silently return empty systematic errors with only a note.
+
+- [ ] **Step 5: Implement the minimal fixes**
+
+Update `fitting/runner.py` and `fitting/implicit_model.py` to satisfy Steps 1-4. Keep strategy selection automatic and diagnostic-only; do not add GUI strategy controls.
+
+- [ ] **Step 6: Verify and commit**
+
+Run:
+
+```bash
+pytest -q tests/test_implicit_scipy_backend.py tests/test_implicit_seed_hints.py tests/test_implicit_model.py tests/test_implicit_performance_regression.py
+ruff check fitting/runner.py fitting/implicit_model.py tests/test_implicit_scipy_backend.py tests/test_implicit_seed_hints.py tests/test_implicit_model.py tests/test_implicit_performance_regression.py
+mypy fitting/runner.py fitting/implicit_model.py tests/test_implicit_scipy_backend.py tests/test_implicit_seed_hints.py tests/test_implicit_model.py tests/test_implicit_performance_regression.py
+python -m compileall -q fitting/runner.py fitting/implicit_model.py tests/test_implicit_scipy_backend.py tests/test_implicit_seed_hints.py tests/test_implicit_model.py tests/test_implicit_performance_regression.py
+```
+
+Expected: all pass. Then request spec/deep review, code-quality review, and Claude adversarial review before committing:
+
+```bash
+git add fitting/runner.py fitting/implicit_model.py tests/test_implicit_scipy_backend.py tests/test_implicit_seed_hints.py tests/test_implicit_model.py tests/test_implicit_performance_regression.py
+git commit -m "test: close implicit backend performance diagnostics"
 ```
 
 ## Task 8: Full Verification and Review Prep

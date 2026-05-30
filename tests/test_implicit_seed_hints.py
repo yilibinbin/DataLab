@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import mpmath as mp
+import pytest
 
 from fitting.implicit_model import ImplicitModelDefinition, ImplicitSolveOptions
 from fitting.implicit_seed_hints import ImplicitSeedHint, detect_seed_hint
@@ -175,3 +178,78 @@ def test_seed_hints_are_used_for_numeric_partial_solves() -> None:
     partial = spec.partial("a", {"x": mp.mpf("0")}, {"a": mp.mpf("0")})
 
     assert mp.almosteq(partial, mp.mpf("1"), rel_eps=mp.mpf("1e-10"))
+
+
+def test_seed_attempt_diagnostics_preserve_configured_branch_before_hint() -> None:
+    from fitting.implicit_model import build_implicit_model_specification
+
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="u**2 - 4",
+        output_expression="u",
+        parameters=("a",),
+        solve_options=ImplicitSolveOptions(method="root", initial="-3", tolerance="1e-30", max_iterations=40),
+    )
+    hint = ImplicitSeedHint(
+        reason="test competing positive branch",
+        candidates=lambda variables, target: (mp.mpf("3"),),
+    )
+    spec = build_implicit_model_specification(definition, target_data=[mp.mpf("2")], seed_hint=hint)
+    getattr(spec, "set_implicit_point_index")(0)
+
+    result = spec.evaluate({"x": mp.mpf("0")}, {"a": mp.mpf("0")})
+
+    diagnostics = getattr(spec, "implicit_diagnostics")
+    assert result < 0
+    assert diagnostics.seed_sources["configured"] == 1
+    assert diagnostics.seed_sources.get("hint", 0) == 0
+    assert diagnostics.seed_attempts[0]["source"] == "configured"
+    assert diagnostics.seed_attempts[0]["success"] is True
+
+
+def test_seed_attempt_diagnostics_report_hint_rescue_after_configured_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fitting.implicit_model import build_implicit_model_specification
+    import fitting.implicit_model as implicit_model
+
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="u**2 - 4",
+        output_expression="u",
+        parameters=("a",),
+        solve_options=ImplicitSolveOptions(method="root", initial="0", tolerance="1e-30", max_iterations=20),
+    )
+    hint = ImplicitSeedHint(
+        reason="test rescue branch",
+        candidates=lambda variables, target: (mp.mpf("3"),),
+    )
+    original_solve = implicit_model._solve_from_seed
+    calls = 0
+
+    def fail_configured_seed(
+        rhs: Callable[[mp.mpf], mp.mpf],
+        seed: mp.mpf,
+        options: ImplicitSolveOptions,
+        tol: mp.mpf,
+    ) -> tuple[mp.mpf, int, bool, mp.mpf]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("forced configured seed failure")
+        return original_solve(rhs, seed, options, tol)
+
+    monkeypatch.setattr(implicit_model, "_solve_from_seed", fail_configured_seed)
+    spec = build_implicit_model_specification(definition, target_data=[mp.mpf("2")], seed_hint=hint)
+    getattr(spec, "set_implicit_point_index")(0)
+
+    result = spec.evaluate({"x": mp.mpf("0")}, {"a": mp.mpf("0")})
+
+    diagnostics = getattr(spec, "implicit_diagnostics")
+    assert result > 0
+    assert [attempt["source"] for attempt in diagnostics.seed_attempts[:2]] == ["configured", "hint"]
+    assert diagnostics.seed_attempts[0]["success"] is False
+    assert diagnostics.seed_attempts[1]["success"] is True
+    assert diagnostics.seed_sources["hint"] == 1

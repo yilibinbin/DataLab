@@ -40,6 +40,10 @@ Run from `data_extrapolation_gui/DataLab`:
 - Custom expression parsing security (rejects unsafe expressions).
 - Fit correctness: exact linear model recovers parameters, residuals ≈ 0.
 - Covariance matrix sanity (shape/symmetry).
+- Implicit fitting performance:
+  - `tests/test_implicit_performance_regression.py` verifies that nonlinear-output implicit models keep the user-facing output-space objective while using automatic SciPy or analytic-implicit acceleration.
+  - `tests/test_implicit_scipy_backend.py` covers the automatic SciPy candidate gate, accepted-candidate materialization, rejected/error fallback, full-route timing labels (`start_norm`, candidate fit, rematerialization, comparator), fresh implicit-cache spot checks, unweighted `data_sigmas` skip, dependent-parameter skip, and numeric mpmath comparator fallback when analytic derivatives are unavailable.
+  - `tests/test_implicit_seed_hints.py` and `tests/test_implicit_model.py` cover configured/warm/hint seed ordering, bounded seed attempt diagnostics, and root-branch audit fields.
 - Branch coverage:
   - `data_sigmas` systematic uncertainty refits (sys errors non-zero).
   - `weights` branch (avoids double counting systematic component).

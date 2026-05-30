@@ -69,7 +69,7 @@ def build_implicit_derivative_evaluator(
     try:
         equation, symbols = parse_symbolic_expression(definition.equation, variables=names)
         output, _ = parse_symbolic_expression(definition.output_expression, variables=names)
-    except (TypeError, ValueError, SyntaxError):
+    except Exception:
         return None
 
     allowed = set(names)
@@ -106,7 +106,7 @@ def build_implicit_derivative_evaluator(
                 sp.simplify(output_partial),
                 "mpmath",
             ))
-        except (TypeError, ValueError, SyntaxError):
+        except Exception:
             return None
 
     return ImplicitDerivativeEvaluator(

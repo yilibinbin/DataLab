@@ -57,6 +57,8 @@ class ImplicitSolveDiagnostics:
     max_residual: mp.mpf = field(default_factory=lambda: mp.mpf("0"))
     warm_start_uses: int = 0
     analytic_derivative_fallbacks: int = 0
+    seed_sources: dict[str, int] = field(default_factory=dict)
+    seed_attempts: list[dict[str, object]] = field(default_factory=list)
 
 
 class ImplicitEvaluationCache:
@@ -545,20 +547,21 @@ def _solve_implicit_value(
         scope = _scope_for(definition, var_tuple, param_tuple, mp.mpf(value))
         return mp.mpf(safe_eval(definition.equation, scope))
 
-    seeds: list[tuple[mp.mpf, bool]] = [(configured_seed, False)]
+    seeds: list[tuple[mp.mpf, str]] = [(configured_seed, "configured")]
     if warm_seed is not None and prefer_warm_start:
-        seeds.append((warm_seed, True))
+        seeds.append((warm_seed, "warm"))
     anchor = warm_seed if warm_seed is not None and prefer_warm_start else configured_seed
     sorted_hints = sorted(
         (mp.mpf(seed) for seed in initial_guesses),
         key=lambda value: mp.fabs(value - anchor),
     )
     for seed in sorted_hints:
-        seeds.append((seed, False))
+        seeds.append((seed, "hint"))
     seeds = _dedupe_solve_seeds(seeds)
 
     last_error: ValueError | None = None
-    for seed, used_warm_start in seeds:
+    used_seed_source = "configured"
+    for seed, seed_source in seeds:
         try:
             solved, iterations_used, used_fallback, residual = _solve_from_seed(
                 rhs,
@@ -566,10 +569,21 @@ def _solve_implicit_value(
                 options,
                 tol,
             )
-            if used_warm_start:
+            _record_seed_attempt(
+                cache,
+                seed_source,
+                True,
+                iterations_used,
+                residual,
+                seed=seed,
+                solved=solved,
+            )
+            if seed_source == "warm":
                 cache.diagnostics.warm_start_uses += 1
+            used_seed_source = seed_source
             break
         except ValueError as exc:
+            _record_seed_attempt(cache, seed_source, False, None, None, seed=seed, error=str(exc))
             last_error = exc
     else:
         assert last_error is not None
@@ -577,6 +591,7 @@ def _solve_implicit_value(
 
     diagnostics = cache.diagnostics
     diagnostics.points_solved += 1
+    diagnostics.seed_sources[used_seed_source] = diagnostics.seed_sources.get(used_seed_source, 0) + 1
     if used_fallback:
         diagnostics.root_fallbacks += 1
     diagnostics.max_iterations_used = max(diagnostics.max_iterations_used, iterations_used)
@@ -609,15 +624,47 @@ def _seed_candidates_for_current_point(
     return seed_hint.candidates(variables, mp.mpf(target_data[point_index]))
 
 
-def _dedupe_solve_seeds(seeds: Sequence[tuple[mp.mpf, bool]]) -> list[tuple[mp.mpf, bool]]:
-    unique: list[tuple[mp.mpf, bool]] = []
+def _record_seed_attempt(
+    cache: ImplicitEvaluationCache,
+    source: str,
+    success: bool,
+    iterations: int | None,
+    residual: mp.mpf | None,
+    *,
+    seed: mp.mpf | None = None,
+    solved: mp.mpf | None = None,
+    error: str | None = None,
+) -> None:
+    # Keep the payload bounded; aggregate seed_sources still covers the whole fit.
+    if len(cache.diagnostics.seed_attempts) >= 50:
+        return
+    attempt: dict[str, object] = {
+        "point_index": cache.current_point_index,
+        "source": source,
+        "success": success,
+    }
+    if iterations is not None:
+        attempt["iterations"] = int(iterations)
+    if residual is not None:
+        attempt["residual"] = str(residual)
+    if seed is not None:
+        attempt["seed"] = str(seed)
+    if solved is not None:
+        attempt["solved"] = str(solved)
+    if error is not None:
+        attempt["error"] = error
+    cache.diagnostics.seed_attempts.append(attempt)
+
+
+def _dedupe_solve_seeds(seeds: Sequence[tuple[mp.mpf, str]]) -> list[tuple[mp.mpf, str]]:
+    unique: list[tuple[mp.mpf, str]] = []
     seen: set[tuple[int, int, _MpfKey]] = set()
-    for seed, is_warm in seeds:
+    for seed, source in seeds:
         key = (int(mp.dps), int(mp.prec), cast(_MpfKey, mp.mpf(seed)._mpf_))
         if key in seen:
             continue
         seen.add(key)
-        unique.append((mp.mpf(seed), is_warm))
+        unique.append((mp.mpf(seed), source))
     return unique
 
 

@@ -148,6 +148,47 @@ def test_runner_uses_analytic_with_bounded_parameter_mapping() -> None:
     assert mp.fabs(result.params["b"] - mp.mpf("0.1")) < mp.mpf("1e-8")
 
 
+def test_observed_linear_implicit_skips_fast_path_for_unweighted_data_sigmas() -> None:
+    from fitting.problem import ModelProblem
+    from fitting.runner import FitRunner
+
+    xs = [mp.mpf("1"), mp.mpf("2"), mp.mpf("3"), mp.mpf("4")]
+    ys = [mp.mpf("0.2") + mp.mpf("0.1") * x for x in xs]
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*x",
+        output_expression="u",
+        parameters=("a", "b"),
+        solve_options=ImplicitSolveOptions(method="fixed_point", initial="0", tolerance="1e-30", max_iterations=20),
+    )
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="u",
+        variables=("x",),
+        parameter_config={"a": {"initial": "0.2"}, "b": {"initial": "0.1"}},
+        implicit_definition=definition,
+    )
+
+    result = FitRunner().fit(
+        problem,
+        {"x": xs},
+        ys,
+        precision=50,
+        data_sigmas=[mp.mpf("0.01")] * len(xs),
+    )
+
+    assert result.details["implicit_strategy"] != "observed_linear"
+    history = result.details.get("fallback_history", [])
+    assert isinstance(history, list)
+    assert any(
+        isinstance(item, dict)
+        and item.get("from") == "observed_linear"
+        and item.get("skipped") == "unweighted_data_sigmas"
+        for item in history
+    )
+
+
 def test_runner_disables_analytic_derivatives_for_dependent_parameters() -> None:
     from fitting.problem import ModelProblem
     from fitting.runner import FitRunner

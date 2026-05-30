@@ -32,6 +32,8 @@ from .model_parser import ModelSpecification, build_model_specification, infer_p
 from .problem import ModelProblem, constants_for_compute
 from .statistics import compute_fit_statistics
 
+SCIPY_IMPLICIT_ACCEPT_SPEEDUP_RATIO = mp.mpf("0.9")
+
 
 @dataclass(frozen=True)
 class _SciPyCandidate:
@@ -41,6 +43,16 @@ class _SciPyCandidate:
     condition: float
     spotcheck_ok: bool
     solution: tuple[mp.mpf, ...]
+
+
+@dataclass(frozen=True)
+class _ImplicitScipyBenchmark:
+    accepted: bool
+    reason: str
+    materialized_result: FitResult | None = None
+    diagnostics: Any | None = None
+    fallback_result: FitResult | None = None
+    fallback_diagnostics: Any | None = None
 
 
 class FitRunner:
@@ -173,27 +185,32 @@ class FitRunner:
         plan = plan_implicit_fit(definition, precision=precision)
         fallback_history: list[dict[str, object]] = []
         if plan.kind is ImplicitPlanKind.OBSERVED_LINEAR:
-            try:
-                result = fit_observed_implicit_variable_linear_model(
-                    definition,
-                    state,
-                    variable_data,
-                    target_data,
-                    precision=precision,
-                    weights=weights,
-                    data_sigmas=data_sigmas,
+            if weights is None and data_sigmas is not None and any(sigma is not None for sigma in data_sigmas):
+                fallback_history.append(
+                    {
+                        "from": "observed_linear",
+                        "to": "general",
+                        "skipped": "unweighted_data_sigmas",
+                        "reason": "unweighted data_sigmas require systematic refits that the observed-linear shortcut does not preserve",
+                    }
                 )
-                result.details["implicit_diagnostics"] = {
-                    "points_solved": 0,
-                    "root_fallbacks": 0,
-                    "max_iterations_used": 0,
-                    "max_residual": "0",
-                }
-                result.details["implicit_strategy"] = "observed_linear"
-                result.details["optimizer_backend"] = "mpmath_qr"
-                return result
-            except ValueError as exc:
-                fallback_history.append({"from": "observed_linear", "to": "general", "reason": str(exc)})
+            else:
+                try:
+                    result = fit_observed_implicit_variable_linear_model(
+                        definition,
+                        state,
+                        variable_data,
+                        target_data,
+                        precision=precision,
+                        weights=weights,
+                        data_sigmas=data_sigmas,
+                    )
+                    result.details["implicit_diagnostics"] = _implicit_diagnostics_details(None)
+                    result.details["implicit_strategy"] = "observed_linear"
+                    result.details["optimizer_backend"] = "mpmath_qr"
+                    return result
+                except ValueError as exc:
+                    fallback_history.append({"from": "observed_linear", "to": "general", "reason": str(exc)})
 
         if plan.kind is ImplicitPlanKind.EXACT_AFFINE_OUTPUT and plan.transform is not None:
             if weights is None and data_sigmas is not None and any(sigma is not None for sigma in data_sigmas):
@@ -232,12 +249,7 @@ class FitRunner:
                         weights=transformed_weights,
                         data_sigmas=transformed_sigmas,
                     )
-                    result.details["implicit_diagnostics"] = {
-                        "points_solved": 0,
-                        "root_fallbacks": 0,
-                        "max_iterations_used": 0,
-                        "max_residual": "0",
-                    }
+                    result.details["implicit_diagnostics"] = _implicit_diagnostics_details(None)
                     result.details["implicit_strategy"] = "exact_affine_output_observed_linear"
                     result.details["optimizer_backend"] = "mpmath_qr"
                     result.details["output_transform"] = plan.transform.reason
@@ -275,10 +287,7 @@ class FitRunner:
                 result.details["implicit_strategy"] = "observed_nonlinear"
                 result.details["optimizer_backend"] = "mpmath_high_precision"
                 result.details["implicit_diagnostics"] = {
-                    "points_solved": 0,
-                    "root_fallbacks": 0,
-                    "max_iterations_used": 0,
-                    "max_residual": "0",
+                    **_implicit_diagnostics_details(None),
                     "direct_observed_residual": True,
                 }
                 return result
@@ -286,219 +295,76 @@ class FitRunner:
                 fallback_history.append({"from": "observed_nonlinear", "to": "general", "reason": str(exc)})
 
         scipy_fallback_reason = ""
+        unweighted_sigmas = data_sigmas is not None and any(sigma is not None for sigma in data_sigmas) and weights is None
         can_try_implicit_scipy, scipy_eligibility_reason = _can_try_scipy_implicit(precision, state)
         if can_try_implicit_scipy:
-            try:
-                benchmark_ok, benchmark_reason = _implicit_scipy_benchmark_gate(
-                    definition,
-                    state,
-                    variable_data,
-                    target_data,
-                    seed_hint=plan.seed_hint,
-                    weights=weights,
-                    precision=precision,
+            if unweighted_sigmas:
+                scipy_fallback_reason = (
+                    "unweighted data_sigmas require mpmath systematic refits; "
+                    "skipped SciPy implicit candidate"
                 )
-            except Exception as exc:
-                benchmark_ok = False
-                benchmark_reason = f"scipy implicit benchmark gate failed: {exc}"
-            if benchmark_ok:
+            else:
                 try:
-                    start_norm_spec = build_implicit_model_specification(
+                    benchmark = _implicit_scipy_benchmark_gate(
                         definition,
-                        target_data=target_data,
-                        seed_hint=plan.seed_hint,
-                        use_analytic_derivatives=False,
-                    )
-                    def fresh_factory() -> ModelSpecification:
-                        return build_implicit_model_specification(
-                            definition,
-                            target_data=target_data,
-                            seed_hint=plan.seed_hint,
-                            use_analytic_derivatives=False,
-                        )
-                    start_norm = _weighted_residual_norm(
-                        start_norm_spec,
-                        state.compose(state.initial_vector()),
-                        variable_data,
-                        target_data,
-                        weights,
-                    )
-                    spec = fresh_factory()
-                    candidate = _fit_with_scipy_least_squares(
-                        spec,
                         state,
                         variable_data,
                         target_data,
+                        seed_hint=plan.seed_hint,
                         weights=weights,
                         data_sigmas=data_sigmas,
-                        fresh_model_factory=fresh_factory,
+                        precision=precision,
                     )
-                    accepted, reason = _accept_scipy_result(
-                        candidate.result,
-                        start_norm,
-                        candidate.condition,
-                        candidate.spotcheck_ok,
+                except Exception as exc:
+                    benchmark = _ImplicitScipyBenchmark(
+                        accepted=False,
+                        reason=f"scipy implicit benchmark gate failed: {exc}",
                     )
-                    if accepted:
-                        materialized, materialized_diagnostics = _materialize_scipy_result_with_fresh_model(
-                            candidate,
-                            fresh_factory,
-                            state,
-                            variable_data,
-                            target_data,
-                            weights,
-                            precision=precision,
-                        )
+                if benchmark.accepted and benchmark.materialized_result is not None:
+                    try:
+                        materialized = benchmark.materialized_result
                         materialized.details["implicit_strategy"] = "scipy_general_implicit"
                         materialized.details["optimizer_backend"] = "scipy_implicit_least_squares"
                         materialized.details["scipy_safety_passed"] = True
-                        materialized.details["scipy_implicit_benchmark"] = benchmark_reason
-                        materialized.details["implicit_diagnostics"] = {
-                            "points_solved": int(materialized_diagnostics.points_solved),
-                            "root_fallbacks": int(materialized_diagnostics.root_fallbacks),
-                            "max_iterations_used": int(materialized_diagnostics.max_iterations_used),
-                            "max_residual": str(materialized_diagnostics.max_residual),
-                        }
+                        materialized.details["scipy_implicit_benchmark"] = benchmark.reason
+                        materialized.details["implicit_diagnostics"] = _implicit_diagnostics_details(benchmark.diagnostics)
                         return materialized
-                    scipy_fallback_reason = reason
-                except Exception as exc:
-                    scipy_fallback_reason = f"scipy implicit unavailable or failed: {exc}"
-            else:
-                scipy_fallback_reason = benchmark_reason
+                    except Exception as exc:
+                        scipy_fallback_reason = f"scipy implicit unavailable or failed: {exc}"
+                elif benchmark.fallback_result is not None:
+                    result = benchmark.fallback_result
+                    result.details["optimizer_backend"] = "mpmath_high_precision"
+                    result.details["scipy_safety_passed"] = False
+                    existing_history = result.details.get("fallback_history", [])
+                    result_history = existing_history if isinstance(existing_history, list) else []
+                    result_history = [
+                        *fallback_history,
+                        *[item for item in result_history if isinstance(item, dict)],
+                        {
+                            "from": "scipy_implicit_least_squares",
+                            "to": "mpmath_high_precision",
+                            "reason": benchmark.reason,
+                        },
+                    ]
+                    result.details["fallback_history"] = result_history
+                    return result
+                else:
+                    scipy_fallback_reason = benchmark.reason
         elif precision <= 16:
             scipy_fallback_reason = scipy_eligibility_reason
 
-        spec = build_implicit_model_specification(
+        result, fallback_history = _fit_mpmath_implicit_route(
             definition,
-            target_data=target_data,
-            seed_hint=plan.seed_hint,
-            use_analytic_derivatives=plan.use_analytic_derivatives and not state.dependent_defs,
-        )
-        if plan.use_analytic_derivatives and state.dependent_defs:
-            fallback_history.append(
-                {
-                    "from": "analytic_implicit_jacobian",
-                    "to": "numeric_finite_difference",
-                    "reason": "dependent parameter expressions require numeric finite differences",
-                }
-            )
-        if getattr(spec, "implicit_derivative_strategy", "") == "analytic_implicit":
-            with mp.workdps(precision):
-                ok, reason = _preflight_implicit_derivatives(
-                    definition,
-                    state,
-                    variable_data,
-                    target_data,
-                    seed_hint=plan.seed_hint,
-                )
-            if not ok:
-                fallback_history.append(
-                    {
-                        "from": "analytic_implicit_jacobian",
-                        "to": "numeric_finite_difference",
-                        "reason": reason,
-                    }
-                )
-                spec = build_implicit_model_specification(
-                    definition,
-                    target_data=target_data,
-                    seed_hint=plan.seed_hint,
-                    use_analytic_derivatives=False,
-                )
-        elif plan.use_analytic_derivatives and not state.dependent_defs:
-            fallback_history.append(
-                {
-                    "from": "analytic_implicit_jacobian",
-                    "to": "numeric_finite_difference",
-                    "reason": "analytic derivative evaluator could not be built for this expression",
-                }
-            )
-        result = fit_custom_model(
-            spec,
             state,
             variable_data,
             target_data,
+            seed_hint=plan.seed_hint,
+            use_analytic_derivatives=plan.use_analytic_derivatives,
             precision=precision,
             weights=weights,
             data_sigmas=data_sigmas,
+            fallback_history=fallback_history,
         )
-        diagnostics = getattr(spec, "implicit_diagnostics")
-        if (
-            getattr(spec, "implicit_derivative_strategy", "") == "analytic_implicit"
-            and int(getattr(diagnostics, "analytic_derivative_fallbacks", 0)) > 0
-        ):
-            fallback_history.append(
-                {
-                    "from": "analytic_implicit_jacobian",
-                    "to": "numeric_finite_difference",
-                    "reason": "analytic derivative fallback occurred during fitting; reran with numeric finite differences",
-                    "fallbacks": int(getattr(diagnostics, "analytic_derivative_fallbacks", 0)),
-                }
-            )
-            spec = build_implicit_model_specification(
-                definition,
-                target_data=target_data,
-                seed_hint=plan.seed_hint,
-                use_analytic_derivatives=False,
-            )
-            result = fit_custom_model(
-                spec,
-                state,
-                variable_data,
-                target_data,
-                precision=precision,
-                weights=weights,
-                data_sigmas=data_sigmas,
-            )
-            diagnostics = getattr(spec, "implicit_diagnostics")
-        elif getattr(spec, "implicit_derivative_strategy", "") == "analytic_implicit":
-            with mp.workdps(precision):
-                final_ok, final_reason = _probe_implicit_derivative_parity(
-                    definition,
-                    result.params,
-                    state.free_params,
-                    variable_data,
-                    target_data,
-                    seed_hint=plan.seed_hint,
-                )
-            if not final_ok:
-                fallback_history.append(
-                    {
-                        "from": "analytic_implicit_jacobian",
-                        "to": "numeric_finite_difference",
-                        "reason": f"final derivative parity check failed: {final_reason}",
-                    }
-                )
-                spec = build_implicit_model_specification(
-                    definition,
-                    target_data=target_data,
-                    seed_hint=plan.seed_hint,
-                    use_analytic_derivatives=False,
-                )
-                result = fit_custom_model(
-                    spec,
-                    state,
-                    variable_data,
-                    target_data,
-                    precision=precision,
-                    weights=weights,
-                    data_sigmas=data_sigmas,
-                )
-                diagnostics = getattr(spec, "implicit_diagnostics")
-        result.details["implicit_diagnostics"] = {
-            "points_solved": int(diagnostics.points_solved),
-            "root_fallbacks": int(diagnostics.root_fallbacks),
-            "max_iterations_used": int(diagnostics.max_iterations_used),
-            "max_residual": str(diagnostics.max_residual),
-            "analytic_derivative_fallbacks": int(getattr(diagnostics, "analytic_derivative_fallbacks", 0)),
-        }
-        result.details["implicit_strategy"] = (
-            "analytic_implicit_output_space"
-            if getattr(spec, "implicit_derivative_strategy", "") == "analytic_implicit"
-            else "general_implicit_numeric_finite_difference"
-        )
-        if plan.seed_hint is not None:
-            result.details["implicit_seed_hint"] = plan.seed_hint.reason
         if scipy_fallback_reason:
             fallback_history.append(
                 {
@@ -524,6 +390,172 @@ def _can_try_scipy_implicit(precision: int, state: ParameterState) -> tuple[bool
     if state.dependent_defs:
         return False, "dependent parameter expressions require mpmath error propagation"
     return True, "eligible"
+
+
+def _implicit_diagnostics_details(diagnostics: Any | None) -> dict[str, object]:
+    if diagnostics is None:
+        return {
+            "points_solved": 0,
+            "root_fallbacks": 0,
+            "max_iterations_used": 0,
+            "max_residual": "0",
+            "seed_sources": {},
+            "seed_attempts": [],
+            "analytic_derivative_fallbacks": 0,
+        }
+    return {
+        "points_solved": int(getattr(diagnostics, "points_solved", 0)),
+        "root_fallbacks": int(getattr(diagnostics, "root_fallbacks", 0)),
+        "max_iterations_used": int(getattr(diagnostics, "max_iterations_used", 0)),
+        "max_residual": str(getattr(diagnostics, "max_residual", "0")),
+        "seed_sources": dict(getattr(diagnostics, "seed_sources", {})),
+        "seed_attempts": list(getattr(diagnostics, "seed_attempts", [])),
+        "analytic_derivative_fallbacks": int(getattr(diagnostics, "analytic_derivative_fallbacks", 0)),
+    }
+
+
+def _fit_mpmath_implicit_route(
+    definition: ImplicitModelDefinition,
+    state: ParameterState,
+    variable_data: dict[str, Sequence[mp.mpf]],
+    target_data: Sequence[mp.mpf],
+    *,
+    seed_hint: ImplicitSeedHint | None,
+    use_analytic_derivatives: bool,
+    precision: int,
+    weights: list[mp.mpf] | None,
+    data_sigmas: list[mp.mpf | None] | None,
+    fallback_history: list[dict[str, object]] | None = None,
+) -> tuple[FitResult, list[dict[str, object]]]:
+    history = list(fallback_history or [])
+    spec = build_implicit_model_specification(
+        definition,
+        target_data=target_data,
+        seed_hint=seed_hint,
+        use_analytic_derivatives=use_analytic_derivatives and not state.dependent_defs,
+    )
+    if use_analytic_derivatives and state.dependent_defs:
+        history.append(
+            {
+                "from": "analytic_implicit_jacobian",
+                "to": "numeric_finite_difference",
+                "reason": "dependent parameter expressions require numeric finite differences",
+            }
+        )
+    if getattr(spec, "implicit_derivative_strategy", "") == "analytic_implicit":
+        with mp.workdps(precision):
+            ok, reason = _preflight_implicit_derivatives(
+                definition,
+                state,
+                variable_data,
+                target_data,
+                seed_hint=seed_hint,
+            )
+        if not ok:
+            history.append(
+                {
+                    "from": "analytic_implicit_jacobian",
+                    "to": "numeric_finite_difference",
+                    "reason": reason,
+                }
+            )
+            spec = build_implicit_model_specification(
+                definition,
+                target_data=target_data,
+                seed_hint=seed_hint,
+                use_analytic_derivatives=False,
+            )
+    elif use_analytic_derivatives and not state.dependent_defs:
+        history.append(
+            {
+                "from": "analytic_implicit_jacobian",
+                "to": "numeric_finite_difference",
+                "reason": "analytic derivative evaluator could not be built for this expression",
+            }
+        )
+    result = fit_custom_model(
+        spec,
+        state,
+        variable_data,
+        target_data,
+        precision=precision,
+        weights=weights,
+        data_sigmas=data_sigmas,
+    )
+    diagnostics = getattr(spec, "implicit_diagnostics")
+    if (
+        getattr(spec, "implicit_derivative_strategy", "") == "analytic_implicit"
+        and int(getattr(diagnostics, "analytic_derivative_fallbacks", 0)) > 0
+    ):
+        history.append(
+            {
+                "from": "analytic_implicit_jacobian",
+                "to": "numeric_finite_difference",
+                "reason": "analytic derivative fallback occurred during fitting; reran with numeric finite differences",
+                "fallbacks": int(getattr(diagnostics, "analytic_derivative_fallbacks", 0)),
+            }
+        )
+        spec = build_implicit_model_specification(
+            definition,
+            target_data=target_data,
+            seed_hint=seed_hint,
+            use_analytic_derivatives=False,
+        )
+        result = fit_custom_model(
+            spec,
+            state,
+            variable_data,
+            target_data,
+            precision=precision,
+            weights=weights,
+            data_sigmas=data_sigmas,
+        )
+        diagnostics = getattr(spec, "implicit_diagnostics")
+    elif getattr(spec, "implicit_derivative_strategy", "") == "analytic_implicit":
+        with mp.workdps(precision):
+            final_ok, final_reason = _probe_implicit_derivative_parity(
+                definition,
+                result.params,
+                state.free_params,
+                variable_data,
+                target_data,
+                seed_hint=seed_hint,
+            )
+        if not final_ok:
+            history.append(
+                {
+                    "from": "analytic_implicit_jacobian",
+                    "to": "numeric_finite_difference",
+                    "reason": f"final derivative parity check failed: {final_reason}",
+                }
+            )
+            spec = build_implicit_model_specification(
+                definition,
+                target_data=target_data,
+                seed_hint=seed_hint,
+                use_analytic_derivatives=False,
+            )
+            result = fit_custom_model(
+                spec,
+                state,
+                variable_data,
+                target_data,
+                precision=precision,
+                weights=weights,
+                data_sigmas=data_sigmas,
+            )
+            diagnostics = getattr(spec, "implicit_diagnostics")
+    result.details["implicit_diagnostics"] = _implicit_diagnostics_details(diagnostics)
+    result.details["implicit_strategy"] = (
+        "analytic_implicit_output_space"
+        if getattr(spec, "implicit_derivative_strategy", "") == "analytic_implicit"
+        else "general_implicit_numeric_finite_difference"
+    )
+    if seed_hint is not None:
+        result.details["implicit_seed_hint"] = seed_hint.reason
+    if history:
+        result.details["fallback_history"] = history
+    return result, history
 
 
 def _accept_scipy_result(
@@ -877,64 +909,111 @@ def _implicit_scipy_benchmark_gate(
     *,
     seed_hint: ImplicitSeedHint | None,
     weights: list[mp.mpf] | None,
+    data_sigmas: list[mp.mpf | None] | None,
     precision: int,
-) -> tuple[bool, str]:
+) -> _ImplicitScipyBenchmark:
     if precision > 16:
-        return False, "precision is above the double-precision SciPy candidate range"
+        return _ImplicitScipyBenchmark(False, "precision is above the double-precision SciPy candidate range")
     if len(target_data) < max(3, len(parameter_state.free_params)):
-        return False, "not enough rows for representative SciPy implicit benchmark"
+        return _ImplicitScipyBenchmark(False, "not enough rows for representative SciPy implicit benchmark")
     if len(target_data) > 256:
-        return False, "dataset is too large for the initial SciPy implicit candidate gate"
-    params = parameter_state.compose(parameter_state.initial_vector())
-    analytic_spec = build_implicit_model_specification(
-        definition,
-        target_data=target_data,
-        seed_hint=seed_hint,
-        use_analytic_derivatives=True,
-    )
-    if getattr(analytic_spec, "implicit_derivative_strategy", "") != "analytic_implicit":
-        return False, "analytic implicit derivative route is unavailable for benchmark comparison"
-
-    scipy_probes: list[float] = []
-    for _ in range(3):
-        numeric_spec = build_implicit_model_specification(
+        return _ImplicitScipyBenchmark(False, "dataset is too large for the initial SciPy implicit candidate gate")
+    def fresh_numeric_spec() -> ModelSpecification:
+        return build_implicit_model_specification(
             definition,
             target_data=target_data,
             seed_hint=seed_hint,
             use_analytic_derivatives=False,
         )
-        start = time.perf_counter()
-        _weighted_residual_norm(numeric_spec, params, variable_data, target_data, weights)
-        scipy_probes.append(time.perf_counter() - start)
-    scipy_probe_seconds = min(scipy_probes)
 
-    observations, _targets = _prepare_points(variable_data, target_data)
-    analytic_probes: list[float] = []
-    for _ in range(3):
-        probe_spec = build_implicit_model_specification(
-            definition,
-            target_data=target_data,
-            seed_hint=seed_hint,
-            use_analytic_derivatives=True,
-        )
-        point_index_setter = getattr(probe_spec, "set_implicit_point_index", None)
+    try:
         start = time.perf_counter()
-        for idx, obs in enumerate(observations):
-            if callable(point_index_setter):
-                point_index_setter(idx)
-            probe_spec.evaluate(obs, params)
-            for name in parameter_state.free_params:
-                probe_spec.partial(name, obs, params)
-        analytic_probes.append(time.perf_counter() - start)
-    analytic_probe_seconds = min(analytic_probes)
-    if scipy_probe_seconds <= analytic_probe_seconds * 0.5:
-        return (
-            True,
-            f"benchmark accepted: scipy_residual={scipy_probe_seconds:.6g}s analytic_gradient={analytic_probe_seconds:.6g}s",
+        with mp.workdps(precision):
+            start_norm = _weighted_residual_norm(
+                fresh_numeric_spec(),
+                parameter_state.compose(parameter_state.initial_vector()),
+                variable_data,
+                target_data,
+                weights,
+            )
+        start_norm_seconds = time.perf_counter() - start
+        start = time.perf_counter()
+        with mp.workdps(precision):
+            candidate = _fit_with_scipy_least_squares(
+                fresh_numeric_spec(),
+                parameter_state,
+                variable_data,
+                target_data,
+                weights=weights,
+                data_sigmas=data_sigmas,
+                fresh_model_factory=fresh_numeric_spec,
+            )
+        candidate_fit_seconds = time.perf_counter() - start
+        accepted, accept_reason = _accept_scipy_result(
+            candidate.result,
+            start_norm,
+            candidate.condition,
+            candidate.spotcheck_ok,
         )
-    return (
+        if not accepted:
+            return _ImplicitScipyBenchmark(False, f"candidate route rejected: {accept_reason}")
+        start = time.perf_counter()
+        with mp.workdps(precision):
+            materialized, materialized_diagnostics = _materialize_scipy_result_with_fresh_model(
+                candidate,
+                fresh_numeric_spec,
+                parameter_state,
+                variable_data,
+                target_data,
+                weights,
+                precision=precision,
+            )
+        rematerialize_seconds = time.perf_counter() - start
+    except Exception as exc:
+        return _ImplicitScipyBenchmark(False, f"candidate route failed: {exc}")
+    scipy_total_seconds = start_norm_seconds + candidate_fit_seconds + rematerialize_seconds
+
+    start = time.perf_counter()
+    comparator_result, _comparator_history = _fit_mpmath_implicit_route(
+        definition,
+        parameter_state,
+        variable_data,
+        target_data,
+        seed_hint=seed_hint,
+        use_analytic_derivatives=True,
+        precision=precision,
+        weights=weights,
+        data_sigmas=data_sigmas,
+        fallback_history=[],
+    )
+    comparator_seconds = time.perf_counter() - start
+    comparator_strategy = str(comparator_result.details.get("implicit_strategy", "mpmath_high_precision"))
+
+    if scipy_total_seconds <= comparator_seconds * float(SCIPY_IMPLICIT_ACCEPT_SPEEDUP_RATIO):
+        return _ImplicitScipyBenchmark(
+            True,
+            "benchmark accepted: "
+            f"scipy_total={scipy_total_seconds:.6g}s "
+            f"start_norm={start_norm_seconds:.6g}s "
+            f"candidate_fit={candidate_fit_seconds:.6g}s "
+            f"rematerialize={rematerialize_seconds:.6g}s "
+            f"comparator={comparator_strategy}:{comparator_seconds:.6g}s",
+            materialized,
+            materialized_diagnostics,
+        )
+    reason = (
+        "benchmark rejected SciPy implicit candidate: "
+        f"scipy_total={scipy_total_seconds:.6g}s "
+        f"start_norm={start_norm_seconds:.6g}s "
+        f"candidate_fit={candidate_fit_seconds:.6g}s "
+        f"rematerialize={rematerialize_seconds:.6g}s "
+        f"comparator={comparator_strategy}:{comparator_seconds:.6g}s "
+        f"selected_comparator={comparator_strategy}"
+    )
+    return _ImplicitScipyBenchmark(
         False,
-        f"benchmark rejected SciPy implicit candidate: scipy_residual={scipy_probe_seconds:.6g}s analytic_gradient={analytic_probe_seconds:.6g}s",
+        reason,
+        fallback_result=comparator_result,
     )
 
 
