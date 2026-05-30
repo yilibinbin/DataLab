@@ -1,6 +1,6 @@
 # DataLab Implicit Performance Auto Optimization Plan
 
-> Status: resynchronized on 2026-05-30 after the second multi-subagent review and Claude adversarial review.
+> Status: resynchronized on 2026-05-30 after the Task 3b multi-subagent review and Claude adversarial review.
 > This file is now the only executable plan for the implicit-performance work. Older task sketches that contradicted the reviewed design have been removed.
 
 ## Goal
@@ -32,7 +32,8 @@ Implemented foundation on branch `codex/parallel-backend-implementation`:
 - Task 0 plan repair was committed as `186c75e`.
 - Task 1 local test diffs were committed as `dab9e68`.
 - Task 2 regression-frontier foundation was committed as `a5e438f`.
-- Task 3a parameter-table GUI polish is staged but not yet committed.
+- Task 3a parameter-table GUI polish was committed as `13fe7fa`.
+- Task 2b uncertainty-regression hardening was committed as `6fca8b0`.
 - Shared symbolic parser and planner modules exist.
 - Exact affine transform support exists behind conservative gates.
 - Seed hints are wired as root-solver hints, not objective transforms.
@@ -44,9 +45,10 @@ Implemented foundation on branch `codex/parallel-backend-implementation`:
 
 Current blockers:
 
-- Worktree still contains staged Task 3a GUI files plus untracked duplicate `" 2"` files. Use strict allowlist staging only.
-- The implementation state above is not a correctness claim for merge or release; Task 2b still needs harder regression gates for covariance, parameter errors, weighted/unweighted uncertainty, SciPy selection metadata, and ionization-energy output-space fitting.
-- Task 3a must be committed only as a narrow parameter/constant GUI slice, or extended to cover all Task 3 workspace/example gates before claiming Task 3 complete.
+- Worktree still contains untracked duplicate `" 2"` files. Use strict allowlist staging only.
+- Task 3b remains blocked by reviewed gaps in example-workspace synchronization, example read-only Save As semantics, formula-preview layout tests, and shared fitting-input normalization boundaries.
+- The current quantum-defect example generator diff is not enough: the checked-in archive, desktop example list, tests, no-strategy-field assertions, and example-template Save As behavior must move together.
+- The quantum-defect example must exercise the ionization-energy output-space route, not only the easy observed `delta` output route, unless a second clearly scoped `delta` example is intentionally added and tested.
 - The release gate still needs concrete frozen-bundle smoke and signing/trust evidence.
 
 ## Task 0: Worktree Hygiene and Plan Repair
@@ -108,7 +110,7 @@ Review gate:
 
 ## Task 2: Complete Implicit Regression Frontier
 
-Status: partly complete. Foundation committed as `a5e438f`; Task 2b hardening remains pending after the 2026-05-30 re-review.
+Status: complete for the reviewed hardening slice. Foundation committed as `a5e438f`; uncertainty and architecture-regression hardening committed as `6fca8b0`.
 
 Purpose:
 
@@ -163,7 +165,7 @@ Review gate:
 
 ## Task 3a: Parameter and Constants GUI Slice
 
-Status: in progress. Current staged files:
+Status: complete. Committed as `13fe7fa`.
 
 - `app_desktop/panels.py`
 - `app_desktop/parameter_table.py`
@@ -201,7 +203,15 @@ Review gate:
 
 ## Task 3b: GUI and Workspace Polish
 
-Status: pending.
+Status: in progress.
+
+Completed slice:
+
+- Example-workspace synchronization and read-only template Save As behavior are implemented and reviewed.
+- `quantum-defect-implicit.datalab` is generated, checked in, listed in the desktop examples menu, and tested byte-for-byte against the generator.
+- The quantum-defect example uses inline ionization-energy data and exercises the `analytic_implicit_output_space` route.
+- Checked-in/generated/Save As workspaces are tested not to persist GUI backend strategy selectors.
+- Opening a checked-in example through the examples menu, ordinary Open, or file-association-style `open_workspace_path()` treats it as a template; Save routes through Save As and saving to the bundled example path is refused.
 
 Purpose:
 
@@ -216,16 +226,36 @@ Required work:
 - Parameter table behavior from Task 3a remains accepted and covered while completing the broader workspace polish.
 - Constants editor behavior from Task 3a remains accepted and covered while completing the broader workspace polish.
 - Custom fitting and self-consistent fitting must use a named shared parameter/constant normalization API. The shared path must cover table view, text view, disabled constants, reserved-name validation, workspace restore, and compute-path serialization.
+- Custom fitting and self-consistent fitting must use a named shared fitting-input normalization API, not only a parameter/constant helper. The shared path must cover:
+  - parameter table rows, manual empty rows, unnamed draft rows, fixed values, bounds, and reserved-name validation,
+  - constants table and text views, disabled constants, and the same constant syntax accepted by error propagation,
+  - workspace capture, restore, migration, and round trip,
+  - compute job construction and worker payload serialization/deserialization,
+  - embedded uncertainty tokens, explicit sigma columns, weighted/unweighted `data_sigmas`, and no-sigma behavior.
 - Add or update a built-in quantum-defect implicit example workspace.
-- Example workspaces are read-only templates: modifying them requires Save As / custom path and must not mutate the bundled template.
+  - Generator, checked-in `.datalab` archive, desktop example list, and tests must stay synchronized.
+  - The example must store data inline with no private/local file paths.
+  - The primary example must cover ionization-energy output-space fitting using the self-consistent `delta` equation and constants such as `CR` and `M`; a direct `delta` observed-variable example may exist only as an additional clearly named variant.
+  - Example metadata variants must use documented tokens and tests must assert the expected variants.
+- Example workspaces are read-only templates: modifying them requires Save As / custom path and must not mutate the bundled template or silently save to an ephemeral temp copy.
+  - Opening an example must mark the workspace as template-derived.
+  - Plain Save on a template-derived workspace must route to Save As.
+  - Save As to a user path must clear the template-derived state; later Save may write that user path.
+  - Tests must prove the bundled example hash/mtime does not change and, if a temp copy is used internally, plain Save does not write that temp copy.
 - Workspaces must not persist any implicit backend strategy selector.
   - Saved and checked-in workspaces must not contain `implicit_strategy`, backend selector fields, or user-visible `enable_new_implicit_backend` controls.
+- Formula preview must be explicit and bounded:
+  - self-consistent equation and output expression expose preview buttons/dialogs only; inline rendered pixmap/label previews must not remain in the left configuration pane,
+  - long formulas must not increase the left pane minimum width or make the main splitter unusable,
+  - light and dark palettes must keep rendered formulas, fallback text, and error messages readable,
+  - switching to MCMC or any non-self-consistent model must not show or route implicit preview controls.
 
 Expected verification:
 
-- GUI/unit tests for formula preview sizing, preview dialog/action, constants visibility, parameter add/remove, workspace round trip, and example-template read-only behavior.
-- Negative workspace tests proving no implicit backend strategy selector is persisted.
-- Checked-in quantum-defect implicit example workspace opens as a read-only template and requires Save As after modification.
+- GUI/unit tests for formula preview sizing, preview dialog/action, splitter width, dark/light contrast, constants visibility, parameter add/remove, workspace round trip, and example-template read-only behavior.
+- Negative workspace tests proving no implicit backend strategy selector is persisted in generated manifests, checked-in archives, and Save As output.
+- Checked-in quantum-defect implicit example workspace opens as a read-only template, requires Save As after modification, and round-trips without local paths.
+- Fitting smoke proving the example configuration runs the intended ionization-energy output-space implicit route with weighted uncertainties.
 - Manual GUI smoke after tests pass.
 
 Review gate:
