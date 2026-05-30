@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import mpmath as mp
 import pytest
 
@@ -97,6 +99,72 @@ def test_direct_delta_output_uses_observed_path_without_root_solves() -> None:
     assert all(mp.isfinite(result.params[name]) for name in ("d0", "d2", "d4", "d6", "d8"))
 
 
+def _assert_error_maps_are_finite(result: Any, parameter_names: tuple[str, ...]) -> None:
+    for mapping_name in ("param_errors_stat", "param_errors_sys", "param_errors_total", "param_errors"):
+        mapping = getattr(result, mapping_name)
+        assert set(mapping) == set(parameter_names)
+        assert all(mp.isfinite(mapping[name]) for name in parameter_names)
+    assert len(result.covariance) == len(parameter_names)
+    assert all(len(row) == len(parameter_names) for row in result.covariance)
+    assert all(mp.isfinite(value) for row in result.covariance for value in row)
+
+
+def test_direct_delta_uncertainty_modes_preserve_error_contracts() -> None:
+    from fitting.implicit_model import ImplicitModelDefinition
+    from fitting.problem import ModelProblem
+    from fitting.runner import FitRunner
+
+    rows = _d8_rows()[:8]
+    n = [row[0] for row in rows]
+    delta = [row[1] for row in rows]
+    sigmas = [row[2] for row in rows]
+    parameter_names = ("d0", "d2", "d4")
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="delta",
+        variables=("n",),
+        parameter_config={
+            "d0": {"initial": "-0.01213"},
+            "d2": {"initial": "0"},
+            "d4": {"initial": "0"},
+        },
+        implicit_definition=ImplicitModelDefinition(
+            x_variables=("n",),
+            implicit_variable="delta",
+            equation="d0 + d2/(n-delta)^2 + d4/(n-delta)^4",
+            output_expression="delta",
+            parameters=parameter_names,
+        ),
+    )
+    runner = FitRunner()
+
+    no_sigma = runner.fit(problem, {"n": n}, delta, precision=50)
+    weighted = runner.fit(
+        problem,
+        {"n": n},
+        delta,
+        precision=50,
+        weights=[1 / (sigma * sigma) for sigma in sigmas],
+        data_sigmas=sigmas,
+    )
+    unweighted = runner.fit(problem, {"n": n}, delta, precision=50, data_sigmas=sigmas)
+
+    assert no_sigma.details["implicit_strategy"] == "observed_linear"
+    assert weighted.details["implicit_strategy"] == "observed_linear"
+    assert unweighted.details["implicit_strategy"] != "observed_linear"
+    fallback_history = unweighted.details.get("fallback_history")
+    assert isinstance(fallback_history, list)
+    assert any(item.get("skipped") == "unweighted_data_sigmas" for item in fallback_history if isinstance(item, dict))
+    for result in (no_sigma, weighted, unweighted):
+        _assert_error_maps_are_finite(result, parameter_names)
+        assert all(
+            mp.almosteq(residual, fit - target, rel_eps=mp.mpf("1e-20"), abs_eps=mp.mpf("1e-22"))
+            for residual, fit, target in zip(result.residuals, result.fitted_curve, delta, strict=True)
+        )
+    assert all(value == 0 for value in no_sigma.param_errors_sys.values())
+    assert any(value > 0 for value in unweighted.param_errors_sys.values())
+
+
 @pytest.mark.slow
 def test_nonlinear_output_uses_output_space_backend_without_transforming_objective() -> None:
     from fitting.implicit_model import ImplicitModelDefinition
@@ -152,6 +220,65 @@ def test_nonlinear_output_uses_output_space_backend_without_transforming_objecti
     assert isinstance(diagnostics, dict)
     assert int(diagnostics.get("points_solved", 10**9)) < len(n) * 500
     assert "seed_sources" in diagnostics or "seed_attempts" in diagnostics
+
+
+@pytest.mark.slow
+def test_ionization_energy_uncertainty_modes_preserve_output_space_errors() -> None:
+    from fitting.implicit_model import ImplicitModelDefinition
+    from fitting.problem import ModelProblem
+    from fitting.runner import FitRunner
+
+    rows = _d8_rows()[:6]
+    n = [row[0] for row in rows]
+    delta = [row[1] for row in rows]
+    r_const = mp.mpf("100")
+    energy = [r_const / (x - u) ** 2 for x, u in zip(n, delta, strict=True)]
+    sigma_energy = [mp.fabs(2 * r_const / (x - u) ** 3) * s for x, u, s in rows]
+    parameter_names = ("d0", "d2", "d4")
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="R/(n-delta)^2",
+        variables=("n",),
+        parameter_config={
+            "d0": {"initial": "-0.01213"},
+            "d2": {"initial": "0"},
+            "d4": {"initial": "0"},
+        },
+        implicit_definition=ImplicitModelDefinition(
+            x_variables=("n",),
+            implicit_variable="delta",
+            equation="d0 + d2/(n-delta)^2 + d4/(n-delta)^4",
+            output_expression="R/(n-delta)^2",
+            parameters=parameter_names,
+            constants={"R": str(r_const)},
+        ),
+    )
+    runner = FitRunner()
+
+    no_sigma = runner.fit(problem, {"n": n}, energy, precision=50)
+    weighted = runner.fit(
+        problem,
+        {"n": n},
+        energy,
+        precision=50,
+        weights=[1 / (sigma * sigma) for sigma in sigma_energy],
+        data_sigmas=sigma_energy,
+    )
+    unweighted = runner.fit(problem, {"n": n}, energy, precision=50, data_sigmas=sigma_energy)
+
+    for result in (no_sigma, weighted, unweighted):
+        assert result.details["implicit_strategy"] in {
+            "analytic_implicit_output_space",
+            "general_implicit_numeric_finite_difference",
+        }
+        assert result.details.get("output_transform") is None
+        _assert_error_maps_are_finite(result, parameter_names)
+        assert all(
+            mp.almosteq(residual, fit - target, rel_eps=mp.mpf("1e-20"), abs_eps=mp.mpf("1e-22"))
+            for residual, fit, target in zip(result.residuals, result.fitted_curve, energy, strict=True)
+        )
+    assert all(value == 0 for value in no_sigma.param_errors_sys.values())
+    assert any(value > 0 for value in unweighted.param_errors_sys.values())
 
 
 @pytest.mark.slow

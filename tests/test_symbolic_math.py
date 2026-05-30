@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 from collections.abc import Callable
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -132,3 +134,80 @@ def test_symbolic_parser_and_safe_eval_reject_same_lowercase_function_contract(e
         parse_symbolic_expression(expression, variables=("x",))
     with pytest.raises(ValueError):
         safe_eval(expression, {"x": 2})
+
+
+def test_implicit_detectors_use_shared_symbolic_parser_boundary() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    detector_paths = [
+        repo_root / "fitting" / "implicit_transforms.py",
+        repo_root / "fitting" / "implicit_seed_hints.py",
+        repo_root / "fitting" / "implicit_derivatives.py",
+    ]
+    forbidden_imports = {
+        "sympy.parsing.sympy_parser",
+        "shared.symbolic_math.SYMPY_FUNCTIONS",
+        "shared.symbolic_math.SYMPY_CONSTANTS",
+        "shared.symbolic_math.build_sympy_local_dict",
+    }
+    for path in detector_paths:
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        imported_shared_parser = False
+        sympy_aliases: set[str] = {"sympy"}
+        for node in ast.walk(module):
+            if isinstance(node, ast.ImportFrom):
+                module_name = node.module or ""
+                imported = {alias.name for alias in node.names}
+                assert module_name not in forbidden_imports
+                if module_name == "sympy" and imported.intersection({"parse_expr", "sympify"}):
+                    raise AssertionError(f"{path.name} must not import SymPy parser helpers directly")
+                if module_name == "shared.symbolic_math":
+                    assert imported == {"parse_symbolic_expression"}
+                if module_name == "shared" and "symbolic_math" in imported:
+                    raise AssertionError(f"{path.name} must not import shared.symbolic_math as a module alias")
+                assert not {f"{module_name}.{name}" for name in imported}.intersection(forbidden_imports)
+                if module_name == "shared.symbolic_math" and "parse_symbolic_expression" in imported:
+                    imported_shared_parser = True
+            elif isinstance(node, ast.Import):
+                imported_modules = {alias.name for alias in node.names}
+                if {"shared", "shared.symbolic_math"}.intersection(imported_modules):
+                    raise AssertionError(f"{path.name} must not import shared or shared.symbolic_math as a module alias")
+                sympy_aliases.update(alias.asname or alias.name for alias in node.names if alias.name == "sympy")
+                assert not imported_modules.intersection(forbidden_imports)
+            elif isinstance(node, ast.Attribute):
+                dotted = _attribute_name(node)
+                if dotted in {
+                    "shared.symbolic_math.SYMPY_FUNCTIONS",
+                    "shared.symbolic_math.SYMPY_CONSTANTS",
+                    "shared.symbolic_math.build_sympy_local_dict",
+                }:
+                    raise AssertionError(f"{path.name} must not access shared symbolic registry attributes directly")
+                if _is_sympy_parser_attribute(dotted, sympy_aliases):
+                    raise AssertionError(f"{path.name} must not bypass shared symbolic parsing with {dotted}")
+        assert imported_shared_parser, f"{path.name} must parse formulas through shared.symbolic_math"
+
+
+def _attribute_name(node: ast.AST) -> str | None:
+    parts: list[str] = []
+    current = node
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if isinstance(current, ast.Name):
+        parts.append(current.id)
+        return ".".join(reversed(parts))
+    return None
+
+
+def _is_sympy_parser_attribute(dotted: str | None, aliases: set[str]) -> bool:
+    if dotted is None:
+        return False
+    return any(
+        dotted
+        in {
+            f"{alias}.parse_expr",
+            f"{alias}.sympify",
+            f"{alias}.parsing.sympy_parser.parse_expr",
+            f"{alias}.parsing.sympy_parser.sympify",
+        }
+        for alias in aliases
+    )
