@@ -1,6 +1,6 @@
 # DataLab Implicit Performance Auto Optimization Plan
 
-> Status: revised on 2026-05-30 after multi-subagent review and Claude adversarial review.
+> Status: resynchronized on 2026-05-30 after the second multi-subagent review and Claude adversarial review.
 > This file is now the only executable plan for the implicit-performance work. Older task sketches that contradicted the reviewed design have been removed.
 
 ## Goal
@@ -29,6 +29,10 @@ The fitted objective must remain the user's original output-space residual. Exac
 
 Implemented foundation on branch `codex/parallel-backend-implementation`:
 
+- Task 0 plan repair was committed as `186c75e`.
+- Task 1 local test diffs were committed as `dab9e68`.
+- Task 2 regression-frontier foundation was committed as `a5e438f`.
+- Task 3a parameter-table GUI polish is staged but not yet committed.
 - Shared symbolic parser and planner modules exist.
 - Exact affine transform support exists behind conservative gates.
 - Seed hints are wired as root-solver hints, not objective transforms.
@@ -40,14 +44,14 @@ Implemented foundation on branch `codex/parallel-backend-implementation`:
 
 Current blockers:
 
-- Worktree still contains tracked test diffs plus untracked duplicate `" 2"` files. Use strict allowlist staging only.
-- Two local tracked test diffs must be reviewed and either committed as focused test tasks or discarded before merge/release.
-- The implementation state above is not a correctness claim for release; Task 2 must still prove the direct `delta` and ionization-energy regression frontier.
+- Worktree still contains staged Task 3a GUI files plus untracked duplicate `" 2"` files. Use strict allowlist staging only.
+- The implementation state above is not a correctness claim for merge or release; Task 2b still needs harder regression gates for covariance, parameter errors, weighted/unweighted uncertainty, SciPy selection metadata, and ionization-energy output-space fitting.
+- Task 3a must be committed only as a narrow parameter/constant GUI slice, or extended to cover all Task 3 workspace/example gates before claiming Task 3 complete.
 - The release gate still needs concrete frozen-bundle smoke and signing/trust evidence.
 
 ## Task 0: Worktree Hygiene and Plan Repair
 
-Status: in progress.
+Status: complete. Committed as `186c75e`.
 
 Files:
 
@@ -61,11 +65,11 @@ Steps:
 - [x] Run multi-subagent plan review and Claude adversarial review.
 - [x] Remove obsolete, copyable Task 1-6 code sketches from this executable plan.
 - [x] Record the reviewed current state and non-negotiable rules.
-- [ ] Review this plan repair with:
+- [x] Review this plan repair with:
   - deep/spec review,
   - code-quality/process review,
   - external Claude adversarial review.
-- [ ] If reviews pass, commit only this plan repair and planning-file updates with explicit path staging.
+- [x] If reviews pass, commit only this plan repair with explicit path staging.
 
 Verification:
 
@@ -74,7 +78,7 @@ Verification:
 
 ## Task 1: Resolve Local Test Diffs
 
-Status: pending.
+Status: complete. Committed as `dab9e68`.
 
 Purpose:
 
@@ -85,12 +89,10 @@ The current tree has tracked diffs in:
 
 Steps:
 
-- [ ] Inspect both diffs and decide whether each is aligned with the current objective.
-- [ ] Treat the `tests/test_app_desktop_workers_core.py` diff as behavior-coupled because it changes existing mocking around observed-implicit fast-path behavior, not just additive coverage.
-- [ ] If aligned, run focused tests and review as a small test-only task.
-- [ ] If not aligned, preserve the diff first with `git diff -- <path> > ../datalab-task1-<name>.patch` or get explicit owner confirmation before reverting it.
-- [ ] Do not destroy or overwrite tracked local changes without either a saved patch or explicit confirmation.
-- [ ] Do not stage any untracked duplicate `" 2"` files.
+- [x] Inspect both diffs and decide whether each is aligned with the current objective.
+- [x] Treat the `tests/test_app_desktop_workers_core.py` diff as behavior-coupled because it changes existing mocking around observed-implicit fast-path behavior, not just additive coverage.
+- [x] Keep aligned test diffs, run focused tests, and review as a small test-only task.
+- [x] Do not stage any untracked duplicate `" 2"` files.
 
 Expected verification if kept:
 
@@ -106,7 +108,7 @@ Review gate:
 
 ## Task 2: Complete Implicit Regression Frontier
 
-Status: pending.
+Status: partly complete. Foundation committed as `a5e438f`; Task 2b hardening remains pending after the 2026-05-30 re-review.
 
 Purpose:
 
@@ -117,24 +119,35 @@ Required regressions:
 - Direct `delta` quantum-defect fitting:
   - expected observed-variable or affine route,
   - output-space residuals,
-  - weighted and unweighted uncertainty behavior,
+  - weighted, unweighted `data_sigmas`, and no-sigma uncertainty behavior,
+  - covariance, `param_errors`, and `param_errors_sys` behavior against the general route where applicable,
   - bounded implicit solve count where the route should avoid per-row root solves.
 - Ionization-energy fitting:
   - output expression like `En + R/(n-delta)^2` or equivalent constants,
   - output-space residuals against the energy target, not transformed `delta`,
+  - weighted, unweighted `data_sigmas`, and no-sigma uncertainty behavior,
+  - covariance, `param_errors`, and `param_errors_sys` behavior,
   - seed hints only affect root-solver initialization,
   - configured seed and warm start beat hints when they converge,
   - hint success after configured/warm failure is explicitly reported.
+- SciPy/mpmath automatic selection:
+  - `precision <= 16` only makes SciPy eligible and never forces SciPy,
+  - unweighted `data_sigmas` skip SciPy when systematic refits are required,
+  - after a full mpmath comparator has already been paid for the current run, the run must either reuse the comparator result or reject the SciPy candidate with diagnostics,
+  - accepted SciPy candidates must rematerialize fitted curve, output-space residuals, covariance, parameter errors, and fit statistics within explicit tolerances against the guarded mpmath route,
+  - fallback metadata must record safety failures, benchmark rejection, sigma-policy skips, and selected comparator fallback.
 - Affine transform parity on non-perfect-fit data:
   - compare against general output-space path,
   - verify fitted curve, residuals, chi-square, AIC/BIC, covariance, and parameter errors.
 - Formula contract parity:
   - symbolic detector acceptance/rejection matches the runtime `safe_eval` registry as the source of truth for relevant constants and functions,
   - cover `Pi/E/Sin` and lowercase `pi/e/sin` according to the runtime contract.
+  - add an architecture guard proving implicit detector modules do not bypass `shared.symbolic_math` with direct SymPy parsing or duplicate formula registries.
 - Cache lifecycle:
   - fresh spec/cache for preflight, production, SciPy candidate, spot-check, and rematerialization,
   - no point-index or warm-start leakage across routes.
   - tests must fail if preflight, production, SciPy candidate, spot-check, or rematerialization reuse the same mutable implicit cache unexpectedly.
+  - cache invalidation boundaries include data rows, parameters, constants, precision, route, seed source, and SciPy/mpmath backend.
 
 Expected verification:
 
@@ -148,7 +161,45 @@ Review gate:
 - code-quality review,
 - Claude adversarial review.
 
-## Task 3: GUI and Workspace Polish
+## Task 3a: Parameter and Constants GUI Slice
+
+Status: in progress. Current staged files:
+
+- `app_desktop/panels.py`
+- `app_desktop/parameter_table.py`
+- `tests/test_desktop_implicit_model_ui.py`
+- `tests/test_parameter_table.py`
+
+Purpose:
+
+Land the narrow GUI improvement that adds manual parameter-row controls and fixes constants-editor visibility, without claiming full Task 3 completion.
+
+Required work:
+
+- Parameter tables for custom and self-consistent fitting expose manual add/remove row controls.
+- Auto-detect preserves intentionally added empty rows without polluting `rows()`, `compute_rows()`, orphan state, or parameter config.
+- Constants editors for custom and self-consistent fitting hide and restore inputs consistently when disabled/enabled.
+- Row-delete semantics are explicit and tested:
+  - no selection deletes only an empty trailing row,
+  - selected rows may be deleted as an explicit user action,
+  - populated rows are never deleted by an accidental no-selection click.
+- Empty-row detection is owned by `ParameterTable`; panels must not duplicate cell-scanning logic.
+- Multiple empty manual rows either have a documented behavior with tests or are collapsed to one trailing empty row by design.
+
+Expected verification:
+
+- `QT_QPA_PLATFORM=offscreen pytest -q tests/test_parameter_table.py tests/test_desktop_implicit_model_ui.py tests/test_formula_preview_dialog.py`
+- `ruff check app_desktop/panels.py app_desktop/parameter_table.py tests/test_desktop_implicit_model_ui.py tests/test_parameter_table.py`
+- `mypy app_desktop/parameter_table.py`
+- `python -m compileall -q app_desktop/panels.py app_desktop/parameter_table.py tests/test_desktop_implicit_model_ui.py tests/test_parameter_table.py`
+
+Review gate:
+
+- deep product/spec review,
+- code-quality review,
+- Claude adversarial review.
+
+## Task 3b: GUI and Workspace Polish
 
 Status: pending.
 
@@ -162,16 +213,19 @@ Required work:
 - Formula preview must not force the left configuration pane width or make splitters unusable.
 - Preview contrast must work on light and dark app palettes.
 - MCMC or unrelated sections must not show stray implicit formula previews.
-- Parameter table supports auto-detect plus manual add/remove rows.
-- Constants table uses the same enable/text-view/editing semantics as error propagation constants.
-- Custom fitting and self-consistent fitting share parameter/constant parsing where possible instead of duplicating logic.
+- Parameter table behavior from Task 3a remains accepted and covered while completing the broader workspace polish.
+- Constants editor behavior from Task 3a remains accepted and covered while completing the broader workspace polish.
+- Custom fitting and self-consistent fitting must use a named shared parameter/constant normalization API. The shared path must cover table view, text view, disabled constants, reserved-name validation, workspace restore, and compute-path serialization.
 - Add or update a built-in quantum-defect implicit example workspace.
 - Example workspaces are read-only templates: modifying them requires Save As / custom path and must not mutate the bundled template.
 - Workspaces must not persist any implicit backend strategy selector.
+  - Saved and checked-in workspaces must not contain `implicit_strategy`, backend selector fields, or user-visible `enable_new_implicit_backend` controls.
 
 Expected verification:
 
 - GUI/unit tests for formula preview sizing, preview dialog/action, constants visibility, parameter add/remove, workspace round trip, and example-template read-only behavior.
+- Negative workspace tests proving no implicit backend strategy selector is persisted.
+- Checked-in quantum-defect implicit example workspace opens as a read-only template and requires Save As after modification.
 - Manual GUI smoke after tests pass.
 
 Review gate:
@@ -195,6 +249,8 @@ Required work:
 - Keep resource controls centralized and reusable across modules.
 - Avoid per-module duplicate process/thread management.
 - Do not reintroduce GUI backend strategy toggles.
+- Name and enforce the shared backend boundary before adding new parallel call sites. New code must not create ad hoc process/thread pools or bypass the shared runner/config path.
+- Worker payloads, preferences, and stale workspace inputs must route through the unified backend even if they contain old `enable_new_implicit_backend=False` data.
 
 Review gate:
 
@@ -209,6 +265,19 @@ Status: pending and blocking public release.
 Release builds must be produced from a clean tracked archive or clean clone. Release prep fails if duplicate `" 2"` files are present in the build source.
 
 Release-only checks may be skipped only by marking the release blocked. An environment skip for macOS smoke, Windows smoke, signing, notarization, Authenticode verification, manifest signing, or pinned-download verification is not a pass and must not produce public release assets.
+
+Release order is mandatory:
+
+1. Commit reviewed changes with explicit allowlist staging.
+2. Push branch and create/review PR.
+3. Merge to `main`.
+4. Tag or otherwise identify the release commit on `main`.
+5. Build macOS and Windows assets from a clean clone or clean tracked archive of that release commit.
+6. Sign, notarize, staple, and verify macOS assets.
+7. Authenticode-sign and verify Windows assets.
+8. Generate update metadata from final uploaded assets only.
+9. Verify uploaded asset size/hash by downloading from GitHub.
+10. Publish release notes without local paths, private hosts, or local-server descriptions.
 
 Required release evidence:
 
@@ -237,8 +306,10 @@ Required release evidence:
   - macOS Developer ID signing and notarization evidence, including `spctl` and package/app verification where applicable,
   - Windows Authenticode signing evidence, including `signtool verify`,
   - update manifest signing verification, or omit auto-installable assets from `updates.json`.
+  - unsigned `updates.json` may link to the release page or manually downloaded signed assets, but must not drive silent or automatic installation.
 - Build-time downloads:
   - release builds must use pre-provisioned dependencies or pinned hash/signature verification for every external download.
+  - release prep must record dependency provenance for standalone Python, wheel caches or lockfiles, and any build-time downloads; missing provenance blocks public release.
 
 Review gate:
 

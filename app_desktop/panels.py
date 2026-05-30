@@ -1141,6 +1141,14 @@ def build_left_panel(self):
     self._register_text(self.custom_param_refresh_btn, "识别参数", "Detect")
     self.custom_param_refresh_btn.clicked.connect(self._refresh_custom_parameter_rows)
     custom_param_header.addWidget(self.custom_param_refresh_btn)
+    self.custom_param_add_btn = QPushButton("+ 行")
+    self._register_text(self.custom_param_add_btn, "+ 行", "+ Row")
+    self.custom_param_add_btn.clicked.connect(lambda: _add_parameter_table_row(self, "custom_params_table"))
+    custom_param_header.addWidget(self.custom_param_add_btn)
+    self.custom_param_remove_btn = QPushButton("- 行")
+    self._register_text(self.custom_param_remove_btn, "- 行", "- Row")
+    self.custom_param_remove_btn.clicked.connect(lambda: _remove_parameter_table_rows(self, "custom_params_table"))
+    custom_param_header.addWidget(self.custom_param_remove_btn)
     custom_param_header_widget = QWidget()
     custom_param_header_widget.setLayout(custom_param_header)
     self.custom_param_header_widget = custom_param_header_widget
@@ -1206,6 +1214,14 @@ def build_left_panel(self):
     self._register_text(self.implicit_param_refresh_btn, "识别参数", "Detect")
     self.implicit_param_refresh_btn.clicked.connect(self._refresh_implicit_parameter_rows)
     implicit_param_header.addWidget(self.implicit_param_refresh_btn)
+    self.implicit_param_add_btn = QPushButton("+ 行")
+    self._register_text(self.implicit_param_add_btn, "+ 行", "+ Row")
+    self.implicit_param_add_btn.clicked.connect(lambda: _add_parameter_table_row(self, "implicit_params_table"))
+    implicit_param_header.addWidget(self.implicit_param_add_btn)
+    self.implicit_param_remove_btn = QPushButton("- 行")
+    self._register_text(self.implicit_param_remove_btn, "- 行", "- Row")
+    self.implicit_param_remove_btn.clicked.connect(lambda: _remove_parameter_table_rows(self, "implicit_params_table"))
+    implicit_param_header.addWidget(self.implicit_param_remove_btn)
     implicit_layout.addLayout(implicit_param_header)
 
     self.implicit_params_table = ParameterTable()
@@ -2035,6 +2051,26 @@ def _open_formula_preview(self, edit_widget, lhs=None) -> None:
         text = edit_widget.text().strip()
     left_hand_side = lhs() if callable(lhs) else lhs
     open_formula_preview_dialog(self, text, left_hand_side)
+
+
+def _add_parameter_table_row(self, table_name: str) -> None:
+    table = getattr(self, table_name, None)
+    if table is None:
+        return
+    table.add_parameter_row()
+
+
+def _remove_parameter_table_rows(self, table_name: str) -> None:
+    table = getattr(self, table_name, None)
+    if table is None:
+        return
+    selected_rows = {index.row() for index in table.table_view.selectedIndexes()}
+    if not selected_rows and table.table_view.rowCount() > 0:
+        last_row = table.table_view.rowCount() - 1
+        if not table.is_row_empty(last_row):
+            return
+        selected_rows = {last_row}
+    table.delete_rows(selected_rows)
 
 
 def _clear_table(self):
