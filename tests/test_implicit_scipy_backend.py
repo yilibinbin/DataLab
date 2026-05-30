@@ -35,6 +35,7 @@ def _quadratic_implicit_problem() -> ModelProblem:
 def test_precision_16_general_implicit_accepts_scipy_candidate_when_gates_pass(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Exercise the caller seam for a future cached/sample gate that can accept SciPy."""
     from fitting.runner import FitRunner, _ImplicitScipyBenchmark
 
     xs = [mp.mpf(i) for i in range(1, 8)]
@@ -173,6 +174,7 @@ def test_scipy_implicit_spotcheck_uses_fresh_implicit_cache(monkeypatch: pytest.
 def test_scipy_implicit_rematerialization_uses_seed_hints_and_fresh_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Exercise accepted-result metadata wiring for a future cached/sample gate."""
     from fitting.implicit_model import ImplicitModelDefinition, ImplicitSolveOptions
     from fitting.problem import ModelProblem
     from fitting.runner import FitRunner, _ImplicitScipyBenchmark
@@ -250,17 +252,88 @@ def test_real_scipy_implicit_benchmark_gate_reports_total_cost() -> None:
 
     result = FitRunner().fit(_quadratic_implicit_problem(), {"x": xs}, ys, precision=16)
 
-    if result.details["optimizer_backend"] == "scipy_implicit_least_squares":
-        reason = str(result.details["scipy_implicit_benchmark"])
-    else:
-        history = result.details.get("fallback_history", [])
-        assert isinstance(history, list)
-        reason = " ".join(str(item.get("reason", "")) for item in history if isinstance(item, dict))
+    assert result.details["optimizer_backend"] == "mpmath_high_precision"
+    history = result.details.get("fallback_history", [])
+    assert isinstance(history, list)
+    reason = " ".join(str(item.get("reason", "")) for item in history if isinstance(item, dict))
     assert "scipy_total=" in reason
     assert "start_norm=" in reason
     assert "candidate_fit=" in reason
     assert "rematerialize=" in reason
     assert "comparator=" in reason
+
+
+def test_scipy_benchmark_gate_rejects_after_full_comparator_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fitting.constraints import build_parameter_state
+    from fitting.hp_fitter import FitResult
+    from fitting.implicit_model import ImplicitModelDefinition
+    from fitting.runner import _ImplicitScipyBenchmark, _SciPyCandidate, _implicit_scipy_benchmark_gate
+
+    def fit_result(strategy: str) -> FitResult:
+        return FitResult(
+            params={"a": mp.mpf("0.2"), "b": mp.mpf("0.5")},
+            param_errors={"a": mp.mpf("0"), "b": mp.mpf("0")},
+            chi2=mp.mpf("0"),
+            reduced_chi2=mp.mpf("0"),
+            aic=mp.mpf("0"),
+            bic=mp.mpf("0"),
+            r2=mp.mpf("1"),
+            rmse=mp.mpf("0"),
+            residuals=[],
+            fitted_curve=[],
+            covariance=[],
+            details={"implicit_strategy": strategy},
+        )
+
+    candidate_result = fit_result("scipy_candidate")
+    comparator_result = fit_result("analytic_implicit_output_space")
+    monkeypatch.setattr("fitting.runner._weighted_residual_norm", lambda *_args, **_kwargs: mp.mpf("1"))
+    monkeypatch.setattr(
+        "fitting.runner._fit_with_scipy_least_squares",
+        lambda *_args, **_kwargs: _SciPyCandidate(
+            candidate_result,
+            True,
+            "ok",
+            1.0,
+            True,
+            (mp.mpf("0.2"), mp.mpf("0.5")),
+        ),
+    )
+    monkeypatch.setattr("fitting.runner._accept_scipy_result", lambda *_args, **_kwargs: (True, "accepted"))
+    monkeypatch.setattr(
+        "fitting.runner._materialize_scipy_result_with_fresh_model",
+        lambda *_args, **_kwargs: (candidate_result, None),
+    )
+    monkeypatch.setattr(
+        "fitting.runner._fit_mpmath_implicit_route",
+        lambda *_args, **_kwargs: (comparator_result, []),
+    )
+    times = iter([0.0, 0.01, 0.01, 0.11, 0.11, 0.13, 0.13, 1.13])
+    monkeypatch.setattr("fitting.runner.time.perf_counter", lambda: next(times))
+
+    xs = [mp.mpf(i) for i in range(1, 8)]
+    ys = [(mp.mpf("0.2") + mp.mpf("0.5") * x) ** 2 for x in xs]
+    state = build_parameter_state({"a": {"initial": "0.15"}, "b": {"initial": "0.45"}}, ["a", "b"])
+    definition = _quadratic_implicit_problem().implicit_definition
+    assert isinstance(definition, ImplicitModelDefinition)
+
+    benchmark = _implicit_scipy_benchmark_gate(
+        definition,
+        state,
+        {"x": xs},
+        ys,
+        seed_hint=None,
+        weights=None,
+        data_sigmas=None,
+        precision=16,
+    )
+
+    assert isinstance(benchmark, _ImplicitScipyBenchmark)
+    assert benchmark.accepted is False
+    assert benchmark.fallback_result is comparator_result
+    assert "scipy_total=0.13s" in benchmark.reason
+    assert "paid_total=1.13s" in benchmark.reason
+    assert "selected_comparator=analytic_implicit_output_space" in benchmark.reason
 
 
 def test_scipy_benchmark_gate_reports_full_route_cost(monkeypatch: pytest.MonkeyPatch) -> None:

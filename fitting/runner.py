@@ -32,8 +32,6 @@ from .model_parser import ModelSpecification, build_model_specification, infer_p
 from .problem import ModelProblem, constants_for_compute
 from .statistics import compute_fit_statistics
 
-SCIPY_IMPLICIT_ACCEPT_SPEEDUP_RATIO = mp.mpf("0.9")
-
 
 def _has_unweighted_data_sigmas(
     weights: list[mp.mpf] | None,
@@ -336,6 +334,8 @@ class FitRunner:
                         accepted=False,
                         reason=f"scipy implicit benchmark gate failed: {exc}",
                     )
+                # Currently reached only by tests or a future cached/sample calibration gate.
+                # The real full-comparator gate returns the already-paid comparator instead.
                 if benchmark.accepted and benchmark.materialized_result is not None:
                     try:
                         materialized = benchmark.materialized_result
@@ -975,7 +975,7 @@ def _implicit_scipy_benchmark_gate(
             return _ImplicitScipyBenchmark(False, f"candidate route rejected: {accept_reason}")
         start = time.perf_counter()
         with mp.workdps(precision):
-            materialized, materialized_diagnostics = _materialize_scipy_result_with_fresh_model(
+            _materialized, _materialized_diagnostics = _materialize_scipy_result_with_fresh_model(
                 candidate,
                 fresh_numeric_spec,
                 parameter_state,
@@ -1005,24 +1005,14 @@ def _implicit_scipy_benchmark_gate(
     comparator_seconds = time.perf_counter() - start
     comparator_strategy = str(comparator_result.details.get("implicit_strategy", "mpmath_high_precision"))
 
-    if scipy_total_seconds <= comparator_seconds * float(SCIPY_IMPLICIT_ACCEPT_SPEEDUP_RATIO):
-        return _ImplicitScipyBenchmark(
-            True,
-            "benchmark accepted: "
-            f"scipy_total={scipy_total_seconds:.6g}s "
-            f"start_norm={start_norm_seconds:.6g}s "
-            f"candidate_fit={candidate_fit_seconds:.6g}s "
-            f"rematerialize={rematerialize_seconds:.6g}s "
-            f"comparator={comparator_strategy}:{comparator_seconds:.6g}s",
-            materialized,
-            materialized_diagnostics,
-        )
+    paid_total_seconds = scipy_total_seconds + comparator_seconds
     reason = (
         "benchmark rejected SciPy implicit candidate: "
         f"scipy_total={scipy_total_seconds:.6g}s "
         f"start_norm={start_norm_seconds:.6g}s "
         f"candidate_fit={candidate_fit_seconds:.6g}s "
         f"rematerialize={rematerialize_seconds:.6g}s "
+        f"paid_total={paid_total_seconds:.6g}s "
         f"comparator={comparator_strategy}:{comparator_seconds:.6g}s "
         f"selected_comparator={comparator_strategy}"
     )
