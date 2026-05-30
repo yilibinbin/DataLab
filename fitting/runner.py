@@ -35,6 +35,13 @@ from .statistics import compute_fit_statistics
 SCIPY_IMPLICIT_ACCEPT_SPEEDUP_RATIO = mp.mpf("0.9")
 
 
+def _has_unweighted_data_sigmas(
+    weights: list[mp.mpf] | None,
+    data_sigmas: list[mp.mpf | None] | None,
+) -> bool:
+    return weights is None and data_sigmas is not None and any(sigma is not None for sigma in data_sigmas)
+
+
 @dataclass(frozen=True)
 class _SciPyCandidate:
     result: FitResult
@@ -97,7 +104,16 @@ class FitRunner:
         state = build_parameter_state(problem.parameter_config, parameter_names)
         fallback_history: list[dict[str, object]] = []
         if _can_try_scipy(problem, precision):
-            if state.dependent_defs:
+            if _has_unweighted_data_sigmas(weights, data_sigmas):
+                fallback_history.append(
+                    {
+                        "from": "scipy_least_squares",
+                        "to": "mpmath_high_precision",
+                        "skipped": "unweighted_data_sigmas",
+                        "reason": "unweighted data_sigmas require mpmath systematic refits",
+                    }
+                )
+            elif state.dependent_defs:
                 fallback_history.append(
                     {
                         "from": "scipy_least_squares",
@@ -295,7 +311,7 @@ class FitRunner:
                 fallback_history.append({"from": "observed_nonlinear", "to": "general", "reason": str(exc)})
 
         scipy_fallback_reason = ""
-        unweighted_sigmas = data_sigmas is not None and any(sigma is not None for sigma in data_sigmas) and weights is None
+        unweighted_sigmas = _has_unweighted_data_sigmas(weights, data_sigmas)
         can_try_implicit_scipy, scipy_eligibility_reason = _can_try_scipy_implicit(precision, state)
         if can_try_implicit_scipy:
             if unweighted_sigmas:
