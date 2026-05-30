@@ -280,33 +280,43 @@ class FitRunner:
                     fallback_history.append({"from": "exact_affine_output", "to": "general", "reason": str(exc)})
 
         if plan.kind is ImplicitPlanKind.OBSERVED_NONLINEAR:
-            try:
-                observed_variable_data = dict(variable_data)
-                observed_variable_data[definition.implicit_variable] = target_data
-                spec = build_model_specification(
-                    definition.equation,
-                    [*definition.x_variables, definition.implicit_variable],
-                    definition.parameters,
-                    definition.constants,
+            if _has_unweighted_data_sigmas(weights, data_sigmas):
+                fallback_history.append(
+                    {
+                        "from": "observed_nonlinear",
+                        "to": "general",
+                        "skipped": "unweighted_data_sigmas",
+                        "reason": "unweighted data_sigmas require mpmath systematic refits",
+                    }
                 )
-                result = fit_custom_model(
-                    spec,
-                    state,
-                    observed_variable_data,
-                    target_data,
-                    precision=precision,
-                    weights=weights,
-                    data_sigmas=data_sigmas,
-                )
-                result.details["implicit_strategy"] = "observed_nonlinear"
-                result.details["optimizer_backend"] = "mpmath_high_precision"
-                result.details["implicit_diagnostics"] = {
-                    **_implicit_diagnostics_details(None),
-                    "direct_observed_residual": True,
-                }
-                return result
-            except ValueError as exc:
-                fallback_history.append({"from": "observed_nonlinear", "to": "general", "reason": str(exc)})
+            else:
+                try:
+                    observed_variable_data = dict(variable_data)
+                    observed_variable_data[definition.implicit_variable] = target_data
+                    spec = build_model_specification(
+                        definition.equation,
+                        [*definition.x_variables, definition.implicit_variable],
+                        definition.parameters,
+                        definition.constants,
+                    )
+                    result = fit_custom_model(
+                        spec,
+                        state,
+                        observed_variable_data,
+                        target_data,
+                        precision=precision,
+                        weights=weights,
+                        data_sigmas=data_sigmas,
+                    )
+                    result.details["implicit_strategy"] = "observed_nonlinear"
+                    result.details["optimizer_backend"] = "mpmath_high_precision"
+                    result.details["implicit_diagnostics"] = {
+                        **_implicit_diagnostics_details(None),
+                        "direct_observed_residual": True,
+                    }
+                    return result
+                except ValueError as exc:
+                    fallback_history.append({"from": "observed_nonlinear", "to": "general", "reason": str(exc)})
 
         scipy_fallback_reason = ""
         unweighted_sigmas = _has_unweighted_data_sigmas(weights, data_sigmas)

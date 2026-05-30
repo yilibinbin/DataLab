@@ -61,8 +61,9 @@ normal UI.
 
 ## Optimizer Selection
 
-The user will configure calculation precision, not backend names. The current
-label "多精度位数 (mpmath)" will become "计算精度".
+The user will configure calculation precision, not backend names. The precision
+label must avoid naming a specific backend; the desktop UI currently uses
+"数值精度位数" / "Precision digits".
 
 Backend selection will be automatic, but a SciPy result must pass explicit
 safety checks before DataLab accepts it:
@@ -154,9 +155,12 @@ matching the current command-line reference to at least 10 significant digits.
 ### Observed Implicit Variable, Nonlinear Parameters
 
 When the output expression is the implicit variable itself but the equation is
-nonlinear in parameters, DataLab will still avoid solving the implicit variable
-for each point. It will minimize the observed-variable residual directly with
-the selected nonlinear optimizer.
+nonlinear in parameters, DataLab can avoid solving the implicit variable for
+each point when the uncertainty policy can be preserved exactly. It will
+minimize the observed-variable residual directly with the selected nonlinear
+optimizer. If unweighted `data_sigmas` require systematic high-precision
+refits, DataLab must skip this shortcut and use the general implicit route so
+the perturbed target and implicit-variable state remain consistent.
 
 ### General Implicit Output
 

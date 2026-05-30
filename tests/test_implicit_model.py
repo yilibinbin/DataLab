@@ -189,6 +189,49 @@ def test_observed_linear_implicit_skips_fast_path_for_unweighted_data_sigmas() -
     )
 
 
+def test_observed_nonlinear_implicit_skips_fast_path_for_unweighted_data_sigmas() -> None:
+    from fitting.problem import ModelProblem
+    from fitting.runner import FitRunner
+
+    xs = [mp.mpf("1"), mp.mpf("2"), mp.mpf("3"), mp.mpf("4")]
+    true_a = mp.mpf("0.2")
+    true_b = mp.mpf("0.1")
+    ys = [(true_a * true_a + true_b * x) / mp.mpf("0.9") for x in xs]
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a*a + b*x + 0.1*u",
+        output_expression="u",
+        parameters=("a", "b"),
+        solve_options=ImplicitSolveOptions(method="root", initial="0.2", tolerance="1e-30", max_iterations=50),
+    )
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="u",
+        variables=("x",),
+        parameter_config={"a": {"initial": "0.18"}, "b": {"initial": "0.08"}},
+        implicit_definition=definition,
+    )
+
+    result = FitRunner().fit(
+        problem,
+        {"x": xs},
+        ys,
+        precision=50,
+        data_sigmas=[mp.mpf("0.01")] * len(xs),
+    )
+
+    assert result.details["implicit_strategy"] != "observed_nonlinear"
+    history = result.details.get("fallback_history", [])
+    assert isinstance(history, list)
+    assert any(
+        isinstance(item, dict)
+        and item.get("from") == "observed_nonlinear"
+        and item.get("skipped") == "unweighted_data_sigmas"
+        for item in history
+    )
+
+
 def test_observed_linear_helper_rejects_unweighted_data_sigmas() -> None:
     from fitting.constraints import build_parameter_state
     from fitting.implicit_model import fit_observed_implicit_variable_linear_model

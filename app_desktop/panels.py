@@ -1344,8 +1344,8 @@ def build_left_panel(self):
     self._register_title(options_box, "选项", "Options")
     options_layout = QVBoxLayout(options_box)
     precision_layout = QHBoxLayout()
-    label_precision = QLabel("多精度位数 (mpmath)：")
-    self._register_text(label_precision, "多精度位数 (mpmath)：", "mpmath digits:")
+    label_precision = QLabel("数值精度位数：")
+    self._register_text(label_precision, "数值精度位数：", "Precision digits:")
     self.mpmath_precision_spin = QSpinBox()
     self.mpmath_precision_spin.setRange(MIN_MPMATH_DPS, MAX_MPMATH_DPS)
     self.mpmath_precision_spin.setValue(16)
@@ -1376,15 +1376,16 @@ def build_left_panel(self):
     self.parallel_mode_combo = QComboBox()
     parallel_mode_items = [
         ("自动", "Auto", ParallelMode.AUTO.value),
-        ("串行", "Serial", ParallelMode.SERIAL.value),
-        ("线程", "Threads", ParallelMode.THREAD.value),
-        ("进程", "Processes", ParallelMode.PROCESS.value),
+        ("串行优先", "Prefer serial", ParallelMode.SERIAL.value),
+        ("线程优先", "Prefer threads", ParallelMode.THREAD.value),
+        ("进程优先", "Prefer processes", ParallelMode.PROCESS.value),
     ]
     for zh, _en, data in parallel_mode_items:
         self.parallel_mode_combo.addItem(zh, data)
     self._register_combo(self.parallel_mode_combo, parallel_mode_items)
-    lbl_parallel_mode = QLabel("并行模式：")
-    self._register_text(lbl_parallel_mode, "并行模式：", "Parallel mode:")
+    self.parallel_mode_combo.setToolTip("资源调度偏好；需要快速取消和隔离的任务仍会使用独立进程。")
+    lbl_parallel_mode = QLabel("资源策略：")
+    self._register_text(lbl_parallel_mode, "资源策略：", "Resource policy:")
     parallel_layout.addRow(lbl_parallel_mode, self.parallel_mode_combo)
 
     worker_row = QHBoxLayout()
