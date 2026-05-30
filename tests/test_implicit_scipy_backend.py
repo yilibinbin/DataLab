@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -10,6 +11,24 @@ from fitting.model_parser import ModelSpecification
 from fitting.problem import ModelProblem
 
 pytest.importorskip("scipy.optimize")
+
+
+def _implicit_cache_from_spec(model: ModelSpecification) -> object:
+    from fitting.implicit_model import ImplicitEvaluationCache
+
+    callables: list[Any] = [model.evaluate_func, *model.gradient_funcs.values()]
+    for func in callables:
+        closure = getattr(func, "__closure__", None)
+        if not closure:
+            continue
+        for cell in closure:
+            try:
+                value = cell.cell_contents
+            except ValueError:
+                continue
+            if isinstance(value, ImplicitEvaluationCache):
+                return value
+    raise AssertionError("ModelSpecification does not expose an implicit cache in callable closures")
 
 
 def _quadratic_implicit_problem() -> ModelProblem:
@@ -172,6 +191,145 @@ def test_scipy_implicit_spotcheck_uses_fresh_implicit_cache(monkeypatch: pytest.
     FitRunner().fit(_quadratic_implicit_problem(), {"x": xs}, ys, precision=16)
 
     assert seen_fresh_factory["called"] is True
+
+
+def test_preflight_and_production_use_distinct_implicit_caches(monkeypatch: pytest.MonkeyPatch) -> None:
+    import fitting.runner as runner
+    from fitting.implicit_model import ImplicitModelDefinition
+
+    original_build = runner.build_implicit_model_specification
+    caches_by_stage: dict[str, list[object]] = {"production": [], "preflight": []}
+
+    def recording_build(*args: Any, **kwargs: Any) -> ModelSpecification:
+        model = original_build(*args, **kwargs)
+        cache = _implicit_cache_from_spec(model)
+        stack_functions = {frame.function for frame in inspect.stack()}
+        if "_probe_implicit_derivative_parity" in stack_functions:
+            caches_by_stage["preflight"].append(cache)
+        elif "_fit_mpmath_implicit_route" in stack_functions:
+            caches_by_stage["production"].append(cache)
+        return model
+
+    monkeypatch.setattr("fitting.runner.build_implicit_model_specification", recording_build)
+    xs = [mp.mpf(i) for i in range(1, 8)]
+    ys = [(mp.mpf("0.2") + mp.mpf("0.5") * x) ** 2 for x in xs]
+    definition = _quadratic_implicit_problem().implicit_definition
+    assert isinstance(definition, ImplicitModelDefinition)
+
+    result = runner.FitRunner().fit(_quadratic_implicit_problem(), {"x": xs}, ys, precision=80)
+
+    assert result.details["implicit_strategy"] == "analytic_implicit_output_space"
+    assert len(caches_by_stage["production"]) == 1
+    assert len(caches_by_stage["preflight"]) >= 2
+    all_caches = [*caches_by_stage["production"], *caches_by_stage["preflight"]]
+    assert len({id(cache) for cache in all_caches}) == len(all_caches)
+
+
+def test_scipy_candidate_spotcheck_rematerialize_and_comparator_use_distinct_caches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fitting.runner as runner
+    from fitting.constraints import build_parameter_state
+    from fitting.implicit_model import ImplicitModelDefinition
+
+    caches_by_stage: dict[str, list[object]] = {
+        "start_norm": [],
+        "candidate": [],
+        "spotcheck": [],
+        "rematerialize": [],
+        "comparator": [],
+    }
+
+    original_weighted_norm = runner._weighted_residual_norm
+    original_scipy_fit = runner._fit_with_scipy_least_squares
+    original_materialize = runner._materialize_scipy_result_with_fresh_model
+    original_mpmath_route = runner._fit_mpmath_implicit_route
+    original_build = runner.build_implicit_model_specification
+
+    def record(stage: str, model: ModelSpecification) -> None:
+        caches_by_stage[stage].append(_implicit_cache_from_spec(model))
+
+    def recording_weighted_norm(model: ModelSpecification, *args: Any, **kwargs: Any) -> float:
+        record("start_norm", model)
+        return float(original_weighted_norm(model, *args, **kwargs))
+
+    def recording_scipy_fit(
+        model: ModelSpecification,
+        *args: Any,
+        fresh_model_factory: Callable[[], ModelSpecification] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        record("candidate", model)
+
+        def recording_fresh_factory() -> ModelSpecification:
+            assert fresh_model_factory is not None
+            fresh = fresh_model_factory()
+            record("spotcheck", fresh)
+            return fresh
+
+        return original_scipy_fit(
+            model,
+            *args,
+            fresh_model_factory=recording_fresh_factory,
+            **kwargs,
+        )
+
+    def recording_materialize(
+        candidate: Any,
+        fresh_model_factory: Callable[[], ModelSpecification],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        def recording_fresh_factory() -> ModelSpecification:
+            fresh = fresh_model_factory()
+            record("rematerialize", fresh)
+            return fresh
+
+        return original_materialize(candidate, recording_fresh_factory, *args, **kwargs)
+
+    in_comparator = {"active": False}
+
+    def recording_build(*args: Any, **kwargs: Any) -> ModelSpecification:
+        model = original_build(*args, **kwargs)
+        if in_comparator["active"]:
+            record("comparator", model)
+        return model
+
+    def recording_mpmath_route(*args: Any, **kwargs: Any) -> Any:
+        in_comparator["active"] = True
+        try:
+            return original_mpmath_route(*args, **kwargs)
+        finally:
+            in_comparator["active"] = False
+
+    monkeypatch.setattr("fitting.runner._weighted_residual_norm", recording_weighted_norm)
+    monkeypatch.setattr("fitting.runner._fit_with_scipy_least_squares", recording_scipy_fit)
+    monkeypatch.setattr("fitting.runner._materialize_scipy_result_with_fresh_model", recording_materialize)
+    monkeypatch.setattr("fitting.runner._fit_mpmath_implicit_route", recording_mpmath_route)
+    monkeypatch.setattr("fitting.runner.build_implicit_model_specification", recording_build)
+
+    xs = [mp.mpf(i) for i in range(1, 8)]
+    ys = [(mp.mpf("0.2") + mp.mpf("0.5") * x) ** 2 for x in xs]
+    state = build_parameter_state({"a": {"initial": "0.15"}, "b": {"initial": "0.45"}}, ["a", "b"])
+    definition = _quadratic_implicit_problem().implicit_definition
+    assert isinstance(definition, ImplicitModelDefinition)
+
+    benchmark = runner._implicit_scipy_benchmark_gate(
+        definition,
+        state,
+        {"x": xs},
+        ys,
+        seed_hint=None,
+        weights=None,
+        data_sigmas=None,
+        precision=16,
+    )
+
+    assert benchmark.accepted is False
+    assert benchmark.fallback_result is not None
+    assert all(caches_by_stage[stage] for stage in caches_by_stage)
+    flattened = [cache for caches in caches_by_stage.values() for cache in caches]
+    assert len({id(cache) for cache in flattened}) == len(flattened)
 
 
 def test_scipy_implicit_rematerialization_uses_seed_hints_and_fresh_diagnostics(

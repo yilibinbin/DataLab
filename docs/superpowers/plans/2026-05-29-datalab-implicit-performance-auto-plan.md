@@ -54,7 +54,7 @@ Current blockers:
 - Worktree still contains untracked duplicate `" 2"` files and local draft source files. Use strict allowlist staging only. Release builds must use a clean clone and must fail on any untracked source artifact, not only duplicate `" 2"` paths.
 - Task 2c evidence matrix, behavioral cache-boundary matrix, and SciPy decision have passed review and were committed as `f670ce2`.
 - Task 3c shared fitting-input normalization is complete as `9376da5`.
-- Task 4 fit-worker backend-boundary and equivalence gates are complete through `4414d58`. This does not close the separate Task 2c direct cache identity/state-restoration release blocker, and it does not claim full-program migration of every existing thread helper to `shared/parallel_backend.py`.
+- Task 4 fit-worker backend-boundary and equivalence gates are complete through `4414d58`; the direct Task 2c cache identity/state-restoration proof is covered by current cache-identity tests. Task 4 still does not claim full-program migration of every existing thread helper to `shared/parallel_backend.py`.
 - The release gate still needs concrete frozen-bundle smoke and signing/trust evidence.
 
 ## Task 0: Worktree Hygiene and Plan Repair
@@ -171,7 +171,7 @@ Review gate:
 
 ## Task 2c: Close Implicit Regression Evidence and SciPy Selection Semantics
 
-Status: complete for the reviewed Task 2c slice. Release and new parallel-backend expansion remain blocked by the direct cache identity/state-restoration gate below.
+Status: complete for the reviewed Task 2c slice, including the direct cache identity/state-restoration proof. Release remains blocked by Task 5 clean-source, frozen-smoke, signing/trust, manifest, and artifact-audit gates.
 
 Purpose:
 
@@ -198,7 +198,7 @@ Required work:
   - SciPy candidate vs spot-check,
   - spot-check vs rematerialization,
   - route/backend/precision/parameter/constant/data-row/seed-source invalidation.
-- [ ] Add direct object-identity/state-leak tests for preflight, production, SciPy candidate, spot-check, and rematerialization before release or before expanding new parallel-backend call sites. Current Task 2c evidence covers behavior and fresh factory threading; it does not claim exhaustive identity proof for every mutable cache instance.
+- [x] Add direct object-identity/state-leak tests for preflight, production, SciPy candidate, spot-check, and rematerialization before release or before expanding new parallel-backend call sites. Covered by `tests/test_implicit_scipy_backend.py::test_preflight_and_production_use_distinct_implicit_caches` and `tests/test_implicit_scipy_backend.py::test_scipy_candidate_spotcheck_rematerialize_and_comparator_use_distinct_caches`.
 - [x] Decide and implement the SciPy acceptance path:
   - either add a real low-net-cost calibration gate, such as cached comparator reuse or sampled calibration whose validation cost is included in the decision,
   - or explicitly keep SciPy as a rejected candidate for current full-comparator runs and update user/debug metadata so the plan no longer claims current-run fastest-route selection where it is not true.
@@ -420,7 +420,7 @@ Review gate:
 
 ## Task 4: Parallel Backend Continuation
 
-Status: complete through `4414d58` for the scoped fit-worker process boundary. Entry gate, backend-boundary tests, raw worker payload tests, serial/process equivalence tests, and stale auto-fit backend toggle removal are committed. PR, merge, and release remain blocked by Task 5, including the still-open Task 2c direct cache identity/state-restoration proof.
+Status: complete through `4414d58` for the scoped fit-worker process boundary. Entry gate, backend-boundary tests, raw worker payload tests, serial/process equivalence tests, and stale auto-fit backend toggle removal are committed. PR, merge, and release remain blocked by Task 5.
 
 Purpose:
 
@@ -444,7 +444,7 @@ Required work:
   - route diagnostics,
   - mutable warm-start or point-index state.
 - Each worker execution must rebuild `ModelSpecification` and implicit caches inside the worker from normalized input payloads.
-- Complete the direct cache identity/state-restoration gate from Task 2c before adding any new parallel call site. The already-committed legacy deletion is the only Task 4 work exempt from this ordering rule.
+- Direct cache identity/state-restoration proof from Task 2c must remain green before adding any new parallel call site. The initial proof is covered by the Task 2c identity tests named above.
 - Serial and process backends must produce equivalent results for direct custom fits and self-consistent fits across:
   - precision `<= 16` and high precision,
   - constants,
