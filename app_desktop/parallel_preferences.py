@@ -12,9 +12,7 @@ KEY_PARALLEL_NESTED_POLICY = "Preferences/Parallel/NestedPolicy"
 KEY_PARALLEL_ENABLE_AUTO_FIT_BACKEND = (
     "Preferences/Parallel/EnableNewAutoFitBackend"
 )
-KEY_PARALLEL_ENABLE_IMPLICIT_BACKEND = (
-    "Preferences/Parallel/EnableNewImplicitBackend"
-)
+_STALE_PARALLEL_ENABLE_IMPLICIT_BACKEND = "Preferences/Parallel/EnableNewImplicitBackend"
 
 
 def parallel_preferences_keys() -> tuple[str, ...]:
@@ -67,9 +65,8 @@ class ParallelPreferencesStore:
                 KEY_PARALLEL_ENABLE_AUTO_FIT_BACKEND,
                 default.enable_new_auto_fit_backend,
             ),
-            enable_new_implicit_backend=True,
         )
-        self.settings.remove(KEY_PARALLEL_ENABLE_IMPLICIT_BACKEND)
+        self.settings.remove(_STALE_PARALLEL_ENABLE_IMPLICIT_BACKEND)
         return config
 
     def save(self, config: ParallelConfig) -> None:
@@ -87,7 +84,7 @@ class ParallelPreferencesStore:
             KEY_PARALLEL_ENABLE_AUTO_FIT_BACKEND,
             config.enable_new_auto_fit_backend,
         )
-        self.settings.remove(KEY_PARALLEL_ENABLE_IMPLICIT_BACKEND)
+        self.settings.remove(_STALE_PARALLEL_ENABLE_IMPLICIT_BACKEND)
 
 
 def current_parallel_config_from_widgets(owner: object) -> ParallelConfig:
@@ -115,7 +112,6 @@ def current_parallel_config_from_widgets(owner: object) -> ParallelConfig:
         ),
         nested_policy=nested_policy,
         enable_new_auto_fit_backend=ParallelConfig().enable_new_auto_fit_backend,
-        enable_new_implicit_backend=True,
     )
 
 

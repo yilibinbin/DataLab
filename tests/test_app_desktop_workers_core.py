@@ -145,56 +145,48 @@ def test_execute_fit_job_payload_self_consistent_wires_definition_and_details(
             tolerance="1e-36",
         ),
     )
-    spec = SimpleNamespace(
-        implicit_diagnostics=SimpleNamespace(
-            points_solved=7,
-            root_fallbacks=2,
-            max_iterations_used=5,
-            max_residual="1.0e-42",
-        )
-    )
     calls: dict[str, object] = {}
 
-    def fake_build_implicit_model_specification(
-        received_definition: ImplicitModelDefinition,
-    ) -> object:
-        calls["definition"] = received_definition
-        return spec
+    class FakeFitRunner:
+        def fit(
+            self,
+            problem: object,
+            variable_data: dict[str, list[mp.mpf]],
+            target_series: list[mp.mpf],
+            *,
+            precision: int,
+            weights: list[mp.mpf] | None = None,
+            data_sigmas: list[mp.mpf | None] | None = None,
+        ) -> FitResult:
+            calls["problem"] = problem
+            calls["variable_data"] = variable_data
+            calls["target_series"] = target_series
+            calls["precision"] = precision
+            calls["weights"] = weights
+            calls["data_sigmas"] = data_sigmas
+            return FitResult(
+                params={"a": mp.mpf("0.1"), "b": mp.mpf("0.2"), "c": mp.mpf("0.4")},
+                param_errors={},
+                chi2=mp.mpf("0"),
+                reduced_chi2=mp.mpf("0"),
+                aic=mp.mpf("0"),
+                bic=mp.mpf("0"),
+                r2=mp.mpf("1"),
+                rmse=mp.mpf("0"),
+                residuals=[],
+                fitted_curve=list(target_series),
+                covariance=[],
+                details={
+                    "implicit_diagnostics": {
+                        "points_solved": 7,
+                        "root_fallbacks": 2,
+                        "max_iterations_used": 5,
+                        "max_residual": "1.0e-42",
+                    }
+                },
+            )
 
-    def fake_fit_custom_model(
-        received_spec: object,
-        state: object,
-        variable_data: dict[str, list[mp.mpf]],
-        target_series: list[mp.mpf],
-        **kwargs: object,
-    ) -> FitResult:
-        calls["spec"] = received_spec
-        calls["free_params"] = tuple(state.free_params)
-        calls["variable_data"] = variable_data
-        calls["target_series"] = target_series
-        calls["kwargs"] = kwargs
-        return FitResult(
-            params={"a": mp.mpf("0.1"), "b": mp.mpf("0.2"), "c": mp.mpf("0.4")},
-            param_errors={},
-            chi2=mp.mpf("0"),
-            reduced_chi2=mp.mpf("0"),
-            aic=mp.mpf("0"),
-            bic=mp.mpf("0"),
-            r2=mp.mpf("1"),
-            rmse=mp.mpf("0"),
-            residuals=[],
-            fitted_curve=list(target_series),
-            covariance=[],
-            details={},
-        )
-
-    monkeypatch.setattr(
-        workers_core,
-        "build_implicit_model_specification",
-        fake_build_implicit_model_specification,
-    )
-    monkeypatch.setattr(workers_core, "can_fit_observed_implicit_variable", lambda _definition: False)
-    monkeypatch.setattr(workers_core, "fit_custom_model", fake_fit_custom_model)
+    monkeypatch.setattr(workers_core, "FitRunner", FakeFitRunner)
 
     job = FitJob(
         model_type="self_consistent",
@@ -225,16 +217,17 @@ def test_execute_fit_job_payload_self_consistent_wires_definition_and_details(
     payload = _execute_fit_job_payload(job)
     fit = payload.fit_result
 
-    assert calls["definition"] is definition
-    assert calls["spec"] is spec
-    assert calls["free_params"] == ("a", "b", "c")
+    problem = calls["problem"]
+    assert getattr(problem, "implicit_definition") is definition
+    assert getattr(problem, "expression") == "u"
+    assert getattr(problem, "variables") == ("x",)
+    assert getattr(problem, "target_name") == "u"
+    assert getattr(problem, "parameter_config") == job.parameter_config
     assert calls["variable_data"] == {"x": x_series}
     assert calls["target_series"] == y_series
-    assert calls["kwargs"] == {
-        "precision": 30,
-        "weights": None,
-        "data_sigmas": [None] * len(y_series),
-    }
+    assert calls["precision"] == 30
+    assert calls["weights"] is None
+    assert calls["data_sigmas"] == [None] * len(y_series)
     assert {name: float(value) for name, value in fit.params.items()} == {
         "a": 0.1,
         "b": 0.2,
@@ -362,11 +355,11 @@ def test_self_consistent_fit_job_is_marked_for_process_boundary() -> None:
     assert _fit_job_requires_process_boundary(direct_job) is False
 
 
-def test_fit_job_default_parallel_config_enables_implicit_backend() -> None:
+def test_fit_job_default_parallel_config_has_no_implicit_backend_gate() -> None:
     job = _small_self_consistent_fit_job()
 
     assert isinstance(job.parallel_config, ParallelConfig)
-    assert job.parallel_config.enable_new_implicit_backend is True
+    assert not hasattr(job.parallel_config, "enable_new_implicit_backend")
 
 
 def test_self_consistent_fit_job_payload_is_spawn_picklable() -> None:
@@ -381,7 +374,7 @@ def test_self_consistent_fit_job_payload_is_spawn_picklable() -> None:
     assert restored.implicit_definition.solve_options.method == "root"
     assert restored.timeout_seconds == 10.0
     assert restored.parallel_config.process_start_method == "spawn"
-    assert restored.parallel_config.enable_new_implicit_backend is True
+    assert not hasattr(restored.parallel_config, "enable_new_implicit_backend")
 
 
 def test_stale_fit_job_payload_false_implicit_backend_is_ignored() -> None:
@@ -390,7 +383,7 @@ def test_stale_fit_job_payload_false_implicit_backend_is_ignored() -> None:
 
     restored = _deserialize_fit_job(payload)
 
-    assert restored.parallel_config.enable_new_implicit_backend is True
+    assert not hasattr(restored.parallel_config, "enable_new_implicit_backend")
 
 
 def test_self_consistent_fit_subprocess_uses_killable_runner_and_forwards_timeout(
@@ -454,12 +447,12 @@ def test_self_consistent_fit_subprocess_uses_killable_runner_and_forwards_timeou
     assert callable(calls["should_cancel"])
 
 
-def test_self_consistent_fit_subprocess_ignores_disabled_legacy_gate(
+def test_self_consistent_fit_subprocess_ignores_stale_disabled_legacy_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    job = _small_self_consistent_fit_job(
-        parallel_config=ParallelConfig(enable_new_implicit_backend=False)
-    )
+    payload = _serialize_fit_job(_small_self_consistent_fit_job())
+    payload["parallel_config"]["enable_new_implicit_backend"] = False
+    job = _deserialize_fit_job(payload)
     calls: dict[str, object] = {}
 
     class FailingRunner:
@@ -501,20 +494,7 @@ def test_self_consistent_fit_subprocess_ignores_disabled_legacy_gate(
                 )
             )
 
-    def fake_legacy(
-        received_job: FitJob,
-        *,
-        timeout_seconds: float | None,
-        should_cancel: Callable[[], bool] | None = None,
-    ) -> workers_core.FitResultPayload:
-        raise AssertionError("stale implicit backend flag must not use legacy path")
-
     monkeypatch.setattr(workers_core, "KillableProcessTaskRunner", FailingRunner)
-    monkeypatch.setattr(
-        workers_core,
-        "_execute_fit_job_payload_subprocess_legacy",
-        fake_legacy,
-    )
 
     result = _execute_fit_job_payload_subprocess(
         job,
@@ -527,6 +507,20 @@ def test_self_consistent_fit_subprocess_ignores_disabled_legacy_gate(
     assert callable(calls["should_cancel"])
     assert calls["config"] is job.parallel_config
     assert calls["target"] is workers_core._fit_job_subprocess_entry
+
+
+def test_legacy_implicit_backend_surfaces_are_removed() -> None:
+    assert not hasattr(ParallelConfig, "enable_new_implicit_backend")
+    assert not hasattr(workers_core, "_execute_fit_job_payload_subprocess_legacy")
+    assert not hasattr(workers_core, "_fit_job_subprocess_queue_entry")
+    assert not hasattr(workers_core, "_terminate_fit_subprocess")
+    assert not hasattr(workers_core, "_deserialize_fit_subprocess_queue_payload")
+    assert not hasattr(workers_core, "_fit_self_consistent_with_legacy_hooks")
+    assert not hasattr(workers_core, "_self_consistent_hooks_replaced")
+    assert not hasattr(workers_core, "_ORIGINAL_BUILD_IMPLICIT_MODEL_SPECIFICATION")
+    assert not hasattr(workers_core, "_ORIGINAL_CAN_FIT_OBSERVED_IMPLICIT_VARIABLE")
+    assert not hasattr(workers_core, "_ORIGINAL_FIT_OBSERVED_IMPLICIT_VARIABLE_LINEAR_MODEL")
+    assert not hasattr(workers_core, "_ORIGINAL_FIT_CUSTOM_MODEL")
 
 
 def test_self_consistent_fit_subprocess_target_uses_job_precision_under_low_ambient_dps(

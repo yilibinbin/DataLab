@@ -417,7 +417,7 @@ Review gate:
 
 ## Task 4: Parallel Backend Continuation
 
-Status: pending.
+Status: in progress. Entry gate implementation is in the current diff and pending review/commit.
 
 Purpose:
 
@@ -425,7 +425,9 @@ Continue the broader backend parallelization plan only after implicit fitting is
 
 Required work:
 
-- Entry gate: delete `_execute_fit_job_payload_subprocess_legacy()` and remove `ParallelConfig.enable_new_implicit_backend`, or add a tracked ADR explaining the external compatibility requirement and a regression proving stale `enable_new_implicit_backend=False` inputs still route through the unified backend. This gate must be complete before adding new parallel call sites.
+- [x] Entry gate: delete `_execute_fit_job_payload_subprocess_legacy()` and remove `ParallelConfig.enable_new_implicit_backend`, or add a tracked ADR explaining the external compatibility requirement and a regression proving stale `enable_new_implicit_backend=False` inputs still route through the unified backend. This gate must be complete before adding new parallel call sites.
+- [x] Delete the legacy self-consistent hook branch (`_fit_self_consistent_with_legacy_hooks` / `_self_consistent_hooks_replaced`) so self-consistent fits always route through the unified `FitRunner` path.
+- [x] Preserve stale-input compatibility by ignoring old serialized/settings `enable_new_implicit_backend=False` fields and proving no public `ParallelConfig` attribute remains.
 - If `docs/superpowers/plans/2026-05-28-datalab-parallel-backend-implementation-plan.md` is committed by then, re-read it and reconcile it with current implicit backend changes.
 - If that parallel-backend plan is still untracked, either commit it through its own reviewed docs task or reconstruct the parallel-backend continuation requirements from tracked code, `task_plan.md`, `findings.md`, `progress.md`, and current git history before implementation.
 - Keep resource controls centralized and reusable across modules.

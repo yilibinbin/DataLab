@@ -56,7 +56,6 @@ def test_parallel_preferences_round_trip_all_public_desktop_fields_and_drops_sta
         reserve_cores=2,
         nested_policy=NestedParallelPolicy.ALLOW,
         enable_new_auto_fit_backend=True,
-        enable_new_implicit_backend=False,
     )
     settings.save_bool(
         "Preferences/Parallel/EnableNewImplicitBackend",
@@ -71,7 +70,7 @@ def test_parallel_preferences_round_trip_all_public_desktop_fields_and_drops_sta
     assert restored.reserve_cores == 2
     assert restored.nested_policy == NestedParallelPolicy.ALLOW
     assert restored.enable_new_auto_fit_backend is True
-    assert restored.enable_new_implicit_backend is True
+    assert not hasattr(restored, "enable_new_implicit_backend")
     assert "Preferences/Parallel/EnableNewImplicitBackend" not in fake_store._data
     assert settings.load_bool(
         "Preferences/Parallel/EnableNewImplicitBackend",
@@ -162,7 +161,7 @@ def test_desktop_parallel_controls_exist_and_save_current_config(window: Any) ->
     assert config.reserve_cores == 2
     assert config.nested_policy == NestedParallelPolicy.ALLOW
     assert config.enable_new_auto_fit_backend is ParallelConfig().enable_new_auto_fit_backend
-    assert config.enable_new_implicit_backend is True
+    assert not hasattr(config, "enable_new_implicit_backend")
 
 
 def test_prepare_jobs_receive_current_parallel_config(window: Any) -> None:
@@ -183,7 +182,7 @@ def test_prepare_jobs_receive_current_parallel_config(window: Any) -> None:
     assert fit_job.parallel_config.mode == ParallelMode.SERIAL
     assert fit_job.parallel_config.max_workers == 5
     assert fit_job.parallel_config.enable_new_auto_fit_backend is ParallelConfig().enable_new_auto_fit_backend
-    assert fit_job.parallel_config.enable_new_implicit_backend is True
+    assert not hasattr(fit_job.parallel_config, "enable_new_implicit_backend")
 
 
 def test_text_to_table_preserves_parenthesized_uncertainty_tokens(window: Any) -> None:

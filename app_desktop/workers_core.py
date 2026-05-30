@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
-import multiprocessing
-import queue
-import time
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -35,14 +32,12 @@ from statistics_utils import compute_statistics, generate_statistics_latex_batch
 from fitting import (
     ImplicitModelDefinition,
     ImplicitSolveOptions,
-    build_implicit_model_specification,
     build_model_specification,
     build_parameter_state,
     FitRunner,
     ModelProblem,
     fit_custom_model,
 )
-from fitting import implicit_model as _implicit_model
 from fitting.auto_models import (
     build_inverse_series_definition,
     build_polynomial_definition,
@@ -54,22 +49,6 @@ from fitting.hp_fitter import FitResult
 # leading underscore prevents ``from app_desktop.workers_core import
 # logger`` from accidentally exposing the handle as a public API.
 _logger = logging.getLogger(__name__)
-
-can_fit_observed_implicit_variable = getattr(
-    _implicit_model,
-    "can_fit_observed_implicit_variable",
-    lambda _definition: False,
-)
-fit_observed_implicit_variable_linear_model = getattr(
-    _implicit_model,
-    "fit_observed_implicit_variable_linear_model",
-    None,
-)
-_ORIGINAL_BUILD_IMPLICIT_MODEL_SPECIFICATION = build_implicit_model_specification
-_ORIGINAL_CAN_FIT_OBSERVED_IMPLICIT_VARIABLE = can_fit_observed_implicit_variable
-_ORIGINAL_FIT_OBSERVED_IMPLICIT_VARIABLE_LINEAR_MODEL = fit_observed_implicit_variable_linear_model
-_ORIGINAL_FIT_CUSTOM_MODEL = fit_custom_model
-
 
 @contextmanager
 def _mp_precision_guard(dps: int | None):
@@ -892,10 +871,6 @@ class FitBatchResultEntry:
     captured_log: str = ""
 
 
-_FIT_SUBPROCESS_POLL_INTERVAL = 0.05
-_FIT_SUBPROCESS_TIMEOUT_SLACK = 0.05
-
-
 def _fit_job_requires_process_boundary(job: FitJob) -> bool:
     return job.model_type == "self_consistent"
 
@@ -927,7 +902,6 @@ def _deserialize_parallel_config(payload: dict[str, Any] | None) -> ParallelConf
         ),
         process_start_method=str(payload.get("process_start_method", "spawn")),
         enable_new_auto_fit_backend=bool(payload.get("enable_new_auto_fit_backend", False)),
-        enable_new_implicit_backend=True,
     )
 
 
@@ -1209,30 +1183,6 @@ def _fit_job_subprocess_entry(job_payload: dict[str, Any]) -> dict[str, Any]:
         return _serialize_fit_result_payload(payload)
 
 
-def _fit_job_subprocess_queue_entry(result_queue: Any, job_payload: dict[str, Any]) -> None:
-    try:
-        result_queue.put({"ok": True, "payload": _fit_job_subprocess_entry(job_payload)})
-    except BaseException as exc:  # noqa: BLE001
-        with suppress(Exception):
-            result_queue.put({"ok": False, "error": str(exc)})
-
-
-def _terminate_fit_subprocess(proc: multiprocessing.Process) -> None:
-    if not proc.is_alive():
-        proc.join(timeout=0.2)
-        return
-    try:
-        proc.terminate()
-        proc.join(timeout=1.0)
-        if proc.is_alive():
-            proc.kill()
-            proc.join(timeout=1.0)
-    except Exception:
-        with suppress(Exception):
-            proc.kill()
-            proc.join(timeout=1.0)
-
-
 def _execute_fit_job_payload_subprocess(
     job: FitJob,
     timeout_seconds: float | None,
@@ -1262,144 +1212,6 @@ def _execute_fit_job_payload_subprocess(
 
     with _mp_precision_guard(job.precision):
         return _deserialize_fit_result_payload(payload)
-
-
-def _execute_fit_job_payload_subprocess_legacy(
-    job: FitJob,
-    timeout_seconds: float | None,
-    should_cancel: Callable[[], bool] | None = None,
-) -> FitResultPayload:
-    ctx = multiprocessing.get_context("spawn")
-    result_queue = ctx.Queue()
-    job_payload = _serialize_fit_job(job)
-    proc = ctx.Process(
-        target=_fit_job_subprocess_queue_entry,
-        args=(result_queue, job_payload),
-        name=f"datalab-fit-{job.model_type}",
-    )
-    proc.start()
-
-    timeout = timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None
-    deadline = (
-        time.monotonic() + timeout + _FIT_SUBPROCESS_TIMEOUT_SLACK
-        if timeout is not None else None
-    )
-    try:
-        while True:
-            if should_cancel is not None and should_cancel():
-                _terminate_fit_subprocess(proc)
-                raise InterruptedError(_dual_msg(
-                    "自洽隐式拟合已取消。",
-                    "Self-consistent fit cancelled.",
-                ))
-
-            try:
-                payload = result_queue.get(timeout=_FIT_SUBPROCESS_POLL_INTERVAL)
-                proc.join(timeout=1.0)
-                return _deserialize_fit_subprocess_queue_payload(job, payload)
-            except queue.Empty:
-                pass
-
-            if deadline is not None and time.monotonic() > deadline:
-                _terminate_fit_subprocess(proc)
-                raise TimeoutError(_dual_msg(
-                    f"自洽隐式拟合超过 {timeout:.0f}s 仍未完成，已停止。",
-                    f"Self-consistent fit exceeded {timeout:.0f}s and was stopped.",
-                ))
-
-            if not proc.is_alive():
-                proc.join(timeout=0.2)
-                try:
-                    payload = result_queue.get(timeout=0.2)
-                    return _deserialize_fit_subprocess_queue_payload(job, payload)
-                except queue.Empty:
-                    pass
-                raise RuntimeError(_dual_msg(
-                    "自洽隐式拟合子进程退出但未返回结果。",
-                    "Self-consistent fit subprocess exited without returning a result.",
-                ))
-    finally:
-        if proc.is_alive():
-            _terminate_fit_subprocess(proc)
-        with suppress(Exception):
-            result_queue.close()
-            result_queue.join_thread()
-
-
-def _deserialize_fit_subprocess_queue_payload(
-    job: FitJob,
-    payload: object,
-) -> FitResultPayload:
-    if isinstance(payload, dict) and payload.get("ok"):
-        with _mp_precision_guard(job.precision):
-            return _deserialize_fit_result_payload(payload["payload"])
-    error = payload.get("error", "unknown error") if isinstance(payload, dict) else str(payload)
-    raise RuntimeError(error)
-
-
-
-def _self_consistent_hooks_replaced() -> bool:
-    return (
-        build_implicit_model_specification is not _ORIGINAL_BUILD_IMPLICIT_MODEL_SPECIFICATION
-        or can_fit_observed_implicit_variable is not _ORIGINAL_CAN_FIT_OBSERVED_IMPLICIT_VARIABLE
-        or fit_observed_implicit_variable_linear_model is not _ORIGINAL_FIT_OBSERVED_IMPLICIT_VARIABLE_LINEAR_MODEL
-        or fit_custom_model is not _ORIGINAL_FIT_CUSTOM_MODEL
-    )
-
-
-def _fit_self_consistent_with_legacy_hooks(job: FitJob) -> FitResult:
-    if job.implicit_definition is None:
-        raise ValueError(
-            _dual_msg(
-                "自洽隐式模型缺少定义。",
-                "Self-consistent fit model requires an implicit definition.",
-            )
-        )
-    state = build_parameter_state(
-        job.parameter_config or {},
-        list(job.implicit_definition.parameters),
-    )
-    if (
-        can_fit_observed_implicit_variable(job.implicit_definition)
-        and fit_observed_implicit_variable_linear_model is not None
-    ):
-        try:
-            fit_result = fit_observed_implicit_variable_linear_model(
-                job.implicit_definition,
-                state,
-                job.variable_data,
-                job.target_series,
-                precision=job.precision,
-                weights=job.weights,
-                data_sigmas=job.sigma_series,
-            )
-            fit_result.details["implicit_diagnostics"] = {
-                "points_solved": 0,
-                "root_fallbacks": 0,
-                "max_iterations_used": 0,
-                "max_residual": "0",
-            }
-            return fit_result
-        except ValueError:
-            pass
-    spec = build_implicit_model_specification(job.implicit_definition)
-    fit_result = fit_custom_model(
-        spec,
-        state,
-        job.variable_data,
-        job.target_series,
-        precision=job.precision,
-        weights=job.weights,
-        data_sigmas=job.sigma_series,
-    )
-    diagnostics = getattr(spec, "implicit_diagnostics")
-    fit_result.details["implicit_diagnostics"] = {
-        "points_solved": int(diagnostics.points_solved),
-        "root_fallbacks": int(diagnostics.root_fallbacks),
-        "max_iterations_used": int(diagnostics.max_iterations_used),
-        "max_residual": str(diagnostics.max_residual),
-    }
-    return fit_result
 
 
 def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
@@ -1445,27 +1257,24 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
                         "Self-consistent fit model requires an implicit definition.",
                     )
                 )
-            if _self_consistent_hooks_replaced():
-                fit_result = _fit_self_consistent_with_legacy_hooks(job)
-            else:
-                problem = ModelProblem(
-                    model_type="self_consistent",
-                    expression=job.implicit_definition.output_expression,
-                    variables=tuple(job.implicit_definition.x_variables),
-                    target_name=job.target_column,
-                    parameter_config=job.parameter_config or {},
-                    constants=job.implicit_definition.constants,
-                    constants_enabled=True,
-                    implicit_definition=job.implicit_definition,
-                )
-                fit_result = FitRunner().fit(
-                    problem,
-                    job.variable_data,
-                    job.target_series,
-                    precision=job.precision,
-                    weights=job.weights,
-                    data_sigmas=job.sigma_series,
-                )
+            problem = ModelProblem(
+                model_type="self_consistent",
+                expression=job.implicit_definition.output_expression,
+                variables=tuple(job.implicit_definition.x_variables),
+                target_name=job.target_column,
+                parameter_config=job.parameter_config or {},
+                constants=job.implicit_definition.constants,
+                constants_enabled=True,
+                implicit_definition=job.implicit_definition,
+            )
+            fit_result = FitRunner().fit(
+                problem,
+                job.variable_data,
+                job.target_series,
+                precision=job.precision,
+                weights=job.weights,
+                data_sigmas=job.sigma_series,
+            )
             fit_result.details["implicit_variable"] = job.implicit_definition.implicit_variable
             fit_result.details["equation"] = job.implicit_definition.equation
             fit_result.details["output_expression"] = job.implicit_definition.output_expression
