@@ -45,6 +45,58 @@ def _d8_rows() -> list[tuple[mp.mpf, mp.mpf, mp.mpf]]:
     return [(mp.mpf(n), mp.mpf(delta), mp.mpf(sigma)) for n, delta, sigma in raw]
 
 
+def test_direct_delta_output_uses_observed_path_without_root_solves() -> None:
+    from fitting.implicit_model import ImplicitModelDefinition
+    from fitting.problem import ModelProblem
+    from fitting.runner import FitRunner
+
+    rows = _d8_rows()
+    n = [row[0] for row in rows]
+    delta = [row[1] for row in rows]
+    sigmas = [row[2] for row in rows]
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="delta",
+        variables=("n",),
+        parameter_config={
+            "d0": {"initial": "-0.01213"},
+            "d2": {"initial": "0"},
+            "d4": {"initial": "0"},
+            "d6": {"initial": "0"},
+            "d8": {"initial": "0"},
+        },
+        implicit_definition=ImplicitModelDefinition(
+            x_variables=("n",),
+            implicit_variable="delta",
+            equation="d0 + d2/(n-delta)^2 + d4/(n-delta)^4 + d6/(n-delta)^6 + d8/(n-delta)^8",
+            output_expression="delta",
+            parameters=("d0", "d2", "d4", "d6", "d8"),
+        ),
+    )
+
+    result = FitRunner().fit(
+        problem,
+        {"n": n},
+        delta,
+        precision=80,
+        weights=[1 / (sigma * sigma) for sigma in sigmas],
+        data_sigmas=sigmas,
+    )
+
+    assert result.details["implicit_strategy"] == "observed_linear"
+    assert result.details["optimizer_backend"] == "mpmath_qr"
+    assert result.details["implicit_fast_path"] == "observed_implicit_linear"
+    diagnostics = result.details["implicit_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    assert diagnostics["points_solved"] == 0
+    assert "uncertainty_note" in result.details
+    assert all(
+        mp.almosteq(residual, fit - target, rel_eps=mp.mpf("1e-24"), abs_eps=mp.mpf("1e-21"))
+        for residual, fit, target in zip(result.residuals, result.fitted_curve, delta, strict=True)
+    )
+    assert all(mp.isfinite(result.params[name]) for name in ("d0", "d2", "d4", "d6", "d8"))
+
+
 @pytest.mark.slow
 def test_nonlinear_output_uses_output_space_backend_without_transforming_objective() -> None:
     from fitting.implicit_model import ImplicitModelDefinition

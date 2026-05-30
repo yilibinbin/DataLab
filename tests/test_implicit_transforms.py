@@ -135,6 +135,29 @@ def test_affine_output_transform_rejects_runtime_formula_alias_mismatches() -> N
     assert detect_output_transform(_definition("sin(1)*u + 1")) is None
 
 
+def test_seed_hint_detector_rejects_runtime_formula_alias_mismatches() -> None:
+    from fitting.implicit_seed_hints import detect_seed_hint
+
+    lowercase_constant = ImplicitModelDefinition(
+        x_variables=("n",),
+        implicit_variable="delta",
+        equation="d0",
+        output_expression="r/(n-delta)^2",
+        parameters=("d0",),
+    )
+    lowercase_function = ImplicitModelDefinition(
+        x_variables=("n",),
+        implicit_variable="delta",
+        equation="d0",
+        output_expression="sin[R]/(n-delta)^2",
+        parameters=("d0",),
+        constants={"R": "1"},
+    )
+
+    assert detect_seed_hint(lowercase_constant) is None
+    assert detect_seed_hint(lowercase_function) is None
+
+
 def test_affine_output_transform_rejects_nonfinite_complex_or_near_zero_scale() -> None:
     def _definition(output_expression: str, constants: dict[str, str] | None = None) -> ImplicitModelDefinition:
         return ImplicitModelDefinition(

@@ -6,7 +6,8 @@ from typing import cast
 import pytest
 import sympy as sp
 
-from shared.symbolic_math import build_sympy_local_dict, parse_symbolic_expression
+from datalab_latex.expression_engine import list_allowed_functions, safe_eval
+from shared.symbolic_math import SYMPY_CONSTANTS, SYMPY_FUNCTIONS, build_sympy_local_dict, parse_symbolic_expression
 
 
 def test_parse_symbolic_expression_supports_numeric_literals_and_xor() -> None:
@@ -104,3 +105,30 @@ def test_build_sympy_local_dict_uses_exact_parser_registry() -> None:
     log10 = cast(Callable[[object], object], local_dict["Log10"])
     assert callable(log10)
     assert str(log10("x")) == "log(x)/log(10)"
+
+
+def test_symbolic_registry_tracks_runtime_safe_eval_allowlist_names() -> None:
+    runtime = list_allowed_functions()
+
+    assert set(SYMPY_FUNCTIONS) == set(runtime["functions"])
+    assert set(SYMPY_CONSTANTS) == set(runtime["constants"])
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "Sin[x] + Pi + E",
+        "Sqrt[x^2] + Log10[100]",
+    ],
+)
+def test_symbolic_parser_and_safe_eval_accept_same_capitalized_formula_contract(expression: str) -> None:
+    parse_symbolic_expression(expression, variables=("x",))
+    safe_eval(expression, {"x": 2})
+
+
+@pytest.mark.parametrize("expression", ["sin[x]", "cos[x]", "sqrt[x]"])
+def test_symbolic_parser_and_safe_eval_reject_same_lowercase_function_contract(expression: str) -> None:
+    with pytest.raises(ValueError):
+        parse_symbolic_expression(expression, variables=("x",))
+    with pytest.raises(ValueError):
+        safe_eval(expression, {"x": 2})
