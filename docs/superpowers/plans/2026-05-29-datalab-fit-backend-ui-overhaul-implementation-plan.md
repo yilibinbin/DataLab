@@ -981,10 +981,34 @@ git commit -m "feat: add example workspaces and fitting verification"
 Run:
 
 ```bash
-rg -n "Users/fanghao|localhost|apm8517|backup-windows|auto.?fit|AutoFit|automatic fitting" app_desktop fitting shared docs examples tests tools -g '!**/* 2.*'
+home_path_pattern='/''Users/'
+temp_path_pattern='/''var/folders/'
+local_host_pattern='local''host|127''\.0\.0\.1'
+secret_pattern='OPENAI''_API_KEY|GITHUB''_TOKEN|ghp''_'
+private_host_pattern='private ''host'
+local_server_pattern='temporary local ''server'
+private_host_marker_pattern='apm''8517|backup-''windows'
+private_content_pattern="($home_path_pattern|$temp_path_pattern|$local_host_pattern|$private_host_pattern|$local_server_pattern|$private_host_marker_pattern|$secret_pattern)"
+audit_paths=(app_desktop fitting shared docs examples tests tools)
+audit_excludes=(':(exclude)docs/superpowers/plans/2026-05-29-datalab-implicit-performance-auto-plan.md' ':(exclude)docs/superpowers/plans/2026-05-29-datalab-fit-backend-ui-overhaul-implementation-plan.md')
+if git diff -- "${audit_paths[@]}" "${audit_excludes[@]}" | rg -n "$private_content_pattern"; then
+  echo "Working-tree private-content audit failed." >&2
+  exit 1
+fi
+if git diff --cached -- "${audit_paths[@]}" "${audit_excludes[@]}" | rg -n "$private_content_pattern"; then
+  echo "Staged private-content audit failed." >&2
+  exit 1
+fi
+if git diff origin/main...HEAD -- "${audit_paths[@]}" "${audit_excludes[@]}" | rg -n "$private_content_pattern"; then
+  echo "Branch private-content audit failed." >&2
+  exit 1
+fi
+git diff origin/main...HEAD -- "${audit_paths[@]}" \
+  ':(exclude)docs/superpowers/plans/2026-05-29-datalab-implicit-performance-auto-plan.md' \
+  | rg -n "auto.?fit|AutoFit|automatic fitting" || true
 ```
 
-Expected: no private path/server hits. Remaining automatic-fitting hits, if any, are only in migration tests or release notes that explicitly document removal.
+Expected: no private path/server hits in working-tree, staged, or branch diffs. Remaining automatic-fitting hits, if any, are only in migration tests or release notes that explicitly document removal.
 
 - [ ] **Step 2: Run focused full gate**
 
