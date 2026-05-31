@@ -666,7 +666,13 @@ def _capture_ui(window: Any) -> dict[str, Any]:
 
 
 def _capture_result_snapshot(window: Any, workspace_hash: str, attachments: dict[str, bytes]) -> dict[str, Any]:
-    markdown = _text(getattr(window, "result_edit", None))
+    rendered_text = _text(getattr(window, "result_edit", None))
+    markdown = getattr(window, "_last_result_text", None)
+    markdown_format = str(getattr(window, "_last_result_text_format", "") or "")
+    cached_rendered = getattr(window, "_last_result_rendered_text", None)
+    if not isinstance(markdown, str) or not markdown or cached_rendered != rendered_text:
+        markdown = rendered_text
+        markdown_format = "plain"
     log_text = _text(getattr(window, "log_edit", None))
     csv_rows = list(getattr(window, "_csv_rows", []) or [])
     csv_headers = list(getattr(window, "_csv_headers", []) or [])
@@ -696,6 +702,7 @@ def _capture_result_snapshot(window: Any, workspace_hash: str, attachments: dict
         "snapshot_only": True,
         "stale": False,
         "markdown": markdown,
+        "markdown_format": markdown_format,
         "log": log_text,
         "csv": {"headers": csv_headers, "rows": csv_rows},
         "latex_source": latex_source,
@@ -811,7 +818,14 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
 
     snapshot = workspace.get("result_snapshot") or {"present": False}
     if snapshot.get("present"):
-        window.result_edit.setPlainText(str(snapshot.get("markdown") or ""))
+        result_text = str(snapshot.get("markdown") or "")
+        if snapshot.get("markdown_format") == "markdown" and hasattr(window, "_set_result_text"):
+            window._set_result_text(result_text)
+        else:
+            window.result_edit.setPlainText(result_text)
+            window._last_result_text = result_text
+            window._last_result_text_format = "plain"
+            window._last_result_rendered_text = window.result_edit.toPlainText()
         window.log_edit.setPlainText(str(snapshot.get("log") or ""))
         csv_payload = snapshot.get("csv") or {}
         window._set_csv_data(list(csv_payload.get("rows") or []), list(csv_payload.get("headers") or []))
@@ -826,6 +840,9 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
         window.log_edit.clear()
         window.latex_edit.clear()
         window._reset_csv_data()
+        window._last_result_text = ""
+        window._last_result_text_format = "plain"
+        window._last_result_rendered_text = ""
     window._last_result_kind = None
     window._last_result_payloads = {}
     window._workspace_snapshot_only = bool(snapshot.get("present"))
