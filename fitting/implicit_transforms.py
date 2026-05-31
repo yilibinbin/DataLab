@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import sympy as sp
 from mpmath import mp
 
+from shared.uncertainty import parse_numeric_value
 from shared.symbolic_math import parse_symbolic_expression
 
 from .implicit_model import ImplicitModelDefinition
@@ -61,7 +62,7 @@ def detect_output_transform(
     if slope_expr == 0 or slope_expr.has(u_symbol) or intercept_expr.has(u_symbol):
         return None
 
-    substitutions = {symbols[name]: sp.Float(str(definition.constants[name]), dps) for name in constants}
+    substitutions = {symbols[name]: sp.Float(mp.nstr(constants[name], dps), dps) for name in constants}
     slope_eval = sp.simplify(slope_expr.subs(substitutions))
     intercept_eval = sp.simplify(intercept_expr.subs(substitutions))
     x_symbols = [symbols[name] for name in definition.x_variables]
@@ -126,7 +127,7 @@ def _build_affine_transform(
 
 
 def _constant_values(constants: dict[str, str]) -> dict[str, mp.mpf]:
-    values = {name: mp.mpf(value) for name, value in constants.items()}
+    values = {name: parse_numeric_value(value) for name, value in constants.items()}
     if any(not mp.isfinite(value) for value in values.values()):
         raise ValueError("Affine output constants must be finite real values.")
     return values

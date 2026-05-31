@@ -121,6 +121,22 @@ def test_constants_normalization_uses_shared_uncertainty_parser() -> None:
     assert latex_parse_uncertainty is shared_parse_uncertainty
 
 
+def test_constants_normalization_mpmath_mode_accepts_uncertainty_nominal_values() -> None:
+    state = normalize_constants_state(
+        enabled=True,
+        rows=[
+            {"name": "CR", "value": "3.2898419602500(36)[+9]"},
+            {"name": "M", "value": "7295.29954171(17)"},
+        ],
+        numeric_mode="mpmath",
+    )
+
+    assert state.compute_dict(validate=True) == {
+        "CR": "3.2898419602500(36)[+9]",
+        "M": "7295.29954171(17)",
+    }
+
+
 def test_constants_normalization_rejects_reserved_names_in_mpmath_mode() -> None:
     state = normalize_constants_state(
         enabled=True,

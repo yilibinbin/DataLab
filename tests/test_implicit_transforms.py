@@ -55,6 +55,27 @@ def test_affine_output_transform_detects_generic_constant_affine_expression() ->
     assert transform.forward_values({"x": [mp.mpf("0")]}, [mp.mpf("3")]) == [mp.mpf("7")]
 
 
+def test_affine_output_transform_accepts_uncertain_constant_notation() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*x",
+        output_expression="CR*u + M",
+        parameters=("a", "b"),
+        constants={
+            "CR": "3.2898419602500(36)[+9]",
+            "M": "7295.29954171(17)",
+        },
+    )
+
+    transform = detect_output_transform(definition, precision=80)
+
+    assert transform is not None
+    with mp.workdps(80):
+        target = mp.mpf("3.2898419602500e9") * mp.mpf("2") + mp.mpf("7295.29954171")
+        assert transform.transformed_targets({"x": [mp.mpf("0")]}, [target]) == [mp.mpf("2")]
+
+
 def test_affine_output_transform_honors_requested_precision_for_constants() -> None:
     long_value = "1.123456789123456789123456789123456789123456789"
     long_intercept = "-0.987654321987654321987654321987654321987654321"

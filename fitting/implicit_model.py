@@ -17,6 +17,7 @@ from fitting.implicit_derivatives import ImplicitDerivativeEvaluator, build_impl
 from fitting.implicit_seed_hints import ImplicitSeedHint
 from fitting.statistics import compute_fit_statistics
 from shared.bilingual import _dual_msg
+from shared.uncertainty import parse_numeric_value
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -484,7 +485,7 @@ def _build_analytic_partial(
                 name: mp.mpf(value)
                 for name, value in zip(definition.parameters, param_tuple, strict=True)
             }
-            constants = {name: mp.mpf(value) for name, value in definition.constants.items()}
+            constants = {name: parse_numeric_value(value) for name, value in definition.constants.items()}
             min_abs_residual_u = max(mp.sqrt(mp.eps), tolerance)
             return derivative_evaluator.partial(
                 parameter_name,
@@ -787,7 +788,7 @@ def _scope_for(
 
 
 def _constant_values(constants: dict[str, str]) -> dict[str, mp.mpf]:
-    return {name: mp.mpf(value) for name, value in constants.items()}
+    return {name: parse_numeric_value(value) for name, value in constants.items()}
 
 
 def _observed_scope_for(
