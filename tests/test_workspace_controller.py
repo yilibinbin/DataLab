@@ -177,6 +177,54 @@ def test_workspace_controller_restores_snapshot_without_live_payloads(qtbot) -> 
     assert not target.display_digits_spin.isEnabled()
 
 
+def test_workspace_preserves_rendered_result_markdown_table(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    markdown = "\n".join(
+        [
+            "## Fit Results",
+            "",
+            "| Parameter | Value ± Error |",
+            "| --- | --- |",
+            "| a | 1.23 ± 0.04 |",
+        ]
+    )
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._set_result_text(markdown)
+
+    bundle = capture_workspace(source, title="rendered result")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+
+    assert snapshot["markdown"] == markdown
+    assert snapshot["markdown_format"] == "markdown"
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert "<table" in target.result_edit.toHtml()
+    assert "Parameter" in target.result_edit.toPlainText()
+    assert "| Parameter |" not in target.result_edit.toPlainText()
+
+
+def test_workspace_capture_ignores_stale_result_markdown_cache(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._set_result_text("| A | B |\n| --- | --- |\n| x | y |")
+    source.result_edit.setPlainText("plain replacement")
+
+    bundle = capture_workspace(source, title="plain result")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+
+    assert snapshot["markdown"] == "plain replacement"
+    assert snapshot["markdown_format"] == "plain"
+
+
 def test_workspace_save_and_open_round_trip_file(qtbot, tmp_path) -> None:
     from app_desktop.window import ExtrapolationWindow
 

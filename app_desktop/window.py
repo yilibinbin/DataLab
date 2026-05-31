@@ -1658,6 +1658,9 @@ class ExtrapolationWindow(
             self.result_edit.setMarkdown(text)
         else:
             self.result_edit.setPlainText(text)
+        self._last_result_text = text
+        self._last_result_text_format = "markdown"
+        self._last_result_rendered_text = self.result_edit.toPlainText()
 
     def _add_font_control_row(self, parent_layout: QVBoxLayout, editor, label: str):
         control_layout = QHBoxLayout()
