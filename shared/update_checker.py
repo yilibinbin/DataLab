@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import ssl
 import sys
 import urllib.request
 from dataclasses import dataclass
@@ -20,6 +21,11 @@ try:  # Python 3.11+
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - kept for interpreter drift
     tomllib = None  # type: ignore[assignment]
+
+try:
+    import certifi
+except ModuleNotFoundError:  # pragma: no cover - source installs may rely on system CA
+    certifi = None  # type: ignore[assignment]
 
 
 REPOSITORY_URL = "https://github.com/yilibinbin/DataLab"
@@ -173,7 +179,12 @@ def format_release_notes_for_dialog(body: str, *, max_chars: int = 4000) -> str:
 
 
 def _urlopen(request: urllib.request.Request, *, timeout: float) -> Any:
-    return urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 - fixed GitHub API URL
+    context = ssl.create_default_context(cafile=certifi.where() if certifi is not None else None)
+    return urllib.request.urlopen(  # noqa: S310 - fixed GitHub API URL
+        request,
+        timeout=timeout,
+        context=context,
+    )
 
 
 def fetch_latest_release(*, timeout: float = 10.0) -> ReleaseInfo:

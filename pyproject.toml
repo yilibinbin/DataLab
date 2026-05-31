@@ -36,6 +36,7 @@ classifiers = [
 # The frontend-specific Qt / Flask deps live under the [desktop] and
 # [web] extras so a headless CI or container install can opt out.
 dependencies = [
+    "certifi>=2024.7.4",
     "Pillow>=10.3.0",
     "mpmath>=1.3.0",
     "sympy>=1.13.0",
