@@ -6,6 +6,14 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.5.2] — 2026-05-31
+
+### Fixed
+- Preserved rendered result table formatting when saving and reopening
+  workspace files.
+- Kept workspace result snapshots compatible with existing plain-text
+  snapshots.
+
 ## [2.5.0] — 2026-05-31
 
 ### Changed
