@@ -1280,7 +1280,7 @@ def test_self_consistent_fit_subprocess_ignores_stale_disabled_legacy_gate(
     assert calls["target"] is workers_core._fit_job_subprocess_entry
 
 
-def test_legacy_implicit_backend_surfaces_are_removed() -> None:
+def test_removed_implicit_backend_surfaces_are_absent() -> None:
     assert not hasattr(ParallelConfig, "enable_new_implicit_backend")
     assert not hasattr(ParallelConfig, "enable_new_auto_fit_backend")
     assert not hasattr(workers_core, "_execute_fit_job_payload_subprocess_legacy")

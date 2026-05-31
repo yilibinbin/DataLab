@@ -27,9 +27,8 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 - Hardened implicit fitting derivative and sequence length guards.
 
 ### Removed
-- Removed the AIC/BIC automatic fitting/model-selection workflow from
-  desktop, web, CLI, and public fitting exports. Use explicit fitting
-  models instead.
+- Removed the AIC/BIC model-selection workflow from desktop, web, CLI,
+  and public fitting exports. Use explicit fitting models instead.
 
 ## [2.4.0] — 2026-05-29
 

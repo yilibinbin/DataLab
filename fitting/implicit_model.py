@@ -629,7 +629,7 @@ def _seed_candidates_for_current_point(
         name: mp.mpf(value)
         for name, value in zip(definition.x_variables, var_tuple, strict=True)
     }
-    return cast(tuple[Any, ...], seed_hint.candidates(variables, mp.mpf(target_data[point_index])))
+    return seed_hint.candidates(variables, mp.mpf(target_data[point_index]))
 
 
 def _record_seed_attempt(
@@ -760,7 +760,7 @@ def _implicit_solve_failure_context(
         for name, value in zip(definition.parameters, param_tuple, strict=True)
     }
     diagnostics = cache.diagnostics
-    return cast(str, _dual_msg(
+    return _dual_msg(
         "隐式方程逐点求解失败: "
         f"point_index={cache.current_point_index}, variables={variable_values}, parameters={parameter_values}, "
         f"method={definition.solve_options.method}, residual={mp.nstr(diagnostics.max_residual, 30)}, "
@@ -769,7 +769,7 @@ def _implicit_solve_failure_context(
         f"point_index={cache.current_point_index}, variables={variable_values}, parameters={parameter_values}, "
         f"method={definition.solve_options.method}, residual={mp.nstr(diagnostics.max_residual, 30)}, "
         f"iterations={diagnostics.max_iterations_used}, error={exc}",
-    ))
+    )
 
 
 def _scope_for(

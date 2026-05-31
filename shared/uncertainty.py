@@ -83,7 +83,21 @@ def parse_uncertainty_format(number_str: str, lang: str = "en") -> UncertainValu
         mantissa = mantissa.replace(".", "").lstrip("0")
         return max(1, len(mantissa))
 
+    def _decimal_exponent_factor(exp: int) -> mp.mpf:
+        return mp.mpf(f"1e{exp}")
+
+    def _mp_with_extra_decimal_exponent(text: str, exp: int) -> mp.mpf:
+        if exp == 0:
+            return _mp(text)
+        sci_match = re.search(r"[eE]([+-]?\d+)$", text)
+        if sci_match:
+            mantissa = text[: sci_match.start()]
+            exp += int(sci_match.group(1))
+            return mp.mpf(f"{mantissa}e{exp}")
+        return mp.mpf(f"{text}e{exp}")
+
     uncertainty = mp.mpf("0")
+    uncertainty_includes_outer_exponent = False
     if "(" in number_str and ")" in number_str:
         paren_match = re.search(r"\(([+-]?(?:\d+(?:\.\d*)?|\.\d+))\)", number_str)
         if paren_match:
@@ -96,27 +110,25 @@ def parse_uncertainty_format(number_str: str, lang: str = "en") -> UncertainValu
             if sci_match:
                 scientific_exponent = int(sci_match.group(1))
 
+            combined_exponent = scientific_exponent + exponent
             if "." in paren_text or "e" in paren_text.lower():
-                uncertainty = _mp(paren_text)
+                uncertainty = mp.mpf(f"{paren_text}e{combined_exponent}")
             else:
-                unc_value = _mp(paren_text)
                 if "." in mantissa_str:
                     decimal_pos = mantissa_str.find(".")
                     digits_after_decimal = len(mantissa_str) - decimal_pos - 1
-                    uncertainty = unc_value * mp.power(10, -digits_after_decimal)
-                else:
-                    uncertainty = unc_value
+                    combined_exponent -= digits_after_decimal
+                uncertainty = mp.mpf(f"{paren_text}e{combined_exponent}")
+            uncertainty_includes_outer_exponent = True
 
-            if scientific_exponent:
-                uncertainty *= mp.power(10, scientific_exponent)
             number_str = mantissa_str + suffix
 
-    value = _mp(number_str)
+    value = _mp_with_extra_decimal_exponent(number_str, exponent)
 
     if exponent != 0:
-        factor = mp.power(10, exponent)
-        value *= factor
-        uncertainty *= factor
+        if not uncertainty_includes_outer_exponent:
+            factor = _decimal_exponent_factor(exponent)
+            uncertainty *= factor
 
     return UncertainValue(value, uncertainty, uncertainty_digits=uncertainty_digits)
 
