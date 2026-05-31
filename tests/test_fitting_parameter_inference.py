@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from mpmath import mp
 
 from fitting import infer_parameter_names
 from fitting.model_parser import build_model_specification
@@ -41,3 +42,19 @@ def test_infer_parameter_names_shared_by_custom_and_implicit():
 def test_build_model_specification_rejects_reserved_constant_names(constants):
     with pytest.raises(ValueError, match="Reserved|保留"):
         build_model_specification("A*x + K", ["x"], ["A"], constants=constants)
+
+
+def test_build_model_specification_uses_nominal_value_for_uncertain_constants():
+    model = build_model_specification(
+        "A*x + CR + M",
+        ["x"],
+        ["A"],
+        constants={
+            "CR": "3.2898419602500(36)[+9]",
+            "M": "7295.29954171(17)",
+        },
+    )
+
+    value = model.evaluate({"x": mp.mpf("2")}, {"A": mp.mpf("5")})
+
+    assert value == mp.mpf("5") * 2 + mp.mpf("3.2898419602500e9") + mp.mpf("7295.29954171")

@@ -119,3 +119,22 @@ def parse_uncertainty_format(number_str: str, lang: str = "en") -> UncertainValu
         uncertainty *= factor
 
     return UncertainValue(value, uncertainty, uncertainty_digits=uncertainty_digits)
+
+
+def parse_numeric_value(value: object, lang: str = "en") -> mp.mpf:
+    """Return the nominal numeric value from a plain or uncertain literal.
+
+    Constants used by fitting expressions are deterministic inputs, so their
+    uncertainty component is intentionally ignored here. This accepts the same
+    compact notation used by data and error-propagation inputs, including
+    ``3.2898419602500(36)[+9]`` and ``1.23(4)e-2``.
+    """
+
+    if isinstance(value, mp.mpf):
+        return value
+    if isinstance(value, (int, float)):
+        return mp.mpf(value)
+    try:
+        return parse_uncertainty_format(str(value), lang=lang).value
+    except Exception:
+        return mp.mpf(value)

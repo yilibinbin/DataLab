@@ -11,7 +11,7 @@ import mpmath as mp
 from fitting.model_parser import is_reserved_expression_name
 from shared.bilingual import _dual_msg
 from shared.fitting_uncertainty import FitUncertaintyState, fit_uncertainty_policy
-from shared.uncertainty import parse_uncertainty_format
+from shared.uncertainty import parse_numeric_value, parse_uncertainty_format
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -236,7 +236,7 @@ class ConstantsState:
             if validate:
                 try:
                     if self.numeric_mode == "mpmath":
-                        mp.mpf(value)
+                        parse_numeric_value(value)
                     else:
                         parse_uncertainty_format(value)
                 except Exception as exc:  # noqa: BLE001
