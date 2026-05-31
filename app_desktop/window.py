@@ -1653,13 +1653,15 @@ class ExtrapolationWindow(
 
     # ------------------------------------------------------------- Logging --
     def _set_result_text(self, text: str):
-        """Display result text.  Uses Markdown rendering when available."""
+        """Display result text and cache the rendered source for workspace snapshots."""
         if hasattr(self.result_edit, 'setMarkdown'):
             self.result_edit.setMarkdown(text)
+            text_format = "markdown"
         else:
             self.result_edit.setPlainText(text)
+            text_format = "plain"
         self._last_result_text = text
-        self._last_result_text_format = "markdown"
+        self._last_result_text_format = text_format
         self._last_result_rendered_text = self.result_edit.toPlainText()
 
     def _add_font_control_row(self, parent_layout: QVBoxLayout, editor, label: str):
