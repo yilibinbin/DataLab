@@ -21,6 +21,11 @@ from typing import Any, Literal
 from urllib.parse import SplitResult, urlsplit
 
 from shared.update_checker import ReleaseInfo, is_newer_version, normalize_version_tag
+from shared.update_signing import (
+    UpdateSignatureError,
+    has_installable_assets,
+    verify_manifest_signature,
+)
 
 
 UPDATES_MANIFEST_NAME = "updates.json"
@@ -173,6 +178,13 @@ def select_update_payload(
 ) -> UpdatePayload:
     if manifest.get("schema_version") != 1:
         raise UpdatePayloadError("unsupported schema_version")
+    try:
+        verify_manifest_signature(
+            manifest,
+            require_signature=has_installable_assets(manifest),
+        )
+    except UpdateSignatureError as exc:
+        raise UpdatePayloadError(str(exc)) from exc
 
     version = normalize_version_tag(str(manifest.get("version") or ""))
     if version != normalize_version_tag(release.tag_name):
