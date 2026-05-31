@@ -374,6 +374,9 @@ $commonArgs = @(
     "--noconfirm",
     "--clean",
     "--paths", $projectRoot,
+    # certifi provides the CA bundle used by the frozen update checker.
+    "--hidden-import", "certifi",
+    "--collect-all", "certifi",
     "--hidden-import", "mpmath",
     "--collect-all", "mpmath",
     "--hidden-import", "sympy",

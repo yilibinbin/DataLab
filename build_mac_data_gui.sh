@@ -255,12 +255,15 @@ if [[ "${DATALAB_BUNDLE_TINYTEX:-0}" == "1" ]]; then
   fi
 fi
 
-# Hidden imports and package collections for numerical/symbolic backends.
+# Hidden imports and package collections for bundled dependencies.
+# certifi provides the CA bundle used by the frozen update checker.
 # SymPy is collected for formula parsing, symbolic fitting, and constraints.
 # emcee and corner sit behind ``HAS_EMCEE`` guards in fitting.mcmc_fitter, so
 # PyInstaller's import graph won't pick them up automatically; declare them
 # explicitly so the bundled .app actually ships MCMC support.
 HIDDEN_IMPORT_FLAGS=(
+  --hidden-import "certifi"
+  --collect-all "certifi"
   --hidden-import "mpmath"
   --collect-all "mpmath"
   --hidden-import "sympy"

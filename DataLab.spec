@@ -22,6 +22,8 @@ data_gui.ps1):
 - hidden imports + ``collect_all`` for emcee and corner — these ship
   behind ``HAS_EMCEE`` runtime guards so PyInstaller's static analyser
   drops them without explicit declaration
+- hidden import + ``collect_all`` for certifi — update checks need a
+  bundled CA store inside frozen macOS/Windows apps
 """
 from pathlib import Path
 
@@ -53,6 +55,7 @@ datas = [
 ]
 binaries = []
 hiddenimports = [
+    "certifi",
     "mpmath",
     "sympy",
     "emcee",
@@ -60,7 +63,7 @@ hiddenimports = [
     "emcee.backends",
     "corner",
 ]
-for _pkg in ("mpmath", "sympy", "emcee", "corner"):
+for _pkg in ("certifi", "mpmath", "sympy", "emcee", "corner"):
     _d, _b, _h = collect_all(_pkg)
     datas += _d
     binaries += _b
