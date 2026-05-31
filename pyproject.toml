@@ -41,6 +41,7 @@ dependencies = [
     "sympy>=1.13.0",
     "matplotlib>=3.10.0",
     "pyyaml>=6.0",
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]

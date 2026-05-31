@@ -16,6 +16,20 @@ ManifestMutation = Callable[[Manifest], None]
 
 SHA_MAC = "0" * 64
 SHA_WIN = "1" * 64
+TEST_SIGNING_KEY_ID = "test-key"
+TEST_PRIVATE_KEY_B64 = "arq5WLNRcnCZW5b+LGSYraZ0boKTF5oCDOo8Wn6jwf4="
+TEST_PUBLIC_KEY_B64 = "CSrQ+417vi16q+8rxYk7X6x58RDmkQH0WVq168r2ArU="
+
+
+@pytest.fixture(autouse=True)
+def _use_test_update_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    import shared.update_signing as update_signing
+
+    monkeypatch.setattr(
+        update_signing,
+        "DEFAULT_UPDATE_PUBLIC_KEYS",
+        {TEST_SIGNING_KEY_ID: TEST_PUBLIC_KEY_B64},
+    )
 
 
 def release_with_assets(*assets: ReleaseAsset) -> ReleaseInfo:
@@ -31,7 +45,9 @@ def release_with_assets(*assets: ReleaseAsset) -> ReleaseInfo:
 
 
 def valid_manifest() -> Manifest:
-    return {
+    from shared.update_signing import sign_manifest
+
+    return sign_manifest({
         "schema_version": 1,
         "min_client_version": "2.2.0",
         "version": "2.3.0",
@@ -52,7 +68,7 @@ def valid_manifest() -> Manifest:
                 "size_bytes": 140,
             },
         },
-    }
+    }, private_key_b64=TEST_PRIVATE_KEY_B64, key_id=TEST_SIGNING_KEY_ID)
 
 
 def macos_release() -> ReleaseInfo:
@@ -112,6 +128,12 @@ def _too_new_min_client(data: Manifest) -> None:
     data["min_client_version"] = "9.0.0"
 
 
+def _resign(data: Manifest) -> Manifest:
+    from shared.update_signing import sign_manifest
+
+    return sign_manifest(data, private_key_b64=TEST_PRIVATE_KEY_B64, key_id=TEST_SIGNING_KEY_ID)
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
@@ -131,8 +153,40 @@ def test_validate_manifest_rejects_invalid_metadata(
 
     manifest = valid_manifest()
     mutation(manifest)
+    if message != "unsupported schema_version":
+        manifest = _resign(manifest)
 
     with pytest.raises(UpdatePayloadError, match=message):
+        select_update_payload(
+            release=macos_release(),
+            manifest=manifest,
+            platform_key="macos",
+            current_version="2.2.0",
+        )
+
+
+def test_manifest_with_installable_assets_requires_signature() -> None:
+    from shared.update_payload import UpdatePayloadError, select_update_payload
+
+    manifest = valid_manifest()
+    manifest.pop("signature")
+
+    with pytest.raises(UpdatePayloadError, match="signature"):
+        select_update_payload(
+            release=macos_release(),
+            manifest=manifest,
+            platform_key="macos",
+            current_version="2.2.0",
+        )
+
+
+def test_manifest_signature_detects_tampering() -> None:
+    from shared.update_payload import UpdatePayloadError, select_update_payload
+
+    manifest = valid_manifest()
+    _macos_asset(manifest)["size_bytes"] = 126
+
+    with pytest.raises(UpdatePayloadError, match="signature"):
         select_update_payload(
             release=macos_release(),
             manifest=manifest,
@@ -163,6 +217,7 @@ def test_min_client_version_respects_prerelease_ordering(current_version: str) -
 
     manifest = valid_manifest()
     manifest["min_client_version"] = "2.0.0"
+    manifest = _resign(manifest)
 
     with pytest.raises(UpdatePayloadError, match="too old"):
         select_update_payload(
@@ -178,6 +233,7 @@ def test_min_client_version_accepts_post_release_client() -> None:
 
     manifest = valid_manifest()
     manifest["min_client_version"] = "2.0.0"
+    manifest = _resign(manifest)
 
     payload = select_update_payload(
         release=macos_release(),
@@ -204,6 +260,7 @@ def test_manifest_asset_name_is_restricted(asset_name: str, message: str) -> Non
 
     manifest = valid_manifest()
     _macos_asset(manifest)["name"] = asset_name
+    manifest = _resign(manifest)
     release = release_with_assets(ReleaseAsset(asset_name, "https://example.invalid/asset", 125))
 
     with pytest.raises(UpdatePayloadError, match=message):
@@ -220,6 +277,7 @@ def test_manifest_release_url_rejects_query_string() -> None:
 
     manifest = valid_manifest()
     manifest["release_url"] = "https://github.com/yilibinbin/DataLab/releases/tag/v2.3.0?x=1"
+    manifest = _resign(manifest)
 
     with pytest.raises(UpdatePayloadError, match="release_url"):
         select_update_payload(
