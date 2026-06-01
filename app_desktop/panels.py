@@ -1141,6 +1141,14 @@ def build_left_panel(self):
     self._register_text(self.custom_param_refresh_btn, "识别参数", "Detect")
     self.custom_param_refresh_btn.clicked.connect(self._refresh_custom_parameter_rows)
     custom_param_header.addWidget(self.custom_param_refresh_btn)
+    self.custom_param_add_btn = QPushButton("+ 行")
+    self._register_text(self.custom_param_add_btn, "+ 行", "+ Row")
+    self.custom_param_add_btn.clicked.connect(lambda: _add_parameter_table_row(self, "custom_params_table"))
+    custom_param_header.addWidget(self.custom_param_add_btn)
+    self.custom_param_remove_btn = QPushButton("- 行")
+    self._register_text(self.custom_param_remove_btn, "- 行", "- Row")
+    self.custom_param_remove_btn.clicked.connect(lambda: _remove_parameter_table_rows(self, "custom_params_table"))
+    custom_param_header.addWidget(self.custom_param_remove_btn)
     custom_param_header_widget = QWidget()
     custom_param_header_widget.setLayout(custom_param_header)
     self.custom_param_header_widget = custom_param_header_widget
@@ -1174,6 +1182,8 @@ def build_left_panel(self):
         self.implicit_equation_edit,
         lhs=lambda: self.implicit_variable_edit.text(),
         title="Preview equation",
+        object_name="implicit_equation_preview_button",
+        tooltip_zh="预览方程",
     )
     implicit_equation_title_row.addWidget(self.implicit_equation_preview_button)
     implicit_layout.addLayout(implicit_equation_title_row)
@@ -1192,6 +1202,8 @@ def build_left_panel(self):
         self.implicit_output_edit,
         lhs="y",
         title="Preview output",
+        object_name="implicit_output_preview_button",
+        tooltip_zh="预览输出",
     )
     implicit_output_title_row.addWidget(self.implicit_output_preview_button)
     implicit_layout.addLayout(implicit_output_title_row)
@@ -1206,6 +1218,14 @@ def build_left_panel(self):
     self._register_text(self.implicit_param_refresh_btn, "识别参数", "Detect")
     self.implicit_param_refresh_btn.clicked.connect(self._refresh_implicit_parameter_rows)
     implicit_param_header.addWidget(self.implicit_param_refresh_btn)
+    self.implicit_param_add_btn = QPushButton("+ 行")
+    self._register_text(self.implicit_param_add_btn, "+ 行", "+ Row")
+    self.implicit_param_add_btn.clicked.connect(lambda: _add_parameter_table_row(self, "implicit_params_table"))
+    implicit_param_header.addWidget(self.implicit_param_add_btn)
+    self.implicit_param_remove_btn = QPushButton("- 行")
+    self._register_text(self.implicit_param_remove_btn, "- 行", "- Row")
+    self.implicit_param_remove_btn.clicked.connect(lambda: _remove_parameter_table_rows(self, "implicit_params_table"))
+    implicit_param_header.addWidget(self.implicit_param_remove_btn)
     implicit_layout.addLayout(implicit_param_header)
 
     self.implicit_params_table = ParameterTable()
@@ -1324,8 +1344,8 @@ def build_left_panel(self):
     self._register_title(options_box, "选项", "Options")
     options_layout = QVBoxLayout(options_box)
     precision_layout = QHBoxLayout()
-    label_precision = QLabel("多精度位数 (mpmath)：")
-    self._register_text(label_precision, "多精度位数 (mpmath)：", "mpmath digits:")
+    label_precision = QLabel("数值精度位数：")
+    self._register_text(label_precision, "数值精度位数：", "Precision digits:")
     self.mpmath_precision_spin = QSpinBox()
     self.mpmath_precision_spin.setRange(MIN_MPMATH_DPS, MAX_MPMATH_DPS)
     self.mpmath_precision_spin.setValue(16)
@@ -1356,15 +1376,16 @@ def build_left_panel(self):
     self.parallel_mode_combo = QComboBox()
     parallel_mode_items = [
         ("自动", "Auto", ParallelMode.AUTO.value),
-        ("串行", "Serial", ParallelMode.SERIAL.value),
-        ("线程", "Threads", ParallelMode.THREAD.value),
-        ("进程", "Processes", ParallelMode.PROCESS.value),
+        ("串行优先", "Prefer serial", ParallelMode.SERIAL.value),
+        ("线程优先", "Prefer threads", ParallelMode.THREAD.value),
+        ("进程优先", "Prefer processes", ParallelMode.PROCESS.value),
     ]
     for zh, _en, data in parallel_mode_items:
         self.parallel_mode_combo.addItem(zh, data)
     self._register_combo(self.parallel_mode_combo, parallel_mode_items)
-    lbl_parallel_mode = QLabel("并行模式：")
-    self._register_text(lbl_parallel_mode, "并行模式：", "Parallel mode:")
+    self.parallel_mode_combo.setToolTip("资源调度偏好；需要快速取消和隔离的任务仍会使用独立进程。")
+    lbl_parallel_mode = QLabel("资源策略：")
+    self._register_text(lbl_parallel_mode, "资源策略：", "Resource policy:")
     parallel_layout.addRow(lbl_parallel_mode, self.parallel_mode_combo)
 
     worker_row = QHBoxLayout()
@@ -1403,13 +1424,6 @@ def build_left_panel(self):
     self._register_text(lbl_nested_policy, "嵌套策略：", "Nested policy:")
     parallel_layout.addRow(lbl_nested_policy, self.parallel_nested_policy_combo)
 
-    self.parallel_implicit_backend_checkbox = QCheckBox("启用新隐式拟合后端")
-    self._register_text(
-        self.parallel_implicit_backend_checkbox,
-        "启用新隐式拟合后端",
-        "Enable new implicit backend",
-    )
-    parallel_layout.addRow(self.parallel_implicit_backend_checkbox)
     options_layout.addLayout(parallel_layout)
 
     try:
@@ -1442,10 +1456,6 @@ def build_left_panel(self):
     self.parallel_nested_policy_combo.currentIndexChanged.connect(
         lambda _index: save_current_parallel_config(self)
     )
-    self.parallel_implicit_backend_checkbox.toggled.connect(
-        lambda _checked: save_current_parallel_config(self)
-    )
-
     self.generate_latex_checkbox = QCheckBox("生成 LaTeX 文件")
     self.generate_latex_checkbox.setChecked(False)
     self.generate_latex_checkbox.toggled.connect(self._toggle_latex_options)
@@ -1971,10 +1981,13 @@ def _load_text_into_table(self, text: str):
     _apply_equal_column_stretch(table)
 
     table.setRowCount(max(len(result.rows), 5))
+    raw_rows = result.raw_rows or [["" for _ in row] for row in result.rows]
     for r, row in enumerate(result.rows):
+        raw_row = raw_rows[r] if r < len(raw_rows) else []
         for c, val in enumerate(row):
+            raw_cell = raw_row[c].strip() if c < len(raw_row) else ""
             if val is None:
-                cell_text = ""
+                cell_text = raw_cell
             elif val.is_integer() and abs(val) <= 1e15:
                 # Prefer "1" over "1.0" for Excel-style integers;
                 # preserves the user's input fidelity for whole numbers
@@ -2026,11 +2039,22 @@ def _update_formula_preview(self, edit_widget, label_widget, lhs=None):
     _render_formula_preview(label_widget, text, lhs=left_hand_side)
 
 
-def _make_formula_preview_button(self, edit_widget=None, lhs=None, title: str = "Preview formula"):
+def _make_formula_preview_button(
+    self,
+    edit_widget=None,
+    lhs=None,
+    title: str = "Preview formula",
+    *,
+    object_name: str = "",
+    tooltip_zh: str = "预览公式",
+):
     button = QPushButton("Preview")
+    if object_name:
+        button.setObjectName(object_name)
     button.setFocusPolicy(Qt.NoFocus)
     button.setToolTip(title)
     self._register_text(button, "预览", "Preview")
+    self._register_text(button, tooltip_zh, title, "setToolTip")
     if edit_widget is not None:
         button.clicked.connect(lambda: _open_formula_preview(self, edit_widget, lhs=lhs))
     return button
@@ -2043,6 +2067,26 @@ def _open_formula_preview(self, edit_widget, lhs=None) -> None:
         text = edit_widget.text().strip()
     left_hand_side = lhs() if callable(lhs) else lhs
     open_formula_preview_dialog(self, text, left_hand_side)
+
+
+def _add_parameter_table_row(self, table_name: str) -> None:
+    table = getattr(self, table_name, None)
+    if table is None:
+        return
+    table.add_parameter_row()
+
+
+def _remove_parameter_table_rows(self, table_name: str) -> None:
+    table = getattr(self, table_name, None)
+    if table is None:
+        return
+    selected_rows = {index.row() for index in table.table_view.selectedIndexes()}
+    if not selected_rows and table.table_view.rowCount() > 0:
+        last_row = table.table_view.rowCount() - 1
+        if not table.is_row_empty(last_row):
+            return
+        selected_rows = {last_row}
+    table.delete_rows(selected_rows)
 
 
 def _clear_table(self):

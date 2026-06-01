@@ -25,3 +25,9 @@ if str(ROOT) not in sys.path:
 # production refusal path still patch os.environ with `clear=True` to remove
 # this flag.
 os.environ.setdefault("DATALAB_DEBUG", "1")
+
+
+def pytest_ignore_collect(collection_path, config):  # type: ignore[no-untyped-def]
+    """Ignore local test-file duplicates produced by Finder-style conflict copies."""
+
+    return collection_path.name.startswith("test_") and collection_path.name.endswith(" 2.py")

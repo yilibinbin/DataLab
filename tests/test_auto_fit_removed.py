@@ -114,6 +114,13 @@ def test_auto_fit_worker_is_not_exported():
     assert importlib.util.find_spec("app_desktop.auto_fit_subprocess") is None
 
 
+def test_auto_fit_backend_toggle_is_not_in_parallel_config():
+    from shared.parallel_config import ParallelConfig
+
+    assert not hasattr(ParallelConfig, "enable_new_auto_fit_backend")
+    assert not hasattr(ParallelConfig(), "enable_new_auto_fit_backend")
+
+
 def test_tests_do_not_import_removed_auto_fit_job():
     tests_dir = Path(__file__).resolve().parent
     removed_import = "from app_desktop.workers_core import " + "AutoFitJob"

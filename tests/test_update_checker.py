@@ -76,6 +76,43 @@ def test_fetch_latest_release_parses_github_payload(monkeypatch) -> None:
     assert release.assets[0].name == "DataLab-macOS.dmg"
 
 
+def test_urlopen_uses_certifi_ca_bundle(monkeypatch) -> None:
+    from shared import update_checker
+
+    seen: dict[str, object] = {}
+    fake_context = object()
+
+    class FakeCertifi:
+        @staticmethod
+        def where() -> str:
+            return "/tmp/cacert.pem"
+
+    def fake_create_default_context(*, cafile=None):
+        seen["cafile"] = cafile
+        return fake_context
+
+    def fake_urlopen(request, *, timeout, context):
+        seen["url"] = request.full_url
+        seen["timeout"] = timeout
+        seen["context"] = context
+        return _fake_response({"tag_name": "v2.5.0"})
+
+    monkeypatch.setattr(update_checker, "certifi", FakeCertifi)
+    monkeypatch.setattr(update_checker.ssl, "create_default_context", fake_create_default_context)
+    monkeypatch.setattr(update_checker.urllib.request, "urlopen", fake_urlopen)
+
+    request = update_checker.urllib.request.Request("https://example.invalid")
+    with update_checker._urlopen(request, timeout=4) as response:
+        response.read()
+
+    assert seen == {
+        "cafile": "/tmp/cacert.pem",
+        "url": "https://example.invalid",
+        "timeout": 4,
+        "context": fake_context,
+    }
+
+
 def test_fetch_latest_release_parses_asset_size(monkeypatch) -> None:
     from shared import update_checker
 

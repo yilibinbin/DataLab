@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "datalab"
-version = "2.4.0"
+version = "2.5.2"
 description = "High-precision scientific tool for sequence extrapolation, curve fitting, and error propagation with LaTeX export"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -36,11 +36,13 @@ classifiers = [
 # The frontend-specific Qt / Flask deps live under the [desktop] and
 # [web] extras so a headless CI or container install can opt out.
 dependencies = [
+    "certifi>=2024.7.4",
     "Pillow>=10.3.0",
     "mpmath>=1.3.0",
     "sympy>=1.13.0",
     "matplotlib>=3.10.0",
     "pyyaml>=6.0",
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]

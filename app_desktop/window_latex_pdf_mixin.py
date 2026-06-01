@@ -9,7 +9,6 @@ from pathlib import Path
 
 from PySide6.QtCore import QEventLoop, Qt, QThread, Signal
 from PySide6.QtWidgets import (
-    QApplication,
     QFileDialog,
     QLabel,
     QMessageBox,
@@ -36,6 +35,9 @@ from shared.latex_engine import (
     tectonic_compile_argv,
 )
 
+from .resources import _ensure_default_path_augmented, _pil_to_qpixmap
+from .workers_core import _safe_read_text, _safe_resolve_path
+
 
 # Bilingual labels for every Tectonic install stage in one place — adding
 # a new stage requires editing only this table (was two parallel dicts in
@@ -46,9 +48,6 @@ _TECTONIC_STAGE_LABELS: dict[str, tuple[str, str]] = {
     "installed": ("安装完成。", "Installed."),
     "already-installed": ("已安装。", "Already installed."),
 }
-
-from .resources import _ensure_default_path_augmented, _pil_to_qpixmap
-from .workers_core import _safe_read_text, _safe_resolve_path
 
 
 class _TectonicInstallWorker(QThread):

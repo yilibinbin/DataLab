@@ -32,7 +32,11 @@ class ModelProblem:
 def constants_for_compute(problem: ModelProblem) -> dict[str, str]:
     if not problem.constants_enabled:
         return {}
-    return {str(name): str(value) for name, value in problem.constants.items() if str(name).strip()}
+    return {
+        trimmed_name: str(value)
+        for name, value in problem.constants.items()
+        if (trimmed_name := str(name).strip())
+    }
 
 
 def parameters_for_compute(rows: Sequence[ParameterDraft]) -> dict[str, dict[str, str]]:
@@ -41,6 +45,8 @@ def parameters_for_compute(rows: Sequence[ParameterDraft]) -> dict[str, dict[str
         name = row.name.strip()
         if not name or row.orphaned:
             continue
+        if name in config:
+            raise ValueError(f"Duplicate parameter name: {name}")
         entry: dict[str, str] = {}
         for field_name in ("initial", "fixed", "min", "max"):
             value = getattr(row, field_name).strip()

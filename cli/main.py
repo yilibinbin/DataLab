@@ -17,6 +17,8 @@ import traceback
 from pathlib import Path
 from typing import Optional, Sequence
 
+from cli.batch_config import BatchJob
+
 __all__ = ["main", "run_batch_file"]
 
 _logger = logging.getLogger(__name__)
@@ -35,12 +37,11 @@ _CLI_MODEL_ALIASES = {
 _POLYNOMIAL_DEGREES = {
     "linear": 1,
     "poly": 1,
-    "polynomial": 1,
     "quadratic": 2,
     "cubic": 3,
 }
-_PUBLIC_CLI_MODELS = frozenset(
-    {"polynomial", "inverse_power", "pade", "power_limit", "custom"}
+_SUPPORTED_CLI_MODEL_INPUTS = frozenset(
+    {"linear", "poly", "quadratic", "cubic", "inverse", "inverse_power"}
 )
 
 
@@ -83,7 +84,7 @@ def _read_xy_csv(path: Path) -> tuple[list[float], list[float]]:
     return xs, ys
 
 
-def _run_fit(job) -> dict:
+def _run_fit(job: BatchJob) -> dict[str, object]:
     """Execute a single explicit CLI fit."""
     from fitting import build_inverse_series_definition, build_polynomial_definition
     from fitting.auto_models import (
@@ -91,24 +92,31 @@ def _run_fit(job) -> dict:
     )
     from shared.precision import precision_guard
 
-    raw_model = (job.model or "polynomial").strip()
+    raw_model = job.model.strip()
     model_key = raw_model.lower()
     if model_key in _REMOVED_FIT_MODELS:
         raise ValueError(
             f"Job {job.name!r}: model {raw_model!r} has been removed. "
-            "Choose an explicit model: polynomial, inverse_power, "
-            "pade, power_limit, or custom."
+            "Choose a CLI-supported explicit model: linear, poly, quadratic, "
+            "cubic, inverse, or inverse_power."
         )
 
     canonical_model = _CLI_MODEL_ALIASES.get(model_key, model_key)
-    if canonical_model not in _PUBLIC_CLI_MODELS:
-        available = ", ".join(sorted(_PUBLIC_CLI_MODELS))
+    if model_key not in _SUPPORTED_CLI_MODEL_INPUTS:
+        available = ", ".join(sorted(_SUPPORTED_CLI_MODEL_INPUTS))
         raise ValueError(
             f"Job {job.name!r}: unknown model {job.model!r}. "
-            f"Available models: {available}"
+            f"Supported CLI batch models: {available}. "
+            "Use the desktop or web UI for other explicit DataLab models."
         )
     if canonical_model == "polynomial":
-        definition = build_polynomial_definition(_POLYNOMIAL_DEGREES.get(model_key, 1))
+        degree = _POLYNOMIAL_DEGREES.get(model_key)
+        if degree is None:
+            raise ValueError(
+                f"Job {job.name!r}: model {raw_model!r} is ambiguous in CLI batch mode. "
+                "Use 'linear', 'quadratic', or 'cubic'."
+            )
+        definition = build_polynomial_definition(degree)
     elif canonical_model == "inverse_power":
         definition = build_inverse_series_definition(1, 3)
     else:
@@ -142,7 +150,7 @@ def _run_fit(job) -> dict:
     }
 
 
-def _run_calc(job) -> dict:
+def _run_calc(job: BatchJob) -> dict[str, object]:
     """Execute a sequence-extrapolation calc via the Wynn-ε accelerator.
 
     For the CLI we keep this minimal — richer options (Richardson,
@@ -176,7 +184,7 @@ def _run_calc(job) -> dict:
     }
 
 
-def _dispatch(job) -> dict:
+def _dispatch(job: BatchJob) -> dict[str, object]:
     """Route to the operation-specific runner."""
     if job.operation == "fit":
         return _run_fit(job)

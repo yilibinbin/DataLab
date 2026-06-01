@@ -36,14 +36,14 @@ def workspace_paths_from_argv(argv: Sequence[str], *, enabled: bool = True) -> l
 # Frozen multiprocessing workers must be diverted before Qt imports.
 multiprocessing.freeze_support()
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer
-from PySide6.QtGui import QFileOpenEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer  # noqa: E402
+from PySide6.QtGui import QFileOpenEvent  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from shared.ui_keyguards import ArrowKeyGuard
+from shared.ui_keyguards import ArrowKeyGuard  # noqa: E402
 
-from .resources import _apply_system_theme, resolve_resource_path
-from .window import ExtrapolationWindow
+from .resources import _apply_system_theme, resolve_resource_path  # noqa: E402
+from .window import ExtrapolationWindow  # noqa: E402
 
 
 def _workspace_path_key(path: Path) -> str:

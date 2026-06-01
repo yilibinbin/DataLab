@@ -19,7 +19,7 @@ def test_runner_matches_existing_custom_fit_for_linear_model():
     y = [mp.mpf("1"), mp.mpf("3"), mp.mpf("5")]
 
     model = build_model_specification("a*x+b", ["x"], ["a", "b"])
-    state = build_parameter_state(["a", "b"], {"a": {"initial": "1"}, "b": {"initial": "0"}})
+    state = build_parameter_state({"a": {"initial": "1"}, "b": {"initial": "0"}}, ["a", "b"])
     old = fit_custom_model(model, state, {"x": x}, y, precision=50)
     new = FitRunner().fit(problem, {"x": x}, y, precision=50)
 

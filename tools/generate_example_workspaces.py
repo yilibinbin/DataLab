@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal, localcontext
 from pathlib import Path
 import sys
 from typing import Any
@@ -20,6 +21,7 @@ EXAMPLE_NAMES = {
     "error-propagation.datalab",
     "statistics.datalab",
     "fitting.datalab",
+    "quantum-defect-implicit.datalab",
 }
 
 
@@ -64,6 +66,55 @@ def _table_section_from_file(path: Path) -> dict[str, Any]:
         "canonical_table": canonical,
         "sha256": sha256_bytes((decoded_text + repr(canonical)).encode("utf-8")),
     }
+
+
+def _table_section_from_rows(headers: list[str], rows: list[list[str]]) -> dict[str, Any]:
+    decoded_text = "\n".join(["\t".join(headers), *("\t".join(row) for row in rows)]) + "\n"
+    canonical = {"headers": headers, "rows": rows}
+    raw_bytes = decoded_text.encode("utf-8")
+    return {
+        "enabled": True,
+        "source_kind": "manual_table",
+        "source_path": None,
+        "source_path_label": None,
+        "active_view": "table",
+        "decoded_text": decoded_text,
+        "encoding": "utf-8",
+        "newline": "lf",
+        "original_bytes_sha256": sha256_bytes(raw_bytes),
+        "raw_bytes_path": None,
+        "canonical_table": canonical,
+        "sha256": sha256_bytes((decoded_text + repr(canonical)).encode("utf-8")),
+    }
+
+
+def _uncertain_decimal(value: str) -> tuple[Decimal, Decimal]:
+    number, uncertainty = value.strip().split("(", 1)
+    uncertainty_digits = uncertainty.rstrip(")")
+    decimal_places = len(number.partition(".")[2])
+    return Decimal(number), Decimal(uncertainty_digits) * (Decimal(10) ** -decimal_places)
+
+
+def _format_decimal(value: Decimal, places: int = 12) -> str:
+    quant = Decimal(1).scaleb(-places)
+    return format(value.quantize(quant), "f")
+
+
+def _quantum_defect_energy_rows(delta_rows: list[list[str]]) -> list[list[str]]:
+    with localcontext() as context:
+        context.prec = 50
+        cr = Decimal("3.2898419602500e9")
+        mass_ratio = Decimal("7294.29954171")
+        rydberg = cr * mass_ratio / (mass_ratio + Decimal(1))
+        rows: list[list[str]] = []
+        for n_text, delta_text in delta_rows:
+            n_value = Decimal(n_text)
+            delta_value, delta_sigma = _uncertain_decimal(delta_text)
+            denominator = n_value - delta_value
+            energy = rydberg / (denominator * denominator)
+            sigma_energy = abs(Decimal(2) * rydberg * delta_sigma / (denominator**3))
+            rows.append([n_text, _format_decimal(energy, places=8), _format_decimal(sigma_energy, places=12)])
+        return rows
 
 
 def _empty_constants() -> dict[str, Any]:
@@ -174,7 +225,7 @@ def _base_config() -> dict[str, Any]:
             "implicit": {
                 "schema": 2,
                 "active": False,
-                "x_variables": ("x",),
+                "x_variables": ["x"],
                 "implicit_variable": "z",
                 "equation": "z - (A + B*x)",
                 "output_expression": "z",
@@ -309,11 +360,89 @@ def build_examples() -> dict[str, dict[str, Any]]:
             "variants": ["custom", "implicit", "weighted", "constraints", "high_precision", "scipy_precision_16"],
         },
     )
+    quantum_delta_rows = [
+        ["4", "-0.01161947382(2)"],
+        ["5", "-0.01182004861(4)"],
+        ["6", "-0.01192302789(3)"],
+        ["7", "-0.01198312684(3)"],
+        ["8", "-0.01202134197(4)"],
+        ["9", "-0.01204718702(6)"],
+        ["10", "-0.01206549920(6)"],
+        ["11", "-0.01207895610(8)"],
+        ["12", "-0.0120891399(1)"],
+        ["13", "-0.0120970357(1)"],
+        ["14", "-0.0121032829(2)"],
+        ["15", "-0.0121083122(2)"],
+    ]
+    quantum_rows = _quantum_defect_energy_rows(quantum_delta_rows)
+    quantum_config = _base_config()
+    quantum_config["common"]["mpmath_precision"] = 50
+    quantum_config["fitting"].update(
+        {
+            "model": "self_consistent",
+            "expression": "CR*M/(M+1)/(n-delta)^2",
+            "target_column": "E",
+            "weighted": True,
+            "variables": [{"name": "n", "column": "n"}],
+            "constraints_enabled": True,
+            "parameter_rows": [],
+            "parameter_orphans": [],
+            "custom_constants": {"enabled": False, "view": "table", "rows": [], "text": ""},
+            "implicit": {
+                "schema": 2,
+                "active": True,
+                "x_variables": ["n"],
+                "implicit_variable": "delta",
+                "equation": "d0 + d2/(n-delta)^2 + d4/(n-delta)^4",
+                "output_expression": "CR*M/(M+1)/(n-delta)^2",
+                "method": "root",
+                "initial": "-0.012",
+                "tolerance": "1e-28",
+                "max_iterations": 80,
+                "timeout_seconds": 300,
+                "constraints_enabled": True,
+                "parameters": [
+                    {"name": "d0", "initial": "-0.01213", "fixed": "", "min": "-0.02", "max": "0"},
+                    {"name": "d2", "initial": "0", "fixed": "", "min": "-1", "max": "1"},
+                    {"name": "d4", "initial": "0", "fixed": "", "min": "-1", "max": "1"},
+                ],
+                "parameter_orphans": [],
+                "constants": [
+                    {"name": "CR", "value": "3.2898419602500e9"},
+                    {"name": "M", "value": "7294.29954171"},
+                ],
+                "constants_enabled": True,
+                "constants_view": "table",
+                "constants_text": "CR = 3.2898419602500e9\nM = 7294.29954171\n",
+            },
+        }
+    )
+    quantum = _manifest(
+        title="Example - Quantum Defect Implicit Fit",
+        mode="fitting",
+        data=_table_section_from_rows(["n", "E", "sigma_E"], quantum_rows),
+        config=quantum_config,
+        markdown=(
+            "Self-consistent quantum-defect fitting example using an ionization-energy output expression. "
+            "The workspace stores the data directly so it can be opened without resolving an external data-file path."
+        ),
+        csv_rows=[
+            {"parameter": "d0", "value": "-0.01213"},
+            {"parameter": "d2", "value": "0"},
+            {"parameter": "d4", "value": "0"},
+        ],
+        examples={
+            "category": "fitting",
+            "source_files": [],
+            "variants": ["self_consistent", "implicit", "quantum_defect", "ionization_energy", "weighted"],
+        },
+    )
     return {
         "extrapolation.datalab": extrapolation,
         "error-propagation.datalab": error,
         "statistics.datalab": statistics,
         "fitting.datalab": fitting,
+        "quantum-defect-implicit.datalab": quantum,
     }
 
 

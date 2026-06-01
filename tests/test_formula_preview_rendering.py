@@ -6,7 +6,8 @@ import importlib
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QLabel  # noqa: E402
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtWidgets import QLabel, QSizePolicy  # noqa: E402
 
 
 def _pixmap_is_cleared(label: QLabel) -> bool:
@@ -34,6 +35,23 @@ def test_formula_preview_renders_pixmap(qtbot) -> None:
     assert label.pixmap() is not None
     assert not label.pixmap().isNull()
     assert not label.text().strip()
+
+
+def test_formula_preview_label_does_not_force_parent_width(qtbot) -> None:
+    from app_desktop.formula_preview import FormulaPreviewLabel, update_formula_preview
+
+    label = FormulaPreviewLabel()
+    qtbot.addWidget(label)
+
+    update_formula_preview(
+        label,
+        "d0 + d2/(n-delta)^2 + d4/(n-delta)^4 + d6/(n-delta)^6 + d8/(n-delta)^8",
+        lhs="delta",
+    )
+
+    assert label.maximumWidth() <= 320
+    assert label.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Ignored
+    assert label.cursor().shape() == Qt.CursorShape.PointingHandCursor
 
 
 def test_formula_preview_falls_back_to_text_on_invalid_input(qtbot) -> None:

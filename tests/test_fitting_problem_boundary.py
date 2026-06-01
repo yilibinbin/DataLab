@@ -21,6 +21,29 @@ def test_model_problem_filters_disabled_constants_and_orphan_params():
     assert parameters_for_compute(drafts) == {"a": {"initial": "1"}}
 
 
+def test_model_problem_trims_constant_keys_and_rejects_duplicate_parameters():
+    import pytest
+
+    from fitting.problem import ModelProblem, ParameterDraft, constants_for_compute, parameters_for_compute
+
+    problem = ModelProblem(
+        model_type="custom",
+        expression="a*x + M",
+        variables=("x",),
+        constants={" M ": "2", "": "9"},
+    )
+
+    assert constants_for_compute(problem) == {"M": "2"}
+
+    with pytest.raises(ValueError, match="Duplicate parameter name: a"):
+        parameters_for_compute(
+            [
+                ParameterDraft(name=" a ", initial="1"),
+                ParameterDraft(name="a", initial="2"),
+            ]
+        )
+
+
 def test_implicit_classifier_records_observed_linear_case():
     from fitting.implicit_classifier import ImplicitProblemClassifier, ImplicitStrategy
     from fitting.implicit_model import ImplicitModelDefinition

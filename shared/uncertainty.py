@@ -1,5 +1,3 @@
-"""Shared uncertainty literal parsing helpers."""
-
 from __future__ import annotations
 
 import re
@@ -10,7 +8,7 @@ from mpmath import mp
 def _mp(value: object) -> mp.mpf:
     if isinstance(value, mp.mpf):
         return value
-    if isinstance(value, int | float):
+    if isinstance(value, (int, float)):
         return mp.mpf(value)
     try:
         return mp.mpf(value)
@@ -42,7 +40,6 @@ class UncertainValue:
 
 def parse_uncertainty_format(number_str: str, lang: str = "en") -> UncertainValue:
     """Parse a number in format 1.23(1)[-2] to value and uncertainty."""
-
     number_str = number_str.strip()
     number_str = number_str.replace("−", "-")
 
@@ -86,6 +83,9 @@ def parse_uncertainty_format(number_str: str, lang: str = "en") -> UncertainValu
         mantissa = mantissa.replace(".", "").lstrip("0")
         return max(1, len(mantissa))
 
+    def _decimal_exponent_factor(exp: int) -> mp.mpf:
+        return mp.mpf(f"1e{exp}")
+
     def _mp_with_extra_decimal_exponent(text: str, exp: int) -> mp.mpf:
         if exp == 0:
             return _mp(text)
@@ -125,18 +125,26 @@ def parse_uncertainty_format(number_str: str, lang: str = "en") -> UncertainValu
 
     value = _mp_with_extra_decimal_exponent(number_str, exponent)
 
-    if exponent != 0 and not uncertainty_includes_outer_exponent:
-        uncertainty *= mp.mpf(f"1e{exponent}")
+    if exponent != 0:
+        if not uncertainty_includes_outer_exponent:
+            factor = _decimal_exponent_factor(exponent)
+            uncertainty *= factor
 
     return UncertainValue(value, uncertainty, uncertainty_digits=uncertainty_digits)
 
 
 def parse_numeric_value(value: object, lang: str = "en") -> mp.mpf:
-    """Return the nominal numeric value from a plain or uncertain literal."""
+    """Return the nominal numeric value from a plain or uncertain literal.
+
+    Constants used by fitting expressions are deterministic inputs, so their
+    uncertainty component is intentionally ignored here. This accepts the same
+    compact notation used by data and error-propagation inputs, including
+    ``3.2898419602500(36)[+9]`` and ``1.23(4)e-2``.
+    """
 
     if isinstance(value, mp.mpf):
         return value
-    if isinstance(value, int | float):
+    if isinstance(value, (int, float)):
         return mp.mpf(value)
     try:
         return parse_uncertainty_format(str(value), lang=lang).value

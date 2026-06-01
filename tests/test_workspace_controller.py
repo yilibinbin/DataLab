@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 
 import mpmath as mp
+import pytest
 from PySide6.QtWidgets import QTableWidgetItem
 
 from fitting.hp_fitter import FitResult
@@ -177,6 +178,54 @@ def test_workspace_controller_restores_snapshot_without_live_payloads(qtbot) -> 
     assert not target.display_digits_spin.isEnabled()
 
 
+def test_workspace_preserves_rendered_result_markdown_table(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    markdown = "\n".join(
+        [
+            "## Fit Results",
+            "",
+            "| Parameter | Value ± Error |",
+            "| --- | --- |",
+            "| a | 1.23 ± 0.04 |",
+        ]
+    )
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._set_result_text(markdown)
+
+    bundle = capture_workspace(source, title="rendered result")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+
+    assert snapshot["markdown"] == markdown
+    assert snapshot["markdown_format"] == "markdown"
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert "<table" in target.result_edit.toHtml()
+    assert "Parameter" in target.result_edit.toPlainText()
+    assert "| Parameter |" not in target.result_edit.toPlainText()
+
+
+def test_workspace_capture_ignores_stale_result_markdown_cache(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._set_result_text("| A | B |\n| --- | --- |\n| x | y |")
+    source.result_edit.setPlainText("plain replacement")
+
+    bundle = capture_workspace(source, title="plain result")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+
+    assert snapshot["markdown"] == "plain replacement"
+    assert snapshot["markdown_format"] == "plain"
+
+
 def test_workspace_save_and_open_round_trip_file(qtbot, tmp_path) -> None:
     from app_desktop.window import ExtrapolationWindow
 
@@ -230,6 +279,65 @@ def test_workspace_restore_old_fitting_config_without_implicit(qtbot) -> None:
     assert target.implicit_equation_edit.toPlainText() == "a + b*Cos[u] + c*x"
     assert target.implicit_output_edit.toPlainText() == "u"
     assert [(row[0].text(), row[1].text()) for row in target.variable_rows] == [("x", "A")]
+
+
+def test_workspace_restore_rejects_malformed_custom_parameter_rows(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    source.custom_params_table.set_rows([{"name": "A", "initial": "1.0"}])
+    bundle = capture_workspace(source, title="malformed custom params")
+    bundle.manifest["workspace"]["config"]["fitting"]["parameter_rows"] = [
+        {"name": "A", "initial": "1.0"},
+        "bad-row",
+    ]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    with pytest.raises(ValueError, match="Parameter rows.*row 2|第 2 行"):
+        restore_workspace(target, bundle.manifest, bundle.attachments)
+
+
+def test_workspace_restore_rejects_malformed_custom_parameter_rows_top_level(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    source.custom_params_table.set_rows([{"name": "A", "initial": "1.0"}])
+    bundle = capture_workspace(source, title="malformed custom params")
+    bundle.manifest["workspace"]["config"]["fitting"]["parameter_rows"] = "bad-rows"
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    with pytest.raises(ValueError, match="Parameter rows.*list|必须是行对象列表"):
+        restore_workspace(target, bundle.manifest, bundle.attachments)
+
+
+def test_workspace_restore_rejects_malformed_implicit_constants(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "self_consistent")
+    source.implicit_constants_editor.setChecked(True)
+    source.implicit_constants_editor.set_rows([{"name": "K", "value": "1"}])
+    bundle = capture_workspace(source, title="malformed implicit constants")
+    bundle.manifest["workspace"]["config"]["fitting"]["implicit"]["constants"] = [
+        {"name": "K", "value": "1"},
+        3,
+    ]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    with pytest.raises(ValueError, match="Constant rows.*row 2|第 2 行"):
+        restore_workspace(target, bundle.manifest, bundle.attachments)
 
 
 def test_custom_fit_config_uses_parameter_table_and_constants_editor(qtbot) -> None:
@@ -300,6 +408,58 @@ def test_workspace_preserves_custom_fit_parameters_and_constants(qtbot) -> None:
     assert target.custom_constants_editor.numeric_mode() == "mpmath"
     assert target.custom_constants_editor.raw_text() == "# draft\nK = 1\n"
     assert target.custom_constants_editor.rows() == [{"name": "K", "value": "1"}]
+
+
+def test_workspace_restore_enables_custom_constraints_before_parameter_rows(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "custom")
+    source.fit_expr_edit.setPlainText("A*x")
+    source.custom_constraints_checkbox.setChecked(True)
+    source.custom_params_table.set_rows([{"name": "A", "initial": "2", "min": "0", "max": "5"}])
+
+    bundle = capture_workspace(source, title="legacy custom constraints")
+    fitting = bundle.manifest["workspace"]["config"]["fitting"]
+    fitting.pop("constraints_enabled", None)
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.custom_constraints_checkbox.isChecked() is True
+    assert target.custom_params_table.rows() == [
+        {"name": "A", "initial": "2", "fixed": "", "min": "0", "max": "5"}
+    ]
+
+
+def test_workspace_restore_enables_custom_constraints_for_legacy_parameter_list(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "custom")
+    source.fit_expr_edit.setPlainText("A*x")
+
+    bundle = capture_workspace(source, title="legacy list constraints")
+    fitting = bundle.manifest["workspace"]["config"]["fitting"]
+    fitting.pop("constraints_enabled", None)
+    fitting.pop("parameter_rows", None)
+    fitting["parameters"] = [{"name": "A", "initial": "2", "min": "0", "max": "5"}]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.custom_constraints_checkbox.isChecked() is True
+    assert target.custom_params_table.rows() == [
+        {"name": "A", "initial": "2", "fixed": "", "min": "0", "max": "5"}
+    ]
 
 
 def test_workspace_preserves_custom_constants_table_rows(qtbot) -> None:

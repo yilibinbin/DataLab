@@ -4,10 +4,14 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from PySide6.QtWidgets import QComboBox, QTableWidget, QTableWidgetItem
 
+from app_desktop.fitting_input_normalization import (
+    normalize_constants_state,
+    normalize_parameter_rows,
+)
 from app_desktop.workers_core import _READ_FALLBACK_ENCODINGS
 from shared.update_checker import current_version
 from shared.workspace_schema import compute_workspace_hash, sha256_bytes
@@ -222,24 +226,29 @@ def _capture_data_section(window: Any, *, constants: bool = False) -> tuple[dict
     return section, attachments
 
 
-def _coerce_string_rows(raw_rows: Any, keys: tuple[str, ...]) -> list[dict[str, str]]:
-    if not isinstance(raw_rows, list):
+def _normalize_workspace_parameter_rows(raw_rows: Any) -> list[dict[str, str]]:
+    if raw_rows is None:
         return []
-    rows: list[dict[str, str]] = []
-    for raw_row in raw_rows:
-        if not isinstance(raw_row, dict):
-            continue
-        rows.append({key: str(raw_row.get(key) or "") for key in keys})
-    return rows
+    return cast(list[dict[str, str]], normalize_parameter_rows(
+        raw_rows,
+        constraints_enabled=True,
+    ).persisted_rows())
+
+
+def _normalize_workspace_constant_rows(raw_rows: Any) -> list[dict[str, str]]:
+    if raw_rows is None:
+        return []
+    return cast(list[dict[str, str]], normalize_constants_state(
+        enabled=True,
+        rows=raw_rows,
+        numeric_mode="uncertainty",
+    ).persisted_rows())
 
 
 def _param_rows(window: Any) -> list[dict[str, str]]:
     table = getattr(window, "custom_params_table", None)
     if table is not None and hasattr(table, "rows"):
-        return _coerce_string_rows(
-            table.rows(),
-            ("name", "initial", "fixed", "min", "max"),
-        )
+        return _normalize_workspace_parameter_rows(table.rows())
     return []
 
 
@@ -253,10 +262,7 @@ def _param_orphans(window: Any) -> list[str]:
 def _implicit_param_rows(window: Any) -> list[dict[str, str]]:
     table = getattr(window, "implicit_params_table", None)
     if table is not None and hasattr(table, "rows"):
-        return _coerce_string_rows(
-            table.rows(),
-            ("name", "initial", "fixed", "min", "max"),
-        )
+        return _normalize_workspace_parameter_rows(table.rows())
     return []
 
 
@@ -279,7 +285,7 @@ def _constants_editor_state(editor: Any) -> dict[str, Any]:
     return {
         "enabled": _checked(editor),
         "view": "text" if editor.using_text_view() else "table",
-        "rows": _coerce_string_rows(editor.rows(), ("name", "value")),
+        "rows": _normalize_workspace_constant_rows(editor.rows()),
         "text": str(editor.raw_text()),
         "numeric_mode": str(editor.numeric_mode()) if hasattr(editor, "numeric_mode") else "uncertainty",
     }
@@ -289,7 +295,7 @@ def _implicit_constants_rows(window: Any) -> list[dict[str, str]]:
     editor = getattr(window, "implicit_constants_editor", None)
     if editor is None:
         return []
-    return _coerce_string_rows(editor.rows(), ("name", "value"))
+    return _normalize_workspace_constant_rows(editor.rows())
 
 
 def _variable_rows(window: Any) -> list[dict[str, str]]:
@@ -363,16 +369,17 @@ def _restore_variable_rows(window: Any, rows: Any) -> None:
 
 
 def _restore_param_rows(window: Any, rows: Any, orphan_names: Any = None) -> None:
-    if not isinstance(rows, list):
+    if rows is None:
         return
+    normalized_rows = _normalize_workspace_parameter_rows(rows)
     table = getattr(window, "custom_params_table", None)
     if table is not None and hasattr(table, "set_rows"):
-        table.set_rows(rows)
+        table.set_rows(normalized_rows)
         if isinstance(orphan_names, list) and hasattr(table, "mark_orphans"):
             active = [
                 str(row.get("name") or "")
-                for row in rows
-                if isinstance(row, dict) and str(row.get("name") or "") not in set(map(str, orphan_names))
+                for row in normalized_rows
+                if str(row.get("name") or "") not in set(map(str, orphan_names))
             ]
             table.mark_orphans(active)
 
@@ -402,75 +409,26 @@ def _clean_optional_string(value: Any) -> str:
 
 
 def _implicit_rows_to_config(rows: Any) -> dict[str, dict[str, str]]:
-    if isinstance(rows, dict):
-        cleaned: dict[str, dict[str, str]] = {}
-        for raw_name, raw_entry in rows.items():
-            name = _clean_optional_string(raw_name)
-            if not name:
-                continue
-            if isinstance(raw_entry, dict):
-                entry = {
-                    key: _clean_optional_string(raw_entry.get(key))
-                    for key in ("initial", "fixed", "min", "max")
-                    if _clean_optional_string(raw_entry.get(key))
-                }
-            else:
-                initial = _clean_optional_string(raw_entry)
-                entry = {"initial": initial} if initial else {}
-            cleaned[name] = entry
-        return cleaned
-    if not isinstance(rows, list):
+    if rows is None:
         return {}
-    cleaned = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        name = _clean_optional_string(row.get("name"))
-        if not name:
-            continue
-        entry = {
-            key: _clean_optional_string(row.get(key))
-            for key in ("initial", "fixed", "min", "max")
-            if _clean_optional_string(row.get(key))
-        }
-        cleaned[name] = entry
-    return cleaned
+    state = normalize_parameter_rows(rows, constraints_enabled=True)
+    return cast(dict[str, dict[str, str]], state.compute_config(validate=False))
 
 
 def _parameter_rows_have_constraints(rows: Any) -> bool:
-    if isinstance(rows, dict):
-        rows = [
-            {"name": name, **entry}
-            for name, entry in rows.items()
-            if isinstance(entry, dict)
-        ]
-    if not isinstance(rows, list):
+    if rows is None:
         return False
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
+    state = normalize_parameter_rows(rows, constraints_enabled=True)
+    for row in state.persisted_rows():
         if any(_clean_optional_string(row.get(key)) for key in ("fixed", "min", "max")):
             return True
     return False
 
 
 def _implicit_constants_to_rows(constants: Any) -> list[dict[str, str]]:
-    if isinstance(constants, dict):
-        return [
-            {"name": str(name), "value": str(value)}
-            for name, value in constants.items()
-        ]
-    if not isinstance(constants, list):
+    if constants is None:
         return []
-    rows: list[dict[str, str]] = []
-    for row in constants:
-        if not isinstance(row, dict):
-            continue
-        name = str(row.get("name") or "")
-        value = str(row.get("value") or "")
-        if name or value:
-            rows.append({"name": name, "value": value})
-    return rows
+    return _normalize_workspace_constant_rows(constants)
 
 
 def _is_legacy_quantum_defect_implicit(equation: str, output_expression: str) -> bool:
@@ -723,7 +681,13 @@ def _capture_ui(window: Any) -> dict[str, Any]:
 
 
 def _capture_result_snapshot(window: Any, workspace_hash: str, attachments: dict[str, bytes]) -> dict[str, Any]:
-    markdown = _text(getattr(window, "result_edit", None))
+    rendered_text = _text(getattr(window, "result_edit", None))
+    markdown = getattr(window, "_last_result_text", None)
+    markdown_format = str(getattr(window, "_last_result_text_format", "") or "")
+    cached_rendered = getattr(window, "_last_result_rendered_text", None)
+    if not isinstance(markdown, str) or not markdown or cached_rendered != rendered_text:
+        markdown = rendered_text
+        markdown_format = "plain"
     log_text = _text(getattr(window, "log_edit", None))
     csv_rows = list(getattr(window, "_csv_rows", []) or [])
     csv_headers = list(getattr(window, "_csv_headers", []) or [])
@@ -753,6 +717,7 @@ def _capture_result_snapshot(window: Any, workspace_hash: str, attachments: dict
         "snapshot_only": True,
         "stale": False,
         "markdown": markdown,
+        "markdown_format": markdown_format,
         "log": log_text,
         "csv": {"headers": csv_headers, "rows": csv_rows},
         "latex_source": latex_source,
@@ -854,17 +819,30 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
         window.fit_target_edit.setText(str(fitting.get("target_column") or ""))
     _restore_variable_rows(window, fitting.get("variables"))
     parameter_rows = fitting.get("parameter_rows") or _legacy_parameter_text_rows(fitting.get("parameters"))
-    _restore_param_rows(window, parameter_rows, fitting.get("parameter_orphans"))
     if not parameter_rows and isinstance(fitting.get("parameters"), list):
-        _restore_param_rows(window, fitting.get("parameters"))
+        parameter_rows = fitting.get("parameters")
     if hasattr(window, "custom_constraints_checkbox"):
-        window.custom_constraints_checkbox.setChecked(bool(fitting.get("constraints_enabled")))
+        custom_had_constraints_flag = "constraints_enabled" in fitting
+        custom_constraints_enabled = (
+            bool(fitting.get("constraints_enabled"))
+            if custom_had_constraints_flag
+            else _parameter_rows_have_constraints(parameter_rows)
+        )
+        window.custom_constraints_checkbox.setChecked(custom_constraints_enabled)
+    _restore_param_rows(window, parameter_rows, fitting.get("parameter_orphans"))
     _restore_constants_editor_state(getattr(window, "custom_constants_editor", None), fitting.get("custom_constants"))
     _restore_implicit_config(window, fitting.get("implicit"), fitting)
 
     snapshot = workspace.get("result_snapshot") or {"present": False}
     if snapshot.get("present"):
-        window.result_edit.setPlainText(str(snapshot.get("markdown") or ""))
+        result_text = str(snapshot.get("markdown") or "")
+        if snapshot.get("markdown_format") == "markdown" and hasattr(window, "_set_result_text"):
+            window._set_result_text(result_text)
+        else:
+            window.result_edit.setPlainText(result_text)
+            window._last_result_text = result_text
+            window._last_result_text_format = "plain"
+            window._last_result_rendered_text = window.result_edit.toPlainText()
         window.log_edit.setPlainText(str(snapshot.get("log") or ""))
         csv_payload = snapshot.get("csv") or {}
         window._set_csv_data(list(csv_payload.get("rows") or []), list(csv_payload.get("headers") or []))
@@ -879,6 +857,9 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
         window.log_edit.clear()
         window.latex_edit.clear()
         window._reset_csv_data()
+        window._last_result_text = ""
+        window._last_result_text_format = "plain"
+        window._last_result_rendered_text = ""
     window._last_result_kind = None
     window._last_result_payloads = {}
     window._workspace_snapshot_only = bool(snapshot.get("present"))

@@ -92,6 +92,15 @@ class FitRunner:
                         "reason": "dependent parameter error propagation is not implemented for SciPy",
                     }
                 )
+            elif _has_unweighted_data_sigmas(weights, data_sigmas):
+                fallback_history.append(
+                    {
+                        "from": "scipy_least_squares",
+                        "to": "mpmath_high_precision",
+                        "skipped": "unweighted_data_sigmas",
+                        "reason": "unweighted data_sigmas require mpmath systematic refits",
+                    }
+                )
             else:
                 try:
                     candidate = _fit_with_scipy_least_squares(
@@ -170,32 +179,45 @@ class FitRunner:
             )
         state = build_parameter_state(problem.parameter_config or {}, list(definition.parameters))
         classification = ImplicitProblemClassifier().classify(definition)
+        observed_linear_skipped: dict[str, object] | None = None
         if classification.strategy is ImplicitStrategy.OBSERVED_LINEAR:
-            try:
-                result = fit_observed_implicit_variable_linear_model(
-                    definition,
-                    state,
-                    variable_data,
-                    target_data,
-                    precision=precision,
-                    weights=weights,
-                    data_sigmas=data_sigmas,
-                )
-                result.details["implicit_diagnostics"] = {
-                    "points_solved": 0,
-                    "root_fallbacks": 0,
-                    "max_iterations_used": 0,
-                    "max_residual": "0",
+            if _has_unweighted_data_sigmas(weights, data_sigmas):
+                observed_linear_skipped = {
+                    "from": "observed_linear",
+                    "to": "general_output_space",
+                    "skipped": "unweighted_data_sigmas",
+                    "reason": "unweighted data_sigmas require output-space systematic refits",
                 }
-                result.details["implicit_strategy"] = "observed_linear"
-                result.details["optimizer_backend"] = "mpmath_qr"
-                return result
-            except ValueError:
-                pass
+            else:
+                observed_linear_skipped = None
+            if observed_linear_skipped is None:
+                try:
+                    result = fit_observed_implicit_variable_linear_model(
+                        definition,
+                        state,
+                        variable_data,
+                        target_data,
+                        precision=precision,
+                        weights=weights,
+                        data_sigmas=data_sigmas,
+                    )
+                    result.details["implicit_diagnostics"] = {
+                        "points_solved": 0,
+                        "root_fallbacks": 0,
+                        "max_iterations_used": 0,
+                        "max_residual": "0",
+                    }
+                    result.details["implicit_strategy"] = "observed_linear"
+                    result.details["optimizer_backend"] = "mpmath_qr"
+                    return result
+                except ValueError:
+                    pass
 
         target_implicit_candidates: list[tuple[mp.mpf, ...]] | None = None
         output_inversion_reason: str | None = None
         fallback_history: list[dict[str, object]] = []
+        if observed_linear_skipped is not None:
+            fallback_history.append(observed_linear_skipped)
         output_inversion = detect_output_inversion(definition, precision=precision)
         if output_inversion is not None:
             output_inversion_reason = output_inversion.reason
@@ -305,6 +327,13 @@ class FitRunner:
 
 def _can_try_scipy(problem: ModelProblem, precision: int) -> bool:
     return precision <= 16 and problem.model_type == "custom"
+
+
+def _has_unweighted_data_sigmas(
+    weights: list[mp.mpf] | None,
+    data_sigmas: list[mp.mpf | None] | None,
+) -> bool:
+    return weights is None and data_sigmas is not None and any(sigma is not None for sigma in data_sigmas)
 
 
 def _fit_output_inversion_parameter_seed(

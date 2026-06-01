@@ -85,6 +85,13 @@ from fitting.auto_models import (
     fit_linear_model,
 )
 
+from app_desktop.fitting_input_normalization import (
+    ParameterInput,
+    WorkerInputRequest,
+    normalize_fitting_input,
+    normalize_fitting_input_from_widgets,
+)
+
 from .workers_core import (
     FitBatchTask,
     FitJob,
@@ -111,7 +118,18 @@ class WindowFittingModelsMixin:
         editor = getattr(host, "custom_constants_editor", None)
         if editor is None or not editor.isChecked():
             return {}
-        return cast("dict[str, str]", editor.constants_dict(validate=True))
+        normalized = normalize_fitting_input_from_widgets(
+            model_type="custom",
+            expression=host.fit_expr_edit.toPlainText().strip(),
+            variable_names=[
+                var_edit.text().strip()
+                for var_edit, _col_edit, *_ in getattr(host, "variable_rows", [])
+                if var_edit.text().strip()
+            ] or ["x"],
+            constants_editor=editor,
+            validate=True,
+        )
+        return dict(normalized.constants_dict)
 
     def _collect_custom_fit_config(
         self,
@@ -121,7 +139,6 @@ class WindowFittingModelsMixin:
     ) -> CustomFitConfig:
         host = cast(Any, self)
         model_expr = host.fit_expr_edit.toPlainText().strip()
-        constants = self._collect_custom_constants()
         if variable_names is None:
             variable_names = [
                 var_edit.text().strip()
@@ -131,13 +148,20 @@ class WindowFittingModelsMixin:
         table = getattr(host, "custom_params_table", None)
         if table is None:
             raise ValueError(host._tr("请在参数列表中添加参数。", "Please add at least one parameter."))
+        editor = getattr(host, "custom_constants_editor", None)
         try:
-            parameter_config = cast(
-                "dict[str, dict[str, str]]",
-                table.parameter_config(validate=validate_parameters),
+            normalized = normalize_fitting_input_from_widgets(
+                model_type="custom",
+                expression=model_expr,
+                variable_names=variable_names,
+                parameter_table=table,
+                constants_editor=editor,
+                validate=validate_parameters,
             )
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
+        parameter_config = {name: dict(values) for name, values in normalized.parameter_config.items()}
+        constants = dict(normalized.constants_dict)
         if validate_parameters and not parameter_config:
             raise ValueError(host._tr("请在参数列表中添加参数。", "Please add at least one parameter."))
         parameter_names = host._infer_parameter_names(
@@ -168,25 +192,33 @@ class WindowFittingModelsMixin:
             target_column = self.fit_target_edit.text().strip()
             if not target_column:
                 raise ValueError(_dual_msg("请指定目标列。", "Please specify the target column."))
-            target_series = self._column_series(headers, data_rows, target_column)
-            sigma_series = self._resolve_uncertainties(
-                headers,
-                data_rows,
-                sigma_rows,
-                target_column,
-                None,
-            )
-            weights = None
-            if self.fit_weighted_checkbox.isChecked():
-                weights = self._build_weight_vector(sigma_series)
-            variable_data = {
-                var: self._column_series(headers, data_rows, column)
-                for var, column in variable_map.items()
-            }
             custom_config = self._collect_custom_fit_config(
                 validate_parameters=True,
                 variable_names=list(variable_map.keys()),
             )
+            normalized = normalize_fitting_input(
+                model_type="custom",
+                expression=str(custom_config["expression"]),
+                variable_names=list(variable_map.keys()),
+                target_column=target_column,
+                parameters=ParameterInput(),
+                worker_request=WorkerInputRequest(
+                    headers=headers,
+                    data_rows=data_rows,
+                    sigma_rows=sigma_rows,
+                    variable_mapping=variable_map,
+                ),
+                weighted=self.fit_weighted_checkbox.isChecked(),
+                validate=False,
+            )
+            worker_input = normalized.worker_input
+            if worker_input is None:
+                raise ValueError(_dual_msg("无法准备拟合数据。", "Could not prepare fitting data."))
+            target_series = list(worker_input.target_series)
+            sigma_series = list(worker_input.sigma_series)
+            weights = list(worker_input.weights) if worker_input.weights is not None else None
+            variable_data = {key: list(values) for key, values in worker_input.variable_data.items()}
+            variable_map = dict(worker_input.variable_map)
             model_expr = str(custom_config["expression"])
             constants = custom_config["constants"]
             parameter_config = custom_config["parameter_config"]
@@ -611,16 +643,39 @@ class WindowFittingModelsMixin:
         self._execute_template_custom_fit("pade", "Padé 拟合", dataset, generate_latex, output_path, batch_tag=batch_tag)
 
     def _prepare_fit_job(self, dataset, generate_latex: bool, output_path: str, verbose: bool, render_plots: bool = True) -> FitJob:
-        headers, data_rows, sigma_rows, x_series, y_series, sigma_series, weights = self._prepare_linear_fit_inputs(*dataset)
+        headers, data_rows, sigma_rows = dataset
         precision = self._read_precision()
         self._current_precision = precision
         self._set_fit_output_precision(precision)
         variable_map = self._collect_variable_mapping(headers)
         target_column = self.fit_target_edit.text().strip()
-        variable_data = {var: self._column_series(headers, data_rows, col) for var, col in variable_map.items()}
-        target_series = self._column_series(headers, data_rows, target_column)
         model_type = self.fit_model_combo.currentData()
         model_expr = self.fit_expr_edit.toPlainText().strip()
+        normalized_worker = normalize_fitting_input(
+            model_type=str(model_type or ""),
+            expression=model_expr,
+            variable_names=list(variable_map.keys()),
+            target_column=target_column,
+            parameters=ParameterInput(),
+            worker_request=WorkerInputRequest(
+                headers=headers,
+                data_rows=data_rows,
+                sigma_rows=sigma_rows,
+                variable_mapping=variable_map,
+            ),
+            weighted=self.fit_weighted_checkbox.isChecked(),
+            validate=False,
+        ).worker_input
+        if normalized_worker is None:
+            raise ValueError(_dual_msg("无法准备拟合数据。", "Could not prepare fitting data."))
+        variable_map = dict(normalized_worker.variable_map)
+        variable_data = {key: list(values) for key, values in normalized_worker.variable_data.items()}
+        target_series = list(normalized_worker.target_series)
+        sigma_series = list(normalized_worker.sigma_series)
+        weights = list(normalized_worker.weights) if normalized_worker.weights is not None else None
+        primary_variable = next(iter(variable_map), "x")
+        x_series = list(variable_data.get("x") or variable_data.get(primary_variable) or [])
+        y_series = list(target_series)
         parameter_config: dict[str, dict[str, str]] = {}
         parameter_names: list[str] = []
         template_expr: str | None = None

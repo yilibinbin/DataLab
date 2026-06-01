@@ -323,6 +323,7 @@ def test_batch_config_accepts_normal_basename(tmp_path: Path):
 jobs:
   - name: linear-fit_2
     operation: fit
+    model: linear
     data_path: {data_path}
     output_dir: {tmp_path}
 """.strip(),

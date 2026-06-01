@@ -8,6 +8,10 @@ import mpmath as mp
 from PySide6.QtWidgets import QMessageBox
 
 from data_extrapolation_latex_latest import _dual_msg, parse_uncertainty_format
+from app_desktop.fitting_input_normalization import (
+    fit_uncertainty_policy,
+    normalize_data_uncertainty,
+)
 from extrapolation_methods import PowerLawConfig
 
 from .panels import (
@@ -127,7 +131,7 @@ class WindowDataMixin:
         self,
         headers: list[str],
         rows: list[tuple[mp.mpf, ...]],
-        sigma_rows: list[tuple[mp.mpf | None, ...]],
+        sigma_rows: list[tuple[object | None, ...]],
         segments: list[tuple[int, int]] | None,
     ) -> list[dict]:
         normalized = segments or [(0, len(rows))]
@@ -232,7 +236,7 @@ class WindowDataMixin:
 
     def _parse_generic_table(
         self, text: str
-    ) -> tuple[list[str], list[tuple[mp.mpf, ...]], list[tuple[mp.mpf | None, ...]]]:
+    ) -> tuple[list[str], list[tuple[mp.mpf, ...]], list[tuple[object | None, ...]]]:
         """Parse whitespace separated table text into numeric rows with optional sigmas."""
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if len(lines) < 2:
@@ -246,7 +250,7 @@ class WindowDataMixin:
         if len(headers) < 1:
             raise ValueError(_dual_msg("表头至少需要一列。", "Header must contain at least one column."))
         rows: list[tuple[mp.mpf, ...]] = []
-        sigma_rows: list[tuple[mp.mpf | None, ...]] = []
+        sigma_rows: list[tuple[object | None, ...]] = []
         for line_num, line in enumerate(lines[1:], 2):
             parts = line.split()
             if len(parts) != len(headers):
@@ -257,7 +261,7 @@ class WindowDataMixin:
                     )
                 )
             values: list[mp.mpf] = []
-            sigmas: list[mp.mpf | None | object] = []
+            sigmas: list[object | None] = []
             lang = "en" if self._is_en() else "zh"
             for token in parts:
                 try:
@@ -325,7 +329,7 @@ class WindowDataMixin:
     ) -> tuple[
         list[str],
         list[tuple[mp.mpf, ...]],
-        list[tuple[mp.mpf | None, ...]],
+        list[tuple[object | None, ...]],
         list[tuple[int, int]],
         str,
     ]:
@@ -353,7 +357,7 @@ class WindowDataMixin:
     def _collect_fitting_dataset(
         self,
         precision_hint: int | None = None,
-    ) -> tuple[list[str], list[tuple[mp.mpf, ...]], list[tuple[mp.mpf | None, ...]]]:
+    ) -> tuple[list[str], list[tuple[mp.mpf, ...]], list[tuple[object | None, ...]]]:
         headers, rows, sigma_rows, _, _ = self._collect_batched_fitting_dataset(precision_hint=precision_hint)
         return headers, rows, sigma_rows
 
@@ -361,11 +365,11 @@ class WindowDataMixin:
         self,
         headers: list[str],
         data_rows: list[tuple[mp.mpf, ...]],
-        sigma_rows: list[tuple[mp.mpf | None, ...]],
+        sigma_rows: list[tuple[object | None, ...]],
     ) -> tuple[
         list[str],
         list[tuple[mp.mpf, ...]],
-        list[tuple[mp.mpf | None, ...]],
+        list[tuple[object | None, ...]],
         list[mp.mpf],
         list[mp.mpf],
         list[mp.mpf | None],
@@ -441,86 +445,20 @@ class WindowDataMixin:
         self,
         headers: list[str],
         rows: list[tuple[mp.mpf, ...]],
-        sigma_rows: list[tuple[mp.mpf | None, ...]],
+        sigma_rows: list[tuple[object | None, ...]],
         target_column: str,
         sigma_column: str | None = None,
     ) -> list[mp.mpf | None]:
-        requested_column = (sigma_column or "").strip()
-        if requested_column:
-            sigma_values = self._column_series(headers, rows, requested_column)
-            return [mp.fabs(value) for value in sigma_values]
-        # 自动探测：优先使用目标列的隐式不确定度；若不存在，再寻找名字包含 sigma/err/unc 的列。
-        if target_column not in headers:
-            raise ValueError(_dual_msg(f"未找到列 {target_column}。", f"Column not found: {target_column}."))
-        target_index = headers.index(target_column)
-        resolved: list[mp.mpf | None] = []
-        for row_sigmas in sigma_rows:
-            if target_index < len(row_sigmas):
-                entry = row_sigmas[target_index]
-                if hasattr(entry, "uncertainty"):
-                    entry_val = getattr(entry, "uncertainty", None)
-                else:
-                    entry_val = entry
-                if entry_val is None:
-                    resolved.append(None)
-                else:
-                    try:
-                        entry_val = mp.mpf(entry_val)
-                    except Exception:
-                        entry_val = None
-                    resolved.append(entry_val if entry_val and entry_val > 0 else None)
-            else:
-                resolved.append(None)
-        if any(sig is not None for sig in resolved):
-            return resolved
-        # no embedded uncertainties, try auto column detection
-        lower_headers = [h.lower() for h in headers]
-        candidate_idx = None
-        keywords = ("sigma", "err", "error", "unc", "uncertainty", "Δ")
-        target_lower = target_column.lower()
-        # 第一优先：目标列名前缀 + 关键词
-        for idx, name in enumerate(lower_headers):
-            if idx == target_index:
-                continue
-            if name.startswith(target_lower) and any(key in name for key in keywords):
-                candidate_idx = idx
-                break
-        # 次优先：任意包含关键词的列
-        if candidate_idx is None:
-            for idx, name in enumerate(lower_headers):
-                if idx == target_index:
-                    continue
-                if any(key in name for key in keywords):
-                    candidate_idx = idx
-                    break
-        if candidate_idx is not None:
-            return [mp.fabs(row[candidate_idx]) if candidate_idx < len(row) else None for row in rows]
-        return resolved
+        return normalize_data_uncertainty(
+            headers=headers,
+            rows=rows,
+            sigma_rows=sigma_rows,
+            target_column=target_column,
+            sigma_column=sigma_column,
+        )
 
     def _build_weight_vector(self, sigma_values: list[mp.mpf | None]) -> list[mp.mpf]:
-        if not sigma_values:
-            raise ValueError(
-                _dual_msg(
-                    "未提供不确定度数据，无法执行加权拟合。",
-                    "No uncertainty data provided; cannot perform weighted fitting.",
-                )
-            )
-        weights: list[mp.mpf] = []
-        for idx, sigma in enumerate(sigma_values, 1):
-            if sigma is None:
-                raise ValueError(
-                    _dual_msg(
-                        f"第 {idx} 行缺少不确定度，无法执行加权拟合；请在数据中提供带不确定度的数值或包含 sigma/err 列。",
-                        f"Row {idx} is missing uncertainty; cannot perform weighted fitting. Provide uncertainties or a sigma/err column.",
-                    )
-                )
-            if sigma <= 0:
-                raise ValueError(
-                    _dual_msg(
-                        f"第 {idx} 行的不确定度必须大于 0。",
-                        f"Uncertainty on row {idx} must be greater than 0.",
-                    )
-                )
-            weights.append(mp.mpf("1") / (sigma * sigma))
-        return weights
-
+        state = fit_uncertainty_policy(sigma_values, weighted=True)
+        if state.weights is None:
+            raise ValueError(_dual_msg("未提供不确定度数据，无法执行加权拟合。", "No uncertainty data provided; cannot perform weighted fitting."))
+        return list(state.weights)

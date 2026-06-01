@@ -6,6 +6,38 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.5.2] — 2026-05-31
+
+### Fixed
+- Preserved rendered result table formatting when saving and reopening
+  workspace files.
+- Kept workspace result snapshots compatible with existing plain-text
+  snapshots.
+
+## [2.5.0] — 2026-05-31
+
+### Changed
+- Refined fitting workflows around explicit model selection and shared
+  fitting input normalization.
+
+### Fixed
+- Preserved custom fitting constants during parameter normalization.
+- Rejected ambiguous or missing CLI batch fit models instead of changing
+  fitting behavior silently.
+- Normalized fitting constants, parameter names, and uncertainty inputs
+  consistently across desktop, web, and CLI paths.
+- Preserved weighted-fitting uncertainty semantics and rejected invalid
+  non-finite uncertainties.
+- Made checked-in workspace examples byte-stable across Python and zlib
+  versions.
+- Restored custom parameter constraints before loading workspace parameter
+  rows, including legacy workspace formats.
+- Hardened implicit fitting derivative and sequence length guards.
+
+### Removed
+- Removed the AIC/BIC model-selection workflow from desktop, web, CLI,
+  and public fitting exports. Use explicit fitting models instead.
+
 ## [2.4.0] — 2026-05-29
 
 ### Added
@@ -187,7 +219,11 @@ stack embedded — no external runtime needed.
 - Coverage spans high-precision Mathematica reference values, all four
   modes end-to-end, and every LaTeX output path
 
-[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/yilibinbin/DataLab/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/yilibinbin/DataLab/compare/v2.4.0...v2.5.0
+[2.4.0]: https://github.com/yilibinbin/DataLab/compare/v2.3.2...v2.4.0
+[2.3.2]: https://github.com/yilibinbin/DataLab/compare/v2.3.1...v2.3.2
+[2.3.1]: https://github.com/yilibinbin/DataLab/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/yilibinbin/DataLab/compare/v2.2.1...v2.3.0
 [2.2.1]: https://github.com/yilibinbin/DataLab/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/yilibinbin/DataLab/compare/v2.1.0...v2.2.0

@@ -27,6 +27,7 @@ import re
 
 import mpmath as mp
 from desktop_doc_loader import load_desktop_doc, load_desktop_manifest
+from app_desktop.fitting_input_normalization import normalize_fitting_input_from_widgets
 from app_desktop.update_controller import UpdateController
 from shared.update_checker import REPOSITORY_URL
 
@@ -192,6 +193,7 @@ EXAMPLE_WORKSPACE_NAMES = (
     "error-propagation.datalab",
     "statistics.datalab",
     "fitting.datalab",
+    "quantum-defect-implicit.datalab",
 )
 
 
@@ -301,6 +303,17 @@ def copy_example_workspace(name: str, destination_dir: Path | None = None) -> Pa
     return target
 
 
+def _same_filesystem_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except (OSError, RuntimeError):
+        return left.absolute() == right.absolute()
+
+
+def _is_example_workspace_path(path: Path) -> bool:
+    return any(_same_filesystem_path(path, example) for example in list_example_workspaces())
+
+
 class _CornerExampleClickFilter(QObject):
     """Event filter that fires a callback on a mouse press.
 
@@ -400,6 +413,7 @@ class ExtrapolationWindow(
         self._zoom_spin_syncing = False
         self._user_zoom_override = False
         self._workspace_path: Path | None = None
+        self._workspace_template_source: Path | None = None
         self._workspace_dirty = False
         self._workspace_degraded = False
         self._workspace_snapshot_only = False
@@ -458,6 +472,8 @@ class ExtrapolationWindow(
 
     def _workspace_title(self) -> str:
         if self._workspace_path is None:
+            if self._workspace_template_source is not None:
+                return self._workspace_template_source.name
             return "Untitled"
         return self._workspace_path.name
 
@@ -624,6 +640,7 @@ class ExtrapolationWindow(
         self._workspace_restoring = True
         try:
             self._workspace_path = None
+            self._workspace_template_source = None
             self._workspace_dirty = False
             self._workspace_degraded = False
             self._workspace_migration_warnings = []
@@ -645,7 +662,7 @@ class ExtrapolationWindow(
         return True
 
     def save_workspace(self, _checked: bool = False) -> bool:
-        if self._workspace_path is None:
+        if self._workspace_template_source is not None or self._workspace_path is None:
             return self.save_workspace_as()
         return self._save_workspace_to_path(self._workspace_path)
 
@@ -655,7 +672,10 @@ class ExtrapolationWindow(
         filename, _ = QFileDialog.getSaveFileName(
             self,
             self._tr("保存工作区", "Save Workspace"),
-            str(self._workspace_path or Path("analysis.datalab")),
+            str(
+                self._workspace_path
+                or Path(self._workspace_title() if self._workspace_template_source else "analysis.datalab")
+            ),
             "DataLab Workspace (*.datalab);;All Files (*)",
         )
         if not filename:
@@ -667,6 +687,16 @@ class ExtrapolationWindow(
 
     def _save_workspace_to_path(self, path: Path) -> bool:
         if not self._workspace_guard_running():
+            return False
+        if _is_example_workspace_path(path):
+            QMessageBox.critical(
+                self,
+                self._tr("保存失败", "Save failed"),
+                self._tr(
+                    "示例工作区是只读模板。请另存为到自定义路径。",
+                    "Example workspaces are read-only templates. Please save to a custom path.",
+                ),
+            )
             return False
         if self._workspace_degraded and self._workspace_path == path:
             reply = QMessageBox.warning(
@@ -691,6 +721,7 @@ class ExtrapolationWindow(
             QMessageBox.critical(self, self._tr("保存失败", "Save failed"), str(exc))
             return False
         self._workspace_path = path
+        self._workspace_template_source = None
         self._workspace_dirty = False
         self._workspace_degraded = False
         self._update_workspace_window_title()
@@ -739,15 +770,18 @@ class ExtrapolationWindow(
         if not ok or not selected:
             return False
         try:
-            copied = copy_example_workspace(str(selected))
+            source = next((path for path in examples if path.name == str(selected)), None)
+            if source is None:
+                raise FileNotFoundError(str(selected))
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, self._tr("打开失败", "Open failed"), str(exc))
             return False
-        return self._open_workspace_from_path(copied)
+        return self._open_workspace_from_path(source, as_template=True)
 
-    def _open_workspace_from_path(self, path: Path) -> bool:
+    def _open_workspace_from_path(self, path: Path, *, as_template: bool = False) -> bool:
         if not self._workspace_guard_running():
             return False
+        as_template = as_template or _is_example_workspace_path(path)
         try:
             from app_desktop.workspace_controller import restore_workspace
             from shared.workspace_io import read_workspace
@@ -762,7 +796,12 @@ class ExtrapolationWindow(
             self._workspace_restoring = False
             QMessageBox.critical(self, self._tr("打开失败", "Open failed"), str(exc))
             return False
-        self._workspace_path = path
+        if as_template:
+            self._workspace_path = None
+            self._workspace_template_source = path
+        else:
+            self._workspace_path = path
+            self._workspace_template_source = None
         self._workspace_dirty = False
         self._workspace_snapshot_stale = False
         self._update_workspace_window_title()
@@ -1157,25 +1196,41 @@ class ExtrapolationWindow(
                 return {}
             raise ValueError(self._tr("请在参数列表中添加参数。", "Please add at least one parameter."))
         try:
-            config = table.parameter_config(validate=True)
+            normalized = normalize_fitting_input_from_widgets(
+                model_type="custom",
+                expression=self.fit_expr_edit.toPlainText().strip(),
+                variable_names=[
+                    var_edit.text().strip()
+                    for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
+                    if var_edit.text().strip()
+                ] or ["x"],
+                parameter_table=table,
+                constants_editor=getattr(self, "custom_constants_editor", None),
+                validate=True,
+            )
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
+        config = {name: dict(values) for name, values in normalized.parameter_config.items()}
         if not config and not allow_empty:
             raise ValueError(self._tr("请在参数列表中添加参数。", "Please add at least one parameter."))
         return config
 
     def _collect_implicit_parameter_config(self, parameter_names: Sequence[str]) -> dict[str, dict[str, str]]:
         table = getattr(self, "implicit_params_table", None)
-        collected: dict[str, dict[str, str]] = {}
-        if table is not None:
-            collected = table.parameter_config(validate=True)
-            allowed = set(parameter_names)
-            collected = {name: value for name, value in collected.items() if name in allowed}
-        missing = [name for name in parameter_names if name not in collected]
-        if missing:
-            joined = ", ".join(missing)
-            raise ValueError(self._tr(f"隐式参数缺少初值或固定值：{joined}", f"Implicit parameters need initial or fixed values: {joined}"))
-        return collected
+        normalized = normalize_fitting_input_from_widgets(
+            model_type="self_consistent",
+            expression=self.implicit_output_edit.toPlainText().strip(),
+            variable_names=[
+                var_edit.text().strip()
+                for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
+                if var_edit.text().strip()
+            ] or ["n"],
+            parameter_table=table,
+            required_parameter_names=parameter_names,
+            validate=True,
+        )
+        allowed = set(parameter_names)
+        return {name: dict(value) for name, value in normalized.parameter_config.items() if name in allowed}
 
     def _refresh_implicit_parameter_rows(self):
         config = self._collect_implicit_config(validate_parameters=False)
@@ -1220,7 +1275,18 @@ class ExtrapolationWindow(
         editor = getattr(self, "implicit_constants_editor", None)
         if editor is None or not editor.isChecked():
             return {}
-        return editor.constants_dict(validate=True)
+        normalized = normalize_fitting_input_from_widgets(
+            model_type="self_consistent",
+            expression=self.implicit_output_edit.toPlainText().strip(),
+            variable_names=[
+                var_edit.text().strip()
+                for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
+                if var_edit.text().strip()
+            ] or ["n"],
+            constants_editor=editor,
+            validate=True,
+        )
+        return dict(normalized.constants_dict)
 
     def _collect_implicit_config(self, validate_parameters: bool = True) -> dict[str, object]:
         x_variables = [
@@ -1243,7 +1309,15 @@ class ExtrapolationWindow(
         max_iterations = self.implicit_max_iterations_spin.value()
         timeout_seconds = self.implicit_timeout_spin.value()
         expressions = f"{equation}\n{output_expression}"
-        constants = self._collect_implicit_constants()
+        editor = getattr(self, "implicit_constants_editor", None)
+        constants_probe = normalize_fitting_input_from_widgets(
+            model_type="self_consistent",
+            expression=expressions,
+            variable_names=x_variables + [implicit_variable],
+            constants_editor=editor,
+            validate=True,
+        )
+        constants = dict(constants_probe.constants_dict)
         constant_names = set(constants)
         parameter_names = self._infer_parameter_names(
             expressions,
@@ -1252,7 +1326,17 @@ class ExtrapolationWindow(
             constants=sorted(constant_names),
         )
         if validate_parameters:
-            self._collect_implicit_parameter_config(parameter_names)
+            table = getattr(self, "implicit_params_table", None)
+            normalized = normalize_fitting_input_from_widgets(
+                model_type="self_consistent",
+                expression=expressions,
+                variable_names=x_variables + [implicit_variable],
+                parameter_table=table,
+                constants_editor=editor,
+                required_parameter_names=parameter_names,
+                validate=True,
+            )
+            constants = dict(normalized.constants_dict)
         return {
             "x_variables": tuple(x_variables),
             "implicit_variable": implicit_variable,
@@ -1569,11 +1653,16 @@ class ExtrapolationWindow(
 
     # ------------------------------------------------------------- Logging --
     def _set_result_text(self, text: str):
-        """Display result text.  Uses Markdown rendering when available."""
+        """Display result text and cache the rendered source for workspace snapshots."""
         if hasattr(self.result_edit, 'setMarkdown'):
             self.result_edit.setMarkdown(text)
+            text_format = "markdown"
         else:
             self.result_edit.setPlainText(text)
+            text_format = "plain"
+        self._last_result_text = text
+        self._last_result_text_format = text_format
+        self._last_result_rendered_text = self.result_edit.toPlainText()
 
     def _add_font_control_row(self, parent_layout: QVBoxLayout, editor, label: str):
         control_layout = QHBoxLayout()
