@@ -38,6 +38,7 @@ from datalab_latex.expression_engine import (
     safe_eval,
 )
 from shared.bilingual import _dual_msg
+from shared.uncertainty import parse_numeric_value
 
 # Signature of the inner per-model evaluator: takes a positional
 # variable-tuple and parameter-tuple of mp.mpf values and returns
@@ -133,7 +134,7 @@ def infer_parameter_names(
 
 
 def _constant_values(constants: dict[str, str]) -> dict[str, mp.mpf]:
-    return {name: mp.mpf(value) for name, value in constants.items()}
+    return {name: parse_numeric_value(value) for name, value in constants.items()}
 
 
 def _build_safe_eval_callable(
@@ -178,7 +179,7 @@ def _build_numeric_gradient_callable(
     var_count = len(variable_names)
     constant_count = len(constant_names)
     param_count = len(parameter_names)
-    constant_values = [mp.mpf(constants[name]) for name in constant_names]
+    constant_values = [parse_numeric_value(constants[name]) for name in constant_names]
     deriv_index = var_count + constant_count + int(parameter_index)
 
     def _call(

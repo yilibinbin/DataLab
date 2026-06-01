@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import io
+import inspect
 import logging
+import math
 import multiprocessing
 import queue
 import time
+from collections.abc import Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import mpmath as mp
 
@@ -69,6 +72,268 @@ _ORIGINAL_BUILD_IMPLICIT_MODEL_SPECIFICATION = build_implicit_model_specificatio
 _ORIGINAL_CAN_FIT_OBSERVED_IMPLICIT_VARIABLE = can_fit_observed_implicit_variable
 _ORIGINAL_FIT_OBSERVED_IMPLICIT_VARIABLE_LINEAR_MODEL = fit_observed_implicit_variable_linear_model
 _ORIGINAL_FIT_CUSTOM_MODEL = fit_custom_model
+
+
+def _attach_mcmc_refinement(summary: Any, job: Any) -> None:
+    """Attach MCMC diagnostics to the current best fit when available."""
+
+    from fitting.mcmc_fitter import HAS_EMCEE, render_corner_plot, run_mcmc
+
+    if not HAS_EMCEE:
+        _logger.info("refine_with_mcmc=True but emcee not installed; skipping")
+        return
+    best = summary.best() if getattr(summary, "best_model", None) is not None else None
+    if best is None or getattr(best, "fit_result", None) is None:
+        _logger.info("refine_with_mcmc=True but no best candidate; skipping")
+        return
+
+    best_fit = best.fit_result
+    param_names = _mcmc_free_parameter_names(best_fit, job)
+    if not param_names:
+        _logger.info("best candidate has no parameters; skipping MCMC")
+        return
+    initial_guess = [float(best_fit.params[name]) for name in param_names]
+    base_params = {name: mp.mpf(value) for name, value in (best_fit.params or {}).items()}
+    parameter_state = _mcmc_parameter_state(job)
+    observations, targets = _mcmc_observations(job)
+    likelihood_weights = _mcmc_likelihood_weights(job, len(targets))
+    rmse = _estimate_rmse(targets, best_fit)
+    evaluator = best_fit.details.get("evaluator") if best_fit.details else None
+    if evaluator is None:
+        _logger.info("MCMC refinement skipped: best fit did not provide an evaluator")
+        return
+
+    def _log_probability(theta: Sequence[object]) -> float:
+        if not param_names or rmse <= 0:
+            return float("-inf")
+        try:
+            new_params = _mcmc_params_from_theta(
+                theta,
+                param_names,
+                base_params,
+                parameter_state,
+            )
+            residuals_sq = 0.0
+            for index, (observation, target) in enumerate(zip(observations, targets)):
+                _set_mcmc_evaluator_point_index(evaluator, index)
+                pred = float(_evaluate_mcmc_prediction(evaluator, new_params, observation))
+                if not math.isfinite(pred):
+                    return float("-inf")
+                residual = float(target) - pred
+                weight = float(likelihood_weights[index]) if likelihood_weights is not None else 1.0
+                residuals_sq += weight * (residual**2)
+                if not math.isfinite(residuals_sq):
+                    return float("-inf")
+            return -0.5 * residuals_sq / (rmse**2)
+        except (TypeError, ValueError, ArithmeticError, OverflowError, KeyError):
+            return float("-inf")
+
+    import math as _math_pre
+
+    proposal_scale = max(1e-4, rmse * 1e-2)
+    pre_flight_lps = [_log_probability(initial_guess)]
+    for sign in (-1, 1):
+        perturbed = [value + sign * proposal_scale for value in initial_guess]
+        pre_flight_lps.append(_log_probability(perturbed))
+    if not any(_math_pre.isfinite(lp) for lp in pre_flight_lps):
+        _logger.info(
+            "MCMC pre-flight: all %d sample log-probabilities were -inf; skipping MCMC refinement.",
+            len(pre_flight_lps),
+        )
+        if best_fit.details is None:
+            best_fit.details = {}
+        best_fit.details["mcmc_warning"] = (
+            "MCMC 跳过：初始 log-probability 全部 -inf（数据过于病态）。 / "
+            "MCMC skipped: all initial log-probabilities are -inf "
+            "(data is too ill-conditioned for Gaussian sampling)."
+        )
+        return
+
+    try:
+        mcmc_result = run_mcmc(
+            _log_probability,
+            initial_guess,
+            param_names,
+            n_walkers=max(32, 2 * len(param_names) + 2),
+            n_steps=800,
+            n_burn_in=200,
+            proposal_scale=proposal_scale,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("MCMC run failed: %s", exc)
+        if best_fit.details is None:
+            best_fit.details = {}
+        best_fit.details["mcmc_warning"] = (
+            f"MCMC 运行失败：{exc}。仅使用最小二乘结果。 / "
+            f"MCMC run failed: {exc}. Using LSQ-only result."
+        )
+        return
+
+    acc = mcmc_result.acceptance_fraction
+    chain_warning: str | None = None
+    if not _math_pre.isfinite(acc) or acc < 0.05:
+        chain_warning = (
+            f"MCMC 接受率 {acc:.2f} 过低（<0.05），结果可能不可靠。 / "
+            f"MCMC acceptance fraction {acc:.2f} is very low (<0.05); "
+            "credible intervals may be unreliable."
+        )
+    elif acc > 0.85:
+        chain_warning = (
+            f"MCMC 接受率 {acc:.2f} 过高（>0.85），proposal_scale 可能太小。 / "
+            f"MCMC acceptance fraction {acc:.2f} is very high (>0.85); "
+            "proposal_scale may be too small."
+        )
+
+    corner_png = b""
+    try:
+        corner_png = render_corner_plot(mcmc_result)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("corner plot render failed: %s", exc)
+
+    if best_fit.details is None:
+        best_fit.details = {}
+    best_fit.details["mcmc_refinement"] = {
+        "medians": mcmc_result.medians,
+        "lo_ci": mcmc_result.lo_ci,
+        "hi_ci": mcmc_result.hi_ci,
+        "acceptance_fraction": mcmc_result.acceptance_fraction,
+    }
+    if chain_warning:
+        best_fit.details["mcmc_warning"] = chain_warning
+    if corner_png:
+        best_fit.details["mcmc_corner_png"] = corner_png
+
+
+def _mcmc_free_parameter_names(best_fit: Any, job: Any) -> list[str]:
+    params = getattr(best_fit, "params", {}) or {}
+    configured_names = list(getattr(job, "parameter_names", []) or [])
+    if configured_names:
+        return [name for name in configured_names if name in params and not _mcmc_parameter_is_fixed(job, name)]
+    return [name for name in params if not _mcmc_parameter_is_fixed(job, name)]
+
+
+def _mcmc_parameter_is_fixed(job: Any, name: str) -> bool:
+    config = getattr(job, "parameter_config", {}) or {}
+    entry = config.get(name, {}) if isinstance(config, dict) else {}
+    return isinstance(entry, dict) and (bool(entry.get("fixed")) or bool(entry.get("expr")))
+
+
+def _mcmc_parameter_state(job: Any) -> Any | None:
+    parameter_names = list(getattr(job, "parameter_names", []) or [])
+    parameter_config = getattr(job, "parameter_config", {}) or {}
+    if not parameter_names or not isinstance(parameter_config, dict):
+        return None
+    try:
+        return build_parameter_state(parameter_config, parameter_names)
+    except Exception:  # noqa: BLE001 - MCMC must not fail the completed LSQ fit.
+        return None
+
+
+def _mcmc_params_from_theta(
+    theta: Sequence[object],
+    param_names: Sequence[str],
+    base_params: Mapping[str, mp.mpf],
+    parameter_state: Any | None,
+) -> dict[str, mp.mpf]:
+    theta_values = [mp.mpf(value) for value in theta]
+    theta_by_name = dict(zip(param_names, theta_values))
+    if parameter_state is not None:
+        free_vector = tuple(
+            theta_by_name.get(name, base_params.get(name, mp.mpf("0")))
+            for name in parameter_state.free_params
+        )
+        return cast(dict[str, mp.mpf], parameter_state.compose(free_vector))
+    params = dict(base_params)
+    params.update(theta_by_name)
+    return params
+
+
+def _mcmc_observations(job: Any) -> tuple[list[object], list[mp.mpf]]:
+    variable_data = getattr(job, "variable_data", None)
+    targets = getattr(job, "target_series", None)
+    if isinstance(variable_data, dict) and targets is not None:
+        names = list(variable_data)
+        row_count = len(targets)
+        observations: list[object] = []
+        for index in range(row_count):
+            observations.append({name: mp.mpf(variable_data[name][index]) for name in names})
+        return observations, [mp.mpf(value) for value in targets]
+    x_series = list(getattr(job, "x_series", []) or [])
+    y_series = list(getattr(job, "y_series", []) or [])
+    return [mp.mpf(value) for value in x_series], [mp.mpf(value) for value in y_series]
+
+
+def _mcmc_likelihood_weights(job: Any, target_count: int) -> list[mp.mpf] | None:
+    weights = getattr(job, "weights", None)
+    if weights is not None and len(weights) == target_count:
+        return [mp.mpf(value) for value in weights]
+    sigmas = getattr(job, "sigma_series", None)
+    if sigmas is None or len(sigmas) != target_count:
+        return None
+    parsed: list[mp.mpf] = []
+    for sigma in sigmas:
+        if sigma is None:
+            return None
+        value = mp.mpf(sigma)
+        if value <= 0:
+            return None
+        parsed.append(1 / (value * value))
+    return parsed
+
+
+def _set_mcmc_evaluator_point_index(evaluator: Any, index: int) -> None:
+    setter = getattr(evaluator, "set_implicit_point_index", None)
+    if callable(setter):
+        setter(index)
+
+
+def _evaluate_mcmc_prediction(evaluator: Any, params: Mapping[str, mp.mpf], observation: object) -> Any:
+    scalar_observation = None
+    if isinstance(observation, Mapping) and len(observation) == 1:
+        scalar_observation = next(iter(observation.values()))
+    candidates: list[tuple[object, ...]] = [(params, observation)]
+    if scalar_observation is not None:
+        candidates.append((params, scalar_observation))
+        candidates.append((scalar_observation,))
+    candidates.append((observation,))
+    for args in candidates:
+        if _callable_accepts_args(evaluator, args):
+            return evaluator(*args)
+    raise TypeError("MCMC evaluator does not accept supported argument shapes")
+
+
+def _callable_accepts_args(evaluator: Any, args: Sequence[object]) -> bool:
+    try:
+        signature = inspect.signature(evaluator)
+    except (TypeError, ValueError):
+        return True
+    try:
+        signature.bind(*args)
+    except TypeError:
+        return False
+    return True
+
+
+def _estimate_rmse(y_series: Any, best_fit: Any) -> float:
+    """Estimate a strictly positive RMSE for MCMC proposal scaling."""
+
+    residuals = best_fit.details.get("residuals") if best_fit.details else None
+    if residuals:
+        try:
+            count = len(residuals)
+            ss = sum(float(residual) ** 2 for residual in residuals)
+            return max(1e-8, (ss / max(1, count)) ** 0.5)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        values = [float(value) for value in y_series]
+        if len(values) < 2:
+            return 1.0
+        mean = sum(values) / len(values)
+        variance = sum((value - mean) ** 2 for value in values) / len(values)
+        return max(1e-8, variance**0.5)
+    except Exception:  # noqa: BLE001
+        return 1.0
 
 
 @contextmanager
@@ -915,8 +1180,15 @@ def _serialize_parallel_config(config: ParallelConfig) -> dict[str, Any]:
 
 
 def _deserialize_parallel_config(payload: dict[str, Any] | None) -> ParallelConfig:
+    if payload is None:
+        return ParallelConfig()
+    if not isinstance(payload, dict):
+        raise ValueError("parallel_config must be an object")
     if not payload:
         return ParallelConfig()
+    process_start_method = _optional_string(payload, "process_start_method", "spawn")
+    if process_start_method not in multiprocessing.get_all_start_methods():
+        raise ValueError(f"Unsupported process_start_method: {process_start_method}")
     return ParallelConfig(
         mode=ParallelMode(payload.get("mode", ParallelMode.AUTO)),
         max_workers=payload.get("max_workers"),
@@ -926,7 +1198,7 @@ def _deserialize_parallel_config(payload: dict[str, Any] | None) -> ParallelConf
         nested_policy=NestedParallelPolicy(
             payload.get("nested_policy", NestedParallelPolicy.SERIAL_WHEN_NESTED)
         ),
-        process_start_method=str(payload.get("process_start_method", "spawn")),
+        process_start_method=process_start_method,
         enable_new_auto_fit_backend=bool(payload.get("enable_new_auto_fit_backend", False)),
         enable_new_implicit_backend=bool(payload.get("enable_new_implicit_backend", True)),
     )
@@ -990,21 +1262,62 @@ def _serialize_implicit_definition(definition: ImplicitModelDefinition | None) -
 def _deserialize_implicit_definition(payload: dict[str, Any] | None) -> ImplicitModelDefinition | None:
     if payload is None:
         return None
-    solve_payload = payload.get("solve_options") or {}
+    if not isinstance(payload, dict):
+        raise ValueError("implicit_definition must be an object")
+    solve_payload = payload.get("solve_options")
+    if solve_payload is None:
+        solve_payload = {}
+    if not isinstance(solve_payload, dict):
+        raise ValueError("implicit_definition.solve_options must be an object")
     return ImplicitModelDefinition(
-        x_variables=tuple(payload["x_variables"]),
-        implicit_variable=str(payload["implicit_variable"]),
-        equation=str(payload["equation"]),
-        output_expression=str(payload["output_expression"]),
-        parameters=tuple(payload["parameters"]),
-        constants=dict(payload.get("constants") or {}),
+        x_variables=tuple(_required_string_sequence(payload, "x_variables")),
+        implicit_variable=_required_string(payload, "implicit_variable"),
+        equation=_required_string(payload, "equation"),
+        output_expression=_required_string(payload, "output_expression"),
+        parameters=tuple(_required_string_sequence(payload, "parameters")),
+        constants=_optional_string_mapping(payload, "constants"),
         solve_options=ImplicitSolveOptions(
-            method=str(solve_payload.get("method", "fixed_point")),
-            initial=str(solve_payload.get("initial", "0")),
-            tolerance=str(solve_payload.get("tolerance", "1e-30")),
+            method=_optional_string(solve_payload, "method", "fixed_point"),
+            initial=_optional_string(solve_payload, "initial", "0"),
+            tolerance=_optional_string(solve_payload, "tolerance", "1e-30"),
             max_iterations=int(solve_payload.get("max_iterations", 80)),
         ),
     )
+
+
+def _required_string(payload: Mapping[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    return value
+
+
+def _optional_string(payload: Mapping[str, Any], key: str, default: str) -> str:
+    value = payload.get(key, default)
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    return value
+
+
+def _required_string_sequence(payload: Mapping[str, Any], key: str) -> list[str]:
+    value = payload.get(key)
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ValueError(f"{key} must be a list of strings")
+    result = list(value)
+    if not all(isinstance(item, str) for item in result):
+        raise ValueError(f"{key} must be a list of strings")
+    return result
+
+
+def _optional_string_mapping(payload: Mapping[str, Any], key: str) -> dict[str, str]:
+    value = payload.get(key)
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{key} must be an object")
+    if not all(isinstance(name, str) and isinstance(item, str) for name, item in value.items()):
+        raise ValueError(f"{key} must map strings to strings")
+    return dict(value)
 
 
 def _serialize_fit_job(job: FitJob) -> dict[str, Any]:

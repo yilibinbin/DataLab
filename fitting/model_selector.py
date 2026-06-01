@@ -63,18 +63,23 @@ def _run_with_timeout(
     """
     holder: list[object] = [None]
     err: list[BaseException] = []
+    parent_dps_before = mp.dps
+    timed_out = [False]
 
     def _target() -> None:
         try:
             holder[0] = func()
         except BaseException as exc:  # noqa: BLE001
             err.append(exc)
+        finally:
+            if timed_out[0]:
+                mp.dps = max(parent_dps_before, target_dps)
 
-    parent_dps_before = mp.dps
     t = threading.Thread(target=_target, name=f"datalab-fit-{label}", daemon=True)
     t.start()
     t.join(timeout_seconds)
     if t.is_alive():
+        timed_out[0] = True
         # Re-assert the parent's dps in case the runaway thread already
         # mutated it (e.g. its precision_guard's __enter__ ran but
         # __exit__ hasn't yet, so the global is at ``target_dps`` —

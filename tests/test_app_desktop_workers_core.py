@@ -193,6 +193,7 @@ def test_execute_fit_job_payload_self_consistent_wires_definition_and_details(
         "build_implicit_model_specification",
         fake_build_implicit_model_specification,
     )
+    monkeypatch.setattr(workers_core, "can_fit_observed_implicit_variable", lambda _definition: False)
     monkeypatch.setattr(workers_core, "fit_custom_model", fake_fit_custom_model)
 
     job = FitJob(
@@ -320,6 +321,62 @@ def test_self_consistent_fit_job_payload_is_spawn_picklable() -> None:
     assert restored.implicit_definition.solve_options.method == "root"
     assert restored.timeout_seconds == 10.0
     assert restored.parallel_config.process_start_method == "spawn"
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "match"),
+    [
+        (("implicit_definition", "equation"), 123, "equation must be a string"),
+        (("implicit_definition", "output_expression"), 123, "output_expression must be a string"),
+        (("implicit_definition", "implicit_variable"), 123, "implicit_variable must be a string"),
+        (("implicit_definition", "x_variables"), ["x", 1], "x_variables must be a list of strings"),
+        (("implicit_definition", "parameters"), ["a", 1], "parameters must be a list of strings"),
+        (("implicit_definition", "constants"), [], "constants must be an object"),
+        (("implicit_definition", "constants"), {"C": 1}, "constants must map strings to strings"),
+        (("implicit_definition", "solve_options"), [], "solve_options must be an object"),
+        (("implicit_definition", "solve_options", "method"), 123, "method must be a string"),
+        (("implicit_definition", "solve_options", "initial"), 123, "initial must be a string"),
+        (("implicit_definition", "solve_options", "tolerance"), 123, "tolerance must be a string"),
+    ],
+)
+def test_deserialize_fit_job_rejects_malformed_implicit_definition_fields(
+    path: tuple[str, ...],
+    value: object,
+    match: str,
+) -> None:
+    payload = _serialize_fit_job(_small_self_consistent_fit_job())
+    target: dict[str, Any] = payload
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    with pytest.raises(ValueError, match=match):
+        _deserialize_fit_job(payload)
+
+
+def test_deserialize_fit_job_rejects_malformed_implicit_solve_options() -> None:
+    payload = _serialize_fit_job(_small_self_consistent_fit_job())
+    payload["implicit_definition"]["solve_options"] = "root"
+
+    with pytest.raises(ValueError, match="solve_options must be an object"):
+        _deserialize_fit_job(payload)
+
+
+def test_deserialize_fit_job_rejects_unsupported_process_start_method() -> None:
+    payload = _serialize_fit_job(_small_self_consistent_fit_job())
+    payload["parallel_config"]["process_start_method"] = "definitely-not-a-start-method"
+
+    with pytest.raises(ValueError, match="Unsupported process_start_method"):
+        _deserialize_fit_job(payload)
+
+
+@pytest.mark.parametrize("value", [[], ""])
+def test_deserialize_fit_job_rejects_malformed_parallel_config(value: object) -> None:
+    payload = _serialize_fit_job(_small_self_consistent_fit_job())
+    payload["parallel_config"] = value
+
+    with pytest.raises(ValueError, match="parallel_config must be an object"):
+        _deserialize_fit_job(payload)
 
 
 def test_self_consistent_fit_subprocess_uses_killable_runner_and_forwards_timeout(

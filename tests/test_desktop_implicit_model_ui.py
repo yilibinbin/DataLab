@@ -316,12 +316,13 @@ def test_implicit_constants_table_rejects_invalid_numeric_values(window) -> None
         window._collect_implicit_config(validate_parameters=False)
 
 
-def test_implicit_constants_reject_uncertainty_notation(window) -> None:
+def test_implicit_constants_accept_compact_uncertainty_notation(window) -> None:
     _select_model(window, "self_consistent")
     window._reset_implicit_constants_rows({"K": "1.23(4)"})
 
-    with pytest.raises(ValueError, match="Invalid value for constant K|常数 K 的取值无效"):
-        window._collect_implicit_config(validate_parameters=False)
+    config = window._collect_implicit_config(validate_parameters=False)
+
+    assert config["constants"] == {"K": "1.23(4)"}
 
 
 def test_implicit_parameter_detection_ignores_custom_parameter_table(window) -> None:

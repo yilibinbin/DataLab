@@ -191,16 +191,22 @@ def test_enabled_custom_constants_are_excluded_and_injected_into_fit_job(qtbot):
     assert mp.almosteq(payload.fit_result.params["A"], mp.mpf("2"), abs_eps=mp.mpf("1e-20"))
 
 
-def test_custom_constants_reject_uncertainty_notation_before_backend(qtbot):
-    win = _prepare_custom_fit_window(qtbot, constants_enabled=True, constant_value="1.23(4)")
+def test_custom_constants_accept_compact_uncertainty_notation_through_backend(qtbot):
+    win = _prepare_custom_fit_window(qtbot, constants_enabled=True, constant_value="1.0(2)")
     dataset = (
         ["x", "y"],
         [(mp.mpf("0"), mp.mpf("1")), (mp.mpf("1"), mp.mpf("3"))],
         [(None, None), (None, None)],
     )
 
-    with pytest.raises(ValueError, match="Invalid value for constant K"):
-        win._prepare_fit_job(dataset, generate_latex=False, output_path="", verbose=False, render_plots=False)
+    job = win._prepare_fit_job(dataset, generate_latex=False, output_path="", verbose=False, render_plots=False)
+
+    assert job.custom_constants == {"K": "1.0(2)"}
+
+    payload = _execute_fit_job_payload(job)
+
+    assert payload.fit_result is not None
+    assert mp.almosteq(payload.fit_result.params["A"], mp.mpf("2"), abs_eps=mp.mpf("1e-20"))
 
 
 def test_disabled_custom_constants_remain_fit_parameters_in_job(qtbot):

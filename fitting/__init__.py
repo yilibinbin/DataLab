@@ -1,6 +1,7 @@
 """High-precision fitting toolkit for the GUI."""
 
-from typing import NoReturn
+from collections.abc import Mapping
+from typing import Any, NoReturn, cast
 
 from .implicit_model import (
     ImplicitEvaluationCache,
@@ -27,12 +28,18 @@ from .auto_models import (
 from .report import summarize_fit_result
 
 
-def build_parameter_state(parameter_config, parameter_names=None):
+def build_parameter_state(parameter_config: Any, parameter_names: Any | None = None) -> ParameterState:
     """Public compatibility wrapper for parameter state construction."""
 
     if isinstance(parameter_config, (list, tuple)) and isinstance(parameter_names, dict):
-        return _build_parameter_state(parameter_names, list(parameter_config))
-    return _build_parameter_state(parameter_config, parameter_names)
+        return _build_parameter_state(
+            cast("Mapping[str, Mapping[str, object]]", parameter_names),
+            list(parameter_config),
+        )
+    return _build_parameter_state(
+        cast("Mapping[str, Mapping[str, object]]", parameter_config),
+        cast("list[str]", parameter_names),
+    )
 
 
 try:

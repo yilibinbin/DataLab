@@ -79,3 +79,44 @@ def test_observed_implicit_d8_weighted_fit_finishes_quickly():
     assert result.details["implicit_strategy"] == "observed_linear"
     assert result.details["optimizer_backend"] == "mpmath_qr"
     assert set(result.params) == {"d0", "d2", "d4", "d6", "d8"}
+
+
+def test_inverse_square_output_d8_fit_uses_generic_inversion_seed_quickly():
+    from fitting.implicit_model import ImplicitModelDefinition
+    from fitting.problem import ModelProblem
+    from fitting.runner import FitRunner
+
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="C/(n-delta)^2",
+        variables=("n",),
+        constants={"C": "3.2898419602500(36)[+9]"},
+        parameter_config={
+            "d0": {"initial": "-0.01213"},
+        },
+        implicit_definition=ImplicitModelDefinition(
+            x_variables=("n",),
+            implicit_variable="delta",
+            equation="d0",
+            output_expression="C/(n-delta)^2",
+            parameters=("d0",),
+            constants={"C": "3.2898419602500(36)[+9]"},
+        ),
+    )
+    n = [mp.mpf(row[0]) for row in D8_ROWS]
+    expected_d0 = mp.mpf("-0.01213")
+    rydberg = mp.mpf("3.2898419602500e9")
+    targets = [rydberg / (n_value - expected_d0) ** 2 for n_value in n]
+
+    start = time.perf_counter()
+    result = FitRunner().fit(problem, {"n": n}, targets, precision=50)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 2.0
+    assert result.details["implicit_strategy"] == "general_output_space_with_inversion_seed"
+    assert result.details["output_inversion"] == "validated symbolic output inversion"
+    assert mp.fabs(result.params["d0"] - expected_d0) < mp.mpf("1e-14")
+    for residual, fitted, target in zip(result.residuals, result.fitted_curve, targets, strict=True):
+        assert mp.almosteq(residual, fitted - target, rel_eps=mp.mpf("1e-20"), abs_eps=mp.mpf("1e-6"))
+    expected_chi2 = mp.fsum(residual * residual for residual in result.residuals)
+    assert mp.almosteq(result.chi2, expected_chi2, rel_eps=mp.mpf("1e-30"), abs_eps=mp.mpf("1e-30"))

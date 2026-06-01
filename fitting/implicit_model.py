@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 import warnings
 from dataclasses import dataclass, field
-from typing import Callable, Sequence, cast
+from collections.abc import MutableMapping
+from typing import Any, Callable, Sequence, cast
 
 from mpmath import mp
 
@@ -15,11 +16,15 @@ from fitting.model_parser import ModelSpecification, MpfCallable
 from fitting.constraints import ParameterState
 from fitting.hp_fitter import FitResult, combine_error_components
 from shared.bilingual import _dual_msg
+from shared.uncertainty import parse_numeric_value
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MpfKey = tuple[int, int, int, int]
-_CacheKey = tuple[int, int, tuple[_MpfKey, ...], tuple[_MpfKey, ...]]
+_BranchSignature = tuple[_MpfKey, ...] | None
+_CacheKey = tuple[int, int, _BranchSignature, tuple[_MpfKey, ...], tuple[_MpfKey, ...]]
+_MAX_IMPLICIT_CACHE_ENTRIES = 10_000
+_IMPLICIT_CACHE_EVICT_BATCH = 1_000
 
 
 @dataclass(frozen=True)
@@ -51,11 +56,12 @@ class ImplicitSolveDiagnostics:
 
 
 class ImplicitEvaluationCache:
-    def __init__(self) -> None:
+    def __init__(self, target_implicit_candidates: Sequence[tuple[mp.mpf, ...]] | None = None) -> None:
         self.diagnostics = ImplicitSolveDiagnostics()
         self._values: dict[_CacheKey, mp.mpf] = {}
         self._warm_starts: dict[tuple[int, int, tuple[_MpfKey, ...]], mp.mpf] = {}
         self.current_point_index: int | None = None
+        self.target_implicit_candidates = target_implicit_candidates
 
     def get(
         self,
@@ -70,40 +76,64 @@ class ImplicitEvaluationCache:
         param_tuple: tuple[mp.mpf, ...],
         value: mp.mpf,
     ) -> None:
+        self._trim_if_needed(self._values)
+        self._trim_if_needed(self._warm_starts)
         self._values[self._key(var_tuple, param_tuple)] = value
         self._warm_starts[self._warm_key(param_tuple)] = value
 
     def get_warm_start(self, param_tuple: tuple[mp.mpf, ...]) -> mp.mpf | None:
         return self._warm_starts.get(self._warm_key(param_tuple))
 
-    @staticmethod
     def _key(
+        self,
         var_tuple: tuple[mp.mpf, ...],
         param_tuple: tuple[mp.mpf, ...],
     ) -> _CacheKey:
         return (
             int(mp.dps),
             int(mp.prec),
+            self._branch_signature(),
             tuple(cast(_MpfKey, value._mpf_) for value in var_tuple),
             tuple(cast(_MpfKey, value._mpf_) for value in param_tuple),
         )
 
-    @staticmethod
-    def _warm_key(param_tuple: tuple[mp.mpf, ...]) -> tuple[int, int, tuple[_MpfKey, ...]]:
+    def _warm_key(self, param_tuple: tuple[mp.mpf, ...]) -> tuple[int, int, tuple[_MpfKey, ...]]:
         return (
             int(mp.dps),
             int(mp.prec),
             tuple(cast(_MpfKey, value._mpf_) for value in param_tuple),
         )
 
+    def _branch_signature(self) -> _BranchSignature:
+        if self.target_implicit_candidates is None or self.current_point_index is None:
+            return None
+        if self.current_point_index < 0 or self.current_point_index >= len(self.target_implicit_candidates):
+            return None
+        return tuple(cast(_MpfKey, mp.mpf(value)._mpf_) for value in self.target_implicit_candidates[self.current_point_index])
+
+    @staticmethod
+    def _trim_if_needed(cache: MutableMapping[Any, mp.mpf]) -> None:
+        if len(cache) < _MAX_IMPLICIT_CACHE_ENTRIES:
+            return
+        evict_count = max(
+            _IMPLICIT_CACHE_EVICT_BATCH,
+            len(cache) - _MAX_IMPLICIT_CACHE_ENTRIES + 1,
+        )
+        for key in list(cache)[:evict_count]:
+            del cache[key]
+
 
 def build_implicit_model_specification(
     definition: ImplicitModelDefinition,
+    target_data: Sequence[mp.mpf] | None = None,
+    *,
+    target_implicit_candidates: Sequence[tuple[mp.mpf, ...]] | None = None,
 ) -> ModelSpecification:
     """Build a `ModelSpecification` for a one-variable implicit equation."""
 
     _validate_definition(definition)
-    cache = ImplicitEvaluationCache()
+    del target_data
+    cache = ImplicitEvaluationCache(target_implicit_candidates=target_implicit_candidates)
     x_names = list(definition.x_variables)
     param_names = list(definition.parameters)
 
@@ -371,15 +401,22 @@ def _solve_implicit_value(
         scope = _scope_for(definition, var_tuple, param_tuple, mp.mpf(value))
         return mp.mpf(safe_eval(definition.equation, scope))
 
-    seeds: list[tuple[mp.mpf, bool]] = [(configured_seed, False)]
+    active_target_candidates = _active_target_candidates(cache)
+    seeds: list[tuple[mp.mpf, bool, mp.mpf | None]] = [(configured_seed, False, None)]
+    target_seeds = _target_implicit_seeds(cache, rhs, options.method)
+    if target_seeds:
+        seeds = [(seed, False, seed) for seed in target_seeds] + seeds
     if warm_seed is not None:
         if prefer_warm_start:
-            seeds = [(warm_seed, True), (configured_seed, False)]
+            seeds = [(warm_seed, True, None), (configured_seed, False, None)]
+            if target_seeds:
+                seeds = [(seed, False, seed) for seed in target_seeds] + seeds
         else:
-            seeds.append((warm_seed, True))
+            seeds.append((warm_seed, True, None))
+    seeds = _deduplicate_seed_order(seeds)
 
     last_error: ValueError | None = None
-    for seed, used_warm_start in seeds:
+    for seed, used_warm_start, branch_anchor in seeds:
         try:
             solved, iterations_used, used_fallback, residual = _solve_from_seed(
                 rhs,
@@ -387,6 +424,13 @@ def _solve_implicit_value(
                 options,
                 tol,
             )
+            if not _solution_matches_target_branch(solved, active_target_candidates, branch_anchor):
+                raise ValueError(
+                    _dual_msg(
+                        "隐式方程收敛到目标输出分支之外的根。",
+                        "Implicit solve converged outside the target output branch.",
+                    )
+                )
             if used_warm_start:
                 cache.diagnostics.warm_start_uses += 1
             break
@@ -404,6 +448,79 @@ def _solve_implicit_value(
     diagnostics.max_residual = max(diagnostics.max_residual, residual)
     cache.set(var_tuple, param_tuple, solved)
     return solved
+
+
+def _target_implicit_seeds(
+    cache: ImplicitEvaluationCache,
+    rhs: Callable[[mp.mpf], mp.mpf],
+    method: str,
+) -> list[mp.mpf]:
+    candidates = _active_target_candidates(cache)
+    ranked: list[tuple[mp.mpf, mp.mpf]] = []
+    for candidate in candidates:
+        try:
+            rhs_value = rhs(candidate)
+            residual = mp.fabs(rhs_value) if method == "root" else mp.fabs(candidate - rhs_value)
+        except Exception:
+            continue
+        if mp.isfinite(residual):
+            ranked.append((residual, candidate))
+    ranked.sort(key=lambda item: item[0])
+    return [candidate for _residual, candidate in ranked]
+
+
+def _active_target_candidates(cache: ImplicitEvaluationCache) -> list[mp.mpf]:
+    if cache.target_implicit_candidates is None or cache.current_point_index is None:
+        return []
+    if cache.current_point_index < 0 or cache.current_point_index >= len(cache.target_implicit_candidates):
+        return []
+    return [mp.mpf(candidate) for candidate in cache.target_implicit_candidates[cache.current_point_index]]
+
+
+def _solution_matches_target_branch(
+    solved: mp.mpf,
+    candidates: Sequence[mp.mpf],
+    branch_anchor: mp.mpf | None,
+) -> bool:
+    if not candidates:
+        return True
+    if not mp.isfinite(solved):
+        return False
+    if branch_anchor is not None:
+        return _solution_matches_branch_anchor(solved, branch_anchor, candidates)
+    return any(_solution_matches_branch_anchor(solved, candidate, candidates) for candidate in candidates)
+
+
+def _solution_matches_branch_anchor(solved: mp.mpf, anchor: mp.mpf, candidates: Sequence[mp.mpf]) -> bool:
+    unique = sorted({mp.mpf(candidate) for candidate in candidates})
+    if not unique:
+        return True
+    if anchor not in unique:
+        anchor = min(unique, key=lambda candidate: mp.fabs(candidate - anchor))
+    anchor_distance = mp.fabs(solved - anchor)
+    other_distances = [mp.fabs(solved - candidate) for candidate in unique if candidate != anchor]
+    if not other_distances:
+        return True
+    nearest_other = min(other_distances)
+    if anchor_distance < nearest_other:
+        return True
+    return bool(anchor_distance <= _branch_anchor_tolerance(solved, anchor, unique))
+
+
+def _branch_anchor_tolerance(solved: mp.mpf, anchor: mp.mpf, candidates: Sequence[mp.mpf]) -> mp.mpf:
+    scale = max(mp.mpf("1"), mp.fabs(solved), mp.fabs(anchor), *(mp.fabs(candidate) for candidate in candidates))
+    return mp.eps * scale * 64
+
+
+def _deduplicate_seed_order(
+    seeds: Sequence[tuple[mp.mpf, bool, mp.mpf | None]],
+) -> list[tuple[mp.mpf, bool, mp.mpf | None]]:
+    unique: list[tuple[mp.mpf, bool, mp.mpf | None]] = []
+    for seed, used_warm_start, branch_anchor in seeds:
+        if any(existing == seed and existing_anchor == branch_anchor for existing, _existing_warm, existing_anchor in unique):
+            continue
+        unique.append((seed, used_warm_start, branch_anchor))
+    return unique
 
 
 def _solve_from_seed(
@@ -490,7 +607,8 @@ def _implicit_solve_failure_context(
         for name, value in zip(definition.parameters, param_tuple)
     }
     diagnostics = cache.diagnostics
-    return _dual_msg(
+    return str(
+        _dual_msg(
         "隐式方程逐点求解失败: "
         f"point_index={cache.current_point_index}, variables={variable_values}, parameters={parameter_values}, "
         f"method={definition.solve_options.method}, residual={mp.nstr(diagnostics.max_residual, 30)}, "
@@ -499,6 +617,7 @@ def _implicit_solve_failure_context(
         f"point_index={cache.current_point_index}, variables={variable_values}, parameters={parameter_values}, "
         f"method={definition.solve_options.method}, residual={mp.nstr(diagnostics.max_residual, 30)}, "
         f"iterations={diagnostics.max_iterations_used}, error={exc}",
+        )
     )
 
 
@@ -518,7 +637,7 @@ def _scope_for(
 
 
 def _constant_values(constants: dict[str, str]) -> dict[str, mp.mpf]:
-    return {name: mp.mpf(value) for name, value in constants.items()}
+    return {name: parse_numeric_value(value) for name, value in constants.items()}
 
 
 def _observed_scope_for(

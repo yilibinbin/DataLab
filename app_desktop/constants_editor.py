@@ -4,7 +4,6 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-import mpmath as mp
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -18,8 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from datalab_latex.latex_tables_error_propagation import parse_uncertainty_format
 from fitting.model_parser import is_reserved_expression_name
+from shared.uncertainty import parse_numeric_value, parse_uncertainty_format
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -100,6 +99,12 @@ class ConstantsEditor(QWidget):
 
         self._on_checked_changed(self.checkbox.isChecked())
         self._constructed = True
+
+    def numeric_mode(self) -> str:
+        return self._numeric_mode
+
+    def set_numeric_mode(self, numeric_mode: str) -> None:
+        self._numeric_mode = str(numeric_mode or "uncertainty")
 
     def setChecked(self, checked: bool) -> None:  # noqa: N802 - Qt-style API
         self.checkbox.setChecked(bool(checked))
@@ -192,7 +197,7 @@ class ConstantsEditor(QWidget):
     def _validate_value(self, name: str, value: str) -> None:
         try:
             if self._numeric_mode == "mpmath":
-                mp.mpf(value)
+                parse_numeric_value(value)
             else:
                 parse_uncertainty_format(value)
         except Exception as exc:  # noqa: BLE001

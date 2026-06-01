@@ -209,6 +209,9 @@ def _capture_data_section(window: Any, *, constants: bool = False) -> tuple[dict
         "source_path_label": source_path,
         "active_view": "text" if source_kind == "manual_text" else "table",
         "decoded_text": decoded_text,
+        "numeric_mode": str(editor.numeric_mode())
+        if constants and editor is not None and hasattr(editor, "numeric_mode")
+        else "uncertainty",
         "encoding": encoding,
         "newline": _newline_kind(decoded_text),
         "original_bytes_sha256": sha256_bytes(raw),
@@ -271,12 +274,14 @@ def _constants_editor_state(editor: Any) -> dict[str, Any]:
             "view": "table",
             "rows": [],
             "text": "",
+            "numeric_mode": "uncertainty",
         }
     return {
         "enabled": _checked(editor),
         "view": "text" if editor.using_text_view() else "table",
         "rows": _coerce_string_rows(editor.rows(), ("name", "value")),
         "text": str(editor.raw_text()),
+        "numeric_mode": str(editor.numeric_mode()) if hasattr(editor, "numeric_mode") else "uncertainty",
     }
 
 
@@ -327,6 +332,12 @@ def _capture_implicit_config(window: Any, model: str) -> dict[str, Any]:
             if getattr(window, "implicit_constants_editor", None) is not None
             else ""
         ),
+        "constants_numeric_mode": (
+            str(window.implicit_constants_editor.numeric_mode())
+            if getattr(window, "implicit_constants_editor", None) is not None
+            and hasattr(window.implicit_constants_editor, "numeric_mode")
+            else "uncertainty"
+        ),
     }
 
 
@@ -374,6 +385,8 @@ def _restore_constants_editor_state(editor: Any, state: Any) -> None:
         rows = state.get("constants")
     use_text_view = str(state.get("view") or "table") == "text"
     text = state.get("text")
+    if "numeric_mode" in state and hasattr(editor, "set_numeric_mode"):
+        editor.set_numeric_mode(str(state.get("numeric_mode") or "uncertainty"))
     editor.set_rows(rows)
     if text is not None:
         if hasattr(editor, "set_raw_text"):
@@ -549,6 +562,8 @@ def _restore_implicit_config(window: Any, config: Any, fitting: dict[str, Any] |
     editor = getattr(window, "implicit_constants_editor", None)
     if editor is not None:
         use_text_view = str(config.get("constants_view") or "table") == "text"
+        if "constants_numeric_mode" in config and hasattr(editor, "set_numeric_mode"):
+            editor.set_numeric_mode(str(config.get("constants_numeric_mode") or "uncertainty"))
         editor.set_rows(_implicit_constants_to_rows(constants))
         if "constants_text" in config:
             if hasattr(editor, "set_raw_text"):
@@ -807,6 +822,8 @@ def _restore_data_section(window: Any, section: dict[str, Any], *, constants: bo
             for row in canonical.get("rows") or []:
                 if isinstance(row, list) and len(row) >= 2:
                     rows.append({"name": str(row[0]), "value": str(row[1])})
+        if "numeric_mode" in section and hasattr(editor, "set_numeric_mode"):
+            editor.set_numeric_mode(str(section.get("numeric_mode") or "uncertainty"))
         editor.set_rows(rows)
         if hasattr(editor, "set_raw_text"):
             editor.set_raw_text(str(section.get("decoded_text") or ""))

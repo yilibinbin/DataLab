@@ -13,7 +13,7 @@ from app_desktop.parameter_table import ParameterTable
 
 
 @pytest.mark.parametrize("constraints_enabled", [False, True])
-def test_parameter_table_detect_preserves_matching_rows_and_drops_orphans(qtbot, constraints_enabled):
+def test_parameter_table_detect_preserves_matching_rows_and_marks_orphans(qtbot, constraints_enabled):
     table = ParameterTable()
     qtbot.addWidget(table)
     table.set_constraints_enabled(constraints_enabled)
@@ -28,6 +28,13 @@ def test_parameter_table_detect_preserves_matching_rows_and_drops_orphans(qtbot,
     table.set_detected_names(["A", "B", "C"])
 
     assert table.rows() == [
+        {"name": "A", "initial": "1", "fixed": "", "min": "0", "max": ""},
+        {"name": "B", "initial": "2", "fixed": "3", "min": "1", "max": "4"},
+        {"name": "C", "initial": "", "fixed": "", "min": "", "max": ""},
+        {"name": "gone", "initial": "9", "fixed": "", "min": "", "max": ""},
+    ]
+    assert table.orphan_names() == {"gone"}
+    assert table.compute_rows() == [
         {"name": "A", "initial": "1", "fixed": "", "min": "0", "max": ""},
         {"name": "B", "initial": "2", "fixed": "3", "min": "1", "max": "4"},
         {"name": "C", "initial": "", "fixed": "", "min": "", "max": ""},

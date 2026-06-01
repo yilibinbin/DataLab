@@ -123,6 +123,7 @@ def test_workspace_preserves_disabled_error_constants_draft(qtbot) -> None:
 
     assert constants["enabled"] is False
     assert constants["active_view"] == "table"
+    assert constants["numeric_mode"] == "uncertainty"
     assert constants["decoded_text"] == raw_text
     assert constants["canonical_table"]["rows"] == [["ALPHA", "1"]]
 
@@ -282,6 +283,7 @@ def test_workspace_preserves_custom_fit_parameters_and_constants(qtbot) -> None:
         "view": "text",
         "rows": [{"name": "K", "value": "1"}],
         "text": "# draft\nK = 1\n",
+        "numeric_mode": "mpmath",
     }
 
     target = ExtrapolationWindow()
@@ -295,6 +297,7 @@ def test_workspace_preserves_custom_fit_parameters_and_constants(qtbot) -> None:
     ]
     assert target.custom_constants_editor.isChecked() is True
     assert target.custom_constants_editor.using_text_view() is True
+    assert target.custom_constants_editor.numeric_mode() == "mpmath"
     assert target.custom_constants_editor.raw_text() == "# draft\nK = 1\n"
     assert target.custom_constants_editor.rows() == [{"name": "K", "value": "1"}]
 
@@ -314,6 +317,7 @@ def test_workspace_preserves_custom_constants_table_rows(qtbot) -> None:
     fitting = bundle.manifest["workspace"]["config"]["fitting"]
 
     assert fitting["custom_constants"]["view"] == "table"
+    assert fitting["custom_constants"]["numeric_mode"] == "mpmath"
     assert fitting["custom_constants"]["rows"] == [{"name": "K", "value": "1"}]
 
     target = ExtrapolationWindow()
@@ -347,6 +351,7 @@ def test_workspace_preserves_custom_constants_table_view_raw_text_draft(qtbot) -
         "view": "table",
         "rows": [{"name": "K", "value": "1"}],
         "text": raw_text,
+        "numeric_mode": "mpmath",
     }
 
     target = ExtrapolationWindow()
@@ -538,6 +543,7 @@ def test_workspace_preserves_implicit_draft_after_switching_back_to_custom(qtbot
     ]
     assert implicit["constants_enabled"] is True
     assert implicit["constants_view"] == "text"
+    assert implicit["constants_numeric_mode"] == "mpmath"
     assert implicit["constants"] == [{"name": "K", "value": "0.007"}]
     assert implicit["constants_text"] == "# draft constant\nK = 0.007\n"
 
@@ -584,17 +590,18 @@ def test_workspace_preserves_implicit_parameters_and_constants(qtbot) -> None:
             "K": {"initial": "-0.007"},
         }
     )
-    source._reset_implicit_constants_rows({"unit": "1"})
+    source._reset_implicit_constants_rows({"CR": "3.2898419602500(36)[+9]"})
 
     bundle = capture_workspace(source, title="implicit")
     implicit = bundle.manifest["workspace"]["config"]["fitting"]["implicit"]
     assert implicit["schema"] == 2
+    assert implicit["constants_numeric_mode"] == "mpmath"
     assert implicit["parameters"] == [
         {"name": "d0", "initial": "0.32", "fixed": "", "min": "", "max": ""},
         {"name": "En", "initial": "-0.0121425", "fixed": "", "min": "", "max": ""},
         {"name": "K", "initial": "-0.007", "fixed": "", "min": "", "max": ""},
     ]
-    assert implicit["constants"] == [{"name": "unit", "value": "1"}]
+    assert implicit["constants"] == [{"name": "CR", "value": "3.2898419602500(36)[+9]"}]
 
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
@@ -605,7 +612,8 @@ def test_workspace_preserves_implicit_parameters_and_constants(qtbot) -> None:
     assert target.implicit_equation_edit.toPlainText() == "d0"
     assert target.implicit_output_edit.toPlainText() == "En - K/(n-delta)^2"
     assert target.implicit_timeout_spin.value() == 420
-    assert target._collect_implicit_constants() == {"unit": "1"}
+    assert target.implicit_constants_editor.numeric_mode() == "mpmath"
+    assert target._collect_implicit_constants() == {"CR": "3.2898419602500(36)[+9]"}
     assert target._collect_implicit_parameter_config(["d0", "En", "K"]) == {
         "d0": {"initial": "0.32"},
         "En": {"initial": "-0.0121425"},

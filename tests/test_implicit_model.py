@@ -1,20 +1,26 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from typing import Any, cast
 
 import pytest
 from mpmath import mp
 
 from fitting.constraints import build_parameter_state
-from fitting.hp_fitter import fit_custom_model
+from fitting.hp_fitter import FitResult, fit_custom_model
 from fitting.implicit_model import (
+    ImplicitEvaluationCache,
     ImplicitModelDefinition,
     ImplicitSolveOptions,
+    _solution_matches_branch_anchor,
     build_implicit_model_specification,
     default_implicit_template,
     quantum_defect_template,
 )
+from fitting.problem import ModelProblem
+import fitting.runner as runner_module
+from fitting.runner import FitRunner
 
 
 def test_fixed_point_model_solves_real_self_dependent_equation() -> None:
@@ -197,6 +203,347 @@ def test_same_dps_different_workprec_contexts_do_not_share_cache() -> None:
     assert diagnostics.points_solved == 2
 
 
+def test_target_implicit_candidates_prevent_branch_cache_bleed() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="u + a*0",
+        output_expression="u",
+        parameters=("a",),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="fixed_point",
+            initial="0",
+            tolerance="1e-40",
+            max_iterations=20,
+        ),
+    )
+    spec = build_implicit_model_specification(
+        definition,
+        target_implicit_candidates=[(mp.mpf("-2"), mp.mpf("2")), (mp.mpf("2"), mp.mpf("-2"))],
+    )
+    setter = getattr(spec, "set_implicit_point_index")
+    variables = {"x": mp.mpf("1")}
+    params = {"a": mp.mpf("1")}
+
+    setter(0)
+    first = spec.evaluate(variables, params)
+    setter(1)
+    second = spec.evaluate(variables, params)
+
+    assert first == mp.mpf("-2")
+    assert second == mp.mpf("2")
+    diagnostics = getattr(spec, "implicit_diagnostics")
+    assert diagnostics.points_solved == 2
+
+
+def test_target_implicit_candidates_reject_root_outside_output_branch() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="-u",
+        output_expression="u^2",
+        parameters=("a",),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="root",
+            initial="0",
+            tolerance="1e-40",
+            max_iterations=20,
+        ),
+    )
+    spec = build_implicit_model_specification(
+        definition,
+        target_implicit_candidates=[(mp.mpf("2"), mp.mpf("-2"))],
+    )
+    setter = getattr(spec, "set_implicit_point_index")
+    setter(0)
+
+    with pytest.raises(ValueError, match="target output branch"):
+        spec.evaluate({"x": mp.mpf("1")}, {"a": mp.mpf("1")})
+
+
+def test_target_branch_validation_allows_large_output_space_residual() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a*x",
+        output_expression="u^2",
+        parameters=("a",),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="root",
+            initial="0",
+            tolerance="1e-40",
+            max_iterations=20,
+        ),
+    )
+    spec = build_implicit_model_specification(
+        definition,
+        target_implicit_candidates=[(mp.mpf("-2"), mp.mpf("2"))],
+    )
+    setter = getattr(spec, "set_implicit_point_index")
+    setter(0)
+
+    assert spec.evaluate({"x": mp.mpf("1")}, {"a": mp.mpf("10")}) == mp.mpf("100")
+
+
+def test_identical_target_implicit_candidates_still_cache_hit() -> None:
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="u + a*0",
+        output_expression="u",
+        parameters=("a",),
+        constants={},
+        solve_options=ImplicitSolveOptions(
+            method="fixed_point",
+            initial="0",
+            tolerance="1e-40",
+            max_iterations=20,
+        ),
+    )
+    spec = build_implicit_model_specification(
+        definition,
+        target_implicit_candidates=[(mp.mpf("-2"), mp.mpf("2")), (mp.mpf("-2"), mp.mpf("2"))],
+    )
+    setter = getattr(spec, "set_implicit_point_index")
+    variables = {"x": mp.mpf("1")}
+    params = {"a": mp.mpf("1")}
+
+    setter(0)
+    first = spec.evaluate(variables, params)
+    setter(1)
+    second = spec.evaluate(variables, params)
+
+    assert first == second == mp.mpf("-2")
+    diagnostics = getattr(spec, "implicit_diagnostics")
+    assert diagnostics.points_solved == 1
+
+
+def test_runner_uses_generic_output_inversion_seed_for_non_observed_output() -> None:
+    parameter_config: dict[str, dict[str, object]] = {"a": {"initial": "1"}}
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="u^2",
+        variables=("x",),
+        parameter_config=parameter_config,
+        implicit_definition=ImplicitModelDefinition(
+            x_variables=("x",),
+            implicit_variable="u",
+            equation="a*x",
+            output_expression="u^2",
+            parameters=("a",),
+        ),
+    )
+
+    result = FitRunner().fit(
+        problem,
+        {"x": [mp.mpf("1"), mp.mpf("2")]},
+        [mp.mpf("4"), mp.mpf("16")],
+        precision=50,
+    )
+
+    assert result.details["implicit_strategy"] == "general_output_space_with_inversion_seed"
+    assert result.details["output_inversion"] == "validated symbolic output inversion"
+    fallback_history = cast(list[dict[str, object]], result.details.get("fallback_history", []))
+    assert any(
+        entry.get("reason") == "multi_branch_candidates"
+        for entry in fallback_history
+    )
+    assert mp.almosteq(result.params["a"], mp.mpf("2"), rel_eps=mp.mpf("1e-20"))
+    assert all(mp.almosteq(residual, mp.mpf("0"), abs_eps=mp.mpf("1e-20")) for residual in result.residuals)
+
+
+def test_runner_uses_singleton_output_inversion_seed_for_parameter_initials() -> None:
+    parameter_config: dict[str, dict[str, object]] = {"a": {"initial": "20"}}
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="u + 1",
+        variables=("x",),
+        parameter_config=parameter_config,
+        implicit_definition=ImplicitModelDefinition(
+            x_variables=("x",),
+            implicit_variable="u",
+            equation="a*x",
+            output_expression="u + 1",
+            parameters=("a",),
+        ),
+    )
+
+    result = FitRunner().fit(
+        problem,
+        {"x": [mp.mpf("1"), mp.mpf("2"), mp.mpf("3")]},
+        [mp.mpf("3"), mp.mpf("5"), mp.mpf("7")],
+        precision=50,
+    )
+
+    assert result.details["implicit_strategy"] == "general_output_space_with_inversion_seed"
+    fallback_history = cast(list[dict[str, object]], result.details.get("fallback_history", []))
+    assert any(
+        entry.get("reason") == "observed_linear_seed_fit"
+        for entry in fallback_history
+    )
+    assert mp.almosteq(result.params["a"], mp.mpf("2"), rel_eps=mp.mpf("1e-20"))
+
+
+def test_runner_keeps_parameter_dependent_output_on_general_route() -> None:
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="p + u",
+        variables=("x",),
+        parameter_config={"p": {"initial": "1"}},
+        implicit_definition=ImplicitModelDefinition(
+            x_variables=("x",),
+            implicit_variable="u",
+            equation="p*x",
+            output_expression="p + u",
+            parameters=("p",),
+        ),
+    )
+
+    result = FitRunner().fit(
+        problem,
+        {"x": [mp.mpf("1"), mp.mpf("2"), mp.mpf("3")]},
+        [mp.mpf("4"), mp.mpf("6"), mp.mpf("8")],
+        precision=50,
+    )
+
+    assert result.details["implicit_strategy"] == "general"
+    assert "output_inversion" not in result.details
+    assert mp.almosteq(result.params["p"], mp.mpf("2"), rel_eps=mp.mpf("1e-20"))
+    assert all(mp.almosteq(residual, mp.mpf("0"), abs_eps=mp.mpf("1e-20")) for residual in result.residuals)
+
+
+def test_runner_recomputes_output_inversion_candidates_for_systematic_refits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_builder = runner_module.build_implicit_model_specification
+    recorded_candidates: list[tuple[tuple[str, ...], ...]] = []
+
+    def _recording_builder(
+        definition: ImplicitModelDefinition,
+        target_data: Sequence[mp.mpf] | None = None,
+        *,
+        target_implicit_candidates: Sequence[tuple[mp.mpf, ...]] | None = None,
+    ) -> Any:
+        if target_implicit_candidates is not None:
+            recorded_candidates.append(
+                tuple(
+                    tuple(mp.nstr(candidate, 30) for candidate in row)
+                    for row in target_implicit_candidates
+                )
+            )
+        return original_builder(
+            definition,
+            target_data,
+            target_implicit_candidates=target_implicit_candidates,
+        )
+
+    monkeypatch.setattr(runner_module, "build_implicit_model_specification", _recording_builder)
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="u^2",
+        variables=("x",),
+        parameter_config={"a": {"initial": "1.8"}},
+        implicit_definition=ImplicitModelDefinition(
+            x_variables=("x",),
+            implicit_variable="u",
+            equation="a*x",
+            output_expression="u^2",
+            parameters=("a",),
+        ),
+    )
+
+    result = FitRunner().fit(
+        problem,
+        {"x": [mp.mpf("1"), mp.mpf("2"), mp.mpf("3")]},
+        [mp.mpf("4"), mp.mpf("16"), mp.mpf("36")],
+        precision=50,
+        data_sigmas=[mp.mpf("0.1"), mp.mpf("0.1"), mp.mpf("0.1")],
+    )
+
+    assert result.details["implicit_strategy"] == "general_output_space_with_inversion_seed"
+    assert len(set(recorded_candidates)) >= 3
+
+
+def test_parameter_config_with_inversion_seed_preserves_constraints() -> None:
+    config: dict[str, dict[str, object]] = {
+        "a": {"initial": "1", "min": "-5", "max": "5"},
+        "b": {"initial": "2", "fixed": "3"},
+        "c": {"expr": "a + b"},
+    }
+    state = build_parameter_state(config, ["a", "b", "c"])
+    seed = FitResult(
+        params={"a": mp.mpf("4"), "b": mp.mpf("99"), "c": mp.mpf("103")},
+        param_errors={},
+        chi2=mp.mpf("0"),
+        reduced_chi2=mp.mpf("0"),
+        aic=mp.mpf("0"),
+        bic=mp.mpf("0"),
+        r2=mp.mpf("1"),
+        rmse=mp.mpf("0"),
+        residuals=[],
+        fitted_curve=[],
+        covariance=[],
+    )
+
+    updated = runner_module._parameter_config_with_inversion_seed(config, state, seed)
+
+    assert updated is not config
+    assert updated["a"] == {"initial": "4.0", "min": "-5", "max": "5"}
+    assert updated["b"] == {"initial": "2", "fixed": "3"}
+    assert updated["c"] == {"expr": "a + b"}
+
+
+def test_inversion_seed_outside_bounds_falls_back_to_original_initials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _out_of_bounds_seed(*_args: object, **_kwargs: object) -> FitResult:
+        return FitResult(
+            params={"a": mp.mpf("2")},
+            param_errors={},
+            chi2=mp.mpf("0"),
+            reduced_chi2=mp.mpf("0"),
+            aic=mp.mpf("0"),
+            bic=mp.mpf("0"),
+            r2=mp.mpf("1"),
+            rmse=mp.mpf("0"),
+            residuals=[],
+            fitted_curve=[],
+            covariance=[],
+        )
+
+    monkeypatch.setattr(runner_module, "_fit_output_inversion_parameter_seed", _out_of_bounds_seed)
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="u + 1",
+        variables=("x",),
+        parameter_config={"a": {"initial": "1", "min": "0", "max": "1.5"}},
+        implicit_definition=ImplicitModelDefinition(
+            x_variables=("x",),
+            implicit_variable="u",
+            equation="a*x",
+            output_expression="u + 1",
+            parameters=("a",),
+        ),
+    )
+
+    result = FitRunner().fit(
+        problem,
+        {"x": [mp.mpf("1"), mp.mpf("2"), mp.mpf("3")]},
+        [mp.mpf("2.2"), mp.mpf("3.4"), mp.mpf("4.6")],
+        precision=50,
+    )
+
+    fallback_history = cast(list[dict[str, object]], result.details.get("fallback_history", []))
+    assert any(
+        str(entry.get("reason", "")).startswith("seed_config_rejected:")
+        for entry in fallback_history
+    )
+    assert mp.almosteq(result.params["a"], mp.mpf("1.2"), rel_eps=mp.mpf("1e-12"))
+
+
 def test_numeric_partial_uses_high_precision_step() -> None:
     with mp.workdps(120):
         definition = ImplicitModelDefinition(
@@ -307,8 +654,37 @@ def test_sequential_general_implicit_evaluations_use_warm_starts() -> None:
     assert diagnostics.warm_start_uses == 2
 
 
+def test_implicit_evaluation_cache_is_bounded_under_unique_parameters() -> None:
+    cache = ImplicitEvaluationCache()
+    var_tuple = (mp.mpf("1"),)
+
+    for index in range(10_050):
+        cache.current_point_index = index
+        param_tuple = (mp.mpf(index),)
+        cache.set(var_tuple, param_tuple, mp.mpf(index))
+
+    assert len(cache._values) <= 10_000
+    assert len(cache._warm_starts) <= 10_000
+    assert len(cache._values) > 8_000
+    assert len(cache._warm_starts) > 8_000
+    assert cache.get(var_tuple, (mp.mpf("10049"),)) == mp.mpf("10049")
+    assert cache.get_warm_start((mp.mpf("10049"),)) == mp.mpf("10049")
+
+
+def test_target_branch_validation_tolerates_near_coincident_root_ulp() -> None:
+    anchor = mp.mpf("1.0")
+    nearby = anchor + mp.eps * 10
+    solved = anchor + mp.eps * 2
+
+    assert _solution_matches_branch_anchor(solved, anchor, [anchor, nearby])
+
+
+def test_target_branch_validation_rejects_ambiguous_midpoint() -> None:
+    assert not _solution_matches_branch_anchor(mp.mpf("0"), mp.mpf("2"), [mp.mpf("-2"), mp.mpf("2")])
+
+
 def test_row_dependent_initial_expression_preserves_fresh_root_branch() -> None:
-    def build_spec():
+    def build_spec() -> Any:
         definition = ImplicitModelDefinition(
             x_variables=("x",),
             implicit_variable="u",
@@ -402,7 +778,7 @@ def _scaled_rydberg_definition() -> ImplicitModelDefinition:
 def _fit_scaled_rydberg_dataset(
     xs: list[mp.mpf],
     ys: list[mp.mpf],
-):
+) -> FitResult:
     definition = _scaled_rydberg_definition()
     spec = build_implicit_model_specification(definition)
     state = build_parameter_state(
@@ -435,8 +811,6 @@ def test_generic_implicit_model_fits_small_scaled_dataset() -> None:
     assert mp.fabs(result.params["K"] - expected_params["K"]) < mp.mpf("1e-9")
     assert result.rmse < mp.mpf("1e-12")
 
-
-@pytest.mark.slow
 def test_generic_implicit_model_fits_rydberg_like_scaled_dataset_quickly(
     record_property: Callable[[str, object], None],
 ) -> None:

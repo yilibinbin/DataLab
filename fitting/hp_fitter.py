@@ -447,6 +447,7 @@ def fit_custom_model(
     precision: int = 80,
     weights: list[mp.mpf] | None = None,
     data_sigmas: list[mp.mpf | None] | None = None,
+    model_factory: Callable[[Sequence[mp.mpf]], ModelSpecification] | None = None,
 ) -> FitResult:
     if not variable_data:
         raise ValueError(
@@ -502,8 +503,9 @@ def fit_custom_model(
                     )
 
         def _run_once(current_targets: Sequence[mp.mpf], seed_override: tuple[mp.mpf, ...] | None = None) -> _FitComputation:
+            current_model = model_factory(current_targets) if model_factory is not None else model
             gradient_funcs = tuple(
-                _gradient_builder(name, model, parameter_state, observations, current_targets, applied_weights)
+                _gradient_builder(name, current_model, parameter_state, observations, current_targets, applied_weights)
                 for name in parameter_state.free_params
             )
             seed = tuple(seed_override) if seed_override is not None else parameter_state.initial_vector()
@@ -564,10 +566,10 @@ def fit_custom_model(
                         bic,
                         dof,
                     ) = _compute_statistics(
-                        model, solved_params, observations, current_targets, free_param_count, applied_weights
+                        current_model, solved_params, observations, current_targets, free_param_count, applied_weights
                     )
                     covariance, stat_errors, cov_warning = _compute_covariance(
-                        model,
+                        current_model,
                         solved_params,
                         observations,
                         current_targets,
@@ -579,11 +581,11 @@ def fit_custom_model(
                     dependent_errors = _propagate_dependent_errors(parameter_state, solved_params, covariance)
                     stat_errors.update(dependent_errors)
                     boundary_hits = _detect_boundary_hits(parameter_state, solution, solved_params, stat_errors)
-                    for name in model.parameters:
+                    for name in current_model.parameters:
                         if name not in stat_errors:
                             stat_errors[name] = mp.mpf("0")
                     details = {
-                        "expression": getattr(model, "expression", ""),
+                        "expression": getattr(current_model, "expression", ""),
                         "dof": int(dof),
                     }
                     if dof <= 0:

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
+from importlib import import_module
+from typing import Any
 
 from mpmath import mp
 
 from shared.bilingual import _dual_msg
 
-from .constraints import build_parameter_state
+from .constraints import ParameterState, build_parameter_state
 from .hp_fitter import (
     FitResult,
     _compute_covariance,
@@ -25,7 +27,10 @@ from .implicit_model import (
     fit_observed_implicit_variable_linear_model,
 )
 from .model_parser import ModelSpecification, build_model_specification, infer_parameter_names
+from .output_inversion import detect_output_inversion
 from .problem import ModelProblem, constants_for_compute
+
+_ParameterConfig = Mapping[str, Mapping[str, object]]
 
 
 @dataclass(frozen=True)
@@ -188,43 +193,85 @@ class FitRunner:
             except ValueError:
                 pass
 
-        if classification.strategy is ImplicitStrategy.OBSERVED_NONLINEAR:
-            try:
-                observed_variable_data = dict(variable_data)
-                observed_variable_data[definition.implicit_variable] = target_data
-                spec = build_model_specification(
-                    definition.equation,
-                    [*definition.x_variables, definition.implicit_variable],
-                    definition.parameters,
-                    definition.constants,
+        target_implicit_candidates: list[tuple[mp.mpf, ...]] | None = None
+        output_inversion_reason: str | None = None
+        fallback_history: list[dict[str, object]] = []
+        output_inversion = detect_output_inversion(definition, precision=precision)
+        if output_inversion is not None:
+            output_inversion_reason = output_inversion.reason
+            target_implicit_candidates = output_inversion.inverse_candidates(variable_data, target_data)
+            if target_implicit_candidates is None:
+                fallback_history.append(
+                    {
+                        "from": "output_inversion",
+                        "to": "general_output_space",
+                        "reason": "dataset_inversion_unavailable",
+                    }
                 )
-                result = fit_custom_model(
-                    spec,
-                    state,
-                    observed_variable_data,
-                    target_data,
-                    precision=precision,
-                    weights=weights,
-                    data_sigmas=data_sigmas,
-                )
-                result.details["implicit_strategy"] = "observed_nonlinear"
-                result.details["optimizer_backend"] = "mpmath_high_precision"
-                result.details["implicit_diagnostics"] = {
-                    "points_solved": 0,
-                    "root_fallbacks": 0,
-                    "max_iterations_used": 0,
-                    "max_residual": "0",
-                    "direct_observed_residual": True,
-                }
-                return result
-            except ValueError as exc:
-                nonlinear_fallback_reason = str(exc)
             else:
-                nonlinear_fallback_reason = ""
-        else:
-            nonlinear_fallback_reason = ""
+                seed_result = _fit_output_inversion_parameter_seed(
+                    definition,
+                    state,
+                    problem.parameter_config or {},
+                    variable_data,
+                    target_implicit_candidates,
+                    precision=precision,
+                )
+                if isinstance(seed_result, FitResult):
+                    seeded_config = _parameter_config_with_inversion_seed(
+                        problem.parameter_config or {},
+                        state,
+                        seed_result,
+                    )
+                    if not _seeded_initials_within_bounds(seeded_config, state):
+                        fallback_history.append(
+                            {
+                                "from": "output_inversion_parameter_seed",
+                                "to": "original_parameter_initials",
+                                "reason": "seed_config_rejected: initial outside bounds",
+                            }
+                        )
+                    else:
+                        try:
+                            state = build_parameter_state(seeded_config, list(definition.parameters))
+                        except ValueError as exc:
+                            fallback_history.append(
+                                {
+                                    "from": "output_inversion_parameter_seed",
+                                    "to": "original_parameter_initials",
+                                    "reason": f"seed_config_rejected: {exc}",
+                                }
+                            )
+                        else:
+                            fallback_history.append(
+                                {
+                                    "from": "output_inversion_parameter_seed",
+                                    "to": "seeded_parameter_initials",
+                                    "reason": "observed_linear_seed_fit",
+                                }
+                            )
+                else:
+                    fallback_history.append(seed_result)
 
-        spec = build_implicit_model_specification(definition)
+        def _implicit_model_for_targets(current_targets: Sequence[mp.mpf]) -> ModelSpecification:
+            current_candidates: list[tuple[mp.mpf, ...]] | None = None
+            if output_inversion is not None:
+                current_candidates = output_inversion.inverse_candidates(variable_data, current_targets)
+            return build_implicit_model_specification(
+                definition,
+                current_targets,
+                target_implicit_candidates=current_candidates,
+            )
+
+        spec = _implicit_model_for_targets(target_data)
+        base_spec_holder: dict[str, ModelSpecification] = {"spec": spec}
+
+        def _model_factory(current_targets: Sequence[mp.mpf]) -> ModelSpecification:
+            if _same_targets(current_targets, target_data):
+                return base_spec_holder["spec"]
+            current_spec = _implicit_model_for_targets(current_targets)
+            return current_spec
+
         result = fit_custom_model(
             spec,
             state,
@@ -233,27 +280,123 @@ class FitRunner:
             precision=precision,
             weights=weights,
             data_sigmas=data_sigmas,
+            model_factory=_model_factory if output_inversion is not None else None,
         )
-        diagnostics = getattr(spec, "implicit_diagnostics")
+        diagnostics = getattr(base_spec_holder["spec"], "implicit_diagnostics")
         result.details["implicit_diagnostics"] = {
             "points_solved": int(diagnostics.points_solved),
             "root_fallbacks": int(diagnostics.root_fallbacks),
             "max_iterations_used": int(diagnostics.max_iterations_used),
             "max_residual": str(diagnostics.max_residual),
         }
-        result.details["implicit_strategy"] = classification.strategy.value
+        if target_implicit_candidates is not None:
+            result.details["implicit_strategy"] = "general_output_space_with_inversion_seed"
+            if output_inversion_reason:
+                result.details["output_inversion"] = output_inversion_reason
+        else:
+            result.details["implicit_strategy"] = classification.strategy.value
         if classification.strategy is ImplicitStrategy.OBSERVED_LINEAR:
             result.details["implicit_strategy_fallback"] = "observed_linear_fast_path_unavailable"
-        elif classification.strategy is ImplicitStrategy.OBSERVED_NONLINEAR:
-            result.details["implicit_strategy_fallback"] = "direct_observed_nonlinear_optimizer_unavailable"
-            if nonlinear_fallback_reason:
-                result.details["implicit_strategy_fallback_reason"] = nonlinear_fallback_reason
+        if fallback_history:
+            result.details["fallback_history"] = fallback_history
         result.details["optimizer_backend"] = "mpmath_high_precision"
         return result
 
 
 def _can_try_scipy(problem: ModelProblem, precision: int) -> bool:
     return precision <= 16 and problem.model_type == "custom"
+
+
+def _fit_output_inversion_parameter_seed(
+    definition: ImplicitModelDefinition,
+    parameter_state: ParameterState,
+    parameter_config: _ParameterConfig,
+    variable_data: dict[str, Sequence[mp.mpf]],
+    target_implicit_candidates: Sequence[tuple[mp.mpf, ...]],
+    *,
+    precision: int,
+) -> FitResult | dict[str, object]:
+    del parameter_config
+    if not target_implicit_candidates:
+        return {
+            "from": "output_inversion_parameter_seed",
+            "to": "original_parameter_initials",
+            "reason": "no_inversion_candidates",
+        }
+    if any(len(row) != 1 for row in target_implicit_candidates):
+        return {
+            "from": "output_inversion_parameter_seed",
+            "to": "original_parameter_initials",
+            "reason": "multi_branch_candidates",
+        }
+    seed_definition = replace(definition, output_expression=definition.implicit_variable)
+    classification = ImplicitProblemClassifier().classify(seed_definition)
+    if classification.strategy is not ImplicitStrategy.OBSERVED_LINEAR:
+        return {
+            "from": "output_inversion_parameter_seed",
+            "to": "original_parameter_initials",
+            "reason": "observed equation is not linear in free parameters",
+        }
+    seed_targets = [row[0] for row in target_implicit_candidates]
+    try:
+        return fit_observed_implicit_variable_linear_model(
+            seed_definition,
+            parameter_state,
+            variable_data,
+            seed_targets,
+            precision=precision,
+            weights=None,
+            data_sigmas=None,
+        )
+    except Exception as exc:
+        return {
+            "from": "output_inversion_parameter_seed",
+            "to": "original_parameter_initials",
+            "reason": f"seed_fit_failed: {exc}",
+        }
+
+
+def _parameter_config_with_inversion_seed(
+    original_config: _ParameterConfig,
+    parameter_state: ParameterState,
+    seed_result: FitResult | None,
+) -> dict[str, dict[str, object]]:
+    updated: dict[str, dict[str, object]] = {
+        name: dict(config) for name, config in original_config.items()
+    }
+    if seed_result is None:
+        return updated
+    for name in parameter_state.free_params:
+        value = seed_result.params.get(name)
+        if value is None or not _mp_is_finite(mp.mpf(value)):
+            continue
+        raw_config = updated.get(name)
+        if not isinstance(raw_config, dict):
+            raw_config = {}
+            updated[name] = raw_config
+        raw_config["initial"] = mp.nstr(mp.mpf(value), 30)
+    return updated
+
+
+def _seeded_initials_within_bounds(config: _ParameterConfig, parameter_state: ParameterState) -> bool:
+    for name in parameter_state.free_params:
+        entry = config.get(name, {})
+        initial = entry.get("initial")
+        if initial is None or initial == "":
+            continue
+        value = mp.mpf(initial)
+        lower, upper = parameter_state.bounds.get(name, (None, None))
+        if lower is not None and value < lower:
+            return False
+        if upper is not None and value > upper:
+            return False
+    return True
+
+
+def _same_targets(left: Sequence[mp.mpf], right: Sequence[mp.mpf]) -> bool:
+    if len(left) != len(right):
+        return False
+    return all(mp.mpf(left_value) == mp.mpf(right_value) for left_value, right_value in zip(left, right))
 
 
 def _accept_scipy_result(
@@ -277,7 +420,7 @@ def _accept_scipy_result(
 
 def _fit_with_scipy_least_squares(
     model: ModelSpecification,
-    parameter_state,
+    parameter_state: ParameterState,
     variable_data: dict[str, Sequence[mp.mpf]],
     target_data: Sequence[mp.mpf],
     *,
@@ -285,7 +428,8 @@ def _fit_with_scipy_least_squares(
     data_sigmas: list[mp.mpf | None] | None,
 ) -> _SciPyCandidate:
     import numpy as np
-    from scipy.optimize import least_squares
+
+    least_squares = import_module("scipy.optimize").least_squares
 
     observations, targets = _prepare_points(variable_data, target_data)
     if len(targets) != len(observations):
@@ -305,7 +449,7 @@ def _fit_with_scipy_least_squares(
         upper.append(float(hi) if hi is not None else np.inf)
     x0 = np.asarray([float(value) for value in parameter_state.initial_vector()], dtype=float)
 
-    def _residual_vector(values) -> np.ndarray:
+    def _residual_vector(values: Sequence[float]) -> Any:
         params = parameter_state.compose(tuple(mp.mpf(str(float(value))) for value in values))
         residuals = []
         for idx, (obs, target) in enumerate(zip(observations, targets)):
@@ -437,7 +581,7 @@ def _weighted_residual_norm(
     return float(total)
 
 
-def _jacobian_condition_estimate(jacobian) -> float:
+def _jacobian_condition_estimate(jacobian: Any) -> float:
     import numpy as np
 
     try:
@@ -465,7 +609,7 @@ def _spotcheck_scipy_solution(
     return True
 
 
-def _dependent_zero_errors(parameter_state, params: dict[str, mp.mpf]) -> dict[str, mp.mpf]:
+def _dependent_zero_errors(parameter_state: ParameterState, params: dict[str, mp.mpf]) -> dict[str, mp.mpf]:
     errors: dict[str, mp.mpf] = {}
     for name in params:
         if name not in parameter_state.free_params:
