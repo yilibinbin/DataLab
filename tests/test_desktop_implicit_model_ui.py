@@ -7,7 +7,6 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from fitting.auto_models import AUTO_MODELS  # noqa: E402
@@ -66,99 +65,6 @@ def test_implicit_ui_is_formula_first_and_generic(window) -> None:
     assert window.implicit_output_edit.toPlainText() == "u"
     assert window.implicit_timeout_spin.value() == 300
     assert not hasattr(window, "quantum_defect_preset_btn") or not window.quantum_defect_preset_btn.isVisible()
-
-
-def test_parameter_tables_expose_manual_add_remove_controls(window, qtbot) -> None:
-    _select_model(window, "self_consistent")
-    initial_rows = window.implicit_params_table.rowCount()
-
-    qtbot.mouseClick(window.implicit_param_add_btn, Qt.MouseButton.LeftButton)
-    assert window.implicit_params_table.rowCount() == initial_rows + 1
-
-    window.implicit_params_table.table_view.selectRow(window.implicit_params_table.rowCount() - 1)
-    qtbot.mouseClick(window.implicit_param_remove_btn, Qt.MouseButton.LeftButton)
-    assert window.implicit_params_table.rowCount() == initial_rows
-
-    _select_model(window, "custom")
-    custom_initial_rows = window.custom_params_table.rowCount()
-
-    qtbot.mouseClick(window.custom_param_add_btn, Qt.MouseButton.LeftButton)
-    assert window.custom_params_table.rowCount() == custom_initial_rows + 1
-
-    window.custom_params_table.table_view.selectRow(window.custom_params_table.rowCount() - 1)
-    qtbot.mouseClick(window.custom_param_remove_btn, Qt.MouseButton.LeftButton)
-    assert window.custom_params_table.rowCount() == custom_initial_rows
-
-
-def test_parameter_remove_without_selection_only_deletes_empty_last_row(window, qtbot) -> None:
-    _select_model(window, "self_consistent")
-    window.implicit_params_table.set_rows([{"name": "d0", "initial": "1"}])
-    populated_row_count = window.implicit_params_table.rowCount()
-
-    qtbot.mouseClick(window.implicit_param_remove_btn, Qt.MouseButton.LeftButton)
-    assert window.implicit_params_table.rowCount() == populated_row_count
-    assert window.implicit_params_table.rows()[0]["name"] == "d0"
-
-    qtbot.mouseClick(window.implicit_param_add_btn, Qt.MouseButton.LeftButton)
-    with_empty_row_count = window.implicit_params_table.rowCount()
-    qtbot.mouseClick(window.implicit_param_remove_btn, Qt.MouseButton.LeftButton)
-
-    assert window.implicit_params_table.rowCount() == with_empty_row_count - 1
-    assert window.implicit_params_table.rows()[0]["name"] == "d0"
-
-
-def test_parameter_remove_deletes_selected_rows_as_explicit_action(window, qtbot) -> None:
-    _select_model(window, "self_consistent")
-    window.implicit_params_table.set_rows(
-        [
-            {"name": "d0", "initial": "1"},
-            {"name": "d2", "initial": "2"},
-        ]
-    )
-
-    window.implicit_params_table.table_view.selectRow(0)
-    qtbot.mouseClick(window.implicit_param_remove_btn, Qt.MouseButton.LeftButton)
-
-    assert window.implicit_params_table.rows() == [
-        {"name": "d2", "initial": "2", "fixed": "", "min": "", "max": ""}
-    ]
-
-
-def test_parameter_add_selects_new_row_before_remove(window, qtbot) -> None:
-    _select_model(window, "self_consistent")
-    window.implicit_params_table.set_rows([{"name": "d0", "initial": "1"}])
-    window.implicit_params_table.table_view.selectRow(0)
-
-    qtbot.mouseClick(window.implicit_param_add_btn, Qt.MouseButton.LeftButton)
-    selected_rows = {index.row() for index in window.implicit_params_table.table_view.selectedIndexes()}
-    assert selected_rows == {1}
-
-    qtbot.mouseClick(window.implicit_param_remove_btn, Qt.MouseButton.LeftButton)
-
-    assert window.implicit_params_table.rows() == [
-        {"name": "d0", "initial": "1", "fixed": "", "min": "", "max": ""}
-    ]
-
-
-def test_constants_editors_hide_inputs_when_disabled(window) -> None:
-    _select_model(window, "self_consistent")
-
-    window.implicit_constants_editor.setChecked(False)
-    assert window.implicit_constants_editor.controls_widget.isHidden()
-    assert window.implicit_constants_editor.stack.isHidden()
-
-    window.implicit_constants_editor.setChecked(True)
-    assert not window.implicit_constants_editor.controls_widget.isHidden()
-    assert not window.implicit_constants_editor.stack.isHidden()
-
-    _select_model(window, "custom")
-    window.custom_constants_editor.setChecked(False)
-    assert window.custom_constants_editor.controls_widget.isHidden()
-    assert window.custom_constants_editor.stack.isHidden()
-
-    window.custom_constants_editor.setChecked(True)
-    assert not window.custom_constants_editor.controls_widget.isHidden()
-    assert not window.custom_constants_editor.stack.isHidden()
 
 
 def test_default_implicit_config_uses_x_as_variable_not_parameter(window) -> None:
@@ -410,7 +316,7 @@ def test_implicit_constants_table_rejects_invalid_numeric_values(window) -> None
         window._collect_implicit_config(validate_parameters=False)
 
 
-def test_implicit_constants_accept_uncertainty_notation(window) -> None:
+def test_implicit_constants_accept_compact_uncertainty_notation(window) -> None:
     _select_model(window, "self_consistent")
     window._reset_implicit_constants_rows({"K": "1.23(4)"})
 

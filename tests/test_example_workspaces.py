@@ -198,7 +198,8 @@ def test_quantum_defect_example_configuration_runs_weighted_output_space_fit():
         data_sigmas=sigmas,
     )
 
-    assert result.details["implicit_strategy"] == "analytic_implicit_output_space"
+    assert result.details["implicit_strategy"] == "general_output_space_with_inversion_seed"
+    assert result.details["output_inversion"] == "validated symbolic output inversion"
     assert result.details["weighted"] is True
     assert all(mp.isfinite(result.params[name]) for name in ("d0", "d2", "d4"))
     assert all(

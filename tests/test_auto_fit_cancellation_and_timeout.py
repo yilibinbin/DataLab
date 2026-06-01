@@ -117,8 +117,6 @@ def _make_sleeping_custom(label: str, sleep_seconds: float):
     not by hoping the timeout cap is small enough — that would make the
     test flaky on fast hardware.
     """
-    import time
-
     from fitting.constraints import build_parameter_state
     from fitting.model_parser import build_model_specification
 
@@ -131,14 +129,18 @@ def _make_sleeping_custom(label: str, sleep_seconds: float):
     # The fitter calls evaluate / partial repeatedly inside Newton
     # iterations, so even a 0.5 s sleep guarantees we exceed the
     # 0.05 s cap below regardless of host speed.
-    original_evaluate = spec.evaluate
-
     def slow_evaluate(*args, **kwargs):
         time.sleep(sleep_seconds)
-        return original_evaluate(*args, **kwargs)
+        raise SystemExit("runaway model should have timed out before completion")
 
     spec.evaluate = slow_evaluate  # type: ignore[assignment]
     return (label, spec, state)
+
+
+def _wait_for_sleeping_timeout_thread() -> None:
+    """Let the timed-out test daemon finish before the next Qt/thread test."""
+
+    time.sleep(0.6)
 
 
 def test_per_model_timeout_aborts_runaway_model() -> None:
@@ -161,6 +163,7 @@ def test_per_model_timeout_aborts_runaway_model() -> None:
             per_model_timeout_seconds=0.05,
         ),
     )
+    _wait_for_sleeping_timeout_thread()
     assert isinstance(summary.results, list)
     custom_results = [r for r in summary.results if r.label == "Slow Custom"]
     assert len(custom_results) == 1
@@ -186,6 +189,7 @@ def test_timeout_message_uses_user_friendly_label_not_internal_id() -> None:
             per_model_timeout_seconds=0.05,
         ),
     )
+    _wait_for_sleeping_timeout_thread()
     custom = next(r for r in summary.results if r.label == "我的拟合 / My Fit")
     assert custom.error
     assert "我的拟合" in custom.error or "My Fit" in custom.error
@@ -214,6 +218,7 @@ def test_timeout_does_not_corrupt_parent_mp_dps() -> None:
             per_model_timeout_seconds=0.05,
         ),
     )
+    _wait_for_sleeping_timeout_thread()
     # After the auto_fit completes, the parent's dps must NOT have
     # been reset by the runaway thread.
     assert mp.dps == parent_dps_target, (

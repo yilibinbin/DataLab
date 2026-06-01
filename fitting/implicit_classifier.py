@@ -31,7 +31,6 @@ _NONLINEAR_DEGREE = 2
 
 class ImplicitStrategy(Enum):
     OBSERVED_LINEAR = "observed_linear"
-    OBSERVED_NONLINEAR = "observed_nonlinear"
     GENERAL = "general"
 
 
@@ -60,7 +59,7 @@ class ImplicitProblemClassifier:
                 "Observed implicit variable equation is linear in all parameters.",
             )
         return ImplicitClassification(
-            ImplicitStrategy.OBSERVED_NONLINEAR,
+            ImplicitStrategy.GENERAL,
             "Observed implicit variable equation is not linear in all parameters.",
         )
 

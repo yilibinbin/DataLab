@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import io
+import inspect
 import logging
-from contextlib import contextmanager
+import math
+import multiprocessing
+import queue
+import time
+from collections.abc import Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import mpmath as mp
 
 from shared.parallel_backend import KillableProcessTaskRunner
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 from shared.parallel_config import NestedParallelPolicy, ParallelConfig, ParallelMode
+from shared.uncertainty import UncertainValue
 
 from data_extrapolation_latex_latest import (
     _dual_msg,
@@ -32,12 +39,14 @@ from statistics_utils import compute_statistics, generate_statistics_latex_batch
 from fitting import (
     ImplicitModelDefinition,
     ImplicitSolveOptions,
+    build_implicit_model_specification,
     build_model_specification,
     build_parameter_state,
     FitRunner,
     ModelProblem,
     fit_custom_model,
 )
+from fitting import implicit_model as _implicit_model
 from fitting.auto_models import (
     build_inverse_series_definition,
     build_polynomial_definition,
@@ -49,6 +58,284 @@ from fitting.hp_fitter import FitResult
 # leading underscore prevents ``from app_desktop.workers_core import
 # logger`` from accidentally exposing the handle as a public API.
 _logger = logging.getLogger(__name__)
+
+can_fit_observed_implicit_variable = getattr(
+    _implicit_model,
+    "can_fit_observed_implicit_variable",
+    lambda _definition: False,
+)
+fit_observed_implicit_variable_linear_model = getattr(
+    _implicit_model,
+    "fit_observed_implicit_variable_linear_model",
+    None,
+)
+_ORIGINAL_BUILD_IMPLICIT_MODEL_SPECIFICATION = build_implicit_model_specification
+_ORIGINAL_CAN_FIT_OBSERVED_IMPLICIT_VARIABLE = can_fit_observed_implicit_variable
+_ORIGINAL_FIT_OBSERVED_IMPLICIT_VARIABLE_LINEAR_MODEL = fit_observed_implicit_variable_linear_model
+_ORIGINAL_FIT_CUSTOM_MODEL = fit_custom_model
+
+
+def _attach_mcmc_refinement(summary: Any, job: Any) -> None:
+    """Attach MCMC diagnostics to the current best fit when available."""
+
+    from fitting.mcmc_fitter import HAS_EMCEE, render_corner_plot, run_mcmc
+
+    if not HAS_EMCEE:
+        _logger.info("refine_with_mcmc=True but emcee not installed; skipping")
+        return
+    best = summary.best() if getattr(summary, "best_model", None) is not None else None
+    if best is None or getattr(best, "fit_result", None) is None:
+        _logger.info("refine_with_mcmc=True but no best candidate; skipping")
+        return
+
+    best_fit = best.fit_result
+    param_names = _mcmc_free_parameter_names(best_fit, job)
+    if not param_names:
+        _logger.info("best candidate has no parameters; skipping MCMC")
+        return
+    initial_guess = [float(best_fit.params[name]) for name in param_names]
+    base_params = {name: mp.mpf(value) for name, value in (best_fit.params or {}).items()}
+    parameter_state = _mcmc_parameter_state(job)
+    observations, targets = _mcmc_observations(job)
+    likelihood_weights = _mcmc_likelihood_weights(job, len(targets))
+    rmse = _estimate_rmse(targets, best_fit)
+    evaluator = best_fit.details.get("evaluator") if best_fit.details else None
+    if evaluator is None:
+        _logger.info("MCMC refinement skipped: best fit did not provide an evaluator")
+        return
+
+    def _log_probability(theta: Sequence[object]) -> float:
+        if not param_names or rmse <= 0:
+            return float("-inf")
+        try:
+            new_params = _mcmc_params_from_theta(
+                theta,
+                param_names,
+                base_params,
+                parameter_state,
+            )
+            residuals_sq = 0.0
+            for index, (observation, target) in enumerate(zip(observations, targets)):
+                _set_mcmc_evaluator_point_index(evaluator, index)
+                pred = float(_evaluate_mcmc_prediction(evaluator, new_params, observation))
+                if not math.isfinite(pred):
+                    return float("-inf")
+                residual = float(target) - pred
+                weight = float(likelihood_weights[index]) if likelihood_weights is not None else 1.0
+                residuals_sq += weight * (residual**2)
+                if not math.isfinite(residuals_sq):
+                    return float("-inf")
+            return -0.5 * residuals_sq / (rmse**2)
+        except (TypeError, ValueError, ArithmeticError, OverflowError, KeyError):
+            return float("-inf")
+
+    import math as _math_pre
+
+    proposal_scale = max(1e-4, rmse * 1e-2)
+    pre_flight_lps = [_log_probability(initial_guess)]
+    for sign in (-1, 1):
+        perturbed = [value + sign * proposal_scale for value in initial_guess]
+        pre_flight_lps.append(_log_probability(perturbed))
+    if not any(_math_pre.isfinite(lp) for lp in pre_flight_lps):
+        _logger.info(
+            "MCMC pre-flight: all %d sample log-probabilities were -inf; skipping MCMC refinement.",
+            len(pre_flight_lps),
+        )
+        if best_fit.details is None:
+            best_fit.details = {}
+        best_fit.details["mcmc_warning"] = (
+            "MCMC 跳过：初始 log-probability 全部 -inf（数据过于病态）。 / "
+            "MCMC skipped: all initial log-probabilities are -inf "
+            "(data is too ill-conditioned for Gaussian sampling)."
+        )
+        return
+
+    try:
+        mcmc_result = run_mcmc(
+            _log_probability,
+            initial_guess,
+            param_names,
+            n_walkers=max(32, 2 * len(param_names) + 2),
+            n_steps=800,
+            n_burn_in=200,
+            proposal_scale=proposal_scale,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("MCMC run failed: %s", exc)
+        if best_fit.details is None:
+            best_fit.details = {}
+        best_fit.details["mcmc_warning"] = (
+            f"MCMC 运行失败：{exc}。仅使用最小二乘结果。 / "
+            f"MCMC run failed: {exc}. Using LSQ-only result."
+        )
+        return
+
+    acc = mcmc_result.acceptance_fraction
+    chain_warning: str | None = None
+    if not _math_pre.isfinite(acc) or acc < 0.05:
+        chain_warning = (
+            f"MCMC 接受率 {acc:.2f} 过低（<0.05），结果可能不可靠。 / "
+            f"MCMC acceptance fraction {acc:.2f} is very low (<0.05); "
+            "credible intervals may be unreliable."
+        )
+    elif acc > 0.85:
+        chain_warning = (
+            f"MCMC 接受率 {acc:.2f} 过高（>0.85），proposal_scale 可能太小。 / "
+            f"MCMC acceptance fraction {acc:.2f} is very high (>0.85); "
+            "proposal_scale may be too small."
+        )
+
+    corner_png = b""
+    try:
+        corner_png = render_corner_plot(mcmc_result)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("corner plot render failed: %s", exc)
+
+    if best_fit.details is None:
+        best_fit.details = {}
+    best_fit.details["mcmc_refinement"] = {
+        "medians": mcmc_result.medians,
+        "lo_ci": mcmc_result.lo_ci,
+        "hi_ci": mcmc_result.hi_ci,
+        "acceptance_fraction": mcmc_result.acceptance_fraction,
+    }
+    if chain_warning:
+        best_fit.details["mcmc_warning"] = chain_warning
+    if corner_png:
+        best_fit.details["mcmc_corner_png"] = corner_png
+
+
+def _mcmc_free_parameter_names(best_fit: Any, job: Any) -> list[str]:
+    params = getattr(best_fit, "params", {}) or {}
+    configured_names = list(getattr(job, "parameter_names", []) or [])
+    if configured_names:
+        return [name for name in configured_names if name in params and not _mcmc_parameter_is_fixed(job, name)]
+    return [name for name in params if not _mcmc_parameter_is_fixed(job, name)]
+
+
+def _mcmc_parameter_is_fixed(job: Any, name: str) -> bool:
+    config = getattr(job, "parameter_config", {}) or {}
+    entry = config.get(name, {}) if isinstance(config, dict) else {}
+    return isinstance(entry, dict) and (bool(entry.get("fixed")) or bool(entry.get("expr")))
+
+
+def _mcmc_parameter_state(job: Any) -> Any | None:
+    parameter_names = list(getattr(job, "parameter_names", []) or [])
+    parameter_config = getattr(job, "parameter_config", {}) or {}
+    if not parameter_names or not isinstance(parameter_config, dict):
+        return None
+    try:
+        return build_parameter_state(parameter_config, parameter_names)
+    except Exception:  # noqa: BLE001 - MCMC must not fail the completed LSQ fit.
+        return None
+
+
+def _mcmc_params_from_theta(
+    theta: Sequence[object],
+    param_names: Sequence[str],
+    base_params: Mapping[str, mp.mpf],
+    parameter_state: Any | None,
+) -> dict[str, mp.mpf]:
+    theta_values = [mp.mpf(value) for value in theta]
+    theta_by_name = dict(zip(param_names, theta_values))
+    if parameter_state is not None:
+        free_vector = tuple(
+            theta_by_name.get(name, base_params.get(name, mp.mpf("0")))
+            for name in parameter_state.free_params
+        )
+        return cast(dict[str, mp.mpf], parameter_state.compose(free_vector))
+    params = dict(base_params)
+    params.update(theta_by_name)
+    return params
+
+
+def _mcmc_observations(job: Any) -> tuple[list[object], list[mp.mpf]]:
+    variable_data = getattr(job, "variable_data", None)
+    targets = getattr(job, "target_series", None)
+    if isinstance(variable_data, dict) and targets is not None:
+        names = list(variable_data)
+        row_count = len(targets)
+        observations: list[object] = []
+        for index in range(row_count):
+            observations.append({name: mp.mpf(variable_data[name][index]) for name in names})
+        return observations, [mp.mpf(value) for value in targets]
+    x_series = list(getattr(job, "x_series", []) or [])
+    y_series = list(getattr(job, "y_series", []) or [])
+    return [mp.mpf(value) for value in x_series], [mp.mpf(value) for value in y_series]
+
+
+def _mcmc_likelihood_weights(job: Any, target_count: int) -> list[mp.mpf] | None:
+    weights = getattr(job, "weights", None)
+    if weights is not None and len(weights) == target_count:
+        return [mp.mpf(value) for value in weights]
+    sigmas = getattr(job, "sigma_series", None)
+    if sigmas is None or len(sigmas) != target_count:
+        return None
+    parsed: list[mp.mpf] = []
+    for sigma in sigmas:
+        if sigma is None:
+            return None
+        value = mp.mpf(sigma)
+        if value <= 0:
+            return None
+        parsed.append(1 / (value * value))
+    return parsed
+
+
+def _set_mcmc_evaluator_point_index(evaluator: Any, index: int) -> None:
+    setter = getattr(evaluator, "set_implicit_point_index", None)
+    if callable(setter):
+        setter(index)
+
+
+def _evaluate_mcmc_prediction(evaluator: Any, params: Mapping[str, mp.mpf], observation: object) -> Any:
+    scalar_observation = None
+    if isinstance(observation, Mapping) and len(observation) == 1:
+        scalar_observation = next(iter(observation.values()))
+    candidates: list[tuple[object, ...]] = [(params, observation)]
+    if scalar_observation is not None:
+        candidates.append((params, scalar_observation))
+        candidates.append((scalar_observation,))
+    candidates.append((observation,))
+    for args in candidates:
+        if _callable_accepts_args(evaluator, args):
+            return evaluator(*args)
+    raise TypeError("MCMC evaluator does not accept supported argument shapes")
+
+
+def _callable_accepts_args(evaluator: Any, args: Sequence[object]) -> bool:
+    try:
+        signature = inspect.signature(evaluator)
+    except (TypeError, ValueError):
+        return True
+    try:
+        signature.bind(*args)
+    except TypeError:
+        return False
+    return True
+
+
+def _estimate_rmse(y_series: Any, best_fit: Any) -> float:
+    """Estimate a strictly positive RMSE for MCMC proposal scaling."""
+
+    residuals = best_fit.details.get("residuals") if best_fit.details else None
+    if residuals:
+        try:
+            count = len(residuals)
+            ss = sum(float(residual) ** 2 for residual in residuals)
+            return max(1e-8, (ss / max(1, count)) ** 0.5)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        values = [float(value) for value in y_series]
+        if len(values) < 2:
+            return 1.0
+        mean = sum(values) / len(values)
+        variance = sum((value - mean) ** 2 for value in values) / len(values)
+        return max(1e-8, variance**0.5)
+    except Exception:  # noqa: BLE001
+        return 1.0
+
 
 @contextmanager
 def _mp_precision_guard(dps: int | None):
@@ -810,7 +1097,7 @@ class FitJob:
     model_type: str
     headers: list[str]
     data_rows: list[tuple[mp.mpf, ...]]
-    sigma_rows: list[tuple[object | None, ...]]
+    sigma_rows: list[tuple[mp.mpf | UncertainValue | None, ...]]
     x_series: list[mp.mpf]
     y_series: list[mp.mpf]
     sigma_series: list[mp.mpf | None]
@@ -871,6 +1158,10 @@ class FitBatchResultEntry:
     captured_log: str = ""
 
 
+_FIT_SUBPROCESS_POLL_INTERVAL = 0.05
+_FIT_SUBPROCESS_TIMEOUT_SLACK = 0.05
+
+
 def _fit_job_requires_process_boundary(job: FitJob) -> bool:
     return job.model_type == "self_consistent"
 
@@ -888,8 +1179,15 @@ def _serialize_parallel_config(config: ParallelConfig) -> dict[str, Any]:
 
 
 def _deserialize_parallel_config(payload: dict[str, Any] | None) -> ParallelConfig:
+    if payload is None:
+        return ParallelConfig()
+    if not isinstance(payload, dict):
+        raise ValueError("parallel_config must be an object")
     if not payload:
         return ParallelConfig()
+    process_start_method = _optional_string(payload, "process_start_method", "spawn")
+    if process_start_method not in multiprocessing.get_all_start_methods():
+        raise ValueError(f"Unsupported process_start_method: {process_start_method}")
     return ParallelConfig(
         mode=ParallelMode(payload.get("mode", ParallelMode.AUTO)),
         max_workers=payload.get("max_workers"),
@@ -899,28 +1197,15 @@ def _deserialize_parallel_config(payload: dict[str, Any] | None) -> ParallelConf
         nested_policy=NestedParallelPolicy(
             payload.get("nested_policy", NestedParallelPolicy.SERIAL_WHEN_NESTED)
         ),
-        process_start_method=str(payload.get("process_start_method", "spawn")),
+        process_start_method=process_start_method,
     )
 
 
 def _mp_to_string(value: Any, keep_digits: int) -> str:
     try:
         return mp.nstr(mp.mpf(value), keep_digits)
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"Unsupported numeric payload value: {value!r}") from exc
-
-
-def _sigma_to_string(value: Any, keep_digits: int) -> str | None:
-    if value is None:
-        return None
-    if hasattr(value, "uncertainty"):
-        # Worker payloads only need numeric sigma values; display precision stays in the main process.
-        value = getattr(value, "uncertainty")
-    try:
-        sigma = mp.mpf(value)
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"Unsupported sigma payload value: {value!r}") from exc
-    return mp.nstr(sigma, keep_digits) if sigma > 0 else None
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def _serialize_optional_mpf(value: Any, keep_digits: int) -> str | None:
@@ -933,30 +1218,47 @@ def _serialize_mpf_sequence(values: list[Any] | tuple[Any, ...], keep_digits: in
     return [_serialize_optional_mpf(value, keep_digits) for value in values]
 
 
-def _serialize_weight_sequence(values: list[Any] | tuple[Any, ...], keep_digits: int) -> list[str]:
-    weights: list[str] = []
-    for value in values:
-        if value is None:
-            raise TypeError("Fit-job weight values must not be None")
-        weights.append(_mp_to_string(value, keep_digits))
-    return weights
-
-
-def _serialize_sigma_sequence(values: list[Any] | tuple[Any, ...], keep_digits: int) -> list[str | None]:
-    return [_sigma_to_string(value, keep_digits) for value in values]
-
-
 def _deserialize_mpf_sequence(values: list[str | None]) -> list[mp.mpf | None]:
     return [mp.mpf(value) if value is not None else None for value in values]
 
 
-def _deserialize_weight_sequence(values: list[str | None]) -> list[mp.mpf]:
-    weights: list[mp.mpf] = []
-    for value in values:
-        if value is None:
-            raise TypeError("Fit-job weight payload values must not be None")
-        weights.append(mp.mpf(value))
-    return weights
+def _serialize_sigma_value(value: Any, keep_digits: int) -> dict[str, Any] | str | None:
+    if value is None:
+        return None
+    if hasattr(value, "value") and hasattr(value, "uncertainty"):
+        return {
+            "kind": "uncertain",
+            "value": _mp_to_string(getattr(value, "value"), keep_digits),
+            "uncertainty": _mp_to_string(getattr(value, "uncertainty"), keep_digits),
+            "uncertainty_digits": getattr(value, "uncertainty_digits", None),
+        }
+    return _mp_to_string(value, keep_digits)
+
+
+def _serialize_sigma_sequence(
+    values: list[Any] | tuple[Any, ...], keep_digits: int
+) -> list[dict[str, Any] | str | None]:
+    return [_serialize_sigma_value(value, keep_digits) for value in values]
+
+
+def _deserialize_sigma_value(value: dict[str, Any] | str | None) -> mp.mpf | UncertainValue | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        if value.get("kind") != "uncertain":
+            raise ValueError("sigma entry has unsupported kind")
+        return UncertainValue(
+            value.get("value", "0"),
+            value.get("uncertainty", "0"),
+            uncertainty_digits=value.get("uncertainty_digits"),
+        )
+    return mp.mpf(value)
+
+
+def _deserialize_sigma_sequence(
+    values: list[dict[str, Any] | str | None],
+) -> list[mp.mpf | UncertainValue | None]:
+    return [_deserialize_sigma_value(value) for value in values]
 
 
 def _serialize_mp_tree(value: Any, keep_digits: int) -> Any:
@@ -964,26 +1266,16 @@ def _serialize_mp_tree(value: Any, keep_digits: int) -> Any:
         return None
     if hasattr(value, "_mpf_"):
         return _mp_to_string(value, keep_digits)
-    if isinstance(value, (bool, int, float, str)):
-        return value
     if isinstance(value, dict):
-        serialized: dict[str, Any] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError(f"Unsupported non-string payload key: {key!r}")
-            serialized[key] = _serialize_mp_tree(item, keep_digits)
-        return serialized
+        return {key: _serialize_mp_tree(item, keep_digits) for key, item in value.items()}
     if isinstance(value, tuple):
         return [_serialize_mp_tree(item, keep_digits) for item in value]
     if isinstance(value, list):
         return [_serialize_mp_tree(item, keep_digits) for item in value]
-    raise TypeError(f"Unsupported fit-job payload value: {value!r}")
+    return value
 
 
-def _serialize_implicit_definition(
-    definition: ImplicitModelDefinition | None,
-    keep_digits: int,
-) -> dict[str, Any] | None:
+def _serialize_implicit_definition(definition: ImplicitModelDefinition | None) -> dict[str, Any] | None:
     if definition is None:
         return None
     solve_options = definition.solve_options
@@ -993,12 +1285,12 @@ def _serialize_implicit_definition(
         "equation": definition.equation,
         "output_expression": definition.output_expression,
         "parameters": list(definition.parameters),
-        "constants": _serialize_mp_tree(definition.constants, keep_digits),
+        "constants": dict(definition.constants),
         "solve_options": {
-            "method": _serialize_mp_tree(solve_options.method, keep_digits),
-            "initial": _serialize_mp_tree(solve_options.initial, keep_digits),
-            "tolerance": _serialize_mp_tree(solve_options.tolerance, keep_digits),
-            "max_iterations": _serialize_mp_tree(solve_options.max_iterations, keep_digits),
+            "method": solve_options.method,
+            "initial": solve_options.initial,
+            "tolerance": solve_options.tolerance,
+            "max_iterations": solve_options.max_iterations,
         },
     }
 
@@ -1006,21 +1298,62 @@ def _serialize_implicit_definition(
 def _deserialize_implicit_definition(payload: dict[str, Any] | None) -> ImplicitModelDefinition | None:
     if payload is None:
         return None
-    solve_payload = payload.get("solve_options") or {}
+    if not isinstance(payload, dict):
+        raise ValueError("implicit_definition must be an object")
+    solve_payload = payload.get("solve_options")
+    if solve_payload is None:
+        solve_payload = {}
+    if not isinstance(solve_payload, dict):
+        raise ValueError("implicit_definition.solve_options must be an object")
     return ImplicitModelDefinition(
-        x_variables=tuple(payload["x_variables"]),
-        implicit_variable=str(payload["implicit_variable"]),
-        equation=str(payload["equation"]),
-        output_expression=str(payload["output_expression"]),
-        parameters=tuple(payload["parameters"]),
-        constants=dict(payload.get("constants") or {}),
+        x_variables=tuple(_required_string_sequence(payload, "x_variables")),
+        implicit_variable=_required_string(payload, "implicit_variable"),
+        equation=_required_string(payload, "equation"),
+        output_expression=_required_string(payload, "output_expression"),
+        parameters=tuple(_required_string_sequence(payload, "parameters")),
+        constants=_optional_string_mapping(payload, "constants"),
         solve_options=ImplicitSolveOptions(
-            method=str(solve_payload.get("method", "fixed_point")),
-            initial=str(solve_payload.get("initial", "0")),
-            tolerance=str(solve_payload.get("tolerance", "1e-30")),
+            method=_optional_string(solve_payload, "method", "fixed_point"),
+            initial=_optional_string(solve_payload, "initial", "0"),
+            tolerance=_optional_string(solve_payload, "tolerance", "1e-30"),
             max_iterations=int(solve_payload.get("max_iterations", 80)),
         ),
     )
+
+
+def _required_string(payload: Mapping[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    return value
+
+
+def _optional_string(payload: Mapping[str, Any], key: str, default: str) -> str:
+    value = payload.get(key, default)
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    return value
+
+
+def _required_string_sequence(payload: Mapping[str, Any], key: str) -> list[str]:
+    value = payload.get(key)
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ValueError(f"{key} must be a list of strings")
+    result = list(value)
+    if not all(isinstance(item, str) for item in result):
+        raise ValueError(f"{key} must be a list of strings")
+    return result
+
+
+def _optional_string_mapping(payload: Mapping[str, Any], key: str) -> dict[str, str]:
+    value = payload.get(key)
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{key} must be an object")
+    if not all(isinstance(name, str) and isinstance(item, str) for name, item in value.items()):
+        raise ValueError(f"{key} must map strings to strings")
+    return dict(value)
 
 
 def _serialize_fit_job(job: FitJob) -> dict[str, Any]:
@@ -1032,8 +1365,8 @@ def _serialize_fit_job(job: FitJob) -> dict[str, Any]:
         "sigma_rows": [_serialize_sigma_sequence(row, keep_digits) for row in job.sigma_rows],
         "x_series": _serialize_mpf_sequence(job.x_series, keep_digits),
         "y_series": _serialize_mpf_sequence(job.y_series, keep_digits),
-        "sigma_series": _serialize_sigma_sequence(job.sigma_series, keep_digits),
-        "weights": _serialize_weight_sequence(job.weights, keep_digits) if job.weights is not None else None,
+        "sigma_series": _serialize_mpf_sequence(job.sigma_series, keep_digits),
+        "weights": _serialize_mpf_sequence(job.weights, keep_digits) if job.weights is not None else None,
         "variable_map": dict(job.variable_map),
         "variable_data": {
             key: _serialize_mpf_sequence(values, keep_digits)
@@ -1063,9 +1396,9 @@ def _serialize_fit_job(job: FitJob) -> dict[str, Any]:
         "weighted": job.weighted,
         "label": job.label,
         "is_multidim": job.is_multidim,
-        "implicit_definition": _serialize_implicit_definition(job.implicit_definition, keep_digits),
+        "implicit_definition": _serialize_implicit_definition(job.implicit_definition),
         "timeout_seconds": job.timeout_seconds,
-        "custom_constants": _serialize_mp_tree(dict(job.custom_constants or {}), keep_digits),
+        "custom_constants": dict(job.custom_constants or {}),
         "parallel_config": _serialize_parallel_config(job.parallel_config),
     }
 
@@ -1077,12 +1410,12 @@ def _deserialize_fit_job(payload: dict[str, Any]) -> FitJob:
             model_type=payload["model_type"],
             headers=list(payload["headers"]),
             data_rows=[tuple(value for value in _deserialize_mpf_sequence(row)) for row in payload["data_rows"]],
-            sigma_rows=[tuple(value for value in _deserialize_mpf_sequence(row)) for row in payload["sigma_rows"]],
+            sigma_rows=[tuple(value for value in _deserialize_sigma_sequence(row)) for row in payload["sigma_rows"]],
             x_series=[mp.mpf(value) for value in payload["x_series"]],
             y_series=[mp.mpf(value) for value in payload["y_series"]],
             sigma_series=[mp.mpf(value) if value is not None else None for value in payload["sigma_series"]],
             weights=(
-                _deserialize_weight_sequence(payload["weights"])
+                [mp.mpf(value) for value in payload["weights"]]
                 if payload.get("weights") is not None else None
             ),
             variable_map=dict(payload["variable_map"]),
@@ -1209,6 +1542,30 @@ def _fit_job_subprocess_entry(job_payload: dict[str, Any]) -> dict[str, Any]:
         return _serialize_fit_result_payload(payload)
 
 
+def _fit_job_subprocess_queue_entry(result_queue: Any, job_payload: dict[str, Any]) -> None:
+    try:
+        result_queue.put({"ok": True, "payload": _fit_job_subprocess_entry(job_payload)})
+    except BaseException as exc:  # noqa: BLE001
+        with suppress(Exception):
+            result_queue.put({"ok": False, "error": str(exc)})
+
+
+def _terminate_fit_subprocess(proc: multiprocessing.Process) -> None:
+    if not proc.is_alive():
+        proc.join(timeout=0.2)
+        return
+    try:
+        proc.terminate()
+        proc.join(timeout=1.0)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(timeout=1.0)
+    except Exception:
+        with suppress(Exception):
+            proc.kill()
+            proc.join(timeout=1.0)
+
+
 def _execute_fit_job_payload_subprocess(
     job: FitJob,
     timeout_seconds: float | None,
@@ -1238,6 +1595,144 @@ def _execute_fit_job_payload_subprocess(
 
     with _mp_precision_guard(job.precision):
         return _deserialize_fit_result_payload(payload)
+
+
+def _execute_fit_job_payload_subprocess_legacy(
+    job: FitJob,
+    timeout_seconds: float | None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> FitResultPayload:
+    ctx = multiprocessing.get_context("spawn")
+    result_queue = ctx.Queue()
+    job_payload = _serialize_fit_job(job)
+    proc = ctx.Process(
+        target=_fit_job_subprocess_queue_entry,
+        args=(result_queue, job_payload),
+        name=f"datalab-fit-{job.model_type}",
+    )
+    proc.start()
+
+    timeout = timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None
+    deadline = (
+        time.monotonic() + timeout + _FIT_SUBPROCESS_TIMEOUT_SLACK
+        if timeout is not None else None
+    )
+    try:
+        while True:
+            if should_cancel is not None and should_cancel():
+                _terminate_fit_subprocess(proc)
+                raise InterruptedError(_dual_msg(
+                    "自洽隐式拟合已取消。",
+                    "Self-consistent fit cancelled.",
+                ))
+
+            try:
+                payload = result_queue.get(timeout=_FIT_SUBPROCESS_POLL_INTERVAL)
+                proc.join(timeout=1.0)
+                return _deserialize_fit_subprocess_queue_payload(job, payload)
+            except queue.Empty:
+                pass
+
+            if deadline is not None and time.monotonic() > deadline:
+                _terminate_fit_subprocess(proc)
+                raise TimeoutError(_dual_msg(
+                    f"自洽隐式拟合超过 {timeout:.0f}s 仍未完成，已停止。",
+                    f"Self-consistent fit exceeded {timeout:.0f}s and was stopped.",
+                ))
+
+            if not proc.is_alive():
+                proc.join(timeout=0.2)
+                try:
+                    payload = result_queue.get(timeout=0.2)
+                    return _deserialize_fit_subprocess_queue_payload(job, payload)
+                except queue.Empty:
+                    pass
+                raise RuntimeError(_dual_msg(
+                    "自洽隐式拟合子进程退出但未返回结果。",
+                    "Self-consistent fit subprocess exited without returning a result.",
+                ))
+    finally:
+        if proc.is_alive():
+            _terminate_fit_subprocess(proc)
+        with suppress(Exception):
+            result_queue.close()
+            result_queue.join_thread()
+
+
+def _deserialize_fit_subprocess_queue_payload(
+    job: FitJob,
+    payload: object,
+) -> FitResultPayload:
+    if isinstance(payload, dict) and payload.get("ok"):
+        with _mp_precision_guard(job.precision):
+            return _deserialize_fit_result_payload(payload["payload"])
+    error = payload.get("error", "unknown error") if isinstance(payload, dict) else str(payload)
+    raise RuntimeError(error)
+
+
+
+def _self_consistent_hooks_replaced() -> bool:
+    return (
+        build_implicit_model_specification is not _ORIGINAL_BUILD_IMPLICIT_MODEL_SPECIFICATION
+        or can_fit_observed_implicit_variable is not _ORIGINAL_CAN_FIT_OBSERVED_IMPLICIT_VARIABLE
+        or fit_observed_implicit_variable_linear_model is not _ORIGINAL_FIT_OBSERVED_IMPLICIT_VARIABLE_LINEAR_MODEL
+        or fit_custom_model is not _ORIGINAL_FIT_CUSTOM_MODEL
+    )
+
+
+def _fit_self_consistent_with_legacy_hooks(job: FitJob) -> FitResult:
+    if job.implicit_definition is None:
+        raise ValueError(
+            _dual_msg(
+                "自洽隐式模型缺少定义。",
+                "Self-consistent fit model requires an implicit definition.",
+            )
+        )
+    state = build_parameter_state(
+        job.parameter_config or {},
+        list(job.implicit_definition.parameters),
+    )
+    if (
+        can_fit_observed_implicit_variable(job.implicit_definition)
+        and fit_observed_implicit_variable_linear_model is not None
+    ):
+        try:
+            fit_result = fit_observed_implicit_variable_linear_model(
+                job.implicit_definition,
+                state,
+                job.variable_data,
+                job.target_series,
+                precision=job.precision,
+                weights=job.weights,
+                data_sigmas=job.sigma_series,
+            )
+            fit_result.details["implicit_diagnostics"] = {
+                "points_solved": 0,
+                "root_fallbacks": 0,
+                "max_iterations_used": 0,
+                "max_residual": "0",
+            }
+            return fit_result
+        except ValueError:
+            pass
+    spec = build_implicit_model_specification(job.implicit_definition)
+    fit_result = fit_custom_model(
+        spec,
+        state,
+        job.variable_data,
+        job.target_series,
+        precision=job.precision,
+        weights=job.weights,
+        data_sigmas=job.sigma_series,
+    )
+    diagnostics = getattr(spec, "implicit_diagnostics")
+    fit_result.details["implicit_diagnostics"] = {
+        "points_solved": int(diagnostics.points_solved),
+        "root_fallbacks": int(diagnostics.root_fallbacks),
+        "max_iterations_used": int(diagnostics.max_iterations_used),
+        "max_residual": str(diagnostics.max_residual),
+    }
+    return fit_result
 
 
 def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
@@ -1283,24 +1778,27 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
                         "Self-consistent fit model requires an implicit definition.",
                     )
                 )
-            problem = ModelProblem(
-                model_type="self_consistent",
-                expression=job.implicit_definition.output_expression,
-                variables=tuple(job.implicit_definition.x_variables),
-                target_name=job.target_column,
-                parameter_config=job.parameter_config or {},
-                constants=job.implicit_definition.constants,
-                constants_enabled=True,
-                implicit_definition=job.implicit_definition,
-            )
-            fit_result = FitRunner().fit(
-                problem,
-                job.variable_data,
-                job.target_series,
-                precision=job.precision,
-                weights=job.weights,
-                data_sigmas=job.sigma_series,
-            )
+            if _self_consistent_hooks_replaced():
+                fit_result = _fit_self_consistent_with_legacy_hooks(job)
+            else:
+                problem = ModelProblem(
+                    model_type="self_consistent",
+                    expression=job.implicit_definition.output_expression,
+                    variables=tuple(job.implicit_definition.x_variables),
+                    target_name=job.target_column,
+                    parameter_config=job.parameter_config or {},
+                    constants=job.implicit_definition.constants,
+                    constants_enabled=True,
+                    implicit_definition=job.implicit_definition,
+                )
+                fit_result = FitRunner().fit(
+                    problem,
+                    job.variable_data,
+                    job.target_series,
+                    precision=job.precision,
+                    weights=job.weights,
+                    data_sigmas=job.sigma_series,
+                )
             fit_result.details["implicit_variable"] = job.implicit_definition.implicit_variable
             fit_result.details["equation"] = job.implicit_definition.equation
             fit_result.details["output_expression"] = job.implicit_definition.output_expression

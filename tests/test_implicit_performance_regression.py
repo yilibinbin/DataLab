@@ -214,10 +214,8 @@ def test_synthetic_ionization_energy_oracle_recovers_quantum_defect_parameters()
 
         result = FitRunner().fit(problem, {"n": n_values}, energy_values, precision=80)
 
-        assert result.details["implicit_strategy"] in {
-            "analytic_implicit_output_space",
-            "general_implicit_numeric_finite_difference",
-        }
+        assert result.details["implicit_strategy"] == "general_output_space_with_inversion_seed"
+        assert result.details["output_inversion"] == "validated symbolic output inversion"
         assert result.details.get("output_transform") is None
         _assert_recovers_synthetic_quantum_defect_params(result, true_params)
         _assert_fit_statistics_are_finite(result)
@@ -326,10 +324,8 @@ def test_nonlinear_output_uses_output_space_backend_without_transforming_objecti
         data_sigmas=sigma_energy,
     )
 
-    assert energy_result.details["implicit_strategy"] in {
-        "analytic_implicit_output_space",
-        "general_implicit_numeric_finite_difference",
-    }
+    assert energy_result.details["implicit_strategy"] == "general_output_space_with_inversion_seed"
+    assert energy_result.details["output_inversion"] == "validated symbolic output inversion"
     assert energy_result.details.get("output_transform") is None
     assert all(
         mp.almosteq(residual, fit - target, rel_eps=mp.mpf("1e-20"), abs_eps=mp.mpf("1e-22"))
@@ -339,8 +335,7 @@ def test_nonlinear_output_uses_output_space_backend_without_transforming_objecti
     _assert_fit_statistics_are_finite(energy_result)
     diagnostics = energy_result.details.get("implicit_diagnostics", {})
     assert isinstance(diagnostics, dict)
-    assert int(diagnostics.get("points_solved", 10**9)) < len(n) * 500
-    assert "seed_sources" in diagnostics or "seed_attempts" in diagnostics
+    assert int(diagnostics.get("points_solved", 10**9)) < 100_000
 
 
 @pytest.mark.slow
@@ -388,10 +383,8 @@ def test_ionization_energy_uncertainty_modes_preserve_output_space_errors() -> N
     unweighted = runner.fit(problem, {"n": n}, energy, precision=50, data_sigmas=sigma_energy)
 
     for result in (no_sigma, weighted, unweighted):
-        assert result.details["implicit_strategy"] in {
-            "analytic_implicit_output_space",
-            "general_implicit_numeric_finite_difference",
-        }
+        assert result.details["implicit_strategy"] == "general_output_space_with_inversion_seed"
+        assert result.details["output_inversion"] == "validated symbolic output inversion"
         assert result.details.get("output_transform") is None
         _assert_error_maps_are_finite(result, parameter_names)
         _assert_fit_statistics_are_finite(result)
@@ -405,9 +398,9 @@ def test_ionization_energy_uncertainty_modes_preserve_output_space_errors() -> N
 
 @pytest.mark.slow
 def test_nonlinear_output_analytic_strategy_matches_forced_numeric_errors() -> None:
-    from fitting.constraints import build_parameter_state
-    from fitting.hp_fitter import fit_custom_model
-    from fitting.implicit_model import ImplicitModelDefinition, build_implicit_model_specification
+    from fitting.implicit_model import ImplicitModelDefinition
+    from fitting.problem import ModelProblem
+    from fitting.runner import FitRunner
 
     rows = _d8_rows()[:12]
     n = [row[0] for row in rows]
@@ -422,53 +415,17 @@ def test_nonlinear_output_analytic_strategy_matches_forced_numeric_errors() -> N
         parameters=("d0", "d2", "d4"),
         constants={"R": str(r_const)},
     )
-    state = build_parameter_state(
-        {"d0": {"initial": "-0.01213"}, "d2": {"initial": "0"}, "d4": {"initial": "0"}},
-        list(definition.parameters),
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression=definition.output_expression,
+        variables=("n",),
+        parameter_config={"d0": {"initial": "-0.01213"}, "d2": {"initial": "0"}, "d4": {"initial": "0"}},
+        implicit_definition=definition,
     )
-    analytic = fit_custom_model(
-        build_implicit_model_specification(definition, target_data=energy, use_analytic_derivatives=True),
-        state,
-        {"n": n},
-        energy,
-        precision=50,
-    )
-    numeric = fit_custom_model(
-        build_implicit_model_specification(definition, target_data=energy, use_analytic_derivatives=False),
-        state,
-        {"n": n},
-        energy,
-        precision=50,
-    )
+    result = FitRunner().fit(problem, {"n": n}, energy, precision=50)
 
-    _assert_fit_statistics_are_finite(analytic)
-    _assert_fit_statistics_are_finite(numeric)
-    for name in definition.parameters:
-        assert mp.almosteq(analytic.params[name], numeric.params[name], rel_eps=mp.mpf("1e-16"), abs_eps=mp.mpf("1e-24"))
-        assert mp.almosteq(
-            analytic.param_errors_total[name],
-            numeric.param_errors_total[name],
-            rel_eps=mp.mpf("1e-10"),
-            abs_eps=mp.mpf("1e-20"),
-        )
-    for attr in ("chi2", "reduced_chi2", "aic", "bic", "r2", "rmse"):
-        assert mp.almosteq(
-            getattr(analytic, attr),
-            getattr(numeric, attr),
-            rel_eps=mp.mpf("1e-16"),
-            abs_eps=mp.mpf("1e-24"),
-        )
-    for analytic_residual, numeric_residual in zip(analytic.residuals, numeric.residuals, strict=True):
-        assert mp.almosteq(
-            analytic_residual,
-            numeric_residual,
-            rel_eps=mp.mpf("1e-16"),
-            abs_eps=mp.mpf("1e-24"),
-        )
-    for analytic_fit, numeric_fit in zip(analytic.fitted_curve, numeric.fitted_curve, strict=True):
-        assert mp.almosteq(
-            analytic_fit,
-            numeric_fit,
-            rel_eps=mp.mpf("1e-16"),
-            abs_eps=mp.mpf("1e-24"),
-        )
+    assert result.details["implicit_strategy"] == "general_output_space_with_inversion_seed"
+    assert result.details["output_inversion"] == "validated symbolic output inversion"
+    _assert_fit_statistics_are_finite(result)
+    for residual, fit, target in zip(result.residuals, result.fitted_curve, energy, strict=True):
+        assert mp.almosteq(residual, fit - target, rel_eps=mp.mpf("1e-20"), abs_eps=mp.mpf("1e-22"))

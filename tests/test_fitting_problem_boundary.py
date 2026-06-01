@@ -62,6 +62,12 @@ def test_implicit_classifier_records_observed_linear_case():
     assert "observed implicit variable" in classification.reason.lower()
 
 
+def test_implicit_classifier_exposes_only_observed_linear_and_general_strategies():
+    from fitting.implicit_classifier import ImplicitStrategy
+
+    assert {strategy.value for strategy in ImplicitStrategy} == {"observed_linear", "general"}
+
+
 def test_implicit_classifier_accepts_datalab_function_bracket_syntax():
     from fitting.implicit_classifier import ImplicitProblemClassifier, ImplicitStrategy
     from fitting.implicit_model import ImplicitModelDefinition
@@ -77,6 +83,24 @@ def test_implicit_classifier_accepts_datalab_function_bracket_syntax():
     classification = ImplicitProblemClassifier().classify(definition)
 
     assert classification.strategy is ImplicitStrategy.OBSERVED_LINEAR
+
+
+def test_implicit_classifier_routes_observed_nonlinear_to_general():
+    from fitting.implicit_classifier import ImplicitProblemClassifier, ImplicitStrategy
+    from fitting.implicit_model import ImplicitModelDefinition
+
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a*a + x",
+        output_expression="u",
+        parameters=("a",),
+    )
+
+    classification = ImplicitProblemClassifier().classify(definition)
+
+    assert classification.strategy is ImplicitStrategy.GENERAL
+    assert "not linear" in classification.reason.lower()
 
 
 def test_implicit_classifier_uses_general_for_uncertain_parse():

@@ -78,8 +78,6 @@ SYMPY_FUNCTIONS: dict[str, object] = {
     "Hyp2f1": _hyp2f1,
 }
 
-_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
-
 
 def normalize_symbolic_expression(expression: str) -> str:
     """Normalize DataLab/Mathematica-style syntax into SymPy parse syntax."""

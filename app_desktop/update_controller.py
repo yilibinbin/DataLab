@@ -296,6 +296,7 @@ class UpdateController:
         worker.failed.connect(thread.quit)
         thread.finished.connect(bridge.thread_finished)
         thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
         thread.finished.connect(self._download_thread_finished)
         thread.started.connect(worker.run)
 
@@ -353,6 +354,14 @@ class UpdateController:
             self._download_lock = None
 
     def _download_thread_finished(self) -> None:
+        try:
+            from PySide6.QtCore import QTimer
+        except ImportError:
+            self._clear_download_thread_refs()
+            return
+        QTimer.singleShot(0, self._clear_download_thread_refs)
+
+    def _clear_download_thread_refs(self) -> None:
         self._download_thread = None
         self._download_worker = None
         self._download_bridge = None

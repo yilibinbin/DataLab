@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 
 import mpmath as mp
-from pytest import MonkeyPatch
 
 
 D8_ROWS = [
@@ -45,7 +44,7 @@ D8_ROWS = [
 ]
 
 
-def test_observed_implicit_d8_weighted_fit_finishes_quickly() -> None:
+def test_observed_implicit_d8_weighted_fit_finishes_quickly():
     from fitting.implicit_model import ImplicitModelDefinition
     from fitting.problem import ModelProblem
     from fitting.runner import FitRunner
@@ -82,243 +81,42 @@ def test_observed_implicit_d8_weighted_fit_finishes_quickly() -> None:
     assert set(result.params) == {"d0", "d2", "d4", "d6", "d8"}
 
 
-def test_affine_output_uses_exact_observed_fast_path_without_changing_statistics() -> None:
+def test_inverse_square_output_d8_fit_uses_generic_inversion_seed_quickly():
     from fitting.implicit_model import ImplicitModelDefinition
     from fitting.problem import ModelProblem
     from fitting.runner import FitRunner
 
-    with mp.workdps(80):
-        n = [mp.mpf(row[0]) for row in D8_ROWS]
-        delta = [mp.mpf(row[1]) for row in D8_ROWS]
-        affine_y = [2 * value + 1 for value in delta]
-        sigmas_delta = [mp.mpf(row[2]) for row in D8_ROWS]
-        sigmas_affine = [2 * sigma for sigma in sigmas_delta]
-        delta_weights = [1 / (sigma**2) for sigma in sigmas_delta]
-        affine_weights = [1 / (sigma**2) for sigma in sigmas_affine]
-    base_config = {
-        "d0": {"initial": "-0.01213"},
-        "d2": {"initial": "0.0"},
-        "d4": {"initial": "0.0"},
-        "d6": {"initial": "0.0"},
-        "d8": {"initial": "0.0"},
-    }
-    equation = "d0 + d2/(n-delta)^2 + d4/(n-delta)^4 + d6/(n-delta)^6 + d8/(n-delta)^8"
-    delta_definition = ImplicitModelDefinition(
-        x_variables=("n",),
-        implicit_variable="delta",
-        equation=equation,
-        output_expression="delta",
-        parameters=("d0", "d2", "d4", "d6", "d8"),
-    )
-    direct_problem = ModelProblem(
+    problem = ModelProblem(
         model_type="self_consistent",
-        expression="delta",
+        expression="C/(n-delta)^2",
         variables=("n",),
-        parameter_config=base_config,
-        implicit_definition=delta_definition,
-    )
-    affine_problem = ModelProblem(
-        model_type="self_consistent",
-        expression="2*delta + 1",
-        variables=("n",),
-        parameter_config=base_config,
+        constants={"C": "3.2898419602500(36)[+9]"},
+        parameter_config={
+            "d0": {"initial": "-0.01213"},
+        },
         implicit_definition=ImplicitModelDefinition(
             x_variables=("n",),
             implicit_variable="delta",
-            equation=equation,
-            output_expression="2*delta + 1",
-            parameters=delta_definition.parameters,
+            equation="d0",
+            output_expression="C/(n-delta)^2",
+            parameters=("d0",),
+            constants={"C": "3.2898419602500(36)[+9]"},
         ),
     )
+    n = [mp.mpf(row[0]) for row in D8_ROWS]
+    expected_d0 = mp.mpf("-0.01213")
+    rydberg = mp.mpf("3.2898419602500e9")
+    targets = [rydberg / (n_value - expected_d0) ** 2 for n_value in n]
 
-    runner = FitRunner()
-    direct = runner.fit(direct_problem, {"n": n}, delta, precision=80, weights=delta_weights, data_sigmas=sigmas_delta)
-    affine = runner.fit(
-        affine_problem,
-        {"n": n},
-        affine_y,
-        precision=80,
-        weights=affine_weights,
-        data_sigmas=sigmas_affine,
-    )
+    start = time.perf_counter()
+    result = FitRunner().fit(problem, {"n": n}, targets, precision=50)
+    elapsed = time.perf_counter() - start
 
-    assert affine.details["implicit_strategy"] == "exact_affine_output_observed_linear"
-    assert affine.details["optimizer_backend"] == "mpmath_qr"
-    assert affine.details["output_space_remapped"] is True
-    with mp.workdps(80):
-        expected_affine_curve = [2 * value + 1 for value in direct.fitted_curve]
-        max_curve_delta = max(
-            mp.fabs(value - expected)
-            for value, expected in zip(affine.fitted_curve, expected_affine_curve, strict=True)
-        )
-        assert max_curve_delta < mp.mpf("1e-24")
-    with mp.workdps(80):
-        max_residual_delta = max(
-            mp.fabs(value - (fit - target))
-            for value, fit, target in zip(affine.residuals, affine.fitted_curve, affine_y, strict=True)
-        )
-        assert max_residual_delta < mp.mpf("1e-24")
-    for name, expected in direct.params.items():
-        assert mp.almosteq(affine.params[name], expected, rel_eps=mp.mpf("1e-25"), abs_eps=mp.mpf("1e-30"))
-        assert mp.almosteq(
-            affine.param_errors_total[name],
-            direct.param_errors_total[name],
-            rel_eps=mp.mpf("1e-20"),
-            abs_eps=mp.mpf("1e-30"),
-        )
-    for attr in ("chi2", "reduced_chi2", "aic", "bic", "r2"):
-        assert mp.almosteq(getattr(affine, attr), getattr(direct, attr), rel_eps=mp.mpf("1e-20"), abs_eps=mp.mpf("1e-30"))
-    with mp.workdps(80):
-        assert mp.almosteq(affine.rmse, 2 * direct.rmse, rel_eps=mp.mpf("1e-20"), abs_eps=mp.mpf("1e-30"))
-
-
-def test_affine_output_fast_path_matches_general_output_space_on_nonzero_residuals(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    from fitting.implicit_model import ImplicitModelDefinition
-    from fitting.problem import ModelProblem
-    from fitting.runner import FitRunner
-
-    xs = [mp.mpf("1"), mp.mpf("2"), mp.mpf("3"), mp.mpf("4"), mp.mpf("5")]
-    implicit_targets = [mp.mpf("0.15"), mp.mpf("0.41"), mp.mpf("0.62"), mp.mpf("0.81"), mp.mpf("1.08")]
-    output_targets = [2 * value + 1 for value in implicit_targets]
-    weights = [mp.mpf("1"), mp.mpf("2"), mp.mpf("1.5"), mp.mpf("3"), mp.mpf("2.5")]
-    problem = ModelProblem(
-        model_type="self_consistent",
-        expression="2*u + 1",
-        variables=("x",),
-        parameter_config={"a": {"initial": "0.1"}, "b": {"initial": "0.1"}},
-        implicit_definition=ImplicitModelDefinition(
-            x_variables=("x",),
-            implicit_variable="u",
-            equation="a + b*x",
-            output_expression="2*u + 1",
-            parameters=("a", "b"),
-        ),
-    )
-
-    fast = FitRunner().fit(problem, {"x": xs}, output_targets, precision=80, weights=weights)
-    monkeypatch.setattr("fitting.implicit_planner.detect_output_transform", lambda definition, **kwargs: None)
-    general = FitRunner().fit(problem, {"x": xs}, output_targets, precision=80, weights=weights)
-
-    assert fast.details["implicit_strategy"] == "exact_affine_output_observed_linear"
-    for attr in ("chi2", "reduced_chi2", "aic", "bic", "r2", "rmse"):
-        assert mp.almosteq(getattr(fast, attr), getattr(general, attr), rel_eps=mp.mpf("1e-18"), abs_eps=mp.mpf("1e-25"))
-    for name in fast.params:
-        assert mp.almosteq(fast.params[name], general.params[name], rel_eps=mp.mpf("1e-18"), abs_eps=mp.mpf("1e-25"))
-        assert mp.almosteq(
-            fast.param_errors_total[name],
-            general.param_errors_total[name],
-            rel_eps=mp.mpf("1e-12"),
-            abs_eps=mp.mpf("1e-25"),
-        )
-
-
-def test_unweighted_affine_output_fast_path_matches_general_output_space(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    from fitting.implicit_model import ImplicitModelDefinition
-    from fitting.problem import ModelProblem
-    from fitting.runner import FitRunner
-
-    xs = [mp.mpf("1"), mp.mpf("2"), mp.mpf("3"), mp.mpf("4"), mp.mpf("5")]
-    implicit_targets = [mp.mpf("0.17"), mp.mpf("0.44"), mp.mpf("0.61"), mp.mpf("0.88"), mp.mpf("1.03")]
-    output_targets = [mp.mpf("3.5") * value - mp.mpf("0.75") for value in implicit_targets]
-    problem = ModelProblem(
-        model_type="self_consistent",
-        expression="3.5*u - 0.75",
-        variables=("x",),
-        parameter_config={"a": {"initial": "0.1"}, "b": {"initial": "0.1"}},
-        implicit_definition=ImplicitModelDefinition(
-            x_variables=("x",),
-            implicit_variable="u",
-            equation="a + b*x",
-            output_expression="3.5*u - 0.75",
-            parameters=("a", "b"),
-        ),
-    )
-
-    fast = FitRunner().fit(problem, {"x": xs}, output_targets, precision=80)
-    monkeypatch.setattr("fitting.implicit_planner.detect_output_transform", lambda definition, **kwargs: None)
-    general = FitRunner().fit(problem, {"x": xs}, output_targets, precision=80)
-
-    assert fast.details["implicit_strategy"] == "exact_affine_output_observed_linear"
-    assert "weighted" not in fast.details
-    for attr in ("chi2", "reduced_chi2", "aic", "bic", "r2", "rmse"):
-        assert mp.almosteq(getattr(fast, attr), getattr(general, attr), rel_eps=mp.mpf("1e-18"), abs_eps=mp.mpf("1e-25"))
-    for name in fast.params:
-        assert mp.almosteq(fast.params[name], general.params[name], rel_eps=mp.mpf("1e-18"), abs_eps=mp.mpf("1e-25"))
-        assert mp.almosteq(
-            fast.param_errors_total[name],
-            general.param_errors_total[name],
-            rel_eps=mp.mpf("1e-12"),
-            abs_eps=mp.mpf("1e-25"),
-        )
-
-
-def test_affine_output_skips_fast_path_for_unweighted_data_sigmas() -> None:
-    from fitting.implicit_model import ImplicitModelDefinition
-    from fitting.problem import ModelProblem
-    from fitting.runner import FitRunner
-
-    xs = [mp.mpf("1"), mp.mpf("2"), mp.mpf("3")]
-    us = [mp.mpf("0.2"), mp.mpf("0.4"), mp.mpf("0.6")]
-    ys = [2 * value + 1 for value in us]
-    sigmas = [mp.mpf("0.01"), mp.mpf("0.01"), mp.mpf("0.01")]
-    problem = ModelProblem(
-        model_type="self_consistent",
-        expression="2*u + 1",
-        variables=("x",),
-        parameter_config={"a": {"initial": "0.1"}, "b": {"initial": "0.1"}},
-        implicit_definition=ImplicitModelDefinition(
-            x_variables=("x",),
-            implicit_variable="u",
-            equation="a*x + b",
-            output_expression="2*u + 1",
-            parameters=("a", "b"),
-        ),
-    )
-
-    result = FitRunner().fit(problem, {"x": xs}, ys, precision=80, data_sigmas=sigmas)
-
-    assert result.details["implicit_strategy"] != "exact_affine_output_observed_linear"
-    fallback_history = result.details.get("fallback_history", [])
-    assert isinstance(fallback_history, list)
-    assert any(
-        item.get("skipped") == "unweighted_data_sigmas"
-        for item in fallback_history
-        if isinstance(item, dict)
-    )
-
-
-def test_affine_output_does_not_use_observed_nonlinear_residual_fast_path() -> None:
-    from fitting.implicit_model import ImplicitModelDefinition
-    from fitting.problem import ModelProblem
-    from fitting.runner import FitRunner
-
-    xs = [mp.mpf("1"), mp.mpf("2"), mp.mpf("3"), mp.mpf("4")]
-    ys = [mp.mpf("1.2"), mp.mpf("1.3"), mp.mpf("1.4"), mp.mpf("1.5")]
-    problem = ModelProblem(
-        model_type="self_consistent",
-        expression="2*u + 1",
-        variables=("x",),
-        parameter_config={"a": {"initial": "0.1"}, "b": {"initial": "0.1"}},
-        implicit_definition=ImplicitModelDefinition(
-            x_variables=("x",),
-            implicit_variable="u",
-            equation="Sin[a] + b*x",
-            output_expression="2*u + 1",
-            parameters=("a", "b"),
-        ),
-    )
-
-    result = FitRunner().fit(problem, {"x": xs}, ys, precision=80)
-
-    assert result.details["implicit_strategy"] != "exact_affine_output_observed_nonlinear"
-    fallback_history = result.details.get("fallback_history", [])
-    assert isinstance(fallback_history, list)
-    assert any(
-        item.get("from") == "exact_affine_output"
-        for item in fallback_history
-        if isinstance(item, dict)
-    )
+    assert elapsed < 2.0
+    assert result.details["implicit_strategy"] == "general_output_space_with_inversion_seed"
+    assert result.details["output_inversion"] == "validated symbolic output inversion"
+    assert mp.fabs(result.params["d0"] - expected_d0) < mp.mpf("1e-14")
+    for residual, fitted, target in zip(result.residuals, result.fitted_curve, targets, strict=True):
+        assert mp.almosteq(residual, fitted - target, rel_eps=mp.mpf("1e-20"), abs_eps=mp.mpf("1e-6"))
+    expected_chi2 = mp.fsum(residual * residual for residual in result.residuals)
+    assert mp.almosteq(result.chi2, expected_chi2, rel_eps=mp.mpf("1e-30"), abs_eps=mp.mpf("1e-30"))
