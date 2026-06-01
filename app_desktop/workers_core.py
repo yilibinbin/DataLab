@@ -18,6 +18,7 @@ import mpmath as mp
 from shared.parallel_backend import KillableProcessTaskRunner
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 from shared.parallel_config import NestedParallelPolicy, ParallelConfig, ParallelMode
+from shared.uncertainty import UncertainValue
 
 from data_extrapolation_latex_latest import (
     _dual_msg,
@@ -1096,7 +1097,7 @@ class FitJob:
     model_type: str
     headers: list[str]
     data_rows: list[tuple[mp.mpf, ...]]
-    sigma_rows: list[tuple[mp.mpf | None, ...]]
+    sigma_rows: list[tuple[mp.mpf | UncertainValue | None, ...]]
     x_series: list[mp.mpf]
     y_series: list[mp.mpf]
     sigma_series: list[mp.mpf | None]
@@ -1225,6 +1226,45 @@ def _deserialize_mpf_sequence(values: list[str | None]) -> list[mp.mpf | None]:
     return [mp.mpf(value) if value is not None else None for value in values]
 
 
+def _serialize_sigma_value(value: Any, keep_digits: int) -> dict[str, Any] | str | None:
+    if value is None:
+        return None
+    if hasattr(value, "value") and hasattr(value, "uncertainty"):
+        return {
+            "kind": "uncertain",
+            "value": _mp_to_string(getattr(value, "value"), keep_digits),
+            "uncertainty": _mp_to_string(getattr(value, "uncertainty"), keep_digits),
+            "uncertainty_digits": getattr(value, "uncertainty_digits", None),
+        }
+    return _mp_to_string(value, keep_digits)
+
+
+def _serialize_sigma_sequence(
+    values: list[Any] | tuple[Any, ...], keep_digits: int
+) -> list[dict[str, Any] | str | None]:
+    return [_serialize_sigma_value(value, keep_digits) for value in values]
+
+
+def _deserialize_sigma_value(value: dict[str, Any] | str | None) -> mp.mpf | UncertainValue | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        if value.get("kind") != "uncertain":
+            raise ValueError("sigma entry has unsupported kind")
+        return UncertainValue(
+            value.get("value", "0"),
+            value.get("uncertainty", "0"),
+            uncertainty_digits=value.get("uncertainty_digits"),
+        )
+    return mp.mpf(value)
+
+
+def _deserialize_sigma_sequence(
+    values: list[dict[str, Any] | str | None],
+) -> list[mp.mpf | UncertainValue | None]:
+    return [_deserialize_sigma_value(value) for value in values]
+
+
 def _serialize_mp_tree(value: Any, keep_digits: int) -> Any:
     if value is None:
         return None
@@ -1326,7 +1366,7 @@ def _serialize_fit_job(job: FitJob) -> dict[str, Any]:
         "model_type": job.model_type,
         "headers": list(job.headers),
         "data_rows": [_serialize_mpf_sequence(row, keep_digits) for row in job.data_rows],
-        "sigma_rows": [_serialize_mpf_sequence(row, keep_digits) for row in job.sigma_rows],
+        "sigma_rows": [_serialize_sigma_sequence(row, keep_digits) for row in job.sigma_rows],
         "x_series": _serialize_mpf_sequence(job.x_series, keep_digits),
         "y_series": _serialize_mpf_sequence(job.y_series, keep_digits),
         "sigma_series": _serialize_mpf_sequence(job.sigma_series, keep_digits),
@@ -1374,7 +1414,7 @@ def _deserialize_fit_job(payload: dict[str, Any]) -> FitJob:
             model_type=payload["model_type"],
             headers=list(payload["headers"]),
             data_rows=[tuple(value for value in _deserialize_mpf_sequence(row)) for row in payload["data_rows"]],
-            sigma_rows=[tuple(value for value in _deserialize_mpf_sequence(row)) for row in payload["sigma_rows"]],
+            sigma_rows=[tuple(value for value in _deserialize_sigma_sequence(row)) for row in payload["sigma_rows"]],
             x_series=[mp.mpf(value) for value in payload["x_series"]],
             y_series=[mp.mpf(value) for value in payload["y_series"]],
             sigma_series=[mp.mpf(value) if value is not None else None for value in payload["sigma_series"]],

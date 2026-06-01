@@ -515,7 +515,7 @@ git diff --check
 
 Add a release/build side-effect audit before packaging any implementation of this plan: build from a clean clone or isolated output directory, fail if `DataLab.spec` or source files drift unexpectedly after packaging, fail if duplicate local files such as `* 2*` would enter the source/archive/package boundary, and scan bundled metadata/docs/example workspaces for stale backend fields, private paths, and local-only artifacts.
 
-- [ ] **Step 3: GUI smoke**
+- [x] **Step 3: GUI smoke**
 
 Open the app, load a local quantum-defect example workspace, run fitting, and verify:
 
@@ -524,6 +524,8 @@ Open the app, load a local quantum-defect example workspace, run fitting, and ve
 - final residuals are output-space energy residuals,
 - result table saves/restores through workspace round trip.
 
+Status: passed on 2026-06-01 with an offscreen GUI smoke that created and opened a local quantum-defect energy workspace, ran the self-consistent fit through the GUI worker/process boundary, verified no second visible `QMainWindow`, verified `general_output_space_with_inversion_seed`/validated symbolic inversion through the live result payload, checked output-space residuals (`fitted - target`), and restored the result snapshot through `capture_workspace()`/`restore_workspace()`. Runtime was 1.882s.
+
 ### Task 8: Multi-Model Review Gate
 
 **Files:**
@@ -531,11 +533,11 @@ Open the app, load a local quantum-defect example workspace, run fitting, and ve
 - Modify: `findings.md`
 - Modify: `progress.md`
 
-- [ ] **Step 1: Codex multi-agent review**
+- [x] **Step 1: Codex multi-agent review**
 
 Run read-only subagents for architecture, Python correctness/performance, GUI/workspace, and release/package risk. Main thread must accept/reject each finding and update the plan or code.
 
-- [ ] **Step 2: Claude and Gemini adversarial loop**
+- [x] **Step 2: Claude and Gemini adversarial loop**
 
 Run both:
 
@@ -545,6 +547,8 @@ Run both:
 ```
 
 If either returns `CONTESTED` or `REJECT`, reconcile findings in `findings.md`, revise the plan/code, and rerun until there are no accepted findings.
+
+Status: accepted Gemini findings were fixed; the final Gemini follow-up timed out and is recorded as unavailable/hung, not as a PASS. Claude became available after quota reset; accepted findings were fixed; the final Claude follow-up returned malformed/non-JSON output with a clear textual PASS and no remaining high/medium blockers.
 
 ## Initial Accepted Review Findings
 

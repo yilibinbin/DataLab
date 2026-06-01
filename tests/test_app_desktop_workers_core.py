@@ -27,6 +27,7 @@ from fitting.hp_fitter import FitResult
 from fitting.implicit_model import ImplicitModelDefinition, ImplicitSolveOptions
 from shared.parallel_config import ParallelConfig
 from shared.parallel_backend import KillableProcessTaskRunner, current_parallel_depth
+from shared.uncertainty import UncertainValue
 
 
 def _small_self_consistent_fit_job(
@@ -321,6 +322,21 @@ def test_self_consistent_fit_job_payload_is_spawn_picklable() -> None:
     assert restored.implicit_definition.solve_options.method == "root"
     assert restored.timeout_seconds == 10.0
     assert restored.parallel_config.process_start_method == "spawn"
+
+
+def test_self_consistent_fit_job_serialization_preserves_uncertain_sigma_rows() -> None:
+    job = _small_self_consistent_fit_job()
+    job.sigma_rows[0] = (None, UncertainValue("204397210.721", "0.002", uncertainty_digits=1))
+
+    payload = _serialize_fit_job(job)
+    roundtrip = pickle.loads(pickle.dumps(payload))
+    restored = _deserialize_fit_job(roundtrip)
+
+    entry = restored.sigma_rows[0][1]
+    assert isinstance(entry, UncertainValue)
+    assert entry.value == mp.mpf("204397210.721")
+    assert entry.uncertainty == mp.mpf("0.002")
+    assert entry.uncertainty_digits == 1
 
 
 @pytest.mark.parametrize(
