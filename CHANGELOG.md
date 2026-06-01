@@ -6,6 +6,26 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.6.0] — 2026-06-01
+
+### Added
+- Added a generic output-inversion initializer for self-consistent and
+  implicit fitting models when the output expression can be inverted
+  from the target values.
+
+### Changed
+- Simplified implicit fitting backend selection by keeping the
+  observed-linear fast path and routing other implicit models through
+  the general output-space solver.
+- Removed obsolete implicit backend toggles and stale specialized
+  implicit strategy paths.
+
+### Fixed
+- Preserved uncertainty-bearing sigma values when self-consistent fits
+  are sent through worker subprocesses.
+- Recomputed target-dependent implicit candidates for systematic
+  refits so uncertainty analyses use the correct output targets.
+
 ## [2.5.2] — 2026-05-31
 
 ### Fixed
