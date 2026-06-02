@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from root_solving.models import RootBatchResult, RootBatchRowResult, RootUnknown
-from root_solving.normalization import normalize_root_problem
+from root_solving.normalization import normalize_root_problem_from_context
 from root_solving.solver import solve_root_problem
 from shared.computation_inputs import (
     ComputationDataRow,
@@ -29,17 +29,6 @@ def solve_root_batch(
 ) -> RootBatchResult:
     clean_equations = tuple(str(equation).strip() for equation in equations if str(equation).strip())
     unknown_rows = _unknown_rows(unknowns)
-    normalize_root_problem(
-        equations=clean_equations,
-        unknown_rows=unknown_rows,
-        known_rows=(),
-        constants_enabled=constants_state.enabled,
-        constants_rows=constants_state.persisted_rows(),
-        constants_view=constants_state.view,
-        constants_text=constants_state.text,
-        mode=mode,
-        precision=precision,
-    )
 
     rows = build_data_rows(tuple(data_headers), tuple(data_rows))
     if not rows:
@@ -55,20 +44,24 @@ def solve_root_batch(
         ),
     )
     validate_symbol_classification(classification)
+    normalize_root_problem_from_context(
+        equations=clean_equations,
+        unknown_rows=unknown_rows,
+        row_values={header: "0" for header in data_headers},
+        constants_state=constants_state,
+        mode=mode,
+        precision=precision,
+    )
 
     results: list[RootBatchRowResult] = []
     for row in rows:
         source_values = {name: str(row.values[name]) for name in row.values}
         try:
-            known_rows = [{"name": name, "value": value} for name, value in source_values.items()]
-            problem, _unused_uncertain = normalize_root_problem(
+            problem = normalize_root_problem_from_context(
                 equations=clean_equations,
                 unknown_rows=unknown_rows,
-                known_rows=known_rows,
-                constants_enabled=constants_state.enabled,
-                constants_rows=constants_state.persisted_rows(),
-                constants_view=constants_state.view,
-                constants_text=constants_state.text,
+                row_values=source_values,
+                constants_state=constants_state,
                 mode=mode,
                 precision=precision,
             )
