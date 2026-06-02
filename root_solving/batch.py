@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from root_solving.models import RootBatchResult, RootBatchRowResult, RootScanConfig, RootUnknown
+from root_solving.models import RootBatchResult, RootBatchRowResult, RootScanConfig, RootUncertaintyOptions, RootUnknown
 from root_solving.normalization import normalize_root_problem_from_context
 from root_solving.solver import solve_root_problem
 from shared.computation_inputs import (
@@ -29,6 +29,7 @@ def solve_root_batch(
     precision: int,
     scan_config: Mapping[str, object] | RootScanConfig | None = None,
     data_text_rows: Sequence[Sequence[str]] | None = None,
+    uncertainty_options: Mapping[str, object] | RootUncertaintyOptions | None = None,
 ) -> RootBatchResult:
     clean_equations = tuple(str(equation).strip() for equation in equations if str(equation).strip())
     unknown_rows = _unknown_rows(unknowns)
@@ -58,6 +59,7 @@ def solve_root_batch(
         mode=mode,
         precision=precision,
         scan_config=scan_config,
+        uncertainty_options=uncertainty_options,
     )
 
     results: list[RootBatchRowResult] = []
@@ -72,6 +74,7 @@ def solve_root_batch(
                 mode=mode,
                 precision=precision,
                 scan_config=scan_config,
+                uncertainty_options=uncertainty_options,
             )
             result = solve_root_problem(
                 problem,

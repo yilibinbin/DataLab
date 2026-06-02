@@ -9,6 +9,7 @@ from mpmath import mp
 
 RootMode = Literal["auto", "scalar", "polynomial", "system", "scan_multiple"]
 RootBackend = Literal["scipy", "mpmath"]
+RootUncertaintyMethod = Literal["auto", "off", "linear", "monte_carlo", "second_order"]
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
@@ -43,6 +44,13 @@ class RootScanConfig:
 
 
 @dataclass(frozen=True)
+class RootUncertaintyOptions:
+    method: RootUncertaintyMethod = "auto"
+    monte_carlo_samples: int = 2000
+    monte_carlo_seed: str = ""
+
+
+@dataclass(frozen=True)
 class RootProblem:
     equations: tuple[str, ...]
     unknowns: tuple[RootUnknown, ...]
@@ -52,6 +60,7 @@ class RootProblem:
     mode: RootMode = "auto"
     precision: int = 16
     scan_config: RootScanConfig = field(default_factory=RootScanConfig)
+    uncertainty_options: RootUncertaintyOptions = field(default_factory=RootUncertaintyOptions)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "row_values", immutable_mapping(self.row_values))
