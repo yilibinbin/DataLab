@@ -6,6 +6,24 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.7.0] — 2026-06-02
+
+### Added
+- Added a dedicated root-solving workflow with scalar, polynomial,
+  system, and scalar multi-root scan modes.
+- Added batch root solving from input data columns, including constants,
+  uncertainty-aware inputs, result tables, CSV output, and workspace
+  persistence.
+
+### Changed
+- Reused the shared computation-input and constants-normalization
+  paths for root-solving data so formula symbols, constants, and data
+  columns are validated consistently.
+
+### Fixed
+- Hardened root-solving result restoration, stale display cleanup,
+  header-only data handling, and expression-scope validation.
+
 ## [2.6.0] — 2026-06-01
 
 ### Added
