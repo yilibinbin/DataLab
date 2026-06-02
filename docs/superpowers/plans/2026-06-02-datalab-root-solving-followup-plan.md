@@ -350,7 +350,7 @@ Expected staged files are exactly the five files in the `git add` command.
 - Test: `tests/test_root_solving_uncertainty_policy.py`
 - Test: `tests/test_root_solving_uncertainty.py`
 
-- [ ] **Step 1: Write RED tests for off and auto-linear behavior**
+- [x] **Step 1: Write RED tests for off and auto-linear behavior**
 
 Create `tests/test_root_solving_uncertainty_policy.py` with:
 
@@ -451,7 +451,7 @@ def test_uncertainty_complex_roots_preserve_real_root_warning() -> None:
     assert any("real-valued roots" in warning for warning in result.warnings)
 ```
 
-- [ ] **Step 2: Write RED Monte Carlo and scalar second-order tests**
+- [x] **Step 2: Write RED Monte Carlo and scalar second-order tests**
 
 Add:
 
@@ -546,7 +546,7 @@ def test_uncertainty_method_second_order_scalar_reports_bias_and_uncertainty() -
     assert "uncertainty_bias" in result.details
 ```
 
-- [ ] **Step 3: Run tests to verify RED**
+- [x] **Step 3: Run tests to verify RED**
 
 Run:
 
@@ -556,7 +556,7 @@ PATH=/Users/fanghao/miniconda3/bin:$PATH PYTHONPATH=. pytest -q tests/test_root_
 
 Expected: fails because `root_solving/uncertainty_policy.py` and solver dispatch do not exist.
 
-- [ ] **Step 4: Implement policy dispatcher**
+- [x] **Step 4: Implement policy dispatcher**
 
 Create `root_solving/uncertainty_policy.py`:
 
@@ -819,7 +819,7 @@ def _monte_carlo_seed(seed: str) -> int | str | None:
 
 Monte Carlo is intentionally limited to `scalar` and square `system` modes in this follow-up. `polynomial` and `scan_multiple` can change root count or root ordering across samples; supporting those modes requires a separate reviewed root-matching algorithm.
 
-- [ ] **Step 5: Integrate solver dispatch without recursion**
+- [x] **Step 5: Integrate solver dispatch without recursion**
 
 In `root_solving/solver.py`, split the current top-level solve into a system-aware internal helper:
 
@@ -861,7 +861,7 @@ propagated = attach_root_uncertainty(
 
 The sample solver must pass `uncertain_inputs=None` because Monte Carlo and second-order have already changed the nominal input values. It must also use `replace(system, nominal_inputs=...)`, not `build_root_expression_system(...)`, so samples do not reparse equations.
 
-- [ ] **Step 6: Verify GREEN**
+- [x] **Step 6: Verify GREEN**
 
 Run:
 
@@ -874,7 +874,7 @@ python3 -m compileall -q root_solving tests/test_root_solving_uncertainty.py tes
 
 Expected: all pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 Run:
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 import math
 from typing import Any
@@ -8,13 +8,22 @@ from typing import Any
 from mpmath import mp
 
 from root_solving.expression import RootExpressionSystem, build_root_expression_system
-from root_solving.models import RootBackend, RootMode, RootProblem, RootScanConfig, RootUnknown, RootValue, RootResult
-from root_solving.uncertainty import attach_linear_uncertainty_with_system
+from root_solving.models import (
+    RootBackend,
+    RootMode,
+    RootProblem,
+    RootResult,
+    RootScanConfig,
+    RootUncertaintyOptions,
+    RootUnknown,
+    RootValue,
+    immutable_mapping,
+)
+from root_solving.uncertainty_policy import attach_root_uncertainty
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 from shared.uncertainty import UncertainValue
 
 _SCIPY_FALLBACK_WARNING = "SciPy validation failed; used mpmath fallback."
-_COMPLEX_UNCERTAINTY_WARNING = "Linear uncertainty propagation is only supported for real-valued roots."
 
 
 @dataclass(frozen=True)
@@ -27,9 +36,17 @@ class _Candidate:
 def solve_root_problem(
     problem: RootProblem,
     *,
-    uncertain_inputs: dict[str, UncertainValue] | None = None,
+    uncertain_inputs: Mapping[str, UncertainValue] | None = None,
 ) -> RootResult:
     system = build_root_expression_system(problem)
+    return _solve_root_problem_with_system(problem, system, uncertain_inputs)
+
+
+def _solve_root_problem_with_system(
+    problem: RootProblem,
+    system: RootExpressionSystem,
+    uncertain_inputs: Mapping[str, UncertainValue] | None = None,
+) -> RootResult:
     mode = _resolve_mode(problem, system)
 
     if mode == "scan_multiple":
@@ -59,13 +76,24 @@ def solve_root_problem(
         },
     )
     if uncertain_inputs:
-        if _all_roots_real(result.roots):
-            propagated = attach_linear_uncertainty_with_system(system, result, uncertain_inputs, precision=problem.precision)
-            if not isinstance(propagated, RootResult):
-                raise TypeError("uncertainty propagation returned an invalid root result")
-            return propagated
-        return replace(result, warnings=(*result.warnings, _COMPLEX_UNCERTAINTY_WARNING))
+        return attach_root_uncertainty(
+            problem=problem,
+            system=system,
+            result=result,
+            uncertain_inputs=uncertain_inputs,
+            solve_nominal=lambda nominal_inputs: _solve_nominal_inputs(problem, system, nominal_inputs),
+        )
     return result
+
+
+def _solve_nominal_inputs(
+    problem: RootProblem,
+    system: RootExpressionSystem,
+    nominal_inputs: Mapping[str, mp.mpf],
+) -> RootResult:
+    sampled_system = replace(system, nominal_inputs=immutable_mapping(nominal_inputs))
+    sampled_problem = replace(problem, uncertainty_options=RootUncertaintyOptions(method="off"))
+    return _solve_root_problem_with_system(sampled_problem, sampled_system, uncertain_inputs=None)
 
 
 def _resolve_mode(problem: RootProblem, system: RootExpressionSystem) -> RootMode:
