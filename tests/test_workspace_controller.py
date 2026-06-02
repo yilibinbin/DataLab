@@ -451,6 +451,33 @@ def test_workspace_restore_root_uncertainty_options_clamps_sample_count_to_widge
     assert target.root_monte_carlo_samples_spin.value() == 50000
 
 
+def test_workspace_restore_root_uncertainty_options_resets_unknown_method_to_auto() -> None:
+    from app_desktop.workspace_controller import _restore_root_config
+
+    target = SimpleNamespace(
+        root_equations_edit=None,
+        root_mode_combo=None,
+        root_unknowns_table=None,
+        root_constants_editor=None,
+        root_uncertainty_method_combo=_FakeCombo("monte_carlo"),
+        root_monte_carlo_samples_spin=_FakeSpin(123),
+        root_monte_carlo_seed_edit=_FakeLineEdit(""),
+    )
+
+    _restore_root_config(
+        target,
+        {
+            "uncertainty_options": {
+                "method": "future_method",
+                "monte_carlo_samples": "200",
+                "monte_carlo_seed": "11",
+            }
+        },
+    )
+
+    assert target.root_uncertainty_method_combo.currentData() == "auto"
+
+
 def test_workspace_restore_without_root_config_clears_stale_root_ui(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Any, cast
+from typing import Any, cast, get_args
 
 from shared.bilingual import _dual_msg
 from shared.computation_inputs import (
@@ -25,7 +25,7 @@ from root_solving.models import (
 
 _ROOT_MODES: set[str] = {"auto", "scalar", "polynomial", "system", "scan_multiple"}
 _UNKNOWN_SOURCES: set[str] = {"manual", "detected"}
-_ROOT_UNCERTAINTY_METHODS: set[str] = {"auto", "off", "linear", "monte_carlo", "second_order"}
+_ROOT_UNCERTAINTY_METHODS: set[str] = set(get_args(RootUncertaintyMethod))
 
 
 def normalize_root_problem(

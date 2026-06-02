@@ -616,7 +616,11 @@ def _restore_root_config(window: Any, config: Any) -> None:
 def _restore_root_uncertainty_options(window: Any, options: Any) -> None:
     if not isinstance(options, dict):
         options = {}
-    _set_combo_data(getattr(window, "root_uncertainty_method_combo", None), str(options.get("method") or "auto"))
+    method = str(options.get("method") or "auto")
+    combo = getattr(window, "root_uncertainty_method_combo", None)
+    if combo is not None and combo.findData(method) < 0 and combo.findText(method) < 0:
+        method = "auto"
+    _set_combo_data(combo, method)
     samples_widget = getattr(window, "root_monte_carlo_samples_spin", None)
     if samples_widget is not None and hasattr(samples_widget, "setValue"):
         samples_widget.setValue(_clamp_widget_int(samples_widget, _safe_int(options.get("monte_carlo_samples"), 2000)))
