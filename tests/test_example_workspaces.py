@@ -10,6 +10,9 @@ EXAMPLE_NAMES = {
     "statistics.datalab",
     "fitting.datalab",
     "quantum-defect-implicit.datalab",
+    "root-scalar-with-uncertainty.datalab",
+    "root-monte-carlo-uncertainty.datalab",
+    "root-batch-quadratic.datalab",
 }
 FORBIDDEN_STRATEGY_KEYS = {
     "implicit_strategy",
@@ -109,6 +112,83 @@ def test_example_generator_records_checked_in_source_files():
     assert _source_paths(manifests["statistics.datalab"]) == {"examples/statistics_weighted.txt"}
     assert _source_paths(manifests["fitting.datalab"]) == {"examples/fitting_powerlaw.txt"}
     assert _source_paths(manifests["quantum-defect-implicit.datalab"]) == set()
+    assert _source_paths(manifests["root-scalar-with-uncertainty.datalab"]) == set()
+    assert _source_paths(manifests["root-monte-carlo-uncertainty.datalab"]) == set()
+    assert _source_paths(manifests["root-batch-quadratic.datalab"]) == set()
+
+
+def test_root_uncertainty_example_workspaces_load() -> None:
+    from shared.workspace_io import read_workspace
+
+    names = {
+        "root-scalar-with-uncertainty.datalab",
+        "root-monte-carlo-uncertainty.datalab",
+        "root-batch-quadratic.datalab",
+    }
+    for name in names:
+        loaded = read_workspace(Path("examples/workspaces") / name)
+        workspace = loaded.manifest["workspace"]
+        assert workspace["current_mode"] == "root_solving"
+        assert "root_solving" in workspace["config"]
+
+
+def test_root_uncertainty_examples_store_expected_options() -> None:
+    from shared.workspace_io import read_workspace
+
+    scalar = read_workspace(Path("examples/workspaces/root-scalar-with-uncertainty.datalab")).manifest["workspace"]
+    monte_carlo = read_workspace(Path("examples/workspaces/root-monte-carlo-uncertainty.datalab")).manifest["workspace"]
+    batch = read_workspace(Path("examples/workspaces/root-batch-quadratic.datalab")).manifest["workspace"]
+
+    assert scalar["config"]["root_solving"]["uncertainty_options"]["method"] == "linear"
+    assert monte_carlo["config"]["root_solving"]["uncertainty_options"] == {
+        "method": "monte_carlo",
+        "monte_carlo_samples": 2000,
+        "monte_carlo_seed": "42",
+    }
+    assert batch["data"]["canonical_table"]["headers"] == ["A"]
+    assert batch["config"]["root_solving"]["equations"] == "x^2 - A"
+
+
+def test_root_uncertainty_example_snapshots_match_worker_payload() -> None:
+    from app_desktop.workers_core import RootSolvingJob, _execute_root_solving_job_payload
+    from shared.workspace_io import read_workspace
+
+    names = {
+        "root-scalar-with-uncertainty.datalab",
+        "root-monte-carlo-uncertainty.datalab",
+        "root-batch-quadratic.datalab",
+    }
+    for name in names:
+        workspace = read_workspace(Path("examples/workspaces") / name).manifest["workspace"]
+        root_config = workspace["config"]["root_solving"]
+        constants_config = root_config["constants"]
+        data_table = workspace["data"]["canonical_table"]
+        job = RootSolvingJob(
+            equations=tuple(
+                line.strip()
+                for line in str(root_config["equations"]).splitlines()
+                if line.strip()
+            ),
+            unknown_rows=tuple(dict(row) for row in root_config["unknowns"]),
+            data_headers=tuple(str(header) for header in data_table.get("headers") or ()),
+            data_rows=tuple(tuple(str(cell) for cell in row) for row in data_table.get("rows") or ()),
+            constants_enabled=bool(constants_config["enabled"]),
+            constants_rows=tuple(dict(row) for row in constants_config["rows"]),
+            constants_view=str(constants_config["view"]),
+            constants_text=str(constants_config["text"]),
+            mode=str(root_config["mode"]),
+            scan_config={},
+            precision=int(workspace["config"]["common"]["mpmath_precision"]),
+            display_digits=int(workspace["config"]["common"]["display_digits"]),
+            uncertainty_options=dict(root_config["uncertainty_options"]),
+        )
+
+        payload = _execute_root_solving_job_payload(job)
+        snapshot = workspace["result_snapshot"]
+        assert snapshot["markdown"] == payload["markdown"], name
+        assert snapshot["csv"]["headers"] == payload["csv_headers"], name
+        assert snapshot["csv"]["rows"] == payload["csv_rows"], name
+        assert snapshot["log"] == payload["log"], name
 
 
 def test_fitting_example_contains_required_variants():

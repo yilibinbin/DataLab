@@ -11,6 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from shared.workspace_io import write_workspace  # noqa: E402
 from shared.workspace_schema import compute_workspace_hash, sha256_bytes  # noqa: E402
+from app_desktop.workers_core import RootSolvingJob, _execute_root_solving_job_payload  # noqa: E402
 
 EXAMPLE_ROOT = PROJECT_ROOT / "examples" / "workspaces"
 DATASET_ROOT = PROJECT_ROOT / "examples"
@@ -22,6 +23,9 @@ EXAMPLE_NAMES = {
     "statistics.datalab",
     "fitting.datalab",
     "quantum-defect-implicit.datalab",
+    "root-scalar-with-uncertainty.datalab",
+    "root-monte-carlo-uncertainty.datalab",
+    "root-batch-quadratic.datalab",
 }
 
 
@@ -250,6 +254,24 @@ def _base_config() -> dict[str, Any]:
             "pade": {"m": 1, "n": 1},
             "log_axes": {"x": False, "y": False},
         },
+        "root_solving": {
+            "schema": 1,
+            "equations": "x^2 - C",
+            "mode": "scalar",
+            "unknowns": [{"name": "x", "initial": "2", "lower": "", "upper": ""}],
+            "constants": {
+                "enabled": True,
+                "view": "table",
+                "rows": [{"name": "C", "value": "4.0(2)"}],
+                "text": "C = 4.0(2)\n",
+                "numeric_mode": "uncertainty",
+            },
+            "uncertainty_options": {
+                "method": "linear",
+                "monte_carlo_samples": 2000,
+                "monte_carlo_seed": "",
+            },
+        },
     }
 
 
@@ -261,6 +283,8 @@ def _manifest(
     config: dict[str, Any],
     markdown: str,
     csv_rows: list[dict[str, str]],
+    csv_headers: list[str] | None = None,
+    log: str | None = None,
     constants: dict[str, Any] | None = None,
     examples: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -282,8 +306,8 @@ def _manifest(
         "snapshot_only": True,
         "stale": False,
         "markdown": markdown,
-        "log": "Generated example snapshot. Rerun from the stored data and configuration.",
-        "csv": {"headers": list(csv_rows[0].keys()) if csv_rows else [], "rows": csv_rows},
+        "log": log or "Generated example snapshot. Rerun from the stored data and configuration.",
+        "csv": {"headers": csv_headers or (list(csv_rows[0].keys()) if csv_rows else []), "rows": csv_rows},
         "latex_source": "",
         "plots": [],
     }
@@ -300,6 +324,49 @@ def _manifest(
     if examples:
         manifest["examples"] = examples
     return manifest
+
+
+def _root_payload(config: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    root_config = config["root_solving"]
+    constants_config = root_config["constants"]
+    table = data.get("canonical_table") or {}
+    job = RootSolvingJob(
+        equations=tuple(str(line).strip() for line in str(root_config["equations"]).splitlines() if str(line).strip()),
+        unknown_rows=tuple(dict(row) for row in root_config["unknowns"]),
+        data_headers=tuple(str(header) for header in table.get("headers") or ()),
+        data_rows=tuple(tuple(str(cell) for cell in row) for row in table.get("rows") or ()),
+        constants_enabled=bool(constants_config.get("enabled", False)),
+        constants_rows=tuple(dict(row) for row in constants_config.get("rows") or ()),
+        constants_view=str(constants_config.get("view") or "table"),
+        constants_text=str(constants_config.get("text") or ""),
+        mode=str(root_config.get("mode") or "auto"),
+        scan_config={},
+        precision=int(config.get("common", {}).get("mpmath_precision") or 16),
+        display_digits=int(config.get("common", {}).get("display_digits") or 10),
+        uncertainty_options=dict(root_config.get("uncertainty_options") or {"method": "auto"}),
+    )
+    return _execute_root_solving_job_payload(job)
+
+
+def _root_manifest(
+    *,
+    title: str,
+    data: dict[str, Any],
+    config: dict[str, Any],
+    examples: dict[str, Any],
+) -> dict[str, Any]:
+    payload = _root_payload(config, data)
+    return _manifest(
+        title=title,
+        mode="root_solving",
+        data=data,
+        config=config,
+        markdown=str(payload["markdown"]),
+        csv_rows=list(payload["csv_rows"]),
+        csv_headers=list(payload["csv_headers"]),
+        log=str(payload["log"]),
+        examples=examples,
+    )
 
 
 def build_examples() -> dict[str, dict[str, Any]]:
@@ -437,12 +504,61 @@ def build_examples() -> dict[str, dict[str, Any]]:
             "variants": ["self_consistent", "implicit", "quantum_defect", "ionization_energy", "weighted"],
         },
     )
+    root_scalar_config = _base_config()
+    root_scalar = _root_manifest(
+        title="Example - Root Solving With Linear Uncertainty",
+        data=_table_section_from_rows([], []),
+        config=root_scalar_config,
+        examples={"category": "root-solving", "source_files": [], "variants": ["scalar", "linear_uncertainty"]},
+    )
+
+    root_monte_carlo_config = _base_config()
+    root_monte_carlo_config["root_solving"]["uncertainty_options"] = {
+        "method": "monte_carlo",
+        "monte_carlo_samples": 2000,
+        "monte_carlo_seed": "42",
+    }
+    root_monte_carlo = _root_manifest(
+        title="Example - Root Solving With Monte Carlo Uncertainty",
+        data=_table_section_from_rows([], []),
+        config=root_monte_carlo_config,
+        examples={"category": "root-solving", "source_files": [], "variants": ["scalar", "monte_carlo"]},
+    )
+
+    root_batch_config = _base_config()
+    root_batch_config["root_solving"] = {
+        "schema": 1,
+        "equations": "x^2 - A",
+        "mode": "scalar",
+        "unknowns": [{"name": "x", "initial": "1", "lower": "", "upper": ""}],
+        "constants": {
+            "enabled": False,
+            "view": "table",
+            "rows": [],
+            "text": "",
+            "numeric_mode": "uncertainty",
+        },
+        "uncertainty_options": {
+            "method": "linear",
+            "monte_carlo_samples": 2000,
+            "monte_carlo_seed": "",
+        },
+    }
+    root_batch = _root_manifest(
+        title="Example - Batch Root Solving",
+        data=_table_section_from_rows(["A"], [["1.0(1)"], ["4.0(2)"], ["9.0(3)"]]),
+        config=root_batch_config,
+        examples={"category": "root-solving", "source_files": [], "variants": ["batch", "linear_uncertainty"]},
+    )
     return {
         "extrapolation.datalab": extrapolation,
         "error-propagation.datalab": error,
         "statistics.datalab": statistics,
         "fitting.datalab": fitting,
         "quantum-defect-implicit.datalab": quantum,
+        "root-scalar-with-uncertainty.datalab": root_scalar,
+        "root-monte-carlo-uncertainty.datalab": root_monte_carlo,
+        "root-batch-quadratic.datalab": root_batch,
     }
 
 

@@ -1208,7 +1208,7 @@ git commit -m "feat: expose root uncertainty controls"
 - Modify: `docs/METHODS_THEORY.zh.tex` if present
 - Test: `tests/test_example_workspaces.py`
 
-- [ ] **Step 1: Write RED example tests**
+- [x] **Step 1: Write RED example tests**
 
 Add:
 
@@ -1226,7 +1226,7 @@ def test_root_uncertainty_example_workspaces_load() -> None:
         assert "root_solving" in workspace["config"]
 ```
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run:
 
@@ -1236,7 +1236,7 @@ PATH=/Users/fanghao/miniconda3/bin:$PATH PYTHONPATH=. pytest -q tests/test_examp
 
 Expected: fails until the missing examples exist.
 
-- [ ] **Step 3: Add examples**
+- [x] **Step 3: Add examples**
 
 Create examples with these behaviors:
 
@@ -1246,7 +1246,7 @@ Create examples with these behaviors:
 
 Use the existing workspace writer helper instead of hand-writing zip archives.
 
-- [ ] **Step 4: Document method limits**
+- [x] **Step 4: Document method limits**
 
 In methods docs, add concise statements:
 
@@ -1254,7 +1254,7 @@ In methods docs, add concise statements:
 For implicit root solving, DataLab supports independent-input first-order propagation through the implicit function theorem. Monte Carlo propagation samples uncertain constants and data inputs, solves each sampled problem, and reports sample standard deviation. Scalar second-order propagation is local and intended for smooth scalar roots; for systems or branch-sensitive problems, Monte Carlo is preferred.
 ```
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run:
 
@@ -1266,7 +1266,7 @@ git diff --check
 
 Expected: all pass or only the known duplicate-manifest warning appears in pytest.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run:
 
