@@ -9,7 +9,7 @@ import sympy as sp
 
 from datalab_latex.expression_engine import safe_eval
 from root_solving.models import RootProblem
-from shared.expression_names import is_reserved_expression_name
+from shared.computation_inputs import SymbolCategories, classify_expression_symbols, validate_symbol_classification
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 from shared.symbolic_math import normalize_symbolic_expression, parse_symbolic_expression
 from shared.uncertainty import parse_numeric_value
@@ -162,16 +162,15 @@ def build_root_expression_system(problem: RootProblem) -> RootExpressionSystem:
     row_names = tuple(problem.row_values)
     known_names = () if row_names else tuple(known.name for known in problem.known_values)
     constant_names = tuple(problem.constants)
-    input_scope_label = "data column" if row_names else "known value"
     input_names = row_names or known_names
     _validate_scope_names(
         unknown_names=unknown_names,
         input_names=input_names,
-        input_scope_label=input_scope_label,
         constant_names=constant_names,
     )
     variables = (*unknown_names, *input_names, *constant_names)
-    nominal_inputs = _nominal_inputs(problem)
+    with precision_guard(problem.precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+        nominal_inputs = _nominal_inputs(problem)
     expressions = tuple(normalize_symbolic_expression(equation) for equation in problem.equations)
 
     symbolic_expressions: list[sp.Expr] = []
@@ -233,26 +232,17 @@ def _validate_scope_names(
     *,
     unknown_names: Sequence[str],
     input_names: Sequence[str],
-    input_scope_label: str,
     constant_names: Sequence[str],
 ) -> None:
-    seen: dict[str, str] = {}
-    for scope, names in (
-        ("unknown", unknown_names),
-        (input_scope_label, input_names),
-        ("constant", constant_names),
-    ):
-        local_seen: set[str] = set()
-        for name in names:
-            if is_reserved_expression_name(name):
-                raise ValueError(f"Name is reserved: {name}")
-            if name in local_seen:
-                raise ValueError(f"Duplicate {scope} name: {name}")
-            local_seen.add(name)
-            previous = seen.get(name)
-            if previous is not None:
-                raise ValueError(f"name collision: {name} appears in both {previous} and {scope}.")
-            seen[name] = scope
+    classification = classify_expression_symbols(
+        (),
+        SymbolCategories(
+            unknowns=tuple(unknown_names),
+            data_columns=tuple(input_names),
+            constants=tuple(constant_names),
+        ),
+    )
+    validate_symbol_classification(classification)
 
 
 def _validate_expression_scope(

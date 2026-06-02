@@ -1315,6 +1315,8 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         constants_state=constants_state,
         mode=job.mode,
         precision=job.precision,
+        scan_config=job.scan_config,
+        data_text_rows=job.data_rows,
     )
     markdown, csv_rows, csv_headers = render_root_batch_result(batch, display_digits=job.display_digits)
     headers = csv_headers or list(_ROOT_CSV_HEADERS)

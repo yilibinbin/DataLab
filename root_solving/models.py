@@ -34,6 +34,15 @@ class RootInputValue:
 
 
 @dataclass(frozen=True)
+class RootScanConfig:
+    enabled: bool = False
+    max_roots: int = 20
+    sample_count: int = 200
+    residual_tolerance: str = ""
+    cluster_tolerance: str = ""
+
+
+@dataclass(frozen=True)
 class RootProblem:
     equations: tuple[str, ...]
     unknowns: tuple[RootUnknown, ...]
@@ -42,6 +51,7 @@ class RootProblem:
     constants: Mapping[str, str] = field(default_factory=immutable_mapping)
     mode: RootMode = "auto"
     precision: int = 16
+    scan_config: RootScanConfig = field(default_factory=RootScanConfig)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "row_values", immutable_mapping(self.row_values))
@@ -71,18 +81,6 @@ class RootResult:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "details", immutable_mapping(self.details))
-
-
-@dataclass(frozen=True)
-class RootScanConfig:
-    enabled: bool = False
-    max_roots: int = 20
-    sample_count: int = 200
-    residual_tolerance: str = ""
-    cluster_tolerance: str = ""
-    singularity_guard: str = ""
-    retry_count: int = 2
-    include_complex: bool = False
 
 
 @dataclass(frozen=True)

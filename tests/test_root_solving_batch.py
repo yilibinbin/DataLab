@@ -88,6 +88,42 @@ def test_batch_scan_multiple_returns_multiple_roots_per_row() -> None:
     assert values_by_row == [[-2.0, 2.0], [-3.0, 3.0]]
 
 
+def test_batch_scan_multiple_applies_max_roots_scan_config() -> None:
+    constants_state = normalize_constants_state(enabled=False, rows=[], numeric_mode="uncertainty")
+
+    result = solve_root_batch(
+        equations=("x**2 - A",),
+        unknowns=(RootUnknown("x", initial="0", lower="-4", upper="4"),),
+        data_headers=("A",),
+        data_rows=((parse_uncertainty_format("4"),),),
+        constants_state=constants_state,
+        mode="scan_multiple",
+        precision=16,
+        scan_config={"max_roots": 1, "sample_count": 100},
+    )
+
+    assert result.rows[0].result is not None
+    assert len(result.rows[0].result.roots) == 1
+
+
+def test_batch_text_rows_ignore_empty_headers_without_aborting() -> None:
+    constants_state = normalize_constants_state(enabled=False, rows=[], numeric_mode="uncertainty")
+
+    result = solve_root_batch(
+        equations=("x - A",),
+        unknowns=(RootUnknown("x", initial="1", lower="", upper=""),),
+        data_headers=("A", ""),
+        data_rows=((parse_uncertainty_format("4"),),),
+        data_text_rows=(("4", ""),),
+        constants_state=constants_state,
+        mode="scalar",
+        precision=16,
+    )
+
+    assert result.rows[0].failure is None
+    assert result.rows[0].source_values == {"A": "4"}
+
+
 def test_row_failure_does_not_abort_other_rows() -> None:
     constants_state = normalize_constants_state(enabled=False, rows=[], numeric_mode="uncertainty")
     data_rows = (

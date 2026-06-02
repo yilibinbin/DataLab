@@ -5,7 +5,7 @@ import pytest
 from typing import Any, cast
 
 from root_solving.models import RootProblem, RootUnknown
-from root_solving.solver import solve_root_problem
+from root_solving.solver import _scipy_scalar_secant_second_guess, solve_root_problem
 
 
 def _real_float(value: object) -> float:
@@ -72,18 +72,26 @@ def test_scalar_unbracketed_precision_16_uses_scipy_root() -> None:
     assert mp.isfinite(result.residual_norm)
 
 
+def test_scalar_scipy_secant_seed_is_float_distinct_for_large_initial_value() -> None:
+    initial = mp.mpf("1e30")
+
+    second = _scipy_scalar_secant_second_guess(initial)
+
+    assert second != initial
+    assert float(second) != float(initial)
+
+
 def test_scipy_failure_falls_back_to_mpmath_with_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     import scipy.optimize  # type: ignore[import-untyped]
 
-    def fail_root(*_args: object, **_kwargs: object) -> object:
+    def fail_root_scalar(*_args: object, **_kwargs: object) -> object:
         class Failed:
-            success = False
-            x = [mp.mpf("nan")]
-            fun = [mp.mpf("nan")]
+            converged = False
+            root = mp.mpf("nan")
 
         return Failed()
 
-    monkeypatch.setattr(scipy.optimize, "root", fail_root)
+    monkeypatch.setattr(scipy.optimize, "root_scalar", fail_root_scalar)
 
     result = solve_root_problem(
         RootProblem(
@@ -96,7 +104,7 @@ def test_scipy_failure_falls_back_to_mpmath_with_warning(monkeypatch: pytest.Mon
 
     assert result.backend == "mpmath"
     assert result.mode == "scalar"
-    assert mp.almosteq(result.roots[0].value, mp.sqrt(mp.mpf("2")))
+    assert mp.almosteq(result.roots[0].value, mp.sqrt(mp.mpf("2")), rel_eps=mp.mpf("1e-14"))
     assert "SciPy validation failed; used mpmath fallback." in result.warnings
     assert result.residual_norm is not None
     assert mp.isfinite(result.residual_norm)

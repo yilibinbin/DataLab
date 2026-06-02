@@ -437,8 +437,8 @@ class ExtrapolationWindow(
 
         self._current_precision = mp.mp.dps
         self._fit_worker: FitWorker | None = None
-        self._root_worker: RootSolvingWorker | None = None
         self._calc_worker: CalcWorker | None = None
+        self._root_worker: RootSolvingWorker | None = None
         self._translations: list[tuple[object, str, str, str]] = []  # (widget, attr, zh, en)
         self._combo_translations: list[tuple[QComboBox, list[tuple[str, str, object]]]] = []
         self._lang_mode = _LANG_AUTO
@@ -1061,6 +1061,8 @@ class ExtrapolationWindow(
         if hasattr(self, "implicit_model_widget"):
             self.implicit_model_widget.setVisible(mode == "self_consistent")
         show_expr = mode != "self_consistent"
+        if hasattr(self, "fit_expr_title_widget"):
+            self.fit_expr_title_widget.setVisible(show_expr)
         self.fit_expr_edit.setVisible(show_expr)
         if show_expr:
             self.fit_expr_edit.setEnabled(True)
@@ -2152,6 +2154,16 @@ class ExtrapolationWindow(
                 self._reset_csv_data()
             elif kind == "fit_batches":
                 self._reformat_fit_batches(**payload)
+            elif kind == "root_solving":
+                markdown = str(payload.get("markdown", ""))
+                csv_rows = payload.get("csv_rows")
+                csv_headers = payload.get("csv_headers")
+                self._set_result_text(markdown)
+                if isinstance(csv_rows, list) and csv_rows:
+                    headers = [str(header) for header in csv_headers] if isinstance(csv_headers, list) else None
+                    self._set_csv_data(csv_rows, headers, suggestion="root_solving_results.csv")
+                else:
+                    self._reset_csv_data()
             else:
                 return
         except Exception:

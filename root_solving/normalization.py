@@ -9,12 +9,11 @@ from shared.computation_inputs import (
     classify_expression_symbols,
     validate_symbol_classification,
 )
-from shared.expression_names import is_reserved_expression_name
 from shared.input_normalization import IDENTIFIER_RE, ConstantsState, normalize_constants_state, string_value
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS
 from shared.uncertainty import UncertainValue, parse_uncertainty_format
 
-from root_solving.models import RootInputValue, RootMode, RootProblem, RootUnknown
+from root_solving.models import RootInputValue, RootMode, RootProblem, RootScanConfig, RootUnknown
 
 _ROOT_MODES: set[str] = {"auto", "scalar", "polynomial", "system", "scan_multiple"}
 _UNKNOWN_SOURCES: set[str] = {"manual", "detected"}
@@ -31,6 +30,7 @@ def normalize_root_problem(
     constants_text: str = "",
     mode: str = "auto",
     precision: Any = 16,
+    scan_config: Mapping[str, Any] | RootScanConfig | None = None,
 ) -> tuple[RootProblem, dict[str, UncertainValue]]:
     clean_equations = tuple(str(equation).strip() for equation in equations if str(equation).strip())
     if not clean_equations:
@@ -63,6 +63,7 @@ def normalize_root_problem(
         constants=dict(constants),
         mode=cast(RootMode, normalized_mode),
         precision=_clamp_precision(precision),
+        scan_config=_normalize_scan_config(scan_config),
     )
     return problem, uncertain_inputs
 
@@ -75,6 +76,7 @@ def normalize_root_problem_from_context(
     constants_state: ConstantsState,
     mode: str = "auto",
     precision: Any = 16,
+    scan_config: Mapping[str, Any] | RootScanConfig | None = None,
 ) -> RootProblem:
     clean_equations = tuple(str(equation).strip() for equation in equations if str(equation).strip())
     if not clean_equations:
@@ -105,6 +107,7 @@ def normalize_root_problem_from_context(
         constants=dict(constants),
         mode=cast(RootMode, normalized_mode),
         precision=_clamp_precision(precision),
+        scan_config=_normalize_scan_config(scan_config),
     )
 
 
@@ -178,32 +181,15 @@ def _validate_scope(
     known_values: Iterable[RootInputValue],
     constants: Mapping[str, str],
 ) -> None:
-    seen: dict[str, str] = {}
-    for scope, names in (
-        ("unknown", [unknown.name for unknown in unknowns]),
-        ("known value", [known.name for known in known_values]),
-        ("constant", list(constants)),
-    ):
-        local_seen: set[str] = set()
-        for name in names:
-            if is_reserved_expression_name(name):
-                raise ValueError(_dual_msg(f"名称是保留字：{name}", f"Name is reserved: {name}"))
-            if name in local_seen:
-                if scope == "unknown":
-                    raise ValueError(_dual_msg(f"未知量重复：{name}", f"Duplicate unknown: {name}"))
-                if scope == "known value":
-                    raise ValueError(_dual_msg(f"已知量重复：{name}", f"Duplicate known value: {name}"))
-                raise ValueError(_dual_msg(f"常数名重复：{name}", f"Duplicate constant name: {name}"))
-            local_seen.add(name)
-            previous = seen.get(name)
-            if previous is not None:
-                raise ValueError(
-                    _dual_msg(
-                        f"名称冲突：{name} 同时出现在 {previous} 和 {scope}。",
-                        f"name collision: {name} appears in both {previous} and {scope}.",
-                    )
-                )
-            seen[name] = scope
+    classification = classify_expression_symbols(
+        (),
+        SymbolCategories(
+            unknowns=tuple(unknown.name for unknown in unknowns),
+            data_columns=tuple(known.name for known in known_values),
+            constants=tuple(constants),
+        ),
+    )
+    validate_symbol_classification(classification)
 
 
 def _clamp_precision(value: Any) -> int:
@@ -213,3 +199,25 @@ def _clamp_precision(value: Any) -> int:
         precision = 16
     clamped: int = max(MIN_MPMATH_DPS, min(MAX_MPMATH_DPS, precision))
     return clamped
+
+
+def _normalize_scan_config(value: Mapping[str, Any] | RootScanConfig | None) -> RootScanConfig:
+    if isinstance(value, RootScanConfig):
+        return value
+    if not value:
+        return RootScanConfig()
+    return RootScanConfig(
+        enabled=bool(value.get("enabled", False)),
+        max_roots=_clamp_positive_int(value.get("max_roots"), default=20, minimum=1, maximum=10000),
+        sample_count=_clamp_positive_int(value.get("sample_count"), default=200, minimum=2, maximum=100000),
+        residual_tolerance=string_value(value.get("residual_tolerance")).strip(),
+        cluster_tolerance=string_value(value.get("cluster_tolerance")).strip(),
+    )
+
+
+def _clamp_positive_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError, OverflowError):
+        numeric = default
+    return max(minimum, min(maximum, numeric))

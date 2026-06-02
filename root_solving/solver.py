@@ -8,7 +8,7 @@ from typing import Any
 from mpmath import mp
 
 from root_solving.expression import RootExpressionSystem, build_root_expression_system
-from root_solving.models import RootBackend, RootMode, RootProblem, RootUnknown, RootValue, RootResult
+from root_solving.models import RootBackend, RootMode, RootProblem, RootScanConfig, RootUnknown, RootValue, RootResult
 from root_solving.uncertainty import attach_linear_uncertainty_with_system
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 from shared.uncertainty import UncertainValue
@@ -132,14 +132,20 @@ def _solve_scipy(problem: RootProblem, system: RootExpressionSystem, mode: RootM
             return _Candidate((_finite_mpf(str(result.root), "SciPy scalar root"),), "scipy")
 
         initial = _initial_values(problem)[0]
+        second = _scipy_scalar_secant_second_guess(initial)
 
-        def scalar_vector(values: Sequence[float]) -> list[float]:
-            return [float(system.evaluate({unknown.name: mp.mpf(str(values[0]))}))]
+        def scalar_float(value: float) -> float:
+            return float(system.evaluate({unknown.name: mp.mpf(str(value))}))
 
-        result = scipy.optimize.root(scalar_vector, [float(initial)])
-        if not bool(getattr(result, "success", False)):
+        result = scipy.optimize.root_scalar(
+            scalar_float,
+            x0=float(initial),
+            x1=float(second),
+            method="secant",
+        )
+        if not result.converged:
             raise ValueError("SciPy scalar root solve did not converge.")
-        return _Candidate((_finite_mpf(str(result.x[0]), "SciPy scalar root"),), "scipy")
+        return _Candidate((_finite_mpf(str(result.root), "SciPy scalar root"),), "scipy")
 
     if mode != "system":
         raise ValueError(f"SciPy mode is not supported here: {mode}")
@@ -176,7 +182,8 @@ def _solve_scan_multiple(problem: RootProblem, system: RootExpressionSystem) -> 
         if lower >= upper:
             raise ValueError("scan_multiple lower bound must be less than upper bound.")
 
-        sample_count = 200
+        scan_config = problem.scan_config
+        sample_count = _scan_sample_count(scan_config)
         roots: list[mp.mpf] = []
         samples: list[tuple[mp.mpf, mp.mpf]] = []
 
@@ -184,7 +191,7 @@ def _solve_scan_multiple(problem: RootProblem, system: RootExpressionSystem) -> 
             x_value = lower + (upper - lower) * index / sample_count
             y_value = _evaluate_scan_point(system, unknown.name, x_value)
             samples.append((x_value, y_value))
-            if _scan_candidate_is_valid(system, unknown.name, x_value, problem.precision):
+            if _scan_candidate_is_valid(system, unknown.name, x_value, problem.precision, scan_config):
                 roots.append(x_value)
 
         for (left_x, left_y), (right_x, right_y) in zip(samples, samples[1:], strict=False):
@@ -201,14 +208,20 @@ def _solve_scan_multiple(problem: RootProblem, system: RootExpressionSystem) -> 
                 continue
             if abs(center_y) <= abs(left_y) and abs(center_y) <= abs(right_y):
                 candidate = _refine_abs_minimum(system, unknown.name, left_x, right_x, problem.precision)
-                if _scan_candidate_is_valid(system, unknown.name, candidate, problem.precision):
+                if _scan_candidate_is_valid(system, unknown.name, candidate, problem.precision, scan_config):
                     roots.append(candidate)
 
-        unique_roots = _deduplicate_roots(tuple(roots), tolerance=max(mp.sqrt(mp.eps), _scan_residual_tolerance(system, problem.precision)))
+        unique_roots = _deduplicate_roots(
+            tuple(roots),
+            tolerance=_scan_cluster_tolerance(system, problem.precision, scan_config),
+        )
         if not unique_roots:
             raise ValueError("scan_multiple found no roots in the scan range.")
+        max_roots = _scan_max_roots(scan_config)
+        if len(unique_roots) > max_roots:
+            unique_roots = unique_roots[:max_roots]
         candidate = _Candidate(unique_roots, "scipy" if problem.precision <= 16 else "mpmath")
-        _validate_candidate(system, candidate.values, "scan_multiple", problem.precision)
+        _validate_candidate(system, candidate.values, "scan_multiple", problem.precision, scan_config)
         return candidate
 
 
@@ -305,9 +318,10 @@ def _scan_candidate_is_valid(
     unknown_name: str,
     value: mp.mpf,
     precision: int,
+    scan_config: RootScanConfig,
 ) -> bool:
     residual = abs(_evaluate_scan_point(system, unknown_name, value))
-    return bool(mp.isfinite(residual) and residual <= _scan_residual_tolerance(system, precision))
+    return bool(mp.isfinite(residual) and residual <= _scan_residual_tolerance(system, precision, scan_config))
 
 
 def _deduplicate_roots(values: Sequence[mp.mpf], *, tolerance: mp.mpf) -> tuple[mp.mpf, ...]:
@@ -361,11 +375,16 @@ def _validate_candidate(
     values: Sequence[mp.mpf | complex],
     mode: RootMode,
     precision: int,
+    scan_config: RootScanConfig | None = None,
 ) -> None:
     if any(not _is_finite_number(value) for value in values):
         raise ValueError("Solver returned a non-finite root.")
     residual_norm = _residual_norm(system, values, mode)
-    tolerance = _scan_residual_tolerance(system, precision) if mode == "scan_multiple" else _residual_tolerance(system, precision)
+    tolerance = (
+        _scan_residual_tolerance(system, precision, scan_config or RootScanConfig())
+        if mode == "scan_multiple"
+        else _residual_tolerance(system, precision)
+    )
     if residual_norm > tolerance:
         raise ValueError("Solver residual exceeded tolerance.")
 
@@ -377,14 +396,46 @@ def _residual_tolerance(system: RootExpressionSystem, precision: int) -> mp.mpf:
         return mp.mpf(str(max(1e-10, 100 * math.sqrt(float(mp.eps))))) * target_scale
 
 
-def _scan_residual_tolerance(system: RootExpressionSystem, precision: int) -> mp.mpf:
+def _scan_residual_tolerance(
+    system: RootExpressionSystem,
+    precision: int,
+    scan_config: RootScanConfig | None = None,
+) -> mp.mpf:
     with precision_guard(precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+        if scan_config and scan_config.residual_tolerance:
+            return _positive_config_mpf(scan_config.residual_tolerance, "scan residual tolerance")
         target_scale = max((abs(value) for value in system.nominal_inputs.values()), default=mp.mpf("1"))
         target_scale = max(mp.mpf("1"), target_scale)
         if precision <= 16:
             return mp.mpf("1e-10") * target_scale
         digits = max(12, min(precision - 8, precision // 2))
         return mp.power(10, -digits) * target_scale
+
+
+def _scan_cluster_tolerance(
+    system: RootExpressionSystem,
+    precision: int,
+    scan_config: RootScanConfig,
+) -> mp.mpf:
+    with precision_guard(precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+        if scan_config.cluster_tolerance:
+            return _positive_config_mpf(scan_config.cluster_tolerance, "scan cluster tolerance")
+        return max(mp.sqrt(mp.eps), _scan_residual_tolerance(system, precision, scan_config))
+
+
+def _scan_sample_count(scan_config: RootScanConfig) -> int:
+    return max(2, min(100000, int(scan_config.sample_count)))
+
+
+def _scan_max_roots(scan_config: RootScanConfig) -> int:
+    return max(1, min(10000, int(scan_config.max_roots)))
+
+
+def _positive_config_mpf(value: str, label: str) -> mp.mpf:
+    numeric = _finite_mpf(value, label)
+    if numeric <= 0:
+        raise ValueError(f"{label} must be positive.")
+    return numeric
 
 
 def _residual_norm(system: RootExpressionSystem, values: Sequence[mp.mpf | mp.mpc | complex], mode: RootMode) -> mp.mpf:
@@ -449,6 +500,21 @@ def _scalar_findroot_guesses(unknown: RootUnknown, initial: mp.mpf) -> tuple[mp.
     if unknown.lower and unknown.upper:
         return (_parse_mpf(unknown.lower, "lower bound"), _parse_mpf(unknown.upper, "upper bound"))
     return (initial,)
+
+
+def _scipy_scalar_secant_second_guess(initial: mp.mpf) -> mp.mpf:
+    with precision_guard(16, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+        scale = max(mp.mpf("1"), abs(initial))
+        step = mp.mpf("1e-6") * scale
+        for _ in range(12):
+            candidate = initial + step
+            if float(candidate) != float(initial):
+                return candidate
+            step *= 10
+        candidate = initial + scale
+        if float(candidate) == float(initial):
+            raise ValueError("Unable to construct a distinct SciPy secant seed.")
+        return candidate
 
 
 def _polynomial_coefficients(system: RootExpressionSystem) -> tuple[mp.mpf, ...]:

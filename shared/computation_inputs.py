@@ -45,8 +45,20 @@ class SymbolCategories:
     constants: tuple[str, ...] = ()
     parameters: tuple[str, ...] = ()
     targets: tuple[str, ...] = ()
+    duplicates: tuple[tuple[str, str], ...] = field(default=(), init=False, repr=False)
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "duplicates",
+            (
+                *_duplicate_names("unknown", self.unknowns),
+                *_duplicate_names("data", self.data_columns),
+                *_duplicate_names("constant", self.constants),
+                *_duplicate_names("parameter", self.parameters),
+                *_duplicate_names("target", self.targets),
+            ),
+        )
         object.__setattr__(self, "unknowns", _normalize_names(self.unknowns))
         object.__setattr__(self, "data_columns", _normalize_names(self.data_columns))
         object.__setattr__(self, "constants", _normalize_names(self.constants))
@@ -66,6 +78,7 @@ class SymbolClassification:
     used_symbols: tuple[str, ...]
     missing_symbols: tuple[str, ...] = ()
     collisions: tuple[SymbolIssue, ...] = ()
+    duplicates: tuple[SymbolIssue, ...] = ()
     reserved_conflicts: tuple[SymbolIssue, ...] = ()
     categories: SymbolCategories = field(default_factory=SymbolCategories)
 
@@ -87,7 +100,7 @@ class SymbolClassification:
             SymbolIssue("missing", name, f"expression symbols are not defined: {name}")
             for name in self.missing_symbols
         )
-        return self.collisions + missing + self.reserved_conflicts
+        return self.duplicates + self.collisions + missing + self.reserved_conflicts
 
 
 @dataclass(frozen=True)
@@ -140,11 +153,19 @@ def classify_expression_symbols(
             name,
             _dual_msg(
                 f"名称冲突：{name} 同时出现在 {', '.join(scopes)}。",
-                f"symbol collision: {name} appears in {', '.join(scopes)}.",
+                f"name collision: {name} appears in {', '.join(scopes)}.",
             ),
         )
         for name, scopes in sorted(category_map.items())
-        if len(scopes) > 1
+        if len(set(scopes)) > 1
+    )
+    duplicates = tuple(
+        SymbolIssue(
+            "duplicate",
+            name,
+            _dual_msg(f"{scope} 名称重复：{name}", f"Duplicate {scope}: {name}"),
+        )
+        for scope, name in categories.duplicates
     )
     reserved_conflicts = tuple(
         SymbolIssue(
@@ -160,12 +181,15 @@ def classify_expression_symbols(
         used_symbols=used_symbols,
         missing_symbols=missing_symbols,
         collisions=collisions,
+        duplicates=duplicates,
         reserved_conflicts=reserved_conflicts,
         categories=categories,
     )
 
 
 def validate_symbol_classification(classification: SymbolClassification) -> None:
+    if classification.duplicates:
+        raise ValueError(classification.duplicates[0].message)
     if classification.collisions:
         raise ValueError(classification.collisions[0].message)
     if classification.reserved_conflicts:
@@ -268,11 +292,27 @@ def _normalize_names(names: Iterable[str]) -> tuple[str, ...]:
     seen: set[str] = set()
     for name in names:
         clean = str(name).strip()
-        if not clean or clean in seen:
+        if not clean:
+            continue
+        if clean in seen:
             continue
         seen.add(clean)
         normalized.append(clean)
     return tuple(normalized)
+
+
+def _duplicate_names(scope: str, names: Iterable[str]) -> tuple[tuple[str, str], ...]:
+    seen: set[str] = set()
+    duplicates: list[tuple[str, str]] = []
+    for name in names:
+        clean = str(name).strip()
+        if not clean:
+            continue
+        if clean in seen:
+            duplicates.append((scope, clean))
+            continue
+        seen.add(clean)
+    return tuple(duplicates)
 
 
 def _as_uncertain_value(value: UncertainValue | object) -> UncertainValue:

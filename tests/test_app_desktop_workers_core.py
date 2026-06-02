@@ -187,6 +187,30 @@ def test_execute_root_solving_job_payload_returns_markdown_csv_and_log() -> None
     assert "root solving completed" in log
 
 
+def test_execute_root_solving_job_payload_preserves_original_data_cell_precision() -> None:
+    original = "1.0000000000000000000000000000000000000000000000001"
+    job = RootSolvingJob(
+        equations=("x - A",),
+        unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        data_headers=("A",),
+        data_rows=((original,),),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=80,
+        display_digits=80,
+    )
+
+    payload = _execute_root_solving_job_payload(job)
+
+    csv_rows = cast(list[dict[str, str]], payload["csv_rows"])
+    assert csv_rows[0]["A"] == original
+    assert csv_rows[0]["value"].startswith(original)
+
+
 def test_root_solving_subprocess_uses_killable_runner_and_forwards_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
