@@ -16,6 +16,7 @@ from shared.uncertainty import parse_numeric_value, parse_uncertainty_format
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PARAMETER_FIELDS = ("name", "initial", "fixed", "min", "max")
+PARAMETER_PERSISTED_FIELDS = (*PARAMETER_FIELDS, "source")
 CONSTANT_FIELDS = ("name", "value")
 
 
@@ -193,7 +194,11 @@ def normalize_parameter_rows(
     elif rows is None:
         clean_rows = []
     else:
-        clean_rows = coerce_string_rows(rows, PARAMETER_FIELDS, source="Parameter rows")
+        clean_rows = coerce_string_rows(rows, PARAMETER_PERSISTED_FIELDS, source="Parameter rows")
+    clean_rows = [
+        {key: value for key, value in row.items() if key != "source" or value}
+        for row in clean_rows
+    ]
     return ParameterRowsState(
         rows=_freeze_rows(clean_rows),
         orphan_names=frozenset(str(name).strip() for name in orphan_names if str(name).strip()),

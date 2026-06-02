@@ -66,6 +66,18 @@ def test_parameter_normalization_preserves_zero_values_from_legacy_dict() -> Non
     }
 
 
+def test_parameter_normalization_preserves_detected_source_metadata() -> None:
+    state = normalize_parameter_rows(
+        [{"name": "a", "initial": "1", "source": "detected"}],
+        constraints_enabled=False,
+    )
+
+    assert state.persisted_rows() == [
+        {"name": "a", "initial": "1", "fixed": "", "min": "", "max": "", "source": "detected"}
+    ]
+    assert state.compute_config(validate=True) == {"a": {"initial": "1"}}
+
+
 def test_parameter_normalization_rejects_malformed_legacy_rows() -> None:
     malformed_rows: list[Any] = [{"name": "a", "initial": "1"}, "bad-row"]
 
