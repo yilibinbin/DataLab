@@ -298,6 +298,38 @@ def _implicit_constants_rows(window: Any) -> list[dict[str, str]]:
     return _normalize_workspace_constant_rows(editor.rows())
 
 
+def _root_unknown_rows(window: Any) -> list[dict[str, str]]:
+    table = getattr(window, "root_unknowns_table", None)
+    if table is None or not hasattr(table, "rows"):
+        return []
+    rows: list[dict[str, str]] = []
+    for row in table.rows():
+        if not isinstance(row, dict):
+            continue
+        clean = {
+            "name": str(row.get("name") or ""),
+            "initial": str(row.get("initial") or ""),
+            "lower": str(row.get("lower") or ""),
+            "upper": str(row.get("upper") or ""),
+        }
+        source = str(row.get("source") or "").strip()
+        if source:
+            clean["source"] = source
+        if any(value for key, value in clean.items() if key != "source"):
+            rows.append(clean)
+    return rows
+
+
+def _capture_root_config(window: Any) -> dict[str, Any]:
+    return {
+        "schema": 1,
+        "equations": _text(getattr(window, "root_equations_edit", None)),
+        "mode": _combo_data(getattr(window, "root_mode_combo", None), "auto"),
+        "unknowns": _root_unknown_rows(window),
+        "constants": _constants_editor_state(getattr(window, "root_constants_editor", None)),
+    }
+
+
 def _variable_rows(window: Any) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for name, column, _widget in getattr(window, "variable_rows", []) or []:
@@ -534,6 +566,30 @@ def _restore_implicit_config(window: Any, config: Any, fitting: dict[str, Any] |
         window._reset_implicit_constants_rows(_implicit_constants_to_rows(constants))
 
 
+def _restore_root_config(window: Any, config: Any) -> None:
+    if not isinstance(config, dict):
+        return
+    _set_text(getattr(window, "root_equations_edit", None), str(config.get("equations") or ""))
+    _set_combo_data(getattr(window, "root_mode_combo", None), str(config.get("mode") or "auto"))
+    table = getattr(window, "root_unknowns_table", None)
+    if table is not None and hasattr(table, "set_rows"):
+        rows = config.get("unknowns")
+        if isinstance(rows, list):
+            clean_rows = [
+                {
+                    "name": str(row.get("name") or ""),
+                    "initial": str(row.get("initial") or ""),
+                    "lower": str(row.get("lower") or ""),
+                    "upper": str(row.get("upper") or ""),
+                    **({"source": str(row.get("source"))} if str(row.get("source") or "").strip() else {}),
+                }
+                for row in rows
+                if isinstance(row, dict)
+            ]
+            table.set_rows(clean_rows)
+    _restore_constants_editor_state(getattr(window, "root_constants_editor", None), config.get("constants"))
+
+
 def _legacy_parameter_text_rows(parameter_text: Any) -> list[dict[str, str]]:
     if not isinstance(parameter_text, str) or not parameter_text.strip():
         return []
@@ -601,6 +657,7 @@ def _capture_config(window: Any) -> dict[str, Any]:
             "sample": _checked(getattr(window, "stats_sample_checkbox", None)),
             "weighted_variance": _checked(getattr(window, "stats_weight_variance_checkbox", None)),
         },
+        "root_solving": _capture_root_config(window),
         "fitting": {
             "model": fitting_model,
             "expression": _text(getattr(window, "fit_expr_edit", None)),
@@ -832,6 +889,7 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
     _restore_param_rows(window, parameter_rows, fitting.get("parameter_orphans"))
     _restore_constants_editor_state(getattr(window, "custom_constants_editor", None), fitting.get("custom_constants"))
     _restore_implicit_config(window, fitting.get("implicit"), fitting)
+    _restore_root_config(window, config.get("root_solving"))
 
     snapshot = workspace.get("result_snapshot") or {"present": False}
     if snapshot.get("present"):

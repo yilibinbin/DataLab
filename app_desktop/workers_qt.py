@@ -20,6 +20,7 @@ from .workers_core import (
     FitBatchTask,
     FitJob,
     FitResultPayload,
+    RootSolvingJob,
     _execute_calc_job,
     _safe_read_text,
 )
@@ -396,6 +397,43 @@ class FitWorker(QThread):
         return workers_core._execute_fit_job_payload(self.job)
 
 
+class RootSolvingWorker(QThread):
+    finished_ok = Signal(object)
+    failed = Signal(str)
+    log_ready = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, job: RootSolvingJob):
+        super().__init__()
+        self.job = job
+        self._stop_requested = False
+
+    def request_stop(self):
+        self._stop_requested = True
+
+    def run(self):
+        try:
+            payload = self._run_root_solving()
+            if self._stop_requested:
+                self.cancelled.emit()
+                return
+            self.finished_ok.emit(payload)
+        except InterruptedError:
+            self.cancelled.emit()
+        except Exception as exc:  # noqa: BLE001
+            if self._stop_requested:
+                self.cancelled.emit()
+                return
+            self.failed.emit(str(exc))
+
+    def _run_root_solving(self) -> dict[str, object]:
+        return workers_core._execute_root_solving_job_payload_subprocess(
+            self.job,
+            timeout_seconds=workers_core.ROOT_SOLVING_SUBPROCESS_TIMEOUT_SECONDS,
+            should_cancel=lambda: self._stop_requested,
+        )
+
+
 class FitBatchWorker(QThread):
     finished_ok = Signal(object)
     failed = Signal(str)
@@ -515,4 +553,5 @@ __all__ = [
     "CalcWorker",
     "FitBatchWorker",
     "FitWorker",
+    "RootSolvingWorker",
 ]

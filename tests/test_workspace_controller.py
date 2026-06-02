@@ -210,6 +210,63 @@ def test_workspace_preserves_rendered_result_markdown_table(qtbot) -> None:
     assert "| Parameter |" not in target.result_edit.toPlainText()
 
 
+def test_workspace_preserves_root_solving_config(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "root_solving")
+    source.root_equations_edit.setPlainText("x**2 - A - C")
+    _set_combo_data(source.root_mode_combo, "scan_multiple")
+    source.root_unknowns_table.set_rows(
+        [
+            {"name": "x", "initial": "1", "lower": "-3", "upper": "3", "source": "detected"},
+            {"name": "manual", "initial": "0", "lower": "", "upper": ""},
+        ]
+    )
+    source.root_constants_editor.setChecked(True)
+    source.root_constants_editor.set_rows([{"name": "C", "value": "1.0(2)"}])
+    source.root_constants_editor.set_text("# root draft\nC = 1.0(2)\n")
+    source.root_constants_editor.use_text_view(False)
+
+    bundle = capture_workspace(source, title="root")
+    root_config = bundle.manifest["workspace"]["config"]["root_solving"]
+
+    assert root_config == {
+        "schema": 1,
+        "equations": "x**2 - A - C",
+        "mode": "scan_multiple",
+        "unknowns": [
+            {"name": "x", "initial": "1", "lower": "-3", "upper": "3", "source": "detected"},
+            {"name": "manual", "initial": "0", "lower": "", "upper": ""},
+        ],
+        "constants": {
+            "enabled": True,
+            "view": "table",
+            "rows": [{"name": "C", "value": "1.0(2)"}],
+            "text": "# root draft\nC = 1.0(2)\n",
+            "numeric_mode": "uncertainty",
+        },
+    }
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.mode_combo.currentData() == "root_solving"
+    assert target.root_equations_edit.toPlainText() == "x**2 - A - C"
+    assert target.root_mode_combo.currentData() == "scan_multiple"
+    assert target.root_unknowns_table.rows() == [
+        {"name": "x", "initial": "1", "lower": "-3", "upper": "3", "source": "detected"},
+        {"name": "manual", "initial": "0", "lower": "", "upper": ""},
+    ]
+    assert target.root_constants_editor.isChecked() is True
+    assert target.root_constants_editor.using_text_view() is False
+    assert target.root_constants_editor.rows() == [{"name": "C", "value": "1.0(2)"}]
+    assert target.root_constants_editor.raw_text() == "# root draft\nC = 1.0(2)\n"
+
+
 def test_workspace_capture_ignores_stale_result_markdown_cache(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace

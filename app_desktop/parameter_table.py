@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any
+from typing import Any, cast
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
+from app_desktop.detected_rows_table import DetectedRowsController, SOURCE_DETECTED
 from app_desktop.fitting_input_normalization import ParameterRowsState, normalize_parameter_rows
 
 _COLUMNS = ("name", "initial", "fixed", "min", "max")
@@ -28,8 +29,15 @@ class ParameterTable(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         self.table_view = QTableWidget(self._min_rows, len(_COLUMNS))
         self.table_view.setHorizontalHeaderLabels(list(_HEADERS))
-        self.table_view.itemChanged.connect(self._emit_changed)
+        self.table_view.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self.table_view)
+        self.detected_rows_controller = DetectedRowsController(
+            self.table_view,
+            columns=_COLUMNS,
+            name_column="name",
+            min_rows=self._min_rows,
+            on_changed=self._emit_changed,
+        )
         self.set_constraints_enabled(False)
 
     def set_constraints_enabled(self, enabled: bool) -> None:
@@ -49,11 +57,14 @@ class ParameterTable(QWidget):
                 for column, key in enumerate(_COLUMNS)
             }
             if any(row.values()):
+                source = self.detected_rows_controller.row_source(row_index)
+                if source == SOURCE_DETECTED:
+                    row["source"] = source
                 rows.append(row)
         return rows
 
     def compute_rows(self) -> list[dict[str, str]]:
-        return self._normalized_state().compute_rows()
+        return cast("list[dict[str, str]]", self._normalized_state().compute_rows())
 
     def orphan_names(self) -> set[str]:
         existing = {row["name"].strip() for row in self.rows() if row["name"].strip()}
@@ -75,6 +86,10 @@ class ParameterTable(QWidget):
         self.table_view.insertRow(row_index)
         for column, key in enumerate(_COLUMNS):
             self.table_view.setItem(row_index, column, QTableWidgetItem(self._string_value(row_values.get(key))))
+        self.detected_rows_controller.set_row_source(
+            row_index,
+            self.detected_rows_controller.source_value(row_values.get("source")),
+        )
         self.table_view.clearSelection()
         self.table_view.selectRow(row_index)
         self.table_view.setCurrentCell(row_index, 0)
@@ -121,33 +136,20 @@ class ParameterTable(QWidget):
         else:
             self.set_rows([{"name": name, "initial": ""} for name in names])
 
-    def set_detected_names(self, names: Sequence[str]) -> None:
-        all_rows = self._all_rows()
-        existing = {row["name"]: row for row in all_rows if row["name"]}
-        seen: set[str] = set()
-        detected_rows: list[dict[str, str]] = []
-        for raw_name in names:
-            name = str(raw_name).strip()
-            if not name or name in seen:
-                continue
-            seen.add(name)
-            detected_rows.append(
-                existing.get(
-                    name,
-                    {"name": name, "initial": "", "fixed": "", "min": "", "max": ""},
-                )
-            )
-        orphan_rows = [
-            row
-            for row in all_rows
-            if any(row.values()) and (not row["name"] or row["name"] not in seen)
-        ]
-        empty_rows = [row for row in all_rows if not any(row.values())]
-        self._set_table_rows(detected_rows + orphan_rows + empty_rows)
-        self.mark_orphans(seen)
+    def set_detected_names(self, names: Sequence[str], *, keep_orphans: bool = True) -> None:
+        self._syncing = True
+        try:
+            seen = self.detected_rows_controller.set_detected_names(names, keep_orphans=keep_orphans)
+        finally:
+            self._syncing = False
+        if keep_orphans:
+            self.mark_orphans(seen)
+        else:
+            self._orphan_names = set()
+            self._emit_changed()
 
     def parameter_config(self, *, validate: bool = True) -> dict[str, dict[str, str]]:
-        return self._normalized_state().compute_config(validate=validate)
+        return cast("dict[str, dict[str, str]]", self._normalized_state().compute_config(validate=validate))
 
     def rowCount(self) -> int:  # noqa: N802 - compatibility with QTableWidget tests
         return self.table_view.rowCount()
@@ -174,6 +176,10 @@ class ParameterTable(QWidget):
             for row_index, row in enumerate(rows):
                 for column, key in enumerate(_COLUMNS):
                     self.table_view.setItem(row_index, column, QTableWidgetItem(row.get(key, "")))
+                self.detected_rows_controller.set_row_source(
+                    row_index,
+                    self.detected_rows_controller.source_value(row.get("source")),
+                )
         finally:
             self._syncing = False
         self._emit_changed()
@@ -183,13 +189,7 @@ class ParameterTable(QWidget):
         return item.text().strip() if item else ""
 
     def _all_rows(self) -> list[dict[str, str]]:
-        return [
-            {
-                key: self._cell_text(row_index, column)
-                for column, key in enumerate(_COLUMNS)
-            }
-            for row_index in range(self.table_view.rowCount())
-        ]
+        return self.detected_rows_controller.all_rows()
 
     def _normalized_state(self) -> ParameterRowsState:
         return normalize_parameter_rows(
@@ -207,3 +207,8 @@ class ParameterTable(QWidget):
     def _emit_changed(self, *_args: object) -> None:
         if not self._syncing:
             self.changed.emit()
+
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        if not self._syncing:
+            self.detected_rows_controller.mark_row_manual(item.row())
+        self._emit_changed()

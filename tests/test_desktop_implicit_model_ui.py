@@ -82,6 +82,22 @@ def test_default_implicit_config_uses_x_as_variable_not_parameter(window) -> Non
     assert "u" not in config["parameter_names"]
 
 
+def test_implicit_detect_defaults_to_x_when_no_variable_rows(window) -> None:
+    _select_model(window, "self_consistent")
+    window.variable_rows = []
+    window.implicit_variable_edit.setText("u")
+    window.implicit_equation_edit.setPlainText("a + b*x + c*u")
+    window.implicit_output_edit.setPlainText("u + d*x")
+    window.implicit_params_table.set_rows([])
+
+    window._refresh_implicit_parameter_rows()
+
+    names = [row["name"] for row in window.implicit_params_table.rows()]
+    assert names == ["a", "b", "c", "d"]
+    assert "x" not in names
+    assert "u" not in names
+
+
 def test_explicit_physical_constants_are_visible_not_builtin(window) -> None:
     _select_model(window, "self_consistent")
 
@@ -349,6 +365,27 @@ def test_implicit_parameter_detection_ignores_custom_parameter_table(window) -> 
         if table.item(row, 0) is not None and table.item(row, 0).text() not in table.orphan_names()
     ]
     assert detected == ["d0", "En", "K"]
+
+
+def test_implicit_detect_bypasses_invalid_constant_values_and_replaces_stale_rows(window) -> None:
+    _select_model(window, "self_consistent")
+    window.implicit_variable_edit.setText("u")
+    window.implicit_equation_edit.setPlainText("d0 + d2/(n-u)^2")
+    window.implicit_output_edit.setPlainText("En - CR/(n-u)^2")
+    window._reset_variable_rows(default_var="n", default_column="A")
+    window.implicit_constants_editor.setChecked(True)
+    window.implicit_constants_editor.set_rows([{"name": "CR", "value": ""}])
+
+    window._refresh_implicit_parameter_rows()
+    window.implicit_params_table.add_parameter_row({"name": "manual", "initial": "3"})
+    window.implicit_equation_edit.setPlainText("d0")
+    window._refresh_implicit_parameter_rows()
+
+    assert window.implicit_params_table.rows() == [
+        {"name": "d0", "initial": "", "fixed": "", "min": "", "max": "", "source": "detected"},
+        {"name": "En", "initial": "", "fixed": "", "min": "", "max": "", "source": "detected"},
+        {"name": "manual", "initial": "3", "fixed": "", "min": "", "max": ""},
+    ]
 
 
 def test_implicit_parameter_detection_marks_workspace_dirty(window) -> None:

@@ -28,6 +28,7 @@ from app_desktop.workers_core import (
     _serialize_fit_job,
 )
 from app_desktop.workers_qt import FitBatchWorker
+from app_desktop.workers_qt import RootSolvingWorker
 from fitting.hp_fitter import FitResult
 from fitting.implicit_model import ImplicitModelDefinition, ImplicitSolveOptions
 from shared.parallel_config import ParallelConfig
@@ -245,6 +246,52 @@ def test_root_solving_subprocess_uses_killable_runner_and_forwards_timeout(
     assert calls["payload"] == _serialize_root_solving_job(job)
     assert calls["timeout_seconds"] == 12.5
     assert callable(calls["should_cancel"])
+
+
+def test_root_solving_worker_emits_cancelled_when_subprocess_interrupts(
+    monkeypatch: pytest.MonkeyPatch,
+    qtbot,
+) -> None:
+    job = RootSolvingJob(
+        equations=("x - 2",),
+        unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=50,
+        display_digits=12,
+    )
+    observed: dict[str, object] = {}
+
+    def fake_subprocess(
+        received_job: RootSolvingJob,
+        *,
+        timeout_seconds: float | None,
+        should_cancel: Callable[[], bool] | None,
+    ) -> dict[str, object]:
+        observed["job"] = received_job
+        observed["timeout_seconds"] = timeout_seconds
+        observed["should_cancel"] = should_cancel
+        if should_cancel and should_cancel():
+            raise InterruptedError("root solving cancelled")
+        raise AssertionError("expected cancellation")
+
+    monkeypatch.setattr(workers_core, "_execute_root_solving_job_payload_subprocess", fake_subprocess)
+    worker = RootSolvingWorker(job)
+    worker.request_stop()
+
+    with qtbot.waitSignal(worker.cancelled, timeout=3000):
+        worker.start()
+
+    assert worker.wait(3000)
+    assert observed["job"] is job
+    assert observed["timeout_seconds"] == workers_core.ROOT_SOLVING_SUBPROCESS_TIMEOUT_SECONDS
+    assert callable(observed["should_cancel"])
 
 
 def _depth_probe_payload(payload: dict[str, Any]) -> dict[str, Any]:
