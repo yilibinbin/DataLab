@@ -7,7 +7,8 @@ from typing import Any
 
 from root_solving.expression import RootExpressionSystem, build_root_expression_system
 from root_solving.batch import solve_root_batch
-from root_solving.models import RootProblem, RootResult, RootUncertaintyOptions, RootUnknown
+from root_solving.models import RootProblem, RootResult, RootUncertaintyOptions, RootUnknown, RootValue
+from root_solving.uncertainty_policy import attach_root_uncertainty
 from root_solving.solver import solve_root_problem
 from shared.input_normalization import ConstantsState
 from shared.uncertainty import UncertainValue
@@ -199,6 +200,45 @@ def test_monte_carlo_reports_skipped_with_first_failure_when_samples_fail(
     assert result.details["monte_carlo_failures"] == 8
     assert "diagnostic test" in str(result.details["monte_carlo_first_failure"])
     assert any("fewer than two valid samples" in warning for warning in result.warnings)
+
+
+def test_monte_carlo_rejects_whole_sample_when_any_root_is_complex() -> None:
+    problem = RootProblem(
+        equations=("x - A", "y - B"),
+        unknowns=(RootUnknown("x", initial="1"), RootUnknown("y", initial="2")),
+        constants={"A": "1.0", "B": "2.0"},
+        mode="system",
+        precision=80,
+        uncertainty_options=RootUncertaintyOptions(method="monte_carlo", monte_carlo_samples=3, monte_carlo_seed="1"),
+    )
+    system = build_root_expression_system(problem)
+    nominal = RootResult(
+        roots=(RootValue("x", mp.mpf("1")), RootValue("y", mp.mpf("2"))),
+        backend="mpmath",
+        mode="system",
+    )
+
+    def fake_solve_nominal(_nominal_inputs: object) -> RootResult:
+        return RootResult(
+            roots=(RootValue("x", mp.mpf("1")), RootValue("y", complex(2.0, 1.0))),
+            backend="mpmath",
+            mode="system",
+        )
+
+    result = attach_root_uncertainty(
+        problem=problem,
+        system=system,
+        result=nominal,
+        uncertain_inputs={"A": UncertainValue("1.0", "0.1"), "B": UncertainValue("2.0", "0.1")},
+        solve_nominal=fake_solve_nominal,
+    )
+
+    assert result.details["uncertainty_method"] == "skipped"
+    assert result.details["monte_carlo_failures"] == 3
+    assert result.details["monte_carlo_valid_samples"] == 0
+    assert result.roots[0].uncertainty is None
+    assert result.roots[1].uncertainty is None
+    assert result.details["monte_carlo_first_failure"] == "sample returned a complex root"
 
 
 def test_monte_carlo_rejects_scan_multiple_without_root_matching() -> None:

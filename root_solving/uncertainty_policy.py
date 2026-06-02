@@ -138,13 +138,13 @@ def _attach_monte_carlo(
                     first_failure = "sample root count did not match the nominal root count"
                 continue
 
+            if any(not _is_real_number(root.value) for root in sample_result.roots):
+                failures += 1
+                if first_failure is None:
+                    first_failure = "sample returned a complex root"
+                continue
             for index, root in enumerate(sample_result.roots):
-                if _is_real_number(root.value):
-                    values_by_root[index].append(mp.mpf(root.value))
-                else:
-                    failures += 1
-                    if first_failure is None:
-                        first_failure = "sample returned a complex root"
+                values_by_root[index].append(mp.mpf(root.value))
 
     warnings = tuple(result.warnings)
     skipped = any(len(values) < 2 for values in values_by_root)

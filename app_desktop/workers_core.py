@@ -1254,10 +1254,16 @@ def _deserialize_root_solving_job(payload: Mapping[str, Any]) -> RootSolvingJob:
 def _normalize_root_uncertainty_payload(value: Any) -> dict[str, object]:
     if not isinstance(value, Mapping):
         value = {}
+    raw_samples = value.get("monte_carlo_samples")
+    try:
+        samples = int(raw_samples) if raw_samples not in (None, "") else 2000
+    except (TypeError, ValueError, OverflowError):
+        samples = 2000
+    raw_seed = value.get("monte_carlo_seed")
     return {
         "method": str(value.get("method") or "auto"),
-        "monte_carlo_samples": int(value.get("monte_carlo_samples") or 2000),
-        "monte_carlo_seed": str(value.get("monte_carlo_seed") or ""),
+        "monte_carlo_samples": samples,
+        "monte_carlo_seed": "" if raw_seed in (None, "") else str(raw_seed),
     }
 
 

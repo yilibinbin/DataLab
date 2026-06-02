@@ -46,14 +46,22 @@ class _FakeCombo:
 
 
 class _FakeSpin:
-    def __init__(self, value: int = 2000) -> None:
+    def __init__(self, value: int = 2000, *, minimum: int = 2, maximum: int = 50000) -> None:
         self._value = value
+        self._minimum = minimum
+        self._maximum = maximum
 
     def value(self) -> int:
         return self._value
 
     def setValue(self, value: int) -> None:
         self._value = int(value)
+
+    def minimum(self) -> int:
+        return self._minimum
+
+    def maximum(self) -> int:
+        return self._maximum
 
 
 class _FakeLineEdit:
@@ -414,6 +422,33 @@ def test_workspace_restore_root_uncertainty_options_falls_back_for_bad_sample_co
     assert target.root_uncertainty_method_combo.currentData() == "monte_carlo"
     assert target.root_monte_carlo_samples_spin.value() == 2000
     assert target.root_monte_carlo_seed_edit.text() == "11"
+
+
+def test_workspace_restore_root_uncertainty_options_clamps_sample_count_to_widget_range() -> None:
+    from app_desktop.workspace_controller import _restore_root_config
+
+    target = SimpleNamespace(
+        root_equations_edit=None,
+        root_mode_combo=None,
+        root_unknowns_table=None,
+        root_constants_editor=None,
+        root_uncertainty_method_combo=_FakeCombo("auto"),
+        root_monte_carlo_samples_spin=_FakeSpin(123),
+        root_monte_carlo_seed_edit=_FakeLineEdit(""),
+    )
+
+    _restore_root_config(
+        target,
+        {
+            "uncertainty_options": {
+                "method": "monte_carlo",
+                "monte_carlo_samples": "999999",
+                "monte_carlo_seed": "11",
+            }
+        },
+    )
+
+    assert target.root_monte_carlo_samples_spin.value() == 50000
 
 
 def test_workspace_restore_without_root_config_clears_stale_root_ui(qtbot) -> None:

@@ -619,8 +619,16 @@ def _restore_root_uncertainty_options(window: Any, options: Any) -> None:
     _set_combo_data(getattr(window, "root_uncertainty_method_combo", None), str(options.get("method") or "auto"))
     samples_widget = getattr(window, "root_monte_carlo_samples_spin", None)
     if samples_widget is not None and hasattr(samples_widget, "setValue"):
-        samples_widget.setValue(_safe_int(options.get("monte_carlo_samples"), 2000))
+        samples_widget.setValue(_clamp_widget_int(samples_widget, _safe_int(options.get("monte_carlo_samples"), 2000)))
     _set_text(getattr(window, "root_monte_carlo_seed_edit", None), str(options.get("monte_carlo_seed") or ""))
+
+
+def _clamp_widget_int(widget: Any, value: int) -> int:
+    minimum = _safe_int(getattr(widget, "minimum", lambda: value)(), value)
+    maximum = _safe_int(getattr(widget, "maximum", lambda: value)(), value)
+    if maximum < minimum:
+        return value
+    return max(minimum, min(value, maximum))
 
 
 def _safe_int(value: Any, default: int) -> int:
