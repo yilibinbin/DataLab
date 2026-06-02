@@ -202,7 +202,7 @@ def _solve_scan_multiple(problem: RootProblem, system: RootExpressionSystem) -> 
 
         for left, center, right in zip(samples, samples[1:], samples[2:], strict=False):
             left_x, left_y = left
-            center_x, center_y = center
+            _center_x, center_y = center
             right_x, right_y = right
             if not (mp.isfinite(left_y) and mp.isfinite(center_y) and mp.isfinite(right_y)):
                 continue

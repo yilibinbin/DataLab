@@ -6,11 +6,12 @@ from typing import Any
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QPushButton
 
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QPushButton
 
 
 @pytest.fixture  # type: ignore[untyped-decorator]
@@ -85,6 +86,20 @@ def test_root_detect_unknowns_populates_table_from_expression_excluding_data_and
     ]
 
 
+def test_root_detect_unknowns_preserves_header_only_data_columns(window: Any) -> None:
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    window.root_equations_edit.setPlainText("x**2 - A")
+    window.root_unknowns_table.set_rows([])
+    window.manual_data_edit.setPlainText("A\n")
+    window._data_stack.setCurrentIndex(1)
+
+    window.root_detect_unknowns_button.click()
+
+    assert window.root_unknowns_table.rows() == [
+        {"name": "x", "initial": "", "lower": "", "upper": "", "source": "detected"}
+    ]
+
+
 def test_root_solving_job_uses_active_data_source_and_preserves_raw_cells(window: Any) -> None:
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
     window.root_equations_edit.setPlainText("x**2 - A")
@@ -98,6 +113,35 @@ def test_root_solving_job_uses_active_data_source_and_preserves_raw_cells(window
     assert job.data_headers == ("A",)
     assert job.data_rows == (("4.0(2)",), ("9.00(3)",))
     assert job.mode == "scalar"
+
+
+def test_root_result_clears_stale_plot_state(window: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app_desktop.window_extrapolation_mixin.QMessageBox.information", lambda *args: None)
+    window.result_plot_bytes = b"old"
+    window._result_plot_base_pixmap = object()
+    window.current_fit_figures = [object()]
+    window.current_stats_figures = [object()]
+    window.current_error_figures = [object()]
+    window.current_extrap_figures = [object()]
+    window._image_mode = "fit"
+
+    window._on_root_solving_finished(
+        {
+            "markdown": "| root |\n|---|\n| 1 |",
+            "csv_headers": ["root"],
+            "csv_rows": [{"root": "1"}],
+            "warnings": [],
+        }
+    )
+
+    assert window.result_plot_bytes is None
+    assert window._result_plot_base_pixmap is None
+    assert window.current_fit_figures == []
+    assert window.current_stats_figures == []
+    assert window.current_error_figures == []
+    assert window.current_extrap_figures == []
+    assert window._image_mode is None
+    assert window._csv_rows == [{"root": "1"}]
 
 
 def test_root_solving_controls_mark_workspace_dirty(window: Any) -> None:

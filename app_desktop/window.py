@@ -1383,7 +1383,7 @@ class ExtrapolationWindow(
                 )
             rows.append(values)
         if not rows:
-            return (), ()
+            return headers, ()
         return headers, tuple(rows)
 
     @staticmethod

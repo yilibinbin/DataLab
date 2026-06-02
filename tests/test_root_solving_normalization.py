@@ -92,13 +92,18 @@ def test_normalize_root_problem_accepts_compact_exponent_notation() -> None:
     assert uncertain["CR"].value == mp.mpf("3.2898419602500e9")
 
 
+def test_normalize_root_problem_rejects_undeclared_equation_symbols() -> None:
+    with pytest.raises(ValueError, match=r"not defined|未定义"):
+        normalize(equations=["x - A"], unknown_rows=[{"name": "x", "initial": "1"}])
+
+
 def test_normalize_root_problem_rejects_duplicate_unknowns() -> None:
-    with pytest.raises(ValueError, match="Duplicate unknown|未知量重复"):
+    with pytest.raises(ValueError, match=r"Duplicate unknown|未知量重复"):
         normalize(unknown_rows=[{"name": "x"}, {"name": "x"}])
 
 
 def test_normalize_root_problem_ignores_source_only_unknown_rows() -> None:
-    problem, _uncertain = normalize(unknown_rows=[{"source": "detected"}])
+    problem, _uncertain = normalize(equations=["1"], unknown_rows=[{"source": "detected"}])
 
     assert problem.unknowns == ()
 
@@ -110,7 +115,7 @@ def test_normalize_root_problem_invalid_source_defaults_to_manual_for_non_empty_
 
 
 def test_normalize_root_problem_rejects_malformed_unknown_row_payload() -> None:
-    with pytest.raises(ValueError, match="Unknown rows row 1 is malformed|Unknown rows 第 1 行格式无效"):
+    with pytest.raises(ValueError, match=r"Unknown rows row 1 is malformed|Unknown rows 第 1 行格式无效"):
         normalize(unknown_rows=[object()])  # type: ignore[list-item]
 
 
@@ -164,7 +169,7 @@ def test_normalize_root_problem_clamps_precision(precision: int, expected: int) 
 
 def test_normalize_root_problem_disabled_constants_do_not_create_uncertain_inputs() -> None:
     problem, uncertain = normalize(
-        equations=["x - C"],
+        equations=["x - 1"],
         constants_enabled=False,
         constants_rows=[{"name": "C", "value": "4.0(2)"}],
     )
@@ -180,7 +185,7 @@ def test_root_normalization_rejects_data_column_constant_collision() -> None:
         numeric_mode="uncertainty",
     )
 
-    with pytest.raises(ValueError, match="collision|冲突"):
+    with pytest.raises(ValueError, match=r"collision|冲突"):
         solve_root_batch(
             equations=("x - A",),
             unknowns=(RootUnknown("x", initial="1"),),

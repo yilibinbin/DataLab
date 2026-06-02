@@ -152,7 +152,7 @@ def test_expression_rejects_scope_collisions_at_public_adapter_boundary() -> Non
         ),
     )
     for problem in problems:
-        with pytest.raises(ValueError, match="name collision|Duplicate"):
+        with pytest.raises(ValueError, match=r"name collision|Duplicate"):
             build_root_expression_system(problem)
 
 

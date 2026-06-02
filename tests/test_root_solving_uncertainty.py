@@ -158,9 +158,10 @@ def test_complex_roots_with_uncertain_inputs_warn_without_uncertainty() -> None:
 
 
 def _diagonal_condition_problem(alpha: mp.mpf, initial_y: mp.mpf, precision: int) -> RootProblem:
+    digits = max(60, precision + 10)
     return RootProblem(
-        equations=("x - A", f"{mp.nstr(alpha, 60)}*y - B"),
-        unknowns=(RootUnknown("x", initial="1"), RootUnknown("y", initial=mp.nstr(initial_y, 60))),
+        equations=("x - A", f"{mp.nstr(alpha, digits)}*y - B"),
+        unknowns=(RootUnknown("x", initial="1"), RootUnknown("y", initial=mp.nstr(initial_y, digits))),
         known_values=(RootInputValue("A", "1.0"), RootInputValue("B", "1.0")),
         mode="system",
         precision=precision,

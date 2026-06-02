@@ -25,7 +25,7 @@ def test_classification_rejects_data_constant_collision() -> None:
         ),
     )
 
-    with pytest.raises(ValueError, match="collision|冲突"):
+    with pytest.raises(ValueError, match=r"collision|冲突"):
         validate_symbol_classification(classification)
 
 
@@ -36,7 +36,7 @@ def test_classification_reports_missing_symbols() -> None:
     )
 
     assert classification.missing_symbols == ("A",)
-    with pytest.raises(ValueError, match="A"):
+    with pytest.raises(ValueError, match=r"A"):
         validate_symbol_classification(classification)
 
 
@@ -70,7 +70,7 @@ def test_classification_rejects_all_category_collisions() -> None:
     ):
         classification = classify_expression_symbols(["A"], categories)
 
-        with pytest.raises(ValueError, match="collision|冲突"):
+        with pytest.raises(ValueError, match=r"collision|冲突"):
             validate_symbol_classification(classification)
 
 
@@ -102,6 +102,11 @@ def test_build_data_rows_preserves_nominal_values_and_uncertainties() -> None:
     assert str(rows[0].values["B"]) == "5.0"
 
 
+def test_build_data_rows_rejects_non_identifier_headers() -> None:
+    with pytest.raises(ValueError, match=r"Invalid data column name|数据列名无效"):
+        build_data_rows(("mass (kg)",), ((parse_uncertainty_format("1.0"),),))
+
+
 def test_computation_input_context_exposes_spec_fields() -> None:
     rows = build_data_rows(("A",), ((parse_uncertainty_format("4.0"),),))
     constants_state = normalize_constants_state(
@@ -125,7 +130,7 @@ def test_computation_input_context_exposes_spec_fields() -> None:
 def test_merge_scope_rejects_unvalidated_shadowing() -> None:
     rows = build_data_rows(("A",), ((parse_uncertainty_format("4.0"),),))
 
-    with pytest.raises(ValueError, match="collision|冲突"):
+    with pytest.raises(ValueError, match=r"collision|冲突"):
         merge_scope(rows[0], {"A": "3.0"}, {"x": "2.0"})
 
 
@@ -137,7 +142,7 @@ def test_merge_scope_without_row_combines_constants_and_unknowns() -> None:
 
 
 def test_merge_scope_without_row_rejects_constant_unknown_collision() -> None:
-    with pytest.raises(ValueError, match="collision|冲突"):
+    with pytest.raises(ValueError, match=r"collision|冲突"):
         merge_scope(None, {"A": "3.0"}, {"A": "2.0"})
 
 

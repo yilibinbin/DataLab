@@ -482,6 +482,23 @@ class WindowExtrapolationMixin:
         markdown = str(payload.get("markdown", ""))
         csv_rows = payload.get("csv_rows")
         csv_headers = payload.get("csv_headers")
+        self._cleanup_temp_batch_images()
+        self._image_mode = None
+        self.current_fit_figures = []
+        self.current_stats_figures = []
+        self.current_error_figures = []
+        self.current_extrap_figures = []
+        self.current_fit_index = 0
+        self.current_stats_index = 0
+        self.current_error_index = 0
+        self.current_extrap_index = 0
+        self._result_plot_base_pixmap = None
+        self.result_plot_bytes = None
+        if hasattr(self, "result_plot_label"):
+            self.result_plot_label.clear()
+            self.result_plot_label.setText(self._tr("尚无图片", "No image yet"))
+        if hasattr(self, "_update_image_status"):
+            self._update_image_status()
         self._set_result_text(markdown)
         if isinstance(csv_rows, list) and csv_rows:
             headers = [str(header) for header in csv_headers] if isinstance(csv_headers, list) else None

@@ -171,7 +171,7 @@ def test_scan_multiple_rejects_system_shape() -> None:
         precision=16,
     )
 
-    with pytest.raises(ValueError, match="scan|single|scalar"):
+    with pytest.raises(ValueError, match=r"scan|single|scalar"):
         solve_root_problem(problem)
 
 

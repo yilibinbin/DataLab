@@ -206,6 +206,14 @@ def build_data_rows(
     clean_headers = tuple(str(header).strip() for header in headers)
     if any(not header for header in clean_headers):
         raise ValueError(_dual_msg("数据列名不能为空。", "Data column names cannot be empty."))
+    invalid_headers = tuple(header for header in clean_headers if not _IDENTIFIER_TOKEN_RE.fullmatch(header))
+    if invalid_headers:
+        raise ValueError(
+            _dual_msg(
+                f"数据列名无效：{invalid_headers[0]}",
+                f"Invalid data column name: {invalid_headers[0]}",
+            )
+        )
     if len(set(clean_headers)) != len(clean_headers):
         raise ValueError(_dual_msg("数据列名重复。", "Duplicate data column names."))
 

@@ -417,7 +417,17 @@ def _restore_param_rows(window: Any, rows: Any, orphan_names: Any = None) -> Non
 
 
 def _restore_constants_editor_state(editor: Any, state: Any) -> None:
-    if editor is None or not isinstance(state, dict):
+    if editor is None:
+        return
+    if not isinstance(state, dict):
+        editor.set_rows([])
+        if hasattr(editor, "set_raw_text"):
+            editor.set_raw_text("")
+        else:
+            editor.set_text("")
+        editor.setChecked(False)
+        if hasattr(editor, "use_text_view"):
+            editor.use_text_view(False)
         return
     rows = state.get("rows")
     if rows is None:
@@ -568,6 +578,12 @@ def _restore_implicit_config(window: Any, config: Any, fitting: dict[str, Any] |
 
 def _restore_root_config(window: Any, config: Any) -> None:
     if not isinstance(config, dict):
+        _set_text(getattr(window, "root_equations_edit", None), "")
+        _set_combo_data(getattr(window, "root_mode_combo", None), "auto")
+        table = getattr(window, "root_unknowns_table", None)
+        if table is not None and hasattr(table, "set_rows"):
+            table.set_rows([])
+        _restore_constants_editor_state(getattr(window, "root_constants_editor", None), None)
         return
     _set_text(getattr(window, "root_equations_edit", None), str(config.get("equations") or ""))
     _set_combo_data(getattr(window, "root_mode_combo", None), str(config.get("mode") or "auto"))

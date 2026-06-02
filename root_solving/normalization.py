@@ -54,7 +54,12 @@ def normalize_root_problem(
     for name, value in constants.items():
         uncertain_inputs[name] = parse_uncertainty_format(value)
 
-    _validate_scope(unknowns=unknowns, known_values=known_values, constants=constants)
+    _validate_scope(
+        equations=clean_equations,
+        unknowns=unknowns,
+        known_values=known_values,
+        constants=constants,
+    )
 
     problem = RootProblem(
         equations=clean_equations,
@@ -87,7 +92,7 @@ def normalize_root_problem_from_context(
         raise ValueError(_dual_msg(f"求根模式无效：{mode}", f"Invalid root mode: {mode}"))
 
     unknowns = _normalize_unknown_rows(unknown_rows)
-    _validate_scope(unknowns=unknowns, known_values=(), constants={})
+    _validate_scope(equations=(), unknowns=unknowns, known_values=(), constants={})
 
     constants = constants_state.compute_dict(validate=True)
     classification = classify_expression_symbols(
@@ -177,12 +182,13 @@ def _validate_identifier(name: str, *, kind_zh: str, kind_en: str, index: int) -
 
 def _validate_scope(
     *,
+    equations: Iterable[str],
     unknowns: Iterable[RootUnknown],
     known_values: Iterable[RootInputValue],
     constants: Mapping[str, str],
 ) -> None:
     classification = classify_expression_symbols(
-        (),
+        equations,
         SymbolCategories(
             unknowns=tuple(unknown.name for unknown in unknowns),
             data_columns=tuple(known.name for known in known_values),
