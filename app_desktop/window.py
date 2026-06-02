@@ -29,6 +29,7 @@ import mpmath as mp
 from desktop_doc_loader import load_desktop_doc, load_desktop_manifest
 from app_desktop.fitting_input_normalization import normalize_fitting_input_from_widgets
 from app_desktop.update_controller import UpdateController
+from shared.computation_inputs import extract_expression_symbols
 from shared.update_checker import REPOSITORY_URL
 
 from PySide6.QtCore import Qt, QSize, QTimer, QLocale, Signal, QObject, QThread, QUrl
@@ -172,13 +173,14 @@ from .workers_core import (
     FitBatchTask,
     FitJob,
     FitResultPayload,
+    RootSolvingJob,
     _mp_precision_guard,
     _render_extrapolation_plot_bytes,
     _safe_read_text,
     _safe_resolve_path,
     split_extrapolation_result,
 )
-from .workers_qt import CalcWorker, FitBatchWorker, FitWorker
+from .workers_qt import CalcWorker, FitBatchWorker, FitWorker, RootSolvingWorker
 
 from .window_latex_pdf_mixin import WindowLatexPdfMixin
 from .window_i18n_mixin import WindowI18nMixin
@@ -436,6 +438,7 @@ class ExtrapolationWindow(
         self._current_precision = mp.mp.dps
         self._fit_worker: FitWorker | None = None
         self._calc_worker: CalcWorker | None = None
+        self._root_worker: RootSolvingWorker | None = None
         self._translations: list[tuple[object, str, str, str]] = []  # (widget, attr, zh, en)
         self._combo_translations: list[tuple[QComboBox, list[tuple[str, str, object]]]] = []
         self._lang_mode = _LANG_AUTO
@@ -511,6 +514,7 @@ class ExtrapolationWindow(
             getattr(self, "formula_edit", None),
             getattr(self, "fit_expr_edit", None),
             getattr(self, "fit_target_edit", None),
+            getattr(self, "root_equations_edit", None),
             getattr(self, "implicit_variable_edit", None),
             getattr(self, "implicit_equation_edit", None),
             getattr(self, "implicit_output_edit", None),
@@ -532,12 +536,12 @@ class ExtrapolationWindow(
             table = getattr(self, table_name, None)
             if table is not None:
                 table.itemChanged.connect(self._mark_workspace_dirty)
-        for parameter_table_name in ("custom_params_table", "implicit_params_table"):
+        for parameter_table_name in ("custom_params_table", "implicit_params_table", "root_unknowns_table"):
             table = getattr(self, parameter_table_name, None)
             signal = getattr(table, "changed", None)
             if signal is not None:
                 signal.connect(self._mark_workspace_dirty)
-        for editor_name in ("error_constants_editor", "custom_constants_editor", "implicit_constants_editor"):
+        for editor_name in ("error_constants_editor", "custom_constants_editor", "implicit_constants_editor", "root_constants_editor"):
             editor = getattr(self, editor_name, None)
             signal = getattr(editor, "changed", None)
             if signal is not None:
@@ -551,6 +555,7 @@ class ExtrapolationWindow(
             "stats_mode_combo",
             "fit_model_combo",
             "implicit_method_combo",
+            "root_mode_combo",
             "latex_engine_combo",
         ):
             combo = getattr(self, combo_name, None)
@@ -1056,6 +1061,8 @@ class ExtrapolationWindow(
         if hasattr(self, "implicit_model_widget"):
             self.implicit_model_widget.setVisible(mode == "self_consistent")
         show_expr = mode != "self_consistent"
+        if hasattr(self, "fit_expr_title_widget"):
+            self.fit_expr_title_widget.setVisible(show_expr)
         self.fit_expr_edit.setVisible(show_expr)
         if show_expr:
             self.fit_expr_edit.setEnabled(True)
@@ -1224,7 +1231,7 @@ class ExtrapolationWindow(
                 var_edit.text().strip()
                 for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
                 if var_edit.text().strip()
-            ] or ["n"],
+            ] or ["x"],
             parameter_table=table,
             required_parameter_names=parameter_names,
             validate=True,
@@ -1233,12 +1240,34 @@ class ExtrapolationWindow(
         return {name: dict(value) for name, value in normalized.parameter_config.items() if name in allowed}
 
     def _refresh_implicit_parameter_rows(self):
-        config = self._collect_implicit_config(validate_parameters=False)
-        parameter_names = tuple(config["parameter_names"])
+        x_variables = [
+            var_edit.text().strip()
+            for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
+            if var_edit.text().strip()
+        ] or ["x"]
+        implicit_variable = self.implicit_variable_edit.text().strip() or "u"
+        expressions = "\n".join(
+            (
+                self.implicit_equation_edit.toPlainText().strip(),
+                self.implicit_output_edit.toPlainText().strip(),
+            )
+        )
+        parameter_names = tuple(
+            self._infer_parameter_names(
+                expressions,
+                x_variables + [implicit_variable],
+                [],
+                constants=list(
+                    self._raw_constant_names_from_editor(
+                        getattr(self, "implicit_constants_editor", None)
+                    )
+                ),
+            )
+        )
         table = getattr(self, "implicit_params_table", None)
         before = table.rows() if table is not None else []
         if table is not None:
-            table.set_detected_names(parameter_names)
+            table.set_detected_names(parameter_names, keep_orphans=False)
         after = table.rows() if table is not None else []
         if after != before and hasattr(self, "_mark_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
             self._mark_workspace_dirty()
@@ -1250,19 +1279,153 @@ class ExtrapolationWindow(
             for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
             if var_edit.text().strip()
         ] or ["x"]
-        constants = self._collect_custom_constants()
+        constants = self._raw_constant_names_from_editor(
+            getattr(self, "custom_constants_editor", None)
+        )
         parameter_names = self._infer_parameter_names(
             model_expr,
             variable_names,
             [],
-            constants=sorted(constants),
+            constants=list(constants),
         )
         table = getattr(self, "custom_params_table", None)
         if table is not None:
             before = table.rows()
-            table.set_detected_names(parameter_names)
+            table.set_detected_names(parameter_names, keep_orphans=False)
             if table.rows() != before and hasattr(self, "_mark_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
                 self._mark_workspace_dirty()
+
+    def _raw_constant_names_from_editor(self, editor: object | None) -> tuple[str, ...]:
+        if editor is None or not getattr(editor, "isChecked", lambda: False)():
+            return ()
+        names: list[str] = []
+        seen: set[str] = set()
+        for row in getattr(editor, "rows", lambda: [])():
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "").strip()
+            if not name or name in seen:
+                continue
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+                continue
+            seen.add(name)
+            names.append(name)
+        return tuple(names)
+
+    def _active_root_data_headers(self) -> tuple[str, ...]:
+        try:
+            data_path, manual_content = self._active_data_source()
+            data_headers, _data_rows = self._parse_root_data_source_for_job(
+                data_path=data_path,
+                manual_content=manual_content,
+            )
+        except Exception:
+            return ()
+        return data_headers
+
+    def _refresh_root_unknown_rows(self) -> None:
+        expressions = tuple(
+            line.strip()
+            for line in self.root_equations_edit.toPlainText().splitlines()
+            if line.strip()
+        )
+        constants = set(self._raw_constant_names_from_editor(getattr(self, "root_constants_editor", None)))
+        data_headers = set(self._active_root_data_headers())
+        symbols = extract_expression_symbols(expressions)
+        unknown_names = tuple(
+            name
+            for name in symbols
+            if name not in constants and name not in data_headers
+        )
+        table = getattr(self, "root_unknowns_table", None)
+        before = table.rows() if table is not None else []
+        if table is not None:
+            table.set_detected_names(unknown_names, keep_orphans=False)
+        after = table.rows() if table is not None else []
+        if after != before and hasattr(self, "_mark_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
+            self._mark_workspace_dirty()
+
+    def _parse_root_data_source_for_job(
+        self,
+        *,
+        data_path: Path | None = None,
+        manual_content: str = "",
+    ) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...]]:
+        text = ""
+        if data_path:
+            text = _safe_read_text(data_path)
+        elif manual_content:
+            text = manual_content
+        if not text.strip():
+            return (), ()
+
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return (), ()
+        parsed = [self._split_root_data_line(line) for line in lines]
+        headers = tuple(cell.strip() for cell in parsed[0])
+        if any(not header for header in headers):
+            raise ValueError(self._tr("求根数据列名不能为空。", "Root data column names cannot be empty."))
+        if len(set(headers)) != len(headers):
+            raise ValueError(self._tr("求根数据列名重复。", "Root data column names are duplicated."))
+
+        rows: list[tuple[str, ...]] = []
+        for index, row in enumerate(parsed[1:], 1):
+            values = tuple(cell.strip() for cell in row)
+            if not any(values):
+                continue
+            if len(values) != len(headers):
+                raise ValueError(
+                    self._tr(
+                        f"求根数据第 {index} 行列数不匹配。",
+                        f"Root data row {index} has the wrong number of columns.",
+                    )
+                )
+            rows.append(values)
+        if not rows:
+            return headers, ()
+        return headers, tuple(rows)
+
+    @staticmethod
+    def _split_root_data_line(line: str) -> tuple[str, ...]:
+        if "," in line:
+            return tuple(cell.strip() for cell in next(csv.reader([line])))
+        return tuple(line.split())
+
+    def _build_root_solving_job(
+        self,
+        *,
+        data_path: Path | None = None,
+        manual_content: str = "",
+    ) -> RootSolvingJob:
+        equations = tuple(
+            line.strip()
+            for line in self.root_equations_edit.toPlainText().splitlines()
+            if line.strip()
+        )
+        constants_editor = getattr(self, "root_constants_editor", None)
+        constants_enabled = bool(constants_editor and constants_editor.isChecked())
+        constants_view = "text" if constants_editor and constants_editor.using_text_view() else "table"
+        constants_rows = tuple(dict(row) for row in (constants_editor.rows() if constants_editor else []))
+        constants_text = constants_editor.raw_text() if constants_editor else ""
+        data_headers, data_rows = self._parse_root_data_source_for_job(
+            data_path=data_path,
+            manual_content=manual_content,
+        )
+        return RootSolvingJob(
+            equations=equations,
+            unknown_rows=tuple(dict(row) for row in self.root_unknowns_table.rows()),
+            data_headers=data_headers,
+            data_rows=data_rows,
+            constants_enabled=constants_enabled,
+            constants_rows=constants_rows,
+            constants_view=constants_view,
+            constants_text=constants_text,
+            mode=str(self.root_mode_combo.currentData() or "auto"),
+            scan_config={},
+            precision=int(self._read_precision()),
+            display_digits=int(self._display_digits_limit()),
+        )
 
     def _reset_implicit_constants_rows(self, config: dict[str, object] | list[dict[str, object]] | None = None):
         editor = getattr(self, "implicit_constants_editor", None)
@@ -1282,7 +1445,7 @@ class ExtrapolationWindow(
                 var_edit.text().strip()
                 for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
                 if var_edit.text().strip()
-            ] or ["n"],
+            ] or ["x"],
             constants_editor=editor,
             validate=True,
         )
@@ -1293,7 +1456,7 @@ class ExtrapolationWindow(
             var_edit.text().strip()
             for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
             if var_edit.text().strip()
-        ] or ["n"]
+        ] or ["x"]
         implicit_variable = self.implicit_variable_edit.text().strip()
         equation = self.implicit_equation_edit.toPlainText().strip()
         output_expression = self.implicit_output_edit.toPlainText().strip()
@@ -1451,22 +1614,37 @@ class ExtrapolationWindow(
             self.error_box.hide()
             self.fit_box.hide()
             self.stats_box.hide()
+            if hasattr(self, "root_box"):
+                self.root_box.hide()
         elif mode == "error":
             self.extrap_box.hide()
             self.error_box.show()
             self.fit_box.hide()
             self.stats_box.hide()
+            if hasattr(self, "root_box"):
+                self.root_box.hide()
         elif mode == "statistics":
             self.extrap_box.hide()
             self.error_box.hide()
             self.fit_box.hide()
             self.stats_box.show()
+            if hasattr(self, "root_box"):
+                self.root_box.hide()
             self._on_stats_mode_change()
+        elif mode == "root_solving":
+            self.extrap_box.hide()
+            self.error_box.hide()
+            self.fit_box.hide()
+            self.stats_box.hide()
+            if hasattr(self, "root_box"):
+                self.root_box.show()
         else:
             self.extrap_box.hide()
             self.error_box.hide()
             self.fit_box.show()
             self.stats_box.hide()
+            if hasattr(self, "root_box"):
+                self.root_box.hide()
         self._update_manual_placeholder(mode)
         self._update_log_scale_visibility()
 
@@ -1976,6 +2154,16 @@ class ExtrapolationWindow(
                 self._reset_csv_data()
             elif kind == "fit_batches":
                 self._reformat_fit_batches(**payload)
+            elif kind == "root_solving":
+                markdown = str(payload.get("markdown", ""))
+                csv_rows = payload.get("csv_rows")
+                csv_headers = payload.get("csv_headers")
+                self._set_result_text(markdown)
+                if isinstance(csv_rows, list) and csv_rows:
+                    headers = [str(header) for header in csv_headers] if isinstance(csv_headers, list) else None
+                    self._set_csv_data(csv_rows, headers, suggestion="root_solving_results.csv")
+                else:
+                    self._reset_csv_data()
             else:
                 return
         except Exception:
@@ -2139,6 +2327,8 @@ class ExtrapolationWindow(
                         self._calc_worker.wait(100)
                     if self._fit_worker:
                         self._fit_worker.wait(100)
+                    if self._root_worker:
+                        self._root_worker.wait(100)
                     max_wait_ms -= 100
 
                 # Force terminate if still running
@@ -2148,6 +2338,9 @@ class ExtrapolationWindow(
                 if self._fit_worker and self._fit_worker.isRunning():
                     self._fit_worker.terminate()
                     self._fit_worker.wait()
+                if self._root_worker and self._root_worker.isRunning():
+                    self._root_worker.terminate()
+                    self._root_worker.wait()
                 event.accept()
             else:
                 event.ignore()

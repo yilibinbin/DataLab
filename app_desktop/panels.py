@@ -53,6 +53,7 @@ from formula_help import (
     get_method_parameters,
 )
 from app_desktop.constants_editor import ConstantsEditor
+from app_desktop.detected_rows_table import DetectedRowsTable
 from app_desktop.formula_preview import open_formula_preview_dialog
 from app_desktop.formula_preview import update_formula_preview as _render_formula_preview
 from app_desktop.parameter_table import ParameterTable
@@ -456,6 +457,7 @@ def build_left_panel(self):
         ("外推", "Extrapolation", "extrapolation"),
         ("误差传递", "Error propagation", "error"),
         ("拟合", "Fitting", "fitting"),
+        ("求根", "Root solving", "root_solving"),
         ("统计平均", "Statistics", "statistics"),
     ]
     for zh, en, data in mode_items:
@@ -1339,6 +1341,90 @@ def build_left_panel(self):
     self.pade_n_spin.valueChanged.connect(self._on_model_settings_changed)
     self.poly_degree_spin.valueChanged.connect(self._on_model_settings_changed)
 
+    # Root-solving module
+    self.root_box = QGroupBox("求根")
+    self._register_title(self.root_box, "求根", "Root solving")
+    root_layout = QVBoxLayout(self.root_box)
+
+    root_equation_title_row = QHBoxLayout()
+    lbl_root_equations = QLabel("方程：")
+    self._register_text(lbl_root_equations, "方程：", "Equations:")
+    root_equation_title_row.addWidget(lbl_root_equations)
+    root_equation_title_row.addStretch()
+    self.root_formula_preview_button = _make_formula_preview_button(
+        self,
+        None,
+        title="Preview equations",
+        object_name="root_formula_preview_button",
+        tooltip_zh="预览方程",
+    )
+    self.root_formula_preview_button.clicked.connect(lambda: _open_root_formula_preview(self))
+    root_equation_title_row.addWidget(self.root_formula_preview_button)
+    root_layout.addLayout(root_equation_title_row)
+
+    self.root_equations_edit = QPlainTextEdit("x^2 - C")
+    self.root_equations_edit.setMinimumHeight(96)
+    self.root_equations_edit.setPlaceholderText(
+        "每行一个方程，按 F_i(...)=0 求解 / One equation per line, interpreted as F_i(...)=0"
+    )
+    root_layout.addWidget(self.root_equations_edit)
+
+    root_mode_layout = QFormLayout()
+    self.root_mode_combo = QComboBox()
+    root_mode_items = [
+        ("自动", "Auto", "auto"),
+        ("标量", "Scalar", "scalar"),
+        ("扫描多根", "Scan multiple roots", "scan_multiple"),
+        ("多项式", "Polynomial", "polynomial"),
+        ("方程组", "System", "system"),
+    ]
+    for zh, _en, data in root_mode_items:
+        self.root_mode_combo.addItem(zh, data)
+    self._register_combo(self.root_mode_combo, root_mode_items)
+    lbl_root_mode = QLabel("求解模式：")
+    self._register_text(lbl_root_mode, "求解模式：", "Solve mode:")
+    root_mode_layout.addRow(lbl_root_mode, self.root_mode_combo)
+    root_layout.addLayout(root_mode_layout)
+
+    root_unknown_header = QHBoxLayout()
+    lbl_root_unknowns = QLabel("未知量：")
+    self._register_text(lbl_root_unknowns, "未知量：", "Unknowns:")
+    root_unknown_header.addWidget(lbl_root_unknowns)
+    root_unknown_header.addStretch()
+    self.root_detect_unknowns_button = QPushButton("识别未知量")
+    self._register_text(self.root_detect_unknowns_button, "识别未知量", "Detect")
+    self.root_detect_unknowns_button.clicked.connect(self._refresh_root_unknown_rows)
+    root_unknown_header.addWidget(self.root_detect_unknowns_button)
+    self.root_add_unknown_button = QPushButton("+ 行")
+    self._register_text(self.root_add_unknown_button, "+ 行", "+ Row")
+    self.root_add_unknown_button.clicked.connect(lambda: _add_detected_rows_table_row(self, "root_unknowns_table"))
+    root_unknown_header.addWidget(self.root_add_unknown_button)
+    self.root_remove_unknown_button = QPushButton("- 行")
+    self._register_text(self.root_remove_unknown_button, "- 行", "- Row")
+    self.root_remove_unknown_button.clicked.connect(lambda: _remove_detected_rows_table_rows(self, "root_unknowns_table"))
+    root_unknown_header.addWidget(self.root_remove_unknown_button)
+    root_layout.addLayout(root_unknown_header)
+
+    self.root_unknowns_table = DetectedRowsTable(
+        columns=("name", "initial", "lower", "upper"),
+        headers=("Name", "Initial", "Lower", "Upper"),
+        min_rows=2,
+    )
+    self.root_unknowns_table.table_view.setMinimumHeight(140)
+    self.root_unknowns_table.table_view.setStyleSheet(_get_table_style())
+    _apply_equal_column_stretch(self.root_unknowns_table.table_view)
+    root_layout.addWidget(self.root_unknowns_table)
+
+    self.root_constants_editor = ConstantsEditor(min_rows=3, checked=True, numeric_mode="uncertainty")
+    self._register_text(self.root_constants_editor.checkbox, "启用常数设置", "Enable constants")
+    _apply_equal_column_stretch(self.root_constants_editor.table_view)
+    self.root_constants_editor.table_view.setStyleSheet(_get_table_style())
+    self.root_constants_editor.table_view.setMinimumHeight(120)
+    root_layout.addWidget(self.root_constants_editor)
+
+    self.left_layout.addWidget(self.root_box)
+    self.root_box.hide()
+
     # Options
     options_box = QGroupBox("选项")
     self._register_title(options_box, "选项", "Options")
@@ -2067,6 +2153,44 @@ def _open_formula_preview(self, edit_widget, lhs=None) -> None:
         text = edit_widget.text().strip()
     left_hand_side = lhs() if callable(lhs) else lhs
     open_formula_preview_dialog(self, text, left_hand_side)
+
+
+def _open_root_formula_preview(self) -> None:
+    lines = [
+        line.strip()
+        for line in self.root_equations_edit.toPlainText().splitlines()
+        if line.strip()
+    ]
+    if not lines:
+        expression = ""
+        lhs = "F"
+    elif len(lines) == 1:
+        expression = lines[0]
+        lhs = "F"
+    else:
+        expression = "\n".join(lines)
+        lhs = "F_i"
+    open_formula_preview_dialog(self, expression, lhs)
+
+
+def _add_detected_rows_table_row(self, table_name: str) -> None:
+    table = getattr(self, table_name, None)
+    if table is None:
+        return
+    table.add_row()
+
+
+def _remove_detected_rows_table_rows(self, table_name: str) -> None:
+    table = getattr(self, table_name, None)
+    if table is None:
+        return
+    selected_rows = {index.row() for index in table.table_view.selectedIndexes()}
+    if not selected_rows and table.table_view.rowCount() > 0:
+        last_row = table.table_view.rowCount() - 1
+        if not table.is_row_empty(last_row):
+            return
+        selected_rows = {last_row}
+    table.delete_rows(selected_rows)
 
 
 def _add_parameter_table_row(self, table_name: str) -> None:

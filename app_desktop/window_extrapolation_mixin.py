@@ -19,7 +19,7 @@ from .workers_core import (
     _safe_resolve_path,
     CalcJob,
 )
-from .workers_qt import CalcWorker
+from .workers_qt import CalcWorker, RootSolvingWorker
 
 
 class WindowExtrapolationMixin:
@@ -29,6 +29,7 @@ class WindowExtrapolationMixin:
         return (
             (self._calc_worker and self._calc_worker.isRunning())
             or (self._fit_worker and self._fit_worker.isRunning())
+            or (getattr(self, "_root_worker", None) and self._root_worker.isRunning())
         )
 
     def _set_button_to_stop_mode(self):
@@ -52,6 +53,9 @@ class WindowExtrapolationMixin:
         if self._fit_worker and self._fit_worker.isRunning():
             self._fit_worker.request_stop()
             stopped = True
+        if getattr(self, "_root_worker", None) and self._root_worker.isRunning():
+            self._root_worker.request_stop()
+            stopped = True
         if stopped:
             self._append_log(self._tr("正在停止任务...", "Stopping task..."))
 
@@ -68,7 +72,12 @@ class WindowExtrapolationMixin:
 
         self._reset_csv_data()
 
+        mode = self.mode_combo.currentData()
         data_path, manual_content = self._active_data_source()
+        if mode == "root_solving":
+            self._run_root_solving_mode(data_path=data_path, manual_content=manual_content)
+            return
+
         constants_editor = getattr(self, "error_constants_editor", None)
         manual_constants_content = (
             constants_editor.text().strip()
@@ -136,7 +145,6 @@ class WindowExtrapolationMixin:
         uncertainty_digits = self.uncertainty_digits_spin.value() if hasattr(self, "uncertainty_digits_spin") else 3
         method_choice = self.method_combo.currentData()
         mp_precision = None
-        mode = self.mode_combo.currentData()
         try:
             if mode == "statistics":
                 mp_precision = self._read_precision()
@@ -446,9 +454,91 @@ class WindowExtrapolationMixin:
                 pass
         self._calc_worker = None
 
+    def _run_root_solving_mode(self, *, data_path=None, manual_content: str = ""):
+        try:
+            job = self._build_root_solving_job(data_path=data_path, manual_content=manual_content)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, self._tr("错误", "Error"), self._localize_text(str(exc)))
+            return
+        worker = RootSolvingWorker(job)
+        worker.finished_ok.connect(self._on_root_solving_finished)
+        worker.failed.connect(self._on_root_solving_failed)
+        worker.finished.connect(self._on_root_solving_thread_done)
+        worker.cancelled.connect(self._on_worker_cancelled)
+        worker.log_ready.connect(self._append_log)
+        self._root_worker = worker
+        self._set_button_to_stop_mode()
+        worker.start()
+
+    def _on_root_solving_finished(self, payload: dict[str, object]):
+        log = str(payload.get("log", "")).strip()
+        if log:
+            self._append_log(log)
+        warnings = payload.get("warnings")
+        if isinstance(warnings, list):
+            for warning in warnings:
+                if warning:
+                    self._append_log(self._tr(f"警告: {warning}", f"Warning: {warning}"))
+        markdown = str(payload.get("markdown", ""))
+        csv_rows = payload.get("csv_rows")
+        csv_headers = payload.get("csv_headers")
+        self._cleanup_temp_batch_images()
+        self._image_mode = None
+        self.current_fit_figures = []
+        self.current_stats_figures = []
+        self.current_error_figures = []
+        self.current_extrap_figures = []
+        self.current_fit_index = 0
+        self.current_stats_index = 0
+        self.current_error_index = 0
+        self.current_extrap_index = 0
+        self._result_plot_base_pixmap = None
+        self.result_plot_bytes = None
+        if hasattr(self, "result_plot_label"):
+            self.result_plot_label.clear()
+            self.result_plot_label.setText(self._tr("尚无图片", "No image yet"))
+        if hasattr(self, "_update_image_status"):
+            self._update_image_status()
+        self._set_result_text(markdown)
+        if isinstance(csv_rows, list) and csv_rows:
+            headers = [str(header) for header in csv_headers] if isinstance(csv_headers, list) else None
+            self._set_csv_data(csv_rows, headers, suggestion="root_solving_results.csv")
+        else:
+            self._reset_csv_data()
+        self._remember_last_result("root_solving", dict(payload))
+        QMessageBox.information(
+            self,
+            self._tr("完成", "Done"),
+            self._tr("计算完成，请查看结果。", "Finished. Please check the results."),
+        )
+        self.tabs.setCurrentIndex(self.result_tab_index)
+
+    def _on_root_solving_failed(self, message: str):
+        localized = self._localize_text(message)
+        QMessageBox.critical(self, self._tr("计算失败", "Calculation failed"), localized)
+        self._append_log(self._tr(f"发生错误: {localized}", f"Error: {localized}"))
+
+    def _on_root_solving_thread_done(self):
+        self._set_button_to_run_mode()
+        worker = getattr(self, "_root_worker", None)
+        if worker:
+            try:
+                worker.finished_ok.disconnect()
+                worker.failed.disconnect()
+                worker.finished.disconnect()
+                worker.cancelled.disconnect()
+                worker.log_ready.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                worker.deleteLater()
+            except Exception:
+                pass
+        self._root_worker = None
+
     def _cleanup_workers(self):
         """Ensure background threads are stopped when the app exits."""
-        for attr in ("_fit_worker", "_calc_worker"):
+        for attr in ("_fit_worker", "_calc_worker", "_root_worker"):
             worker = getattr(self, attr, None)
             if not worker:
                 continue
