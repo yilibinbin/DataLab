@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from root_solving.batch import solve_root_batch
 from root_solving.models import RootUnknown
 from shared.input_normalization import normalize_constants_state
 from shared.uncertainty import parse_uncertainty_format
+
+
+def _real_float(value: object) -> float:
+    if isinstance(value, complex):
+        assert value.imag == 0
+        return float(value.real)
+    return float(cast(Any, value))
 
 
 def test_empty_data_runs_one_default_row_context() -> None:
@@ -52,6 +61,31 @@ def test_non_empty_data_solves_one_problem_per_row() -> None:
     assert [row.row_index for row in result.rows] == [0, 1]
     assert all(row.failure is None for row in result.rows)
     assert [row.source_values["A"] for row in result.rows] == ["4.0", "9.0"]
+
+
+def test_batch_scan_multiple_returns_multiple_roots_per_row() -> None:
+    constants_state = normalize_constants_state(enabled=False, rows=[], numeric_mode="uncertainty")
+    data_rows = (
+        (parse_uncertainty_format("4"),),
+        (parse_uncertainty_format("9"),),
+    )
+
+    result = solve_root_batch(
+        equations=("x**2 - A",),
+        unknowns=(RootUnknown("x", initial="0", lower="-4", upper="4"),),
+        data_headers=("A",),
+        data_rows=data_rows,
+        constants_state=constants_state,
+        mode="scan_multiple",
+        precision=16,
+    )
+
+    values_by_row = [
+        sorted(round(_real_float(root.value), 6) for root in row.result.roots)
+        for row in result.rows
+        if row.result is not None
+    ]
+    assert values_by_row == [[-2.0, 2.0], [-3.0, 3.0]]
 
 
 def test_row_failure_does_not_abort_other_rows() -> None:

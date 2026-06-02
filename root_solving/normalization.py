@@ -16,7 +16,7 @@ from shared.uncertainty import UncertainValue, parse_uncertainty_format
 
 from root_solving.models import RootInputValue, RootMode, RootProblem, RootUnknown
 
-_ROOT_MODES: set[str] = {"auto", "scalar", "polynomial", "system"}
+_ROOT_MODES: set[str] = {"auto", "scalar", "polynomial", "system", "scan_multiple"}
 _UNKNOWN_SOURCES: set[str] = {"manual", "detected"}
 
 

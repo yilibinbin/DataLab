@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 import math
-from typing import Any, cast
+from typing import Any
 
 from mpmath import mp
 
@@ -32,7 +32,9 @@ def solve_root_problem(
     system = build_root_expression_system(problem)
     mode = _resolve_mode(problem, system)
 
-    if problem.precision <= 16:
+    if mode == "scan_multiple":
+        candidate = _solve_scan_multiple(problem, system)
+    elif problem.precision <= 16:
         if mode == "polynomial":
             candidate = _solve_polynomial_scipy_or_fallback(problem, system)
         else:
@@ -58,7 +60,10 @@ def solve_root_problem(
     )
     if uncertain_inputs:
         if _all_roots_real(result.roots):
-            return attach_linear_uncertainty_with_system(system, result, uncertain_inputs, precision=problem.precision)
+            propagated = attach_linear_uncertainty_with_system(system, result, uncertain_inputs, precision=problem.precision)
+            if not isinstance(propagated, RootResult):
+                raise TypeError("uncertainty propagation returned an invalid root result")
+            return propagated
         return replace(result, warnings=(*result.warnings, _COMPLEX_UNCERTAINTY_WARNING))
     return result
 
@@ -78,6 +83,8 @@ def _resolve_mode(problem: RootProblem, system: RootExpressionSystem) -> RootMod
         raise ValueError("Scalar root-solving mode requires exactly one equation and one unknown.")
     if requested == "polynomial" and (equation_count != 1 or unknown_count != 1):
         raise ValueError("Polynomial root-solving mode requires exactly one equation and one unknown.")
+    if requested == "scan_multiple" and (equation_count != 1 or unknown_count != 1):
+        raise ValueError("scan_multiple root-solving mode requires exactly one equation and one unknown.")
     if requested == "system" and (equation_count != unknown_count or unknown_count == 0):
         raise ValueError("System root-solving mode requires a non-empty square system.")
     return requested
@@ -159,6 +166,159 @@ def _solve_polynomial_scipy(system: RootExpressionSystem) -> _Candidate:
     return _Candidate(values, "scipy")
 
 
+def _solve_scan_multiple(problem: RootProblem, system: RootExpressionSystem) -> _Candidate:
+    with precision_guard(system.precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+        unknown = _single_unknown(problem)
+        if not unknown.lower or not unknown.upper:
+            raise ValueError("scan_multiple requires lower and upper bounds.")
+        lower = _parse_mpf(unknown.lower, "lower bound")
+        upper = _parse_mpf(unknown.upper, "upper bound")
+        if lower >= upper:
+            raise ValueError("scan_multiple lower bound must be less than upper bound.")
+
+        sample_count = 200
+        roots: list[mp.mpf] = []
+        samples: list[tuple[mp.mpf, mp.mpf]] = []
+
+        for index in range(sample_count + 1):
+            x_value = lower + (upper - lower) * index / sample_count
+            y_value = _evaluate_scan_point(system, unknown.name, x_value)
+            samples.append((x_value, y_value))
+            if _scan_candidate_is_valid(system, unknown.name, x_value, problem.precision):
+                roots.append(x_value)
+
+        for (left_x, left_y), (right_x, right_y) in zip(samples, samples[1:], strict=False):
+            if not (mp.isfinite(left_y) and mp.isfinite(right_y)):
+                continue
+            if left_y * right_y < 0:
+                roots.append(_refine_scalar_bracket(system, unknown.name, left_x, right_x, problem.precision))
+
+        for left, center, right in zip(samples, samples[1:], samples[2:], strict=False):
+            left_x, left_y = left
+            center_x, center_y = center
+            right_x, right_y = right
+            if not (mp.isfinite(left_y) and mp.isfinite(center_y) and mp.isfinite(right_y)):
+                continue
+            if abs(center_y) <= abs(left_y) and abs(center_y) <= abs(right_y):
+                candidate = _refine_abs_minimum(system, unknown.name, left_x, right_x, problem.precision)
+                if _scan_candidate_is_valid(system, unknown.name, candidate, problem.precision):
+                    roots.append(candidate)
+
+        unique_roots = _deduplicate_roots(tuple(roots), tolerance=max(mp.sqrt(mp.eps), _scan_residual_tolerance(system, problem.precision)))
+        if not unique_roots:
+            raise ValueError("scan_multiple found no roots in the scan range.")
+        candidate = _Candidate(unique_roots, "scipy" if problem.precision <= 16 else "mpmath")
+        _validate_candidate(system, candidate.values, "scan_multiple", problem.precision)
+        return candidate
+
+
+def _evaluate_scan_point(system: RootExpressionSystem, unknown_name: str, value: mp.mpf) -> mp.mpf:
+    try:
+        result = system.evaluate({unknown_name: value})
+    except Exception:
+        return mp.nan
+    if not mp.isfinite(result):
+        return mp.nan
+    return result
+
+
+def _refine_scalar_bracket(
+    system: RootExpressionSystem,
+    unknown_name: str,
+    lower: mp.mpf,
+    upper: mp.mpf,
+    precision: int,
+) -> mp.mpf:
+    if precision <= 16:
+        import scipy.optimize
+
+        def scalar_float(value: float) -> float:
+            return float(system.evaluate({unknown_name: mp.mpf(str(value))}))
+
+        result = scipy.optimize.root_scalar(scalar_float, bracket=(float(lower), float(upper)), method="brentq")
+        if not result.converged:
+            raise ValueError("SciPy scan bracket solve did not converge.")
+        return _finite_mpf(str(result.root), "SciPy scan root")
+
+    def function(value: mp.mpf) -> mp.mpf:
+        return system.evaluate({unknown_name: value})
+
+    return _finite_mpf(mp.findroot(function, (lower, upper)), "mpmath scan root")
+
+
+def _refine_abs_minimum(
+    system: RootExpressionSystem,
+    unknown_name: str,
+    lower: mp.mpf,
+    upper: mp.mpf,
+    precision: int,
+) -> mp.mpf:
+    if precision <= 16:
+        import scipy.optimize
+
+        def objective(value: float) -> float:
+            try:
+                residual = system.evaluate({unknown_name: mp.mpf(str(value))})
+            except Exception:
+                return float("inf")
+            return float(abs(residual))
+
+        result = scipy.optimize.minimize_scalar(objective, bounds=(float(lower), float(upper)), method="bounded")
+        if not bool(getattr(result, "success", False)):
+            raise ValueError("SciPy scan minimum refinement did not converge.")
+        return _finite_mpf(str(result.x), "SciPy scan minimum")
+
+    return _golden_section_abs_minimum(system, unknown_name, lower, upper, precision)
+
+
+def _golden_section_abs_minimum(
+    system: RootExpressionSystem,
+    unknown_name: str,
+    lower: mp.mpf,
+    upper: mp.mpf,
+    precision: int,
+) -> mp.mpf:
+    with precision_guard(precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+        ratio = (mp.sqrt(5) - 1) / 2
+        left = lower
+        right = upper
+        c_value = right - ratio * (right - left)
+        d_value = left + ratio * (right - left)
+        for _ in range(max(80, precision * 2)):
+            if abs(right - left) <= mp.sqrt(mp.eps) * max(mp.mpf("1"), abs(c_value), abs(d_value)):
+                break
+            c_score = abs(_evaluate_scan_point(system, unknown_name, c_value))
+            d_score = abs(_evaluate_scan_point(system, unknown_name, d_value))
+            if c_score < d_score:
+                right = d_value
+                d_value = c_value
+                c_value = right - ratio * (right - left)
+            else:
+                left = c_value
+                c_value = d_value
+                d_value = left + ratio * (right - left)
+        return _finite_mpf((left + right) / 2, "mpmath scan minimum")
+
+
+def _scan_candidate_is_valid(
+    system: RootExpressionSystem,
+    unknown_name: str,
+    value: mp.mpf,
+    precision: int,
+) -> bool:
+    residual = abs(_evaluate_scan_point(system, unknown_name, value))
+    return bool(mp.isfinite(residual) and residual <= _scan_residual_tolerance(system, precision))
+
+
+def _deduplicate_roots(values: Sequence[mp.mpf], *, tolerance: mp.mpf) -> tuple[mp.mpf, ...]:
+    ordered = sorted(values)
+    roots: list[mp.mpf] = []
+    for value in ordered:
+        if not roots or abs(value - roots[-1]) > tolerance:
+            roots.append(value)
+    return tuple(roots)
+
+
 def _solve_mpmath(problem: RootProblem, system: RootExpressionSystem, mode: RootMode) -> _Candidate:
     with precision_guard(system.precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
         if mode == "polynomial":
@@ -205,7 +365,7 @@ def _validate_candidate(
     if any(not _is_finite_number(value) for value in values):
         raise ValueError("Solver returned a non-finite root.")
     residual_norm = _residual_norm(system, values, mode)
-    tolerance = _residual_tolerance(system, precision)
+    tolerance = _scan_residual_tolerance(system, precision) if mode == "scan_multiple" else _residual_tolerance(system, precision)
     if residual_norm > tolerance:
         raise ValueError("Solver residual exceeded tolerance.")
 
@@ -217,11 +377,24 @@ def _residual_tolerance(system: RootExpressionSystem, precision: int) -> mp.mpf:
         return mp.mpf(str(max(1e-10, 100 * math.sqrt(float(mp.eps))))) * target_scale
 
 
+def _scan_residual_tolerance(system: RootExpressionSystem, precision: int) -> mp.mpf:
+    with precision_guard(precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+        target_scale = max((abs(value) for value in system.nominal_inputs.values()), default=mp.mpf("1"))
+        target_scale = max(mp.mpf("1"), target_scale)
+        if precision <= 16:
+            return mp.mpf("1e-10") * target_scale
+        digits = max(12, min(precision - 8, precision // 2))
+        return mp.power(10, -digits) * target_scale
+
+
 def _residual_norm(system: RootExpressionSystem, values: Sequence[mp.mpf | mp.mpc | complex], mode: RootMode) -> mp.mpf:
     with precision_guard(system.precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
         if mode == "polynomial":
             coefficients = _polynomial_coefficients(system)
             return max((_polynomial_residual_abs(coefficients, value) for value in values), default=mp.mpf("0"))
+        if mode == "scan_multiple":
+            name = system.unknown_names[0]
+            return max((abs(system.evaluate({name: value})) for value in values), default=mp.mpf("0"))
         scope = {name: value for name, value in zip(system.unknown_names, values, strict=True)}
         residuals = system.residuals(scope)
         return max((abs(residual) for residual in residuals), default=mp.mpf("0"))
@@ -239,7 +412,7 @@ def _root_values(
     values: Sequence[mp.mpf | mp.mpc | complex],
     mode: RootMode,
 ) -> tuple[RootValue, ...]:
-    if mode == "polynomial":
+    if mode in {"polynomial", "scan_multiple"}:
         name = unknown_names[0]
         return tuple(RootValue(name, value) for value in values)
     return tuple(RootValue(name, value) for name, value in zip(unknown_names, values, strict=True))
@@ -282,7 +455,7 @@ def _polynomial_coefficients(system: RootExpressionSystem) -> tuple[mp.mpf, ...]
     coefficients = system.polynomial_coefficients()
     if coefficients is None:
         raise ValueError("Equation is not a univariate polynomial in the unknown.")
-    return cast(tuple[mp.mpf, ...], coefficients)
+    return tuple(mp.mpf(coefficient) for coefficient in coefficients)
 
 
 def _parse_mpf(value: str, label: str) -> mp.mpf:

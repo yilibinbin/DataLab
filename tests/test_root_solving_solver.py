@@ -2,9 +2,20 @@ from __future__ import annotations
 
 import mpmath as mp
 import pytest
+from typing import Any, cast
 
 from root_solving.models import RootProblem, RootUnknown
 from root_solving.solver import solve_root_problem
+
+
+def _real_float(value: object) -> float:
+    if isinstance(value, complex):
+        assert value.imag == 0
+        return float(value.real)
+    if isinstance(value, mp.mpc):
+        assert mp.im(value) == 0
+        return float(mp.re(value))
+    return float(cast(Any, value))
 
 
 def test_scalar_bracketed_scipy_solves_quadratic_root() -> None:
@@ -123,6 +134,85 @@ def test_polynomial_mode_returns_all_roots() -> None:
     assert roots == [mp.mpf("-1.0"), mp.mpf("1.0")]
     assert result.residual_norm is not None
     assert mp.isfinite(result.residual_norm)
+
+
+def test_scan_multiple_finds_scalar_roots_in_range() -> None:
+    problem = RootProblem(
+        equations=("x**2 - 4",),
+        unknowns=(RootUnknown("x", initial="0", lower="-3", upper="3"),),
+        mode="scan_multiple",
+        precision=16,
+    )
+
+    result = solve_root_problem(problem)
+
+    assert result.backend == "scipy"
+    assert result.mode == "scan_multiple"
+    values = sorted(round(_real_float(root.value), 6) for root in result.roots)
+    assert values == [-2.0, 2.0]
+    assert [root.name for root in result.roots] == ["x", "x"]
+    assert result.residual_norm is not None
+    assert result.residual_norm <= mp.mpf("1e-10")
+
+
+def test_scan_multiple_rejects_system_shape() -> None:
+    problem = RootProblem(
+        equations=("x + y", "x - y"),
+        unknowns=(RootUnknown("x", initial="1"), RootUnknown("y", initial="1")),
+        mode="scan_multiple",
+        precision=16,
+    )
+
+    with pytest.raises(ValueError, match="scan|single|scalar"):
+        solve_root_problem(problem)
+
+
+def test_high_precision_scan_multiple_uses_mpmath() -> None:
+    problem = RootProblem(
+        equations=("x**2 - 2",),
+        unknowns=(RootUnknown("x", initial="0", lower="-2", upper="2"),),
+        mode="scan_multiple",
+        precision=80,
+    )
+
+    result = solve_root_problem(problem)
+
+    assert result.backend == "mpmath"
+    with mp.workdps(80):
+        values = sorted(mp.mpf(root.value) for root in result.roots)
+        assert abs(values[0] + mp.sqrt(2)) < mp.mpf("1e-60")
+        assert abs(values[1] - mp.sqrt(2)) < mp.mpf("1e-60")
+
+
+def test_scan_multiple_does_not_accept_near_zero_false_roots() -> None:
+    result = solve_root_problem(
+        RootProblem(
+            equations=("x*(x - 1e-12)",),
+            unknowns=(RootUnknown("x", lower="0", upper="2e-10"),),
+            mode="scan_multiple",
+            precision=80,
+        )
+    )
+
+    with mp.workdps(80):
+        values = sorted(mp.mpf(root.value) for root in result.roots)
+        assert len(values) == 2
+        assert values[0] == 0
+        assert abs(values[1] - mp.mpf("1e-12")) < mp.mpf("1e-50")
+
+
+def test_scan_multiple_finds_off_grid_even_multiplicity_root() -> None:
+    result = solve_root_problem(
+        RootProblem(
+            equations=("(x - 1.003)^2",),
+            unknowns=(RootUnknown("x", lower="-2", upper="2"),),
+            mode="scan_multiple",
+            precision=16,
+        )
+    )
+
+    values = sorted(round(_real_float(root.value), 6) for root in result.roots)
+    assert values == [1.003]
 
 
 def test_large_scale_scipy_validation_does_not_spuriously_fallback() -> None:
