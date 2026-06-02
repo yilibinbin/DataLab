@@ -125,6 +125,75 @@ def test_root_solving_job_payload_uses_data_rows_and_is_spawn_picklable() -> Non
     assert restored["scan_config"] == {}
 
 
+def test_root_worker_payload_preserves_uncertainty_options() -> None:
+    job = RootSolvingJob(
+        equations=("x^2 - C",),
+        unknown_rows=({"name": "x", "initial": "2", "lower": "", "upper": ""},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=True,
+        constants_rows=({"name": "C", "value": "4.0(2)"},),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=80,
+        display_digits=20,
+        uncertainty_options={"method": "monte_carlo", "monte_carlo_samples": 25, "monte_carlo_seed": "7"},
+    )
+
+    payload = _serialize_root_solving_job(job)
+    restored = _deserialize_root_solving_job(payload)
+
+    assert restored.uncertainty_options == {
+        "method": "monte_carlo",
+        "monte_carlo_samples": 25,
+        "monte_carlo_seed": "7",
+    }
+
+
+def test_execute_root_solving_job_payload_forwards_uncertainty_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    job = RootSolvingJob(
+        equations=("x^2 - C",),
+        unknown_rows=({"name": "x", "initial": "2", "lower": "", "upper": ""},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=True,
+        constants_rows=({"name": "C", "value": "4.0(2)"},),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=80,
+        display_digits=20,
+        uncertainty_options={"method": "monte_carlo", "monte_carlo_samples": 25, "monte_carlo_seed": "7"},
+    )
+
+    def fake_solve_root_batch(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return SimpleNamespace(rows=(), warnings=(), headers=())
+
+    def fake_render_root_batch_result(_batch: object, *, display_digits: int) -> tuple[str, list[dict[str, str]], list[str]]:
+        captured["display_digits"] = display_digits
+        return "markdown", [], ["name"]
+
+    monkeypatch.setattr(workers_core, "solve_root_batch", fake_solve_root_batch)
+    monkeypatch.setattr(workers_core, "render_root_batch_result", fake_render_root_batch_result)
+
+    payload = _execute_root_solving_job_payload(job)
+
+    assert payload["kind"] == "root_solving"
+    assert captured["uncertainty_options"] == {
+        "method": "monte_carlo",
+        "monte_carlo_samples": 25,
+        "monte_carlo_seed": "7",
+    }
+    assert captured["display_digits"] == 20
+
+
 def test_root_solving_legacy_known_rows_payload_migrates_to_data_rows() -> None:
     payload = {
         "equations": ("x**2 - A",),

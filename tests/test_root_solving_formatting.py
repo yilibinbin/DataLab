@@ -109,6 +109,29 @@ def test_render_warnings_below_result_table() -> None:
     )
 
 
+def test_render_root_result_includes_uncertainty_method_details_without_csv_columns() -> None:
+    result = RootResult(
+        roots=(RootValue("x", mp.mpf("2.0"), uncertainty=mp.mpf("0.05")),),
+        backend="mpmath",
+        mode="scalar",
+        residual_norm=mp.mpf("1e-20"),
+        details={
+            "uncertainty_method": "monte_carlo",
+            "monte_carlo_samples": 2000,
+            "monte_carlo_failures": 0,
+        },
+    )
+
+    markdown, csv_rows, csv_headers = render_root_result(result, display_digits=6)
+
+    assert csv_headers == ["name", "value", "uncertainty", "backend", "mode", "residual_norm"]
+    assert "uncertainty_method" not in csv_rows[0]
+    assert "Details:" in markdown
+    assert "- uncertainty method: monte_carlo" in markdown
+    assert "- monte carlo samples: 2000" in markdown
+    assert "- monte carlo failures: 0" in markdown
+
+
 def test_render_scan_multiple_flattens_roots_to_csv_rows() -> None:
     batch = RootBatchResult(
         rows=(
@@ -138,6 +161,76 @@ def test_render_scan_multiple_flattens_roots_to_csv_rows() -> None:
     assert csv_rows[1]["root_index"] == "1"
     assert csv_rows[1]["value"] == "2.0"
     assert "| input_row_index |" in markdown
+
+
+def test_render_batch_result_includes_uncertainty_method_details_without_csv_columns() -> None:
+    batch = RootBatchResult(
+        rows=(
+            RootBatchRowResult(
+                row_index=0,
+                result=RootResult(
+                    roots=(RootValue("x", mp.mpf("2"), uncertainty=mp.mpf("0.05")),),
+                    backend="mpmath",
+                    mode="scalar",
+                    details={
+                        "uncertainty_method": "monte_carlo",
+                        "monte_carlo_samples": 2000,
+                        "monte_carlo_failures": 0,
+                    },
+                ),
+            ),
+        ),
+    )
+
+    markdown, csv_rows, headers = render_root_batch_result(batch, display_digits=8)
+
+    assert "uncertainty_method" not in headers
+    assert "uncertainty_method" not in csv_rows[0]
+    assert "Details:" in markdown
+    assert "- uncertainty method: monte_carlo" in markdown
+    assert "- monte carlo samples: 2000" in markdown
+    assert "- monte carlo failures: 0" in markdown
+
+
+def test_render_batch_result_aggregates_monte_carlo_detail_counters() -> None:
+    batch = RootBatchResult(
+        rows=(
+            RootBatchRowResult(
+                row_index=0,
+                result=RootResult(
+                    roots=(RootValue("x", mp.mpf("2"), uncertainty=mp.mpf("0.05")),),
+                    backend="mpmath",
+                    mode="scalar",
+                    details={
+                        "uncertainty_method": "monte_carlo",
+                        "monte_carlo_failures": 1,
+                        "monte_carlo_valid_samples": 1999,
+                    },
+                ),
+            ),
+            RootBatchRowResult(
+                row_index=1,
+                result=RootResult(
+                    roots=(RootValue("x", mp.mpf("3"), uncertainty=mp.mpf("0.04")),),
+                    backend="mpmath",
+                    mode="scalar",
+                    details={
+                        "uncertainty_method": "linear",
+                        "monte_carlo_failures": 2,
+                        "monte_carlo_valid_samples": 1998,
+                        "monte_carlo_first_failure": "row 2 sample failed",
+                    },
+                ),
+            ),
+        ),
+    )
+
+    markdown, _csv_rows, _headers = render_root_batch_result(batch, display_digits=8)
+
+    assert "- uncertainty method: mixed" in markdown
+    assert "- monte carlo failures: 3" in markdown
+    assert "- monte carlo valid samples: 3997" in markdown
+    assert "- monte carlo first failure: row 2 sample failed" in markdown
 
 
 def test_render_row_failure_as_one_csv_row() -> None:

@@ -896,7 +896,7 @@ Expected: staged files are only root-solving backend/tests.
 - Test: `tests/test_workspace_controller.py`
 - Test: `tests/test_root_solving_formatting.py`
 
-- [ ] **Step 1: Write RED worker and workspace tests**
+- [x] **Step 1: Write RED worker and workspace tests**
 
 Add:
 
@@ -950,7 +950,7 @@ def test_workspace_preserves_root_uncertainty_options(window: Any, tmp_path: Pat
     assert window.root_monte_carlo_seed_edit.text() == "11"
 ```
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run:
 
@@ -960,7 +960,7 @@ PATH=/Users/fanghao/miniconda3/bin:$PATH QT_QPA_PLATFORM=offscreen PYTHONPATH=. 
 
 Expected: fails because UI/payload/workspace fields do not exist.
 
-- [ ] **Step 3: Implement primitive worker payload**
+- [x] **Step 3: Implement primitive worker payload**
 
 Extend `RootSolvingJob` in `app_desktop/workers_core.py`. Append the new defaulted field after the existing `display_digits` field so dataclass non-default field ordering stays valid:
 
@@ -1001,7 +1001,7 @@ uncertainty_options=job.uncertainty_options,
 
 to `solve_root_batch(...)`.
 
-- [ ] **Step 4: Persist workspace config**
+- [x] **Step 4: Persist workspace config**
 
 In `app_desktop/workspace_controller.py`, modify `_capture_root_config(window)` so the returned root-solving config dictionary includes:
 
@@ -1024,7 +1024,7 @@ if samples_widget is not None:
 _set_text(getattr(window, "root_monte_carlo_seed_edit", None), str(options.get("monte_carlo_seed") or ""))
 ```
 
-- [ ] **Step 5: Format method metadata**
+- [x] **Step 5: Format method metadata**
 
 In `root_solving/formatting.py`, ensure Markdown details include:
 
@@ -1036,7 +1036,7 @@ monte carlo failures: 0
 
 when those fields exist in `RootResult.details`.
 
-- [ ] **Step 6: Verify GREEN**
+- [x] **Step 6: Verify GREEN**
 
 Run:
 
@@ -1048,7 +1048,7 @@ python3 -m compileall -q app_desktop/workers_core.py app_desktop/workspace_contr
 
 Expected: all pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 Run:
 

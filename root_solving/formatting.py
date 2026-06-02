@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from mpmath import mp
 
@@ -40,7 +40,7 @@ def render_root_result(
         }
         for root in result.roots
     ]
-    return _render_markdown(csv_rows, result.warnings), csv_rows, list(CSV_HEADERS)
+    return _render_markdown(csv_rows, result.warnings, details=result.details), csv_rows, list(CSV_HEADERS)
 
 
 def render_root_batch_result(
@@ -64,6 +64,7 @@ def render_root_batch_result(
     ]
     rows: list[dict[str, str]] = []
     warnings: list[str] = [warning for warning in batch.warnings if warning]
+    detail_values: dict[str, object] = {}
     for batch_row in batch.rows:
         warnings.extend(warning for warning in batch_row.warnings if warning)
         if batch_row.failure:
@@ -73,6 +74,7 @@ def render_root_batch_result(
             rows.append(_batch_failure_row(batch_row, source_headers, source_output_headers, failure="missing result"))
             continue
         warnings.extend(warning for warning in batch_row.result.warnings if warning)
+        _merge_root_details(detail_values, batch_row.result.details)
         residual_norm = _format_optional_real(batch_row.result.residual_norm, digits)
         if not batch_row.result.roots:
             rows.append(_batch_failure_row(batch_row, source_headers, source_output_headers, failure="no roots"))
@@ -92,7 +94,7 @@ def render_root_batch_result(
                     "failure": "",
                 }
             )
-    return _render_markdown_with_headers(rows, headers, _deduplicate_strings(warnings)), rows, headers
+    return _render_markdown_with_headers(rows, headers, _deduplicate_strings(warnings), details=detail_values), rows, headers
 
 
 def _batch_failure_row(
@@ -143,12 +145,21 @@ def _format_row_index(row: RootBatchRowResult) -> str:
     return "" if row.row_index is None else str(row.row_index)
 
 
-def _render_markdown(rows: list[dict[str, str]], warnings: Iterable[str]) -> str:
-    return _render_markdown_with_headers(rows, list(CSV_HEADERS), warnings)
+def _render_markdown(
+    rows: list[dict[str, str]],
+    warnings: Iterable[str],
+    *,
+    details: Mapping[str, object] | None = None,
+) -> str:
+    return _render_markdown_with_headers(rows, list(CSV_HEADERS), warnings, details=details)
 
 
 def _render_markdown_with_headers(
-    rows: list[dict[str, str]], headers: list[str], warnings: Iterable[str]
+    rows: list[dict[str, str]],
+    headers: list[str],
+    warnings: Iterable[str],
+    *,
+    details: Mapping[str, object] | None = None,
 ) -> str:
     lines = [
         "| " + " | ".join(headers) + " |",
@@ -160,11 +171,74 @@ def _render_markdown_with_headers(
             + " | ".join(_escape_markdown_cell(row.get(header, "")) for header in headers)
             + " |"
         )
+    detail_lines = _root_detail_lines(details or {})
+    if detail_lines:
+        lines.extend(["", "Details:"])
+        lines.extend(f"- {line}" for line in detail_lines)
     warning_lines = [warning for warning in warnings if warning]
     if warning_lines:
         lines.extend(["", "Warnings:"])
         lines.extend(f"- {_escape_markdown_warning(warning)}" for warning in warning_lines)
     return "\n".join(lines)
+
+
+def _root_detail_lines(details: Mapping[str, object]) -> list[str]:
+    keys = (
+        "uncertainty_method",
+        "uncertainty_requested_method",
+        "monte_carlo_samples",
+        "monte_carlo_failures",
+        "monte_carlo_valid_samples",
+        "monte_carlo_first_failure",
+        "uncertainty_bias",
+    )
+    lines: list[str] = []
+    for key in keys:
+        value = details.get(key)
+        if value is None or value == "":
+            continue
+        label = key.replace("_", " ")
+        lines.append(f"{label}: {_escape_markdown_warning(str(value))}")
+    return lines
+
+
+def _merge_root_details(target: dict[str, object], source: Mapping[str, object]) -> None:
+    _merge_same_or_mixed(target, source, "uncertainty_method")
+    _merge_same_or_mixed(target, source, "uncertainty_requested_method")
+    _merge_sum(target, source, "monte_carlo_failures")
+    _merge_sum(target, source, "monte_carlo_valid_samples")
+    _merge_first(target, source, "monte_carlo_first_failure")
+    _merge_same_or_mixed(target, source, "monte_carlo_samples")
+    _merge_same_or_mixed(target, source, "uncertainty_bias")
+
+
+def _merge_same_or_mixed(target: dict[str, object], source: Mapping[str, object], key: str) -> None:
+    value = source.get(key)
+    if value is None or value == "":
+        return
+    if key in target and target[key] != value:
+        target[key] = "mixed"
+        return
+    target[key] = value
+
+
+def _merge_sum(target: dict[str, object], source: Mapping[str, object], key: str) -> None:
+    value = source.get(key)
+    if value is None or value == "":
+        return
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError, OverflowError):
+        _merge_same_or_mixed(target, source, key)
+        return
+    target[key] = int(target.get(key, 0)) + numeric
+
+
+def _merge_first(target: dict[str, object], source: Mapping[str, object], key: str) -> None:
+    value = source.get(key)
+    if value is None or value == "" or key in target:
+        return
+    target[key] = value
 
 
 def _deduplicate_strings(values: Iterable[str]) -> list[str]:
