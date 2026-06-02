@@ -7,7 +7,7 @@ import math
 import multiprocessing
 import queue
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,7 +18,7 @@ import mpmath as mp
 from shared.parallel_backend import KillableProcessTaskRunner
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 from shared.parallel_config import NestedParallelPolicy, ParallelConfig, ParallelMode
-from shared.uncertainty import UncertainValue
+from shared.uncertainty import UncertainValue, parse_uncertainty_format
 
 from data_extrapolation_latex_latest import (
     _dual_msg,
@@ -53,6 +53,10 @@ from fitting.auto_models import (
     fit_linear_model,
 )
 from fitting.hp_fitter import FitResult
+from root_solving.batch import solve_root_batch
+from root_solving.formatting import render_root_batch_result
+from root_solving.models import RootUnknown
+from shared.input_normalization import normalize_constants_state
 # Private-by-convention logger name — matches the rest of DataLab
 # (_logger in sse.py, collaborate.py, mcmc_fitter.py, etc.). The
 # leading underscore prevents ``from app_desktop.workers_core import
@@ -1134,6 +1138,22 @@ class FitJob:
     parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
 
 
+@dataclass(frozen=True)
+class RootSolvingJob:
+    equations: tuple[str, ...]
+    unknown_rows: tuple[dict[str, str], ...]
+    data_headers: tuple[str, ...]
+    data_rows: tuple[tuple[str, ...], ...]
+    constants_enabled: bool
+    constants_rows: tuple[dict[str, str], ...]
+    constants_view: str
+    constants_text: str
+    mode: str
+    scan_config: dict[str, str | int | float | bool]
+    precision: int
+    display_digits: int
+
+
 @dataclass
 class FitResultPayload:
     job: FitJob
@@ -1160,6 +1180,200 @@ class FitBatchResultEntry:
 
 _FIT_SUBPROCESS_POLL_INTERVAL = 0.05
 _FIT_SUBPROCESS_TIMEOUT_SLACK = 0.05
+
+
+_ROOT_CSV_HEADERS = ["name", "value", "uncertainty", "backend", "mode", "residual_norm"]
+ROOT_SOLVING_SUBPROCESS_TIMEOUT_SECONDS = 300.0
+
+
+def _serialize_root_solving_job(job: RootSolvingJob) -> dict[str, Any]:
+    return {
+        "equations": tuple(str(value) for value in job.equations),
+        "unknown_rows": tuple(
+            _string_row(row, ("name", "initial", "lower", "upper"), optional_keys=("source",))
+            for row in job.unknown_rows
+        ),
+        "data_headers": tuple(str(value) for value in job.data_headers),
+        "data_rows": tuple(tuple(str(cell) for cell in row) for row in job.data_rows),
+        "constants_enabled": bool(job.constants_enabled),
+        "constants_rows": tuple(_string_row(row, ("name", "value")) for row in job.constants_rows),
+        "constants_view": str(job.constants_view),
+        "constants_text": str(job.constants_text),
+        "mode": str(job.mode),
+        "scan_config": dict(job.scan_config),
+        "precision": int(job.precision),
+        "display_digits": int(job.display_digits),
+    }
+
+
+def _string_row(
+    row: Mapping[str, Any],
+    keys: tuple[str, ...],
+    *,
+    optional_keys: tuple[str, ...] = (),
+) -> dict[str, str]:
+    clean = {key: "" if row.get(key) is None else str(row.get(key)) for key in keys}
+    for key in optional_keys:
+        if key in row:
+            clean[key] = "" if row.get(key) is None else str(row.get(key))
+    return clean
+
+
+def _deserialize_root_solving_job(payload: Mapping[str, Any]) -> RootSolvingJob:
+    data_headers = tuple(str(value) for value in payload.get("data_headers", ()))
+    data_rows = _data_row_sequence(payload.get("data_rows", ()))
+    if not data_headers and "known_rows" in payload:
+        data_headers, data_rows = _legacy_known_rows_to_data(payload)
+    return RootSolvingJob(
+        equations=tuple(str(value) for value in payload.get("equations", ())),
+        unknown_rows=tuple(
+            _string_row(
+                _dict_string_row(row),
+                ("name", "initial", "lower", "upper"),
+                optional_keys=("source",),
+            )
+            for row in _row_sequence(payload.get("unknown_rows", ()))
+        ),
+        data_headers=data_headers,
+        data_rows=data_rows,
+        constants_enabled=bool(payload.get("constants_enabled", False)),
+        constants_rows=tuple(_dict_string_row(row) for row in _row_sequence(payload.get("constants_rows", ()))),
+        constants_view=str(payload.get("constants_view", "table")),
+        constants_text=str(payload.get("constants_text", "")),
+        mode=str(payload.get("mode", "auto")),
+        scan_config=_deserialize_scan_config(payload.get("scan_config", {})),
+        precision=int(payload.get("precision", 16)),
+        display_digits=int(payload.get("display_digits", 10)),
+    )
+
+
+def _legacy_known_rows_to_data(
+    payload: Mapping[str, Any],
+) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...]]:
+    known_rows = tuple(_dict_string_row(row) for row in _row_sequence(payload.get("known_rows", ())))
+    headers = tuple(row.get("name", "").strip() for row in known_rows if row.get("name", "").strip())
+    values = tuple(row.get("value", "") for row in known_rows if row.get("name", "").strip())
+    if not headers:
+        return (), ()
+    return headers, (values,)
+
+
+def _row_sequence(value: Any) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, (tuple, list)):
+        raise ValueError("root-solving rows must be a tuple/list of objects")
+    rows: list[Mapping[str, Any]] = []
+    for row in value:
+        if not isinstance(row, Mapping):
+            raise ValueError("root-solving row must be an object")
+        rows.append(row)
+    return tuple(rows)
+
+
+def _data_row_sequence(value: Any) -> tuple[tuple[str, ...], ...]:
+    if not isinstance(value, (tuple, list)):
+        raise ValueError("root-solving data rows must be a tuple/list of rows")
+    rows: list[tuple[str, ...]] = []
+    for row in value:
+        if not isinstance(row, (tuple, list)):
+            raise ValueError("root-solving data row must be a tuple/list")
+        rows.append(tuple(str(cell) for cell in row))
+    return tuple(rows)
+
+
+def _deserialize_scan_config(value: Any) -> dict[str, str | int | float | bool]:
+    if not isinstance(value, Mapping):
+        raise ValueError("root-solving scan_config must be an object")
+    clean: dict[str, str | int | float | bool] = {}
+    for key, item in value.items():
+        if isinstance(item, (str, int, float, bool)):
+            clean[str(key)] = item
+    return clean
+
+
+def _dict_string_row(row: Mapping[str, Any]) -> dict[str, str]:
+    return {str(key): "" if value is None else str(value) for key, value in row.items()}
+
+
+def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
+    constants_state = normalize_constants_state(
+        enabled=job.constants_enabled,
+        rows=job.constants_rows,
+        view=job.constants_view,
+        text=job.constants_text,
+        numeric_mode="uncertainty",
+    )
+    data_rows = tuple(
+        tuple(parse_uncertainty_format(cell) for cell in row)
+        for row in job.data_rows
+    )
+    unknowns = tuple(RootUnknown(**row) for row in job.unknown_rows if row.get("name", "").strip())
+    batch = solve_root_batch(
+        equations=job.equations,
+        unknowns=unknowns,
+        data_headers=job.data_headers,
+        data_rows=data_rows,
+        constants_state=constants_state,
+        mode=job.mode,
+        precision=job.precision,
+    )
+    markdown, csv_rows, csv_headers = render_root_batch_result(batch, display_digits=job.display_digits)
+    headers = csv_headers or list(_ROOT_CSV_HEADERS)
+    roots_count = sum(len(row.result.roots) for row in batch.rows if row.result is not None)
+    warnings = list(batch.warnings)
+    for row in batch.rows:
+        warnings.extend(row.warnings)
+        if row.result is not None:
+            warnings.extend(row.result.warnings)
+    warnings = _deduplicate_strings(warnings)
+    return {
+        "kind": "root_solving",
+        "markdown": markdown,
+        "csv_rows": csv_rows,
+        "csv_headers": headers,
+        "log": (
+            f"root solving completed: mode={job.mode} rows={len(batch.rows)} "
+            f"roots={roots_count} precision={job.precision}"
+        ),
+        "warnings": warnings,
+    }
+
+
+def _deduplicate_strings(values: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
+def _root_solving_job_entry(job_payload: dict[str, Any]) -> dict[str, object]:
+    job = _deserialize_root_solving_job(job_payload)
+    return _execute_root_solving_job_payload(job)
+
+
+def _execute_root_solving_job_payload_subprocess(
+    job: RootSolvingJob,
+    *,
+    timeout_seconds: float | None = ROOT_SOLVING_SUBPROCESS_TIMEOUT_SECONDS,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict[str, object]:
+    job_payload = _serialize_root_solving_job(job)
+    runner = KillableProcessTaskRunner(config=ParallelConfig())
+    try:
+        return cast(
+            dict[str, object],
+            runner.run_killable(
+                _root_solving_job_entry,
+                job_payload,
+                timeout_seconds=timeout_seconds,
+                should_cancel=should_cancel,
+            ),
+        )
+    except InterruptedError as exc:
+        raise InterruptedError("Root solving cancelled") from exc
 
 
 def _fit_job_requires_process_boundary(job: FitJob) -> bool:
@@ -1883,5 +2097,11 @@ __all__ = [
     "FitBatchTask",
     "FitJob",
     "FitResultPayload",
+    "RootSolvingJob",
+    "ROOT_SOLVING_SUBPROCESS_TIMEOUT_SECONDS",
+    "_execute_root_solving_job_payload",
+    "_execute_root_solving_job_payload_subprocess",
+    "_root_solving_job_entry",
+    "_serialize_root_solving_job",
     "split_extrapolation_result",
 ]

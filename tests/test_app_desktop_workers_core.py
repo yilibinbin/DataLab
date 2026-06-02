@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import pickle
 import os
+import pickle
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import mpmath as mp
 import pytest
@@ -15,6 +15,11 @@ from app_desktop.workers_core import (
     CalcJob,
     FitBatchTask,
     FitJob,
+    RootSolvingJob,
+    _deserialize_root_solving_job,
+    _execute_root_solving_job_payload,
+    _execute_root_solving_job_payload_subprocess,
+    _serialize_root_solving_job,
     _deserialize_fit_job,
     _execute_calc_job,
     _execute_fit_job_payload,
@@ -28,6 +33,19 @@ from fitting.implicit_model import ImplicitModelDefinition, ImplicitSolveOptions
 from shared.parallel_config import ParallelConfig
 from shared.parallel_backend import KillableProcessTaskRunner, current_parallel_depth
 from shared.uncertainty import UncertainValue
+
+
+def _assert_primitive_payload(value: object) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            assert isinstance(key, str)
+            _assert_primitive_payload(item)
+        return
+    if isinstance(value, tuple):
+        for item in value:
+            _assert_primitive_payload(item)
+        return
+    assert isinstance(value, (str, int, float, bool, type(None)))
 
 
 def _small_self_consistent_fit_job(
@@ -79,6 +97,154 @@ def _small_self_consistent_fit_job(
         timeout_seconds=10.0,
         parallel_config=parallel_config or ParallelConfig(),
     )
+
+
+def test_root_solving_job_payload_uses_data_rows_and_is_spawn_picklable() -> None:
+    job = RootSolvingJob(
+        equations=("x**2 - A",),
+        unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        data_headers=("A",),
+        data_rows=(("4.0(2)",),),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=16,
+        display_digits=10,
+    )
+
+    payload = _serialize_root_solving_job(job)
+    restored = pickle.loads(pickle.dumps(payload))
+
+    _assert_primitive_payload(restored)
+    assert restored["data_headers"] == ("A",)
+    assert restored["data_rows"] == (("4.0(2)",),)
+    assert restored["scan_config"] == {}
+
+
+def test_root_solving_legacy_known_rows_payload_migrates_to_data_rows() -> None:
+    payload = {
+        "equations": ("x**2 - A",),
+        "unknown_rows": ({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        "known_rows": ({"name": "A", "value": "4.0(2)"},),
+        "constants_enabled": False,
+        "constants_rows": (),
+        "constants_view": "table",
+        "constants_text": "",
+        "mode": "scalar",
+        "precision": 16,
+        "display_digits": 10,
+    }
+
+    job = _deserialize_root_solving_job(payload)
+
+    assert job.data_headers == ("A",)
+    assert job.data_rows == (("4.0(2)",),)
+    assert job.scan_config == {}
+
+
+def test_execute_root_solving_job_payload_returns_markdown_csv_and_log() -> None:
+    job = RootSolvingJob(
+        equations=("x^2 - C",),
+        unknown_rows=({"name": "x", "initial": "2", "lower": "", "upper": ""},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=True,
+        constants_rows=({"name": "C", "value": "4.0000000000000000000000000001(2)"},),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=50,
+        display_digits=20,
+    )
+
+    payload = _execute_root_solving_job_payload(job)
+
+    assert payload["kind"] == "root_solving"
+    markdown = payload["markdown"]
+    assert isinstance(markdown, str)
+    assert "| input_row_index | root_index | name | value | uncertainty |" in markdown
+    assert payload["csv_headers"] == [
+        "input_row_index",
+        "root_index",
+        "name",
+        "value",
+        "uncertainty",
+        "backend",
+        "mode",
+        "residual_norm",
+        "failure",
+    ]
+    csv_rows = cast(list[dict[str, str]], payload["csv_rows"])
+    assert csv_rows[0]["name"] == "x"
+    assert csv_rows[0]["uncertainty"]
+    log = payload["log"]
+    assert isinstance(log, str)
+    assert "root solving completed" in log
+
+
+def test_root_solving_subprocess_uses_killable_runner_and_forwards_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = RootSolvingJob(
+        equations=("x - 2",),
+        unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=50,
+        display_digits=12,
+    )
+    calls: dict[str, object] = {}
+    expected: dict[str, object] = {
+        "kind": "root_solving",
+        "markdown": "ok",
+        "csv_rows": [],
+        "csv_headers": ["name", "value", "uncertainty", "backend", "mode", "residual_norm"],
+        "log": "ok",
+        "warnings": [],
+    }
+
+    class FakeRunner:
+        def __init__(self, *, config: ParallelConfig) -> None:
+            calls["config"] = config
+
+        def run_killable(
+            self,
+            target: Callable[[dict[str, Any]], dict[str, object]],
+            payload: dict[str, Any],
+            *,
+            timeout_seconds: float | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> dict[str, object]:
+            calls["target"] = target
+            calls["payload"] = payload
+            calls["timeout_seconds"] = timeout_seconds
+            calls["should_cancel"] = should_cancel
+            return expected
+
+    monkeypatch.setattr(workers_core, "KillableProcessTaskRunner", FakeRunner)
+
+    result = _execute_root_solving_job_payload_subprocess(
+        job,
+        timeout_seconds=12.5,
+        should_cancel=lambda: False,
+    )
+
+    assert result is expected
+    assert isinstance(calls["config"], ParallelConfig)
+    assert calls["target"] is workers_core._root_solving_job_entry
+    assert calls["payload"] == _serialize_root_solving_job(job)
+    assert calls["timeout_seconds"] == 12.5
+    assert callable(calls["should_cancel"])
 
 
 def _depth_probe_payload(payload: dict[str, Any]) -> dict[str, Any]:

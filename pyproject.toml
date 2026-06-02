@@ -129,6 +129,7 @@ datalab = "cli.main:main"
 include = [
     "cli*",
     "shared*",
+    "root_solving*",
     "fitting*",
     "extrapolation_methods*",
     "datalab_latex*",
