@@ -18,6 +18,9 @@ _COMPLEX_UNCERTAINTY_WARNING = "Linear uncertainty propagation is only supported
 _SECOND_ORDER_SYSTEM_WARNING = (
     "Second-order root uncertainty is currently supported for scalar real roots only; use Monte Carlo for systems."
 )
+_SECOND_ORDER_MULTI_INPUT_WARNING = (
+    "Second-order root uncertainty fell back to linear propagation: multiple uncertain inputs require mixed curvature terms."
+)
 
 
 def attach_root_uncertainty(
@@ -195,6 +198,16 @@ def _attach_scalar_second_order(
     root = linear.roots[0]
     if root.uncertainty is None:
         return _with_linear_method(linear)
+    if len(uncertain_inputs) > 1:
+        return replace(
+            _with_linear_method(linear),
+            details={
+                **linear.details,
+                "uncertainty_method": "linear",
+                "uncertainty_requested_method": "second_order",
+            },
+            warnings=(*linear.warnings, _SECOND_ORDER_MULTI_INPUT_WARNING),
+        )
 
     bias = mp.mpf("0")
     variance = mp.mpf("0")

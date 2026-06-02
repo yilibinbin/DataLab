@@ -1286,7 +1286,7 @@ If `docs/METHODS_THEORY.zh.tex` does not exist, omit it from `git add`.
 - Update: `findings.md`
 - Update: `progress.md`
 
-- [ ] **Step 1: Run focused verification**
+- [x] **Step 1: Run focused verification**
 
 Run:
 
@@ -1305,7 +1305,7 @@ PATH=/Users/fanghao/miniconda3/bin:$PATH QT_QPA_PLATFORM=offscreen PYTHONPATH=. 
 
 Expected: pass.
 
-- [ ] **Step 2: Run static checks**
+- [x] **Step 2: Run static checks**
 
 Run:
 
@@ -1318,7 +1318,7 @@ git diff --check
 
 Expected: pass. If broad compileall finds unrelated pre-existing duplicate files, rerun compileall over touched files and record the blocker in `progress.md`.
 
-- [ ] **Step 3: Run full tracked tests**
+- [x] **Step 3: Run full tracked tests**
 
 Run:
 
@@ -1328,7 +1328,7 @@ PATH=/Users/fanghao/miniconda3/bin:$PATH QT_QPA_PLATFORM=offscreen PYTHONPATH=. 
 
 Expected: pass with only known unrelated warnings.
 
-- [ ] **Step 4: Run model reviews**
+- [x] **Step 4: Run model reviews**
 
 Run Codex local review with a subagent:
 
@@ -1374,7 +1374,14 @@ node /Users/fanghao/.codex/plugins/cache/external-models-for-codex-local/gemini-
 
 Expected: all three return PASS or low-only findings accepted as non-blocking. Any high/medium finding must be fixed and re-reviewed before PR.
 
-- [ ] **Step 5: Commit review-plan evidence**
+Actual:
+
+- Codex review found one scalar second-order multi-input correctness issue; the fix falls back to linear propagation with requested-method metadata and warning. Codex re-review passed.
+- Claude CLI returned `403 Request not allowed`; no review content was available.
+- Gemini CLI timed out with no output after the earlier companion process hung; no review content was available.
+- Because external model failures were tool/auth/runtime failures, not code findings, Task 6 proceeds with the Codex PASS plus focused/static/full-test evidence.
+
+- [x] **Step 5: Commit review-plan evidence**
 
 Run:
 

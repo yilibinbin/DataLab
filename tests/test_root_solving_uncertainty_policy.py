@@ -254,3 +254,23 @@ def test_uncertainty_method_second_order_scalar_reports_bias_and_uncertainty() -
     assert result.roots[0].uncertainty is not None
     assert mp.mpf("0.049") < result.roots[0].uncertainty < mp.mpf("0.052")
     assert "uncertainty_bias" in result.details
+
+
+def test_second_order_multi_input_scalar_falls_back_to_linear_with_warning() -> None:
+    result = solve_root_problem(
+        RootProblem(
+            equations=("x - A*B",),
+            unknowns=(RootUnknown("x", initial="6"),),
+            constants={"A": "2.0", "B": "3.0"},
+            mode="scalar",
+            precision=80,
+            uncertainty_options=RootUncertaintyOptions(method="second_order"),
+        ),
+        uncertain_inputs={"A": UncertainValue("2.0", "0.5"), "B": UncertainValue("3.0", "0.25")},
+    )
+
+    assert result.details["uncertainty_method"] == "linear"
+    assert result.details["uncertainty_requested_method"] == "second_order"
+    assert result.roots[0].uncertainty is not None
+    assert mp.almosteq(result.roots[0].uncertainty, mp.sqrt(mp.mpf("2.5")), abs_eps=mp.mpf("1e-15"))
+    assert any("multiple uncertain inputs" in warning for warning in result.warnings)

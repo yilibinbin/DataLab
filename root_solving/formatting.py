@@ -226,12 +226,23 @@ def _merge_sum(target: dict[str, object], source: Mapping[str, object], key: str
     value = source.get(key)
     if value is None or value == "":
         return
-    try:
-        numeric = int(value)
-    except (TypeError, ValueError, OverflowError):
+    numeric = _detail_int(value, default=None)
+    if numeric is None:
         _merge_same_or_mixed(target, source, key)
         return
-    target[key] = int(target.get(key, 0)) + numeric
+    current = _detail_int(target.get(key), default=0)
+    if current is None:
+        current = 0
+    target[key] = current + numeric
+
+
+def _detail_int(value: object, *, default: int | None) -> int | None:
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 def _merge_first(target: dict[str, object], source: Mapping[str, object], key: str) -> None:
