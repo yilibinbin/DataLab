@@ -1065,7 +1065,7 @@ git commit -m "feat: persist root uncertainty options"
 - Modify: `app_desktop/window.py`
 - Test: `tests/test_desktop_root_solving_ui.py`
 
-- [ ] **Step 1: Write RED UI tests**
+- [x] **Step 1: Write RED UI tests**
 
 Add:
 
@@ -1119,7 +1119,7 @@ def test_root_job_collects_uncertainty_options(window: Any) -> None:
     }
 ```
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run:
 
@@ -1129,7 +1129,7 @@ PATH=/Users/fanghao/miniconda3/bin:$PATH QT_QPA_PLATFORM=offscreen PYTHONPATH=. 
 
 Expected: fails because controls do not exist.
 
-- [ ] **Step 3: Add UI controls below root constants**
+- [x] **Step 3: Add UI controls below root constants**
 
 In `app_desktop/panels.py`, after `root_constants_editor`, create:
 
@@ -1162,7 +1162,7 @@ root_layout.addWidget(self.root_uncertainty_group)
 
 Add `_on_root_uncertainty_method_changed()` to show/hide Monte Carlo controls and update help text. Do not use in-app prose explaining general software behavior; the label should only state the selected calculation method and trigger condition.
 
-- [ ] **Step 4: Connect dirty tracking and job build**
+- [x] **Step 4: Connect dirty tracking and job build**
 
 In `app_desktop/window.py`, include:
 
@@ -1176,7 +1176,7 @@ in `RootSolvingJob`.
 
 Connect changed signals to `_mark_workspace_dirty`.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run:
 
@@ -1188,7 +1188,7 @@ python3 -m compileall -q app_desktop/panels.py app_desktop/window.py tests/test_
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run:
 

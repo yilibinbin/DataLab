@@ -62,6 +62,69 @@ def test_root_solving_page_has_required_widgets(window: Any) -> None:
     assert isinstance(window.root_formula_preview_button, QPushButton)
 
 
+def test_root_solving_page_has_uncertainty_controls(window: Any) -> None:
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+
+    assert _combo_data(window.root_uncertainty_method_combo) == [
+        "auto",
+        "off",
+        "linear",
+        "monte_carlo",
+        "second_order",
+    ]
+    assert window.root_monte_carlo_samples_spin.minimum() == 2
+    assert window.root_monte_carlo_samples_spin.maximum() == 50000
+    assert window.root_monte_carlo_samples_spin.value() == 2000
+    assert window.root_uncertainty_method_help_label.text()
+
+
+def test_root_monte_carlo_controls_visible_only_for_monte_carlo(window: Any, qtbot: Any) -> None:
+    window.show()
+    qtbot.waitExposed(window)
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    QApplication.processEvents()
+
+    window.root_uncertainty_method_combo.setCurrentIndex(window.root_uncertainty_method_combo.findData("auto"))
+    QApplication.processEvents()
+    assert not window.root_monte_carlo_samples_spin.isVisible()
+    assert not window.root_monte_carlo_seed_edit.isVisible()
+
+    window.root_uncertainty_method_combo.setCurrentIndex(
+        window.root_uncertainty_method_combo.findData("monte_carlo")
+    )
+    QApplication.processEvents()
+    assert window.root_monte_carlo_samples_spin.isVisible()
+    assert window.root_monte_carlo_seed_edit.isVisible()
+
+
+def test_root_uncertainty_help_text_refreshes_on_language_change(window: Any) -> None:
+    window.root_uncertainty_method_combo.setCurrentIndex(window.root_uncertainty_method_combo.findData("monte_carlo"))
+
+    window._apply_language("en")
+    assert window.root_uncertainty_method_help_label.text() == "Resolves roots from sampled uncertain inputs."
+
+    window._apply_language("zh")
+    assert window.root_uncertainty_method_help_label.text() == "对输入不确定度抽样后重新求根。"
+
+
+def test_root_job_collects_uncertainty_options(window: Any) -> None:
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    window.root_equations_edit.setPlainText("x^2 - C")
+    window.root_unknowns_table.set_rows([{"name": "x", "initial": "2", "lower": "", "upper": ""}])
+    window.root_constants_editor.set_rows([{"name": "C", "value": "4.0(2)"}])
+    window.root_uncertainty_method_combo.setCurrentIndex(window.root_uncertainty_method_combo.findData("monte_carlo"))
+    window.root_monte_carlo_samples_spin.setValue(123)
+    window.root_monte_carlo_seed_edit.setText("5")
+
+    job = window._build_root_solving_job(data_path=None, manual_content="")
+
+    assert job.uncertainty_options == {
+        "method": "monte_carlo",
+        "monte_carlo_samples": 123,
+        "monte_carlo_seed": "5",
+    }
+
+
 def test_root_solving_page_has_no_known_values_table(window: Any) -> None:
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
 

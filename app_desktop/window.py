@@ -515,6 +515,7 @@ class ExtrapolationWindow(
             getattr(self, "fit_expr_edit", None),
             getattr(self, "fit_target_edit", None),
             getattr(self, "root_equations_edit", None),
+            getattr(self, "root_monte_carlo_seed_edit", None),
             getattr(self, "implicit_variable_edit", None),
             getattr(self, "implicit_equation_edit", None),
             getattr(self, "implicit_output_edit", None),
@@ -556,6 +557,7 @@ class ExtrapolationWindow(
             "fit_model_combo",
             "implicit_method_combo",
             "root_mode_combo",
+            "root_uncertainty_method_combo",
             "latex_engine_combo",
         ):
             combo = getattr(self, combo_name, None)
@@ -600,6 +602,7 @@ class ExtrapolationWindow(
             "poly_degree_spin",
             "implicit_max_iterations_spin",
             "implicit_timeout_spin",
+            "root_monte_carlo_samples_spin",
         ):
             spin = getattr(self, spin_name, None)
             if spin is not None:
