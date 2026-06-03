@@ -6,6 +6,19 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.7.4] — 2026-06-04
+
+### Fixed
+- Improved root-solving GUI layout bounds so the configuration pane cannot
+  be narrowed enough to hide controls.
+- Fixed root-solving result display and LaTeX export to preserve compact
+  value-with-uncertainty formatting.
+- Kept root-solving LaTeX export settings stable across background worker
+  completion.
+- Added SciPy package coverage and smoke checks for packaged desktop builds.
+- Hardened root-solving worker payload defaults and result formatting for
+  compatibility with older or partial workspace data.
+
 ## [2.7.3] — 2026-06-03
 
 ### Added
