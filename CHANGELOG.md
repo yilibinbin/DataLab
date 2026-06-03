@@ -6,6 +6,27 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.7.1] — 2026-06-03
+
+### Added
+- Added selectable uncertainty propagation methods for root solving,
+  including automatic linear propagation, Monte Carlo propagation,
+  scalar second-order propagation, and an option to disable propagation.
+- Added root-solving example workspaces for linear uncertainty,
+  Monte Carlo uncertainty, and batch quadratic solving.
+
+### Changed
+- Persisted root-solving uncertainty options in workspace files and
+  worker payloads.
+- Improved root-solving result metadata so uncertainty method choices
+  are reported consistently.
+
+### Fixed
+- Hardened restoration of root-solving uncertainty settings from
+  saved workspaces.
+- Improved validation and diagnostics for malformed root-solving
+  workspace settings and Monte Carlo sample counts.
+
 ## [2.7.0] — 2026-06-02
 
 ### Added
