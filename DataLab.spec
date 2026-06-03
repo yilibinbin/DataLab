@@ -19,6 +19,8 @@ data_gui.ps1):
   guarded with ``Path.is_file()``)
 - hidden imports + ``collect_all`` for mpmath and sympy — numerical and
   symbolic backends used by fitting and constraints
+- hidden imports + ``collect_all`` for scipy — double-precision fitting
+  and root solving use SciPy when the precision setting is <= 16
 - hidden imports + ``collect_all`` for emcee and corner — these ship
   behind ``HAS_EMCEE`` runtime guards so PyInstaller's static analyser
   drops them without explicit declaration
@@ -58,12 +60,13 @@ hiddenimports = [
     "certifi",
     "mpmath",
     "sympy",
+    "scipy",
     "emcee",
     "emcee.moves",
     "emcee.backends",
     "corner",
 ]
-for _pkg in ("certifi", "mpmath", "sympy", "emcee", "corner"):
+for _pkg in ("certifi", "mpmath", "sympy", "scipy", "emcee", "corner"):
     _d, _b, _h = collect_all(_pkg)
     datas += _d
     binaries += _b

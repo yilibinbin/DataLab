@@ -5,8 +5,10 @@ from typing import Any, cast
 import pytest
 
 from root_solving.batch import solve_root_batch
-from root_solving.models import RootProblem, RootResult, RootUncertaintyOptions, RootUnknown, RootValue
+import root_solving.batch as batch_module
+from root_solving.models import RootUncertaintyOptions, RootUnknown
 from shared.input_normalization import normalize_constants_state
+from shared.parallel_config import NestedParallelPolicy, ParallelConfig, ParallelMode, ParallelWorkload
 from shared.uncertainty import parse_uncertainty_format
 
 
@@ -63,6 +65,53 @@ def test_non_empty_data_solves_one_problem_per_row() -> None:
     assert [row.source_values["A"] for row in result.rows] == ["4.0", "9.0"]
 
 
+def test_batch_parallel_config_uses_inner_allow_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, Any] = {}
+    real_executor = batch_module.ParallelMapExecutor
+
+    class SpyExecutor:
+        def __init__(self, config: ParallelConfig) -> None:
+            observed["config"] = config
+            self._delegate = real_executor(ParallelConfig(mode=ParallelMode.SERIAL))
+
+        def map_pure(
+            self,
+            func: Any,
+            items: Any,
+            *,
+            workload: ParallelWorkload,
+            timeout: float | None = None,
+        ) -> list[Any]:
+            item_list = list(items)
+            observed["workload"] = workload
+            observed["item_count"] = len(item_list)
+            return self._delegate.map_pure(func, item_list, workload=workload, timeout=timeout)
+
+    monkeypatch.setattr(batch_module, "ParallelMapExecutor", SpyExecutor)
+    constants_state = normalize_constants_state(enabled=False, rows=[], numeric_mode="uncertainty")
+    data_rows = tuple((parse_uncertainty_format(str(value)),) for value in (4, 9, 16, 25))
+
+    solve_root_batch(
+        equations=("x**2 - A",),
+        unknowns=(RootUnknown("x", initial="1", lower="", upper=""),),
+        data_headers=("A",),
+        data_rows=data_rows,
+        constants_state=constants_state,
+        mode="scalar",
+        precision=16,
+        parallel_config=ParallelConfig(mode=ParallelMode.PROCESS, max_workers=2, reserve_cores=0, min_process_tasks=2),
+    )
+
+    config = observed["config"]
+    assert isinstance(config, ParallelConfig)
+    assert config.nested_policy == NestedParallelPolicy.ALLOW
+    assert config.max_workers == 2
+    assert config.reserve_cores == 1
+    assert config.min_process_tasks == 12
+    assert observed["workload"] == ParallelWorkload.CPU_FLOAT
+    assert observed["item_count"] == 4
+
+
 def test_batch_scan_multiple_returns_multiple_roots_per_row() -> None:
     constants_state = normalize_constants_state(enabled=False, rows=[], numeric_mode="uncertainty")
     data_rows = (
@@ -106,15 +155,8 @@ def test_batch_scan_multiple_applies_max_roots_scan_config() -> None:
     assert len(result.rows[0].result.roots) == 1
 
 
-def test_batch_forwards_uncertainty_options_to_row_problem(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_batch_forwards_uncertainty_options_to_row_problem() -> None:
     constants_state = normalize_constants_state(enabled=False, rows=[], numeric_mode="uncertainty")
-    captured: list[RootProblem] = []
-
-    def fake_solve(problem: RootProblem, **_kwargs: object) -> RootResult:
-        captured.append(problem)
-        return RootResult(roots=(RootValue("x", 2),), backend="mpmath", mode="scalar")
-
-    monkeypatch.setattr("root_solving.batch.solve_root_problem", fake_solve)
 
     result = solve_root_batch(
         equations=("x**2 - A",),
@@ -129,20 +171,13 @@ def test_batch_forwards_uncertainty_options_to_row_problem(monkeypatch: pytest.M
     )
 
     assert result.rows[0].result is not None
-    assert captured[0].uncertainty_options.method == "off"
+    assert result.rows[0].result.roots[0].uncertainty is None
 
 
-def test_batch_accepts_uncertainty_options_dataclass(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_batch_accepts_uncertainty_options_dataclass() -> None:
     constants_state = normalize_constants_state(enabled=False, rows=[], numeric_mode="uncertainty")
-    captured: list[RootProblem] = []
 
-    def fake_solve(problem: RootProblem, **_kwargs: object) -> RootResult:
-        captured.append(problem)
-        return RootResult(roots=(RootValue("x", 2),), backend="mpmath", mode="scalar")
-
-    monkeypatch.setattr("root_solving.batch.solve_root_problem", fake_solve)
-
-    solve_root_batch(
+    result = solve_root_batch(
         equations=("x**2 - A",),
         unknowns=(RootUnknown("x", initial="2", lower="", upper=""),),
         data_headers=("A",),
@@ -153,8 +188,9 @@ def test_batch_accepts_uncertainty_options_dataclass(monkeypatch: pytest.MonkeyP
         uncertainty_options=RootUncertaintyOptions(method="taylor", taylor_order=1),
     )
 
-    assert captured[0].uncertainty_options.method == "taylor"
-    assert captured[0].uncertainty_options.taylor_order == 1
+    assert result.rows[0].result is not None
+    assert result.rows[0].result.details["uncertainty_method"] == "taylor"
+    assert result.rows[0].result.roots[0].uncertainty is not None
 
 
 def test_batch_text_rows_ignore_empty_headers_without_aborting() -> None:

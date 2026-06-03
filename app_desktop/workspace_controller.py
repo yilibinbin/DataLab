@@ -43,6 +43,13 @@ def _normalize_fitting_model(value: Any) -> str:
     return aliases.get(model, model)
 
 
+def _normalize_root_mode(value: Any) -> str:
+    mode = str(value or "scalar")
+    if mode == "auto":
+        return "scalar"
+    return mode
+
+
 def _set_combo_data(combo: QComboBox | None, value: str) -> None:
     if combo is None:
         return
@@ -324,7 +331,7 @@ def _capture_root_config(window: Any) -> dict[str, Any]:
     return {
         "schema": 1,
         "equations": _text(getattr(window, "root_equations_edit", None)),
-        "mode": _combo_data(getattr(window, "root_mode_combo", None), "auto"),
+        "mode": _combo_data(getattr(window, "root_mode_combo", None), "scalar"),
         "unknowns": _root_unknown_rows(window),
         "constants": _constants_editor_state(getattr(window, "root_constants_editor", None)),
         "uncertainty_options": {
@@ -585,7 +592,7 @@ def _restore_implicit_config(window: Any, config: Any, fitting: dict[str, Any] |
 def _restore_root_config(window: Any, config: Any) -> None:
     if not isinstance(config, dict):
         _set_text(getattr(window, "root_equations_edit", None), "")
-        _set_combo_data(getattr(window, "root_mode_combo", None), "auto")
+        _set_combo_data(getattr(window, "root_mode_combo", None), "scalar")
         table = getattr(window, "root_unknowns_table", None)
         if table is not None and hasattr(table, "set_rows"):
             table.set_rows([])
@@ -593,7 +600,7 @@ def _restore_root_config(window: Any, config: Any) -> None:
         _restore_root_uncertainty_options(window, None)
         return
     _set_text(getattr(window, "root_equations_edit", None), str(config.get("equations") or ""))
-    _set_combo_data(getattr(window, "root_mode_combo", None), str(config.get("mode") or "auto"))
+    _set_combo_data(getattr(window, "root_mode_combo", None), _normalize_root_mode(config.get("mode")))
     table = getattr(window, "root_unknowns_table", None)
     if table is not None and hasattr(table, "set_rows"):
         rows = config.get("unknowns")

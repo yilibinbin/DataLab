@@ -86,6 +86,30 @@ def _solve_root_problem_with_system(
     return result
 
 
+def resolve_root_mode(problem: RootProblem, system: RootExpressionSystem) -> RootMode:
+    """Resolve the requested root mode for callers that reuse a prepared system."""
+    return _resolve_mode(problem, system)
+
+
+def solve_prepared_root_problem(
+    problem: RootProblem,
+    system: RootExpressionSystem,
+    mode: RootMode,
+    *,
+    uncertain_inputs: Mapping[str, UncertainValue] | None = None,
+    uncertainty_options: Mapping[str, object] | RootUncertaintyOptions | None = None,
+) -> RootResult:
+    """Solve a root problem with an already-parsed expression system."""
+    if uncertainty_options is not None and not isinstance(uncertainty_options, RootUncertaintyOptions):
+        from root_solving.normalization import normalize_root_uncertainty_options
+
+        normalized_options = normalize_root_uncertainty_options(uncertainty_options)
+    else:
+        normalized_options = uncertainty_options or problem.uncertainty_options
+    prepared_problem = replace(problem, mode=mode, uncertainty_options=normalized_options)
+    return _solve_root_problem_with_system(prepared_problem, system, uncertain_inputs)
+
+
 def _solve_nominal_inputs(
     problem: RootProblem,
     system: RootExpressionSystem,

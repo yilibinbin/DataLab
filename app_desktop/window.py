@@ -1401,6 +1401,8 @@ class ExtrapolationWindow(
         *,
         data_path: Path | None = None,
         manual_content: str = "",
+        generate_latex: bool = False,
+        output_path: str = "",
     ) -> RootSolvingJob:
         equations = tuple(
             line.strip()
@@ -1425,7 +1427,7 @@ class ExtrapolationWindow(
             constants_rows=constants_rows,
             constants_view=constants_view,
             constants_text=constants_text,
-            mode=str(self.root_mode_combo.currentData() or "auto"),
+            mode=str(self.root_mode_combo.currentData() or "scalar"),
             scan_config={},
             precision=int(self._read_precision()),
             display_digits=int(self._display_digits_limit()),
@@ -1447,7 +1449,16 @@ class ExtrapolationWindow(
                     or ""
                 ),
             },
+            language=self._current_output_language(),
+            parallel_config=self._current_parallel_config(),
+            generate_latex=generate_latex,
+            output_path=output_path,
         )
+
+    def _current_output_language(self) -> str:
+        system_lang = getattr(self, "_system_lang", _LANG_ZH)
+        lang_mode = getattr(self, "_lang_mode", _LANG_AUTO)
+        return _LANG_EN if lang_mode == _LANG_EN or (lang_mode == _LANG_AUTO and system_lang == _LANG_EN) else _LANG_ZH
 
     def _reset_implicit_constants_rows(self, config: dict[str, object] | list[dict[str, object]] | None = None):
         editor = getattr(self, "implicit_constants_editor", None)

@@ -12,12 +12,12 @@ def test_pyinstaller_packaging_collects_sympy() -> None:
 
     hidden_imports = re.search(r"hiddenimports\s*=\s*\[(?P<body>.*?)\]", spec, re.S)
     assert hidden_imports is not None
-    for package in ('"mpmath"', '"sympy"', '"emcee"', '"corner"'):
+    for package in ('"mpmath"', '"sympy"', '"scipy"', '"emcee"', '"corner"'):
         assert package in hidden_imports.group("body")
 
     collect_loop = re.search(r"for\s+_pkg\s+in\s+\(([^)]*)\):", spec)
     assert collect_loop is not None
-    for package in ('"mpmath"', '"sympy"', '"emcee"', '"corner"'):
+    for package in ('"mpmath"', '"sympy"', '"scipy"', '"emcee"', '"corner"'):
         assert package in collect_loop.group(1)
 
     assert '--hidden-import "sympy"' in mac

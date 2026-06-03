@@ -75,7 +75,24 @@ class WindowExtrapolationMixin:
         mode = self.mode_combo.currentData()
         data_path, manual_content = self._active_data_source()
         if mode == "root_solving":
-            self._run_root_solving_mode(data_path=data_path, manual_content=manual_content)
+            generate_latex = self.generate_latex_checkbox.isChecked()
+            output_path = ""
+            if generate_latex:
+                output_path_text = self.output_file_edit.text().strip()
+                if not output_path_text:
+                    QMessageBox.critical(
+                        self,
+                        self._tr("错误", "Error"),
+                        self._tr("请在「选项」中设置 LaTeX 输出路径。", "Please set LaTeX output path in Options."),
+                    )
+                    return
+                output_path = str(_safe_resolve_path(output_path_text))
+            self._run_root_solving_mode(
+                data_path=data_path,
+                manual_content=manual_content,
+                generate_latex=generate_latex,
+                output_path=output_path,
+            )
             return
 
         constants_editor = getattr(self, "error_constants_editor", None)
@@ -454,9 +471,14 @@ class WindowExtrapolationMixin:
                 pass
         self._calc_worker = None
 
-    def _run_root_solving_mode(self, *, data_path=None, manual_content: str = ""):
+    def _run_root_solving_mode(self, *, data_path=None, manual_content: str = "", generate_latex: bool = False, output_path: str = ""):
         try:
-            job = self._build_root_solving_job(data_path=data_path, manual_content=manual_content)
+            job = self._build_root_solving_job(
+                data_path=data_path,
+                manual_content=manual_content,
+                generate_latex=generate_latex,
+                output_path=output_path,
+            )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, self._tr("错误", "Error"), self._localize_text(str(exc)))
             return
@@ -505,6 +527,7 @@ class WindowExtrapolationMixin:
             self._set_csv_data(csv_rows, headers, suggestion="root_solving_results.csv")
         else:
             self._reset_csv_data()
+        self._write_root_latex_if_requested(payload)
         self._remember_last_result("root_solving", dict(payload))
         QMessageBox.information(
             self,
@@ -512,6 +535,32 @@ class WindowExtrapolationMixin:
             self._tr("计算完成，请查看结果。", "Finished. Please check the results."),
         )
         self.tabs.setCurrentIndex(self.result_tab_index)
+
+    def _write_root_latex_if_requested(self, payload: dict[str, object]) -> None:
+        generate_latex = bool(payload.get("generate_latex", False))
+        output_path = str(payload.get("output_path", "") or "")
+        if not generate_latex or not output_path:
+            return
+        raw_rows = payload.get("raw_rows")
+        if not isinstance(raw_rows, list):
+            self._append_log(self._tr("求根 LaTeX 未写入：缺少原始结果。", "Root LaTeX was not written: raw results are missing."))
+            return
+        try:
+            from .root_latex_writer import write_root_latex
+
+            tex_path = write_root_latex(
+                output_path=output_path,
+                rows=raw_rows,
+                caption=self._caption_value(require=False),
+                digits=self.latex_input_precision_spin.value(),
+                group_size=self.latex_group_size_spin.value(),
+                include_dcolumn=self.dcolumn_checkbox.isChecked(),
+                language=self._current_output_language(),
+            )
+            self._append_log(self._tr(f"求根 LaTeX 已写入: {tex_path}", f"Root LaTeX written: {tex_path}"))
+            self._load_latex_into_editor(tex_path)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, self._tr("写入失败", "Write Failed"), str(exc))
 
     def _on_root_solving_failed(self, message: str):
         localized = self._localize_text(message)

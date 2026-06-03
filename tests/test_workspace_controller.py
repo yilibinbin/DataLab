@@ -558,11 +558,31 @@ def test_workspace_restore_without_root_config_clears_stale_root_ui(qtbot) -> No
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
     assert target.root_equations_edit.toPlainText() == ""
-    assert target.root_mode_combo.currentData() == "auto"
+    assert target.root_mode_combo.currentData() == "scalar"
     assert target.root_unknowns_table.rows() == []
     assert target.root_constants_editor.isChecked() is False
     assert target.root_constants_editor.rows() == []
     assert target.root_constants_editor.raw_text() == ""
+
+
+def test_workspace_restore_migrates_legacy_root_auto_mode(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import _restore_root_config
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    _set_combo_data(target.root_mode_combo, "scan_multiple")
+
+    _restore_root_config(
+        target,
+        {
+            "equations": "x - 1",
+            "mode": "auto",
+            "unknowns": [{"name": "x", "initial": "1", "lower": "", "upper": ""}],
+        },
+    )
+
+    assert target.root_mode_combo.currentData() == "scalar"
 
 
 def test_workspace_capture_ignores_stale_result_markdown_cache(qtbot) -> None:
