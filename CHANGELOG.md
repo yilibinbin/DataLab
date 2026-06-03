@@ -6,6 +6,27 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.7.3] — 2026-06-03
+
+### Added
+- Added localized root-solving result output, warnings, logs, and
+  LaTeX table export.
+
+### Changed
+- Parallelized batch root solving through the shared parallel backend
+  while reusing prepared root-expression systems.
+- Removed the visible root-solving Auto mode and migrated legacy
+  root-solving workspaces to scalar mode.
+- Included SciPy in the packaged desktop application for
+  double-precision root solving and fitting paths.
+
+### Fixed
+- Preserved high-precision root result values for raw result payloads
+  and LaTeX export.
+- Made root-solving constants default to disabled in the desktop UI.
+- Kept root-solving workspace restore paths from retaining stale UI
+  state when older workspaces omit root configuration.
+
 ## [2.7.2] — 2026-06-03
 
 ### Changed
