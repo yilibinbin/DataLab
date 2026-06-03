@@ -53,12 +53,13 @@ def test_root_solving_page_has_required_widgets(window: Any) -> None:
     for name in required:
         assert hasattr(window, name), name
 
-    assert _combo_data(window.root_mode_combo) == ["auto", "scalar", "scan_multiple", "polynomial", "system"]
+    assert _combo_data(window.root_mode_combo) == ["scalar", "scan_multiple", "polynomial", "system"]
     assert [
         window.root_unknowns_table.table_view.horizontalHeaderItem(index).text()
         for index in range(window.root_unknowns_table.table_view.columnCount())
     ] == ["Name", "Initial", "Lower", "Upper"]
     assert window.root_constants_editor.numeric_mode() == "uncertainty"
+    assert window.root_constants_editor.isChecked() is False
     assert isinstance(window.root_formula_preview_button, QPushButton)
 
 
@@ -218,7 +219,7 @@ def test_root_solving_controls_mark_workspace_dirty(window: Any) -> None:
     assert window._workspace_dirty is True
 
     window._workspace_dirty = False
-    window.root_mode_combo.setCurrentIndex(window.root_mode_combo.findData("scalar"))
+    window.root_mode_combo.setCurrentIndex(window.root_mode_combo.findData("scan_multiple"))
     QApplication.processEvents()
     assert window._workspace_dirty is True
 

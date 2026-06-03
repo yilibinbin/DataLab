@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 
 from mpmath import mp
 
+from root_solving.messages import localize_root_message
 from root_solving.models import RootBatchResult, RootBatchRowResult, RootResult
 
 CSV_HEADERS = ["name", "value", "uncertainty", "backend", "mode", "residual_norm"]
@@ -24,7 +25,7 @@ _BATCH_RESULT_COLUMNS = frozenset(BATCH_CSV_HEADERS)
 
 
 def render_root_result(
-    result: RootResult, *, display_digits: int = 10
+    result: RootResult, *, display_digits: int = 10, language: str = "en"
 ) -> tuple[str, list[dict[str, str]], list[str]]:
     """Render a root-solving result for desktop markdown and CSV plumbing."""
     digits = max(1, int(display_digits))
@@ -40,11 +41,11 @@ def render_root_result(
         }
         for root in result.roots
     ]
-    return _render_markdown(csv_rows, result.warnings, details=result.details), csv_rows, list(CSV_HEADERS)
+    return _render_markdown(csv_rows, result.warnings, details=result.details, language=language), csv_rows, list(CSV_HEADERS)
 
 
 def render_root_batch_result(
-    batch: RootBatchResult, *, display_digits: int = 10
+    batch: RootBatchResult, *, display_digits: int = 10, language: str = "en"
 ) -> tuple[str, list[dict[str, str]], list[str]]:
     """Render a root batch result as a flat table for desktop result plumbing."""
     digits = max(1, int(display_digits))
@@ -94,7 +95,7 @@ def render_root_batch_result(
                     "failure": "",
                 }
             )
-    return _render_markdown_with_headers(rows, headers, _deduplicate_strings(warnings), details=detail_values), rows, headers
+    return _render_markdown_with_headers(rows, headers, _deduplicate_strings(warnings), details=detail_values, language=language), rows, headers
 
 
 def _batch_failure_row(
@@ -150,8 +151,9 @@ def _render_markdown(
     warnings: Iterable[str],
     *,
     details: Mapping[str, object] | None = None,
+    language: str = "en",
 ) -> str:
-    return _render_markdown_with_headers(rows, list(CSV_HEADERS), warnings, details=details)
+    return _render_markdown_with_headers(rows, list(CSV_HEADERS), warnings, details=details, language=language)
 
 
 def _render_markdown_with_headers(
@@ -160,15 +162,17 @@ def _render_markdown_with_headers(
     warnings: Iterable[str],
     *,
     details: Mapping[str, object] | None = None,
+    language: str = "en",
 ) -> str:
+    display_headers = [_display_header(header, language=language) for header in headers]
     lines = [
-        "| " + " | ".join(headers) + " |",
-        "| " + " | ".join("---" for _ in headers) + " |",
+        "| " + " | ".join(display_headers) + " |",
+        "| " + " | ".join("---" for _ in display_headers) + " |",
     ]
     for row in rows:
         lines.append(
             "| "
-            + " | ".join(_escape_markdown_cell(row.get(header, "")) for header in headers)
+            + " | ".join(_escape_markdown_cell(_display_cell(header, row.get(header, ""), language=language)) for header in headers)
             + " |"
         )
     detail_lines = _root_detail_lines(details or {})
@@ -177,9 +181,40 @@ def _render_markdown_with_headers(
         lines.extend(f"- {line}" for line in detail_lines)
     warning_lines = [warning for warning in warnings if warning]
     if warning_lines:
-        lines.extend(["", "Warnings:"])
-        lines.extend(f"- {_escape_markdown_warning(warning)}" for warning in warning_lines)
+        lines.extend(["", _warning_label(language)])
+        lines.extend(f"- {_escape_markdown_warning(localize_root_message(warning, language=language))}" for warning in warning_lines)
     return "\n".join(lines)
+
+
+_ZH_HEADERS = {
+    "input_row_index": "输入行",
+    "root_index": "根序号",
+    "name": "名称",
+    "value": "值",
+    "uncertainty": "不确定度",
+    "backend": "后端",
+    "mode": "模式",
+    "residual_norm": "残差范数",
+    "failure": "失败原因",
+}
+
+
+def _display_header(header: str, *, language: str) -> str:
+    if language != "zh":
+        return header
+    if header.startswith("input_") and header not in _ZH_HEADERS:
+        return f"输入 {header.removeprefix('input_')}"
+    return _ZH_HEADERS.get(header, header)
+
+
+def _warning_label(language: str) -> str:
+    return "警告:" if language == "zh" else "Warnings:"
+
+
+def _display_cell(header: str, value: str, *, language: str) -> str:
+    if header == "failure":
+        return localize_root_message(value, language=language)
+    return value
 
 
 def _root_detail_lines(details: Mapping[str, object]) -> list[str]:

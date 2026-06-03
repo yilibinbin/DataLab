@@ -55,6 +55,7 @@ from fitting.auto_models import (
 from fitting.hp_fitter import FitResult
 from root_solving.batch import solve_root_batch
 from root_solving.formatting import render_root_batch_result
+from root_solving.messages import localize_root_message
 from root_solving.models import RootUnknown
 from root_solving.normalization import normalize_root_uncertainty_options
 from shared.input_normalization import normalize_constants_state
@@ -1154,6 +1155,10 @@ class RootSolvingJob:
     precision: int
     display_digits: int
     uncertainty_options: dict[str, object] = field(default_factory=lambda: {"method": "taylor", "taylor_order": 1})
+    language: str = "en"
+    parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
+    generate_latex: bool = False
+    output_path: str = ""
 
 
 @dataclass
@@ -1207,6 +1212,10 @@ def _serialize_root_solving_job(job: RootSolvingJob) -> dict[str, Any]:
         "uncertainty_options": uncertainty_options,
         "precision": int(job.precision),
         "display_digits": int(job.display_digits),
+        "language": str(job.language),
+        "parallel_config": _serialize_parallel_config(job.parallel_config),
+        "generate_latex": bool(job.generate_latex),
+        "output_path": str(job.output_path),
     }
 
 
@@ -1249,7 +1258,16 @@ def _deserialize_root_solving_job(payload: Mapping[str, Any]) -> RootSolvingJob:
         uncertainty_options=_normalize_root_uncertainty_payload(payload.get("uncertainty_options", {})),
         precision=int(payload.get("precision", 16)),
         display_digits=int(payload.get("display_digits", 10)),
+        language=_deserialize_language(payload.get("language", "en")),
+        parallel_config=_deserialize_parallel_config(cast(dict[str, Any] | None, payload.get("parallel_config"))),
+        generate_latex=bool(payload.get("generate_latex", False)),
+        output_path=str(payload.get("output_path", "")),
     )
+
+
+def _deserialize_language(value: Any) -> str:
+    language = str(value or "en").strip().lower()
+    return "en" if language == "en" else "zh"
 
 
 def _normalize_root_uncertainty_payload(value: Any) -> dict[str, object]:
@@ -1341,8 +1359,13 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         scan_config=job.scan_config,
         data_text_rows=job.data_rows,
         uncertainty_options=job.uncertainty_options,
+        parallel_config=job.parallel_config,
     )
-    markdown, csv_rows, csv_headers = render_root_batch_result(batch, display_digits=job.display_digits)
+    markdown, csv_rows, csv_headers = render_root_batch_result(
+        batch,
+        display_digits=job.display_digits,
+        language=job.language,
+    )
     headers = csv_headers or list(_ROOT_CSV_HEADERS)
     roots_count = sum(len(row.result.roots) for row in batch.rows if row.result is not None)
     warnings = list(batch.warnings)
@@ -1356,12 +1379,72 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         "markdown": markdown,
         "csv_rows": csv_rows,
         "csv_headers": headers,
+        "raw_rows": _serialize_root_batch_raw_rows(batch, digits=job.precision),
         "log": (
-            f"root solving completed: mode={job.mode} rows={len(batch.rows)} "
-            f"roots={roots_count} precision={job.precision}"
+            _root_log_text(
+                language=job.language,
+                mode=job.mode,
+                row_count=len(batch.rows),
+                roots_count=roots_count,
+                precision=job.precision,
+            )
         ),
-        "warnings": warnings,
+        "warnings": _localize_root_messages(warnings, language=job.language),
+        "generate_latex": bool(job.generate_latex),
+        "output_path": str(job.output_path),
     }
+
+
+def _root_log_text(
+    *,
+    language: str,
+    mode: str,
+    row_count: int,
+    roots_count: int,
+    precision: int,
+) -> str:
+    if language == "en":
+        return f"root solving completed: mode={mode} rows={row_count} roots={roots_count} precision={precision}"
+    return f"求根完成：模式={mode} 行数={row_count} 根数={roots_count} 精度={precision}"
+
+
+def _serialize_root_batch_raw_rows(batch: Any, *, digits: int) -> list[dict[str, str]]:
+    raw_digits = max(1, int(digits))
+    rows: list[dict[str, str]] = []
+    for batch_row in batch.rows:
+        input_row_index = "0" if batch_row.row_index is None else str(batch_row.row_index)
+        base = {
+            "input_row_index": input_row_index,
+            **{f"input_{key}": str(value) for key, value in batch_row.source_values.items()},
+            "failure": str(batch_row.failure or ""),
+        }
+        if batch_row.result is None:
+            rows.append({**base, "root_index": "", "name": "", "value": "", "uncertainty": "", "backend": "", "mode": "", "residual_norm": ""})
+            continue
+        residual = "" if batch_row.result.residual_norm is None else mp.nstr(batch_row.result.residual_norm, n=raw_digits)
+        if not batch_row.result.roots:
+            rows.append({**base, "root_index": "", "name": "", "value": "", "uncertainty": "", "backend": batch_row.result.backend, "mode": batch_row.result.mode, "residual_norm": residual})
+            continue
+        for index, root in enumerate(batch_row.result.roots):
+            rows.append(
+                {
+                    **base,
+                    "root_index": str(index),
+                    "name": root.name,
+                    "value": mp.nstr(root.value, n=raw_digits),
+                    "uncertainty": "" if root.uncertainty is None else mp.nstr(root.uncertainty, n=raw_digits),
+                    "backend": batch_row.result.backend,
+                    "mode": batch_row.result.mode,
+                    "residual_norm": residual,
+                }
+            )
+    return rows
+
+
+def _localize_root_messages(values: Iterable[str], *, language: str) -> list[str]:
+    if language == "en":
+        return list(values)
+    return [localize_root_message(value, language=language) for value in values]
 
 
 def _deduplicate_strings(values: Iterable[str]) -> list[str]:
@@ -1387,7 +1470,7 @@ def _execute_root_solving_job_payload_subprocess(
     should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, object]:
     job_payload = _serialize_root_solving_job(job)
-    runner = KillableProcessTaskRunner(config=ParallelConfig())
+    runner = KillableProcessTaskRunner(config=job.parallel_config)
     try:
         return cast(
             dict[str, object],

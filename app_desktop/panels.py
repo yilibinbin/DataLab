@@ -1362,7 +1362,7 @@ def build_left_panel(self):
     root_equation_title_row.addWidget(self.root_formula_preview_button)
     root_layout.addLayout(root_equation_title_row)
 
-    self.root_equations_edit = QPlainTextEdit("x^2 - C")
+    self.root_equations_edit = QPlainTextEdit("x^2 - 2")
     self.root_equations_edit.setMinimumHeight(96)
     self.root_equations_edit.setPlaceholderText(
         "每行一个方程，按 F_i(...)=0 求解 / One equation per line, interpreted as F_i(...)=0"
@@ -1372,7 +1372,6 @@ def build_left_panel(self):
     root_mode_layout = QFormLayout()
     self.root_mode_combo = QComboBox()
     root_mode_items = [
-        ("自动", "Auto", "auto"),
         ("标量", "Scalar", "scalar"),
         ("扫描多根", "Scan multiple roots", "scan_multiple"),
         ("多项式", "Polynomial", "polynomial"),
@@ -1415,7 +1414,7 @@ def build_left_panel(self):
     _apply_equal_column_stretch(self.root_unknowns_table.table_view)
     root_layout.addWidget(self.root_unknowns_table)
 
-    self.root_constants_editor = ConstantsEditor(min_rows=3, checked=True, numeric_mode="uncertainty")
+    self.root_constants_editor = ConstantsEditor(min_rows=3, checked=False, numeric_mode="uncertainty")
     self._register_text(self.root_constants_editor.checkbox, "启用常数设置", "Enable constants")
     _apply_equal_column_stretch(self.root_constants_editor.table_view)
     self.root_constants_editor.table_view.setStyleSheet(_get_table_style())
@@ -2249,7 +2248,7 @@ def _on_root_uncertainty_method_changed(self) -> None:
 
     help_text = {
         "off": self._tr("不传播输入不确定度。", "Input uncertainty is not propagated."),
-        "taylor": self._tr("使用 Taylor 传播；阶数由下方控件设置。", "Uses Taylor propagation; order is set below."),
+        "taylor": self._tr("使用 Taylor 传播；阶数由阶数控件设置。", "Uses Taylor propagation; order is set by the order control."),
         "monte_carlo": self._tr("对输入不确定度抽样后重新求根。", "Resolves roots from sampled uncertain inputs."),
     }.get(method, "")
     self.root_uncertainty_method_help_label.setText(help_text)

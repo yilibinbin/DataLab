@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 
-from root_solving.models import RootBatchResult, RootBatchRowResult, RootScanConfig, RootUncertaintyOptions, RootUnknown
+from root_solving.expression import RootExpressionSystem, build_root_expression_system
+from root_solving.models import (
+    RootBatchResult,
+    RootBatchRowResult,
+    RootProblem,
+    RootResult,
+    RootScanConfig,
+    RootUncertaintyOptions,
+    RootUnknown,
+    RootValue,
+)
 from root_solving.normalization import normalize_root_problem_from_context
-from root_solving.solver import solve_root_problem
+from root_solving.solver import resolve_root_mode, solve_prepared_root_problem
 from shared.computation_inputs import (
     ComputationDataRow,
     SymbolCategories,
@@ -14,8 +25,35 @@ from shared.computation_inputs import (
     validate_symbol_classification,
 )
 from shared.input_normalization import ConstantsState
+from shared.parallel_backend import ParallelMapExecutor
+from shared.parallel_config import NestedParallelPolicy, ParallelConfig, ParallelMode, ParallelWorkload
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
-from shared.uncertainty import UncertainValue
+from shared.uncertainty import UncertainValue, parse_numeric_value
+
+
+@dataclass(frozen=True)
+class _RootBatchTask:
+    row_index: int | None
+    source_values: dict[str, str]
+    nominal_inputs: dict[str, str]
+    uncertain_inputs: dict[str, UncertainValue]
+    equations: tuple[str, ...]
+    unknowns: tuple[RootUnknown, ...]
+    constants: dict[str, str]
+    scan_config: RootScanConfig
+    precision: int
+    system: RootExpressionSystem
+    mode: str
+    uncertainty_options: Mapping[str, object] | RootUncertaintyOptions | None
+
+
+@dataclass(frozen=True)
+class _RootBatchTaskOutput:
+    row_index: int | None
+    source_values: dict[str, str]
+    result: dict[str, object] | None = None
+    failure: str | None = None
+    warnings: tuple[str, ...] = ()
 
 
 def solve_root_batch(
@@ -30,6 +68,7 @@ def solve_root_batch(
     scan_config: Mapping[str, object] | RootScanConfig | None = None,
     data_text_rows: Sequence[Sequence[str]] | None = None,
     uncertainty_options: Mapping[str, object] | RootUncertaintyOptions | None = None,
+    parallel_config: ParallelConfig | None = None,
 ) -> RootBatchResult:
     clean_equations = tuple(str(equation).strip() for equation in equations if str(equation).strip())
     unknown_rows = _unknown_rows(unknowns)
@@ -51,7 +90,7 @@ def solve_root_batch(
         ),
     )
     validate_symbol_classification(classification)
-    normalize_root_problem_from_context(
+    base_problem = normalize_root_problem_from_context(
         equations=clean_equations,
         unknown_rows=unknown_rows,
         row_values={header: "0" for header in clean_headers},
@@ -61,44 +100,174 @@ def solve_root_batch(
         scan_config=scan_config,
         uncertainty_options=uncertainty_options,
     )
+    base_system = build_root_expression_system(base_problem)
+    resolved_mode = resolve_root_mode(base_problem, base_system)
+    constant_nominals = {
+        name: value
+        for name, value in base_system.nominal_inputs.items()
+        if name not in clean_headers
+    }
 
-    results: list[RootBatchRowResult] = []
+    tasks: list[_RootBatchTask] = []
     for row in rows:
         source_values = _source_values(row, text_rows, precision=precision)
-        try:
-            problem = normalize_root_problem_from_context(
-                equations=clean_equations,
-                unknown_rows=unknown_rows,
-                row_values=source_values,
-                constants_state=constants_state,
-                mode=mode,
-                precision=precision,
-                scan_config=scan_config,
-                uncertainty_options=uncertainty_options,
-            )
-            result = solve_root_problem(
-                problem,
+        nominal_inputs = {
+            name: source_values.get(name, str(value))
+            for name, value in row.values.items()
+        }
+        nominal_inputs.update({name: str(value) for name, value in constant_nominals.items()})
+        tasks.append(
+            _RootBatchTask(
+                row_index=row.index,
+                source_values=source_values,
+                nominal_inputs=nominal_inputs,
                 uncertain_inputs=dict(extract_uncertainties(row, constants_state)),
+                equations=base_problem.equations,
+                unknowns=base_problem.unknowns,
+                constants=dict(base_problem.constants),
+                scan_config=base_problem.scan_config,
+                precision=base_problem.precision,
+                system=base_system,
+                mode=resolved_mode,
+                uncertainty_options=base_problem.uncertainty_options,
             )
-            results.append(
-                RootBatchRowResult(
-                    row_index=row.index,
-                    source_values=source_values,
-                    result=result,
-                    warnings=result.warnings,
-                )
-            )
-        except Exception as exc:  # noqa: BLE001
-            results.append(
-                RootBatchRowResult(
-                    row_index=row.index,
-                    source_values=source_values,
-                    failure=str(exc),
-                    warnings=(str(exc),),
-                )
-            )
+        )
 
+    executor = ParallelMapExecutor(_inner_root_parallel_config(parallel_config))
+    outputs = executor.map_pure(
+        _solve_root_batch_task,
+        tasks,
+        workload=ParallelWorkload.CPU_MPMATH if precision > 16 else ParallelWorkload.CPU_FLOAT,
+    )
+    results = [_task_output_to_row(output) for output in outputs]
     return RootBatchResult(rows=tuple(results), headers=clean_headers)
+
+
+def _solve_root_batch_task(task: _RootBatchTask) -> _RootBatchTaskOutput:
+    source_values = dict(task.source_values)
+    try:
+        uncertainty_options = _row_uncertainty_options(task.uncertainty_options, task.row_index)
+        problem = RootProblem(
+            equations=task.equations,
+            unknowns=task.unknowns,
+            row_values=source_values,
+            constants=task.constants,
+            mode=task.mode,  # type: ignore[arg-type]
+            precision=task.precision,
+            scan_config=task.scan_config,
+        )
+        with precision_guard(problem.precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+            system = replace(
+                task.system,
+                nominal_inputs={name: parse_numeric_value(value) for name, value in task.nominal_inputs.items()},
+            )
+        result = solve_prepared_root_problem(
+            problem,
+            system,
+            task.mode,  # type: ignore[arg-type]
+            uncertain_inputs=task.uncertain_inputs,
+            uncertainty_options=uncertainty_options,
+        )
+        return _RootBatchTaskOutput(
+            row_index=task.row_index,
+            source_values=source_values,
+            result=_serialize_result_for_task(result),
+            warnings=result.warnings,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _RootBatchTaskOutput(
+            row_index=task.row_index,
+            source_values=source_values,
+            failure=str(exc),
+            warnings=(str(exc),),
+        )
+
+
+def _serialize_result_for_task(result: RootResult) -> dict[str, object]:
+    return {
+        "roots": tuple(
+            {
+                "name": root.name,
+                "value": root.value,
+                "uncertainty": root.uncertainty,
+                "contributions": dict(root.contributions),
+            }
+            for root in result.roots
+        ),
+        "backend": result.backend,
+        "mode": result.mode,
+        "residual_norm": result.residual_norm,
+        "jacobian_condition": result.jacobian_condition,
+        "warnings": tuple(result.warnings),
+        "details": dict(result.details),
+    }
+
+
+def _task_output_to_row(output: _RootBatchTaskOutput) -> RootBatchRowResult:
+    result = None if output.result is None else _deserialize_result_from_task(output.result)
+    return RootBatchRowResult(
+        row_index=output.row_index,
+        source_values=output.source_values,
+        result=result,
+        failure=output.failure,
+        warnings=output.warnings,
+    )
+
+
+def _deserialize_result_from_task(payload: Mapping[str, object]) -> RootResult:
+    return RootResult(
+        roots=tuple(
+            RootValue(
+                name=str(root_payload.get("name", "")),
+                value=root_payload.get("value"),  # type: ignore[arg-type]
+                uncertainty=root_payload.get("uncertainty"),  # type: ignore[arg-type]
+                contributions=dict(root_payload.get("contributions", {})),  # type: ignore[arg-type]
+            )
+            for root_payload in payload.get("roots", ())  # type: ignore[union-attr]
+            if isinstance(root_payload, Mapping)
+        ),
+        backend=payload.get("backend", "mpmath"),  # type: ignore[arg-type]
+        mode=payload.get("mode", "scalar"),  # type: ignore[arg-type]
+        residual_norm=payload.get("residual_norm"),  # type: ignore[arg-type]
+        jacobian_condition=payload.get("jacobian_condition"),  # type: ignore[arg-type]
+        warnings=tuple(str(warning) for warning in payload.get("warnings", ())),  # type: ignore[arg-type]
+        details=dict(payload.get("details", {})),  # type: ignore[arg-type]
+    )
+
+
+def _inner_root_parallel_config(config: ParallelConfig | None) -> ParallelConfig:
+    base = config or ParallelConfig()
+    if base.mode == ParallelMode.SERIAL:
+        return base
+    # Root solving runs inside a killable worker process. That boundary
+    # increments DataLab's parallel depth, so the batch row fan-out must opt in
+    # to one inner process pool; worker count and reserve cores still come from
+    # the user's shared parallel settings.
+    return replace(
+        base,
+        reserve_cores=max(0, int(base.reserve_cores)) + 1,
+        nested_policy=NestedParallelPolicy.ALLOW,
+        min_process_tasks=max(12, int(base.min_process_tasks)),
+    )
+
+
+def _row_uncertainty_options(
+    options: Mapping[str, object] | RootUncertaintyOptions | None,
+    row_index: int | None,
+) -> Mapping[str, object] | RootUncertaintyOptions | None:
+    if not options or row_index is None:
+        return options
+    if isinstance(options, RootUncertaintyOptions):
+        seed = str(options.monte_carlo_seed or "").strip()
+    else:
+        seed = str(options.get("monte_carlo_seed", "") or "").strip()
+    if not seed:
+        return options
+    if isinstance(options, RootUncertaintyOptions):
+        return replace(options, monte_carlo_seed=f"{seed}:{row_index}")
+    derived = dict(options)
+    derived["monte_carlo_seed"] = f"{seed}:{row_index}"
+    return derived
 
 
 def _unknown_rows(unknowns: Sequence[RootUnknown]) -> tuple[dict[str, str], ...]:

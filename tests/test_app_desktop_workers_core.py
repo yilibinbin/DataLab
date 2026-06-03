@@ -231,8 +231,14 @@ def test_execute_root_solving_job_payload_forwards_uncertainty_options(
         captured.update(kwargs)
         return SimpleNamespace(rows=(), warnings=(), headers=())
 
-    def fake_render_root_batch_result(_batch: object, *, display_digits: int) -> tuple[str, list[dict[str, str]], list[str]]:
+    def fake_render_root_batch_result(
+        _batch: object,
+        *,
+        display_digits: int,
+        language: str,
+    ) -> tuple[str, list[dict[str, str]], list[str]]:
         captured["display_digits"] = display_digits
+        captured["language"] = language
         return "markdown", [], ["name"]
 
     monkeypatch.setattr(workers_core, "solve_root_batch", fake_solve_root_batch)
@@ -247,6 +253,7 @@ def test_execute_root_solving_job_payload_forwards_uncertainty_options(
         "monte_carlo_seed": "7",
     }
     assert captured["display_digits"] == 20
+    assert captured["language"] == "en"
 
 
 def test_root_solving_legacy_known_rows_payload_migrates_to_data_rows() -> None:
@@ -311,6 +318,40 @@ def test_execute_root_solving_job_payload_returns_markdown_csv_and_log() -> None
     assert "root solving completed" in log
 
 
+def test_execute_root_solving_job_payload_localizes_root_output_to_chinese() -> None:
+    job = RootSolvingJob(
+        equations=("x^2 - C",),
+        unknown_rows=({"name": "x", "initial": "2", "lower": "", "upper": ""},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=True,
+        constants_rows=({"name": "C", "value": "4.0(2)"},),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=16,
+        display_digits=8,
+        language="zh",
+    )
+
+    payload = _execute_root_solving_job_payload(job)
+
+    assert "| 输入行 | 根序号 | 名称 | 值 | 不确定度 |" in cast(str, payload["markdown"])
+    assert "求根完成" in cast(str, payload["log"])
+    assert payload["csv_headers"] == [
+        "input_row_index",
+        "root_index",
+        "name",
+        "value",
+        "uncertainty",
+        "backend",
+        "mode",
+        "residual_norm",
+        "failure",
+    ]
+
+
 def test_execute_root_solving_job_payload_preserves_original_data_cell_precision() -> None:
     original = "1.0000000000000000000000000000000000000000000000001"
     job = RootSolvingJob(
@@ -333,6 +374,33 @@ def test_execute_root_solving_job_payload_preserves_original_data_cell_precision
     csv_rows = cast(list[dict[str, str]], payload["csv_rows"])
     assert csv_rows[0]["A"] == original
     assert csv_rows[0]["value"].startswith(original)
+    raw_rows = cast(list[dict[str, str]], payload["raw_rows"])
+    assert raw_rows[0]["input_A"] == original
+    assert raw_rows[0]["value"].startswith(original)
+
+
+def test_root_raw_rows_assign_default_input_index_for_no_data_multi_root_latex() -> None:
+    job = RootSolvingJob(
+        equations=("x^2 - 4",),
+        unknown_rows=({"name": "x", "initial": "0", "lower": "-3", "upper": "3"},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scan_multiple",
+        scan_config={"sample_count": 100, "max_roots": 5},
+        precision=16,
+        display_digits=10,
+    )
+
+    payload = _execute_root_solving_job_payload(job)
+
+    raw_rows = cast(list[dict[str, str]], payload["raw_rows"])
+    assert len(raw_rows) == 2
+    assert {row["input_row_index"] for row in raw_rows} == {"0"}
+    assert [row["root_index"] for row in raw_rows] == ["0", "1"]
 
 
 def test_root_solving_subprocess_uses_killable_runner_and_forwards_timeout(
