@@ -431,7 +431,6 @@ def build_ui(self):
                     and len(sizes_after) == splitter.count()
                     and all(s >= 0 for s in sizes_after)
                     and sum(sizes_after) > 0
-                    and sizes_after[0] >= self._main_splitter_left_min_width
                 ):
                     # Good restore — leave it in place.
                     pass
@@ -454,11 +453,12 @@ def _refresh_main_splitter_left_min_width(self) -> None:
     left_scroll = getattr(self, "_left_scroll", None)
     if left_container is None or left_scroll is None:
         return
-    left_min_width = max(
-        320,
-        left_container.minimumSizeHint().width(),
-        left_container.sizeHint().width(),
-    )
+    if getattr(self, "mode_combo", None) is not None and self.mode_combo.currentData() == "root_solving":
+        base_min_width = max(320, left_container.minimumSizeHint().width())
+        left_min_width = max(base_min_width, left_container.sizeHint().width())
+    else:
+        base_min_width = max(300, left_container.minimumSizeHint().width())
+        left_min_width = min(max(base_min_width, 300), 360)
     self._main_splitter_left_min_width = left_min_width
     left_scroll.setMinimumWidth(left_min_width)
 
