@@ -114,6 +114,13 @@ def test_root_solving_job_payload_uses_data_rows_and_is_spawn_picklable() -> Non
         scan_config={},
         precision=16,
         display_digits=10,
+        generate_latex=True,
+        output_path="/tmp/root.tex",
+        latex_caption="Frozen caption",
+        latex_digits=12,
+        latex_group_size=4,
+        latex_include_dcolumn=True,
+        latex_language="zh",
     )
 
     payload = _serialize_root_solving_job(job)
@@ -123,6 +130,65 @@ def test_root_solving_job_payload_uses_data_rows_and_is_spawn_picklable() -> Non
     assert restored["data_headers"] == ("A",)
     assert restored["data_rows"] == (("4.0(2)",),)
     assert restored["scan_config"] == {}
+    assert restored["latex_caption"] == "Frozen caption"
+    assert restored["latex_digits"] == 12
+    assert restored["latex_group_size"] == 4
+    assert restored["latex_include_dcolumn"] is True
+    assert restored["latex_language"] == "zh"
+
+
+def test_root_worker_payload_round_trips_frozen_latex_settings() -> None:
+    job = RootSolvingJob(
+        equations=("x**2 - A",),
+        unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        data_headers=("A",),
+        data_rows=(("4.0(2)",),),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=16,
+        display_digits=10,
+        generate_latex=True,
+        output_path="/tmp/root.tex",
+        latex_caption="Root run",
+        latex_digits=11,
+        latex_group_size=2,
+        latex_include_dcolumn=True,
+        latex_language="en",
+    )
+
+    restored = _deserialize_root_solving_job(_serialize_root_solving_job(job))
+
+    assert restored.latex_caption == "Root run"
+    assert restored.latex_digits == 11
+    assert restored.latex_group_size == 2
+    assert restored.latex_include_dcolumn is True
+    assert restored.latex_language == "en"
+
+
+def test_root_worker_payload_defaults_latex_language_to_job_language() -> None:
+    payload = {
+        "equations": ("x**2 - 2",),
+        "unknown_rows": ({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        "data_headers": (),
+        "data_rows": (),
+        "constants_enabled": False,
+        "constants_rows": (),
+        "constants_view": "table",
+        "constants_text": "",
+        "mode": "scalar",
+        "scan_config": {},
+        "precision": 16,
+        "display_digits": 10,
+        "language": "en",
+    }
+
+    restored = _deserialize_root_solving_job(payload)
+
+    assert restored.latex_language == "en"
 
 
 def test_root_worker_payload_preserves_uncertainty_options() -> None:
@@ -298,13 +364,15 @@ def test_execute_root_solving_job_payload_returns_markdown_csv_and_log() -> None
     assert payload["kind"] == "root_solving"
     markdown = payload["markdown"]
     assert isinstance(markdown, str)
-    assert "| input_row_index | root_index | name | value | uncertainty |" in markdown
+    assert "| input_row_index | root_index | name | value | backend |" in markdown
+    assert "| uncertainty |" not in markdown
     assert payload["csv_headers"] == [
         "input_row_index",
         "root_index",
         "name",
         "value",
         "uncertainty",
+        "display_value",
         "backend",
         "mode",
         "residual_norm",
@@ -313,6 +381,7 @@ def test_execute_root_solving_job_payload_returns_markdown_csv_and_log() -> None
     csv_rows = cast(list[dict[str, str]], payload["csv_rows"])
     assert csv_rows[0]["name"] == "x"
     assert csv_rows[0]["uncertainty"]
+    assert csv_rows[0]["display_value"]
     log = payload["log"]
     assert isinstance(log, str)
     assert "root solving completed" in log
@@ -337,7 +406,9 @@ def test_execute_root_solving_job_payload_localizes_root_output_to_chinese() -> 
 
     payload = _execute_root_solving_job_payload(job)
 
-    assert "| 输入行 | 根序号 | 名称 | 值 | 不确定度 |" in cast(str, payload["markdown"])
+    markdown = cast(str, payload["markdown"])
+    assert "| 输入行 | 根序号 | 名称 | 值 | 后端 |" in markdown
+    assert "不确定度" not in markdown.split("\n", maxsplit=1)[0]
     assert "求根完成" in cast(str, payload["log"])
     assert payload["csv_headers"] == [
         "input_row_index",
@@ -345,6 +416,7 @@ def test_execute_root_solving_job_payload_localizes_root_output_to_chinese() -> 
         "name",
         "value",
         "uncertainty",
+        "display_value",
         "backend",
         "mode",
         "residual_norm",

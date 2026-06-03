@@ -34,6 +34,21 @@ def test_gui_requirements_declares_emcee_and_corner() -> None:
     assert "corner" in text, "gui_requirements.txt must list corner"
 
 
+def test_gui_requirements_declares_scipy() -> None:
+    text = _read("gui_requirements.txt")
+    assert "scipy>=" in text, "gui_requirements.txt must install scipy for frozen precision-16 paths"
+
+
+def test_web_requirements_declares_scipy() -> None:
+    text = _read("web_requirements.txt")
+    assert "scipy>=" in text, "web_requirements.txt must install scipy for precision-16 backend paths"
+
+
+def test_pyproject_core_dependencies_declare_scipy() -> None:
+    text = _read("pyproject.toml")
+    assert '"scipy>=' in text, "pyproject.toml core dependencies must include scipy"
+
+
 def test_web_requirements_declares_emcee_and_corner() -> None:
     """Web pip install must also pull in MCMC deps so the web 'Refine
     with MCMC' toggle actually works (was missing pre-Phase-7-followup,
@@ -67,11 +82,17 @@ def test_pyproject_mcmc_extra_declares_emcee_and_corner() -> None:
 # PyInstaller build scripts — hidden-imports / collect-all
 
 
-def test_mac_build_script_declares_mcmc_hidden_imports() -> None:
+def test_mac_build_script_declares_numeric_and_mcmc_hidden_imports() -> None:
     """build_mac_data_gui.sh must pass ``--hidden-import emcee`` and
     ``--hidden-import corner`` so PyInstaller doesn't drop them from
     the bundle just because they're imported lazily."""
     text = _read("build_mac_data_gui.sh")
+    assert '--hidden-import "scipy"' in text, (
+        "build_mac_data_gui.sh must --hidden-import scipy for precision-16 fitting/root solving"
+    )
+    assert '--collect-all "scipy"' in text, (
+        "build_mac_data_gui.sh must --collect-all scipy so frozen apps can use SciPy"
+    )
     assert "--hidden-import" in text and "emcee" in text, (
         "build_mac_data_gui.sh must --hidden-import emcee"
     )
@@ -83,8 +104,14 @@ def test_mac_build_script_declares_mcmc_hidden_imports() -> None:
     )
 
 
-def test_windows_build_script_declares_mcmc_hidden_imports() -> None:
+def test_windows_build_script_declares_numeric_and_mcmc_hidden_imports() -> None:
     text = _read("build_windows_data_gui.ps1")
+    assert '"--hidden-import", "scipy"' in text, (
+        "build_windows_data_gui.ps1 must declare scipy as hidden import"
+    )
+    assert '"--collect-all", "scipy"' in text, (
+        "build_windows_data_gui.ps1 must --collect-all scipy"
+    )
     assert '"--hidden-import", "emcee"' in text, (
         "build_windows_data_gui.ps1 must declare emcee as hidden import"
     )

@@ -551,11 +551,11 @@ class WindowExtrapolationMixin:
             tex_path = write_root_latex(
                 output_path=output_path,
                 rows=raw_rows,
-                caption=self._caption_value(require=False),
-                digits=self.latex_input_precision_spin.value(),
-                group_size=self.latex_group_size_spin.value(),
-                include_dcolumn=self.dcolumn_checkbox.isChecked(),
-                language=self._current_output_language(),
+                caption=str(payload.get("latex_caption", "") or ""),
+                digits=int(payload.get("latex_digits", 16)),
+                group_size=int(payload.get("latex_group_size", 3)),
+                include_dcolumn=bool(payload.get("latex_include_dcolumn", False)),
+                language=str(payload.get("latex_language", "zh") or "zh"),
             )
             self._append_log(self._tr(f"求根 LaTeX 已写入: {tex_path}", f"Root LaTeX written: {tex_path}"))
             self._load_latex_into_editor(tex_path)

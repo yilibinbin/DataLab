@@ -360,6 +360,7 @@ def build_ui(self):
 
     left_scroll = QScrollArea()
     left_scroll.setWidgetResizable(True)
+    self._left_scroll = left_scroll
     left_container = QWidget()
     self.left_container = left_container
     self.left_layout = QVBoxLayout(left_container)
@@ -375,12 +376,12 @@ def build_ui(self):
     splitter.setSizes([520, 820])
 
     self._build_left_panel()
-    left_scroll.setMinimumWidth(320)
     self._build_right_panel(right_layout)
     # 初始化手动输入占位示例
     self._update_manual_placeholder(self.mode_combo.currentData())
     # 根据当前模式刷新可见性
     self._on_mode_change()
+    self._refresh_main_splitter_left_min_width()
 
     # Restore persisted splitter geometry so the user's last-chosen
     # left/right proportions survive a restart. See
@@ -430,6 +431,7 @@ def build_ui(self):
                     and len(sizes_after) == splitter.count()
                     and all(s >= 0 for s in sizes_after)
                     and sum(sizes_after) > 0
+                    and sizes_after[0] >= self._main_splitter_left_min_width
                 ):
                     # Good restore — leave it in place.
                     pass
@@ -446,6 +448,19 @@ def build_ui(self):
         logging.getLogger(__name__).debug(
             "Splitter state restore skipped", exc_info=True
         )
+
+def _refresh_main_splitter_left_min_width(self) -> None:
+    left_container = getattr(self, "left_container", None)
+    left_scroll = getattr(self, "_left_scroll", None)
+    if left_container is None or left_scroll is None:
+        return
+    left_min_width = max(
+        320,
+        left_container.minimumSizeHint().width(),
+        left_container.sizeHint().width(),
+    )
+    self._main_splitter_left_min_width = left_min_width
+    left_scroll.setMinimumWidth(left_min_width)
 
 def build_left_panel(self):
     # Mode selection
@@ -1392,14 +1407,17 @@ def build_left_panel(self):
     root_unknown_header.addStretch()
     self.root_detect_unknowns_button = QPushButton("识别未知量")
     self._register_text(self.root_detect_unknowns_button, "识别未知量", "Detect")
+    self.root_detect_unknowns_button.setToolTip(self._tr("从方程中识别未知量", "Detect unknowns from equations"))
     self.root_detect_unknowns_button.clicked.connect(self._refresh_root_unknown_rows)
     root_unknown_header.addWidget(self.root_detect_unknowns_button)
     self.root_add_unknown_button = QPushButton("+ 行")
     self._register_text(self.root_add_unknown_button, "+ 行", "+ Row")
+    self.root_add_unknown_button.setToolTip(self._tr("手动添加未知量行", "Add an unknown row"))
     self.root_add_unknown_button.clicked.connect(lambda: _add_detected_rows_table_row(self, "root_unknowns_table"))
     root_unknown_header.addWidget(self.root_add_unknown_button)
     self.root_remove_unknown_button = QPushButton("- 行")
     self._register_text(self.root_remove_unknown_button, "- 行", "- Row")
+    self.root_remove_unknown_button.setToolTip(self._tr("删除选中的未知量行", "Remove selected unknown rows"))
     self.root_remove_unknown_button.clicked.connect(lambda: _remove_detected_rows_table_rows(self, "root_unknowns_table"))
     root_unknown_header.addWidget(self.root_remove_unknown_button)
     root_layout.addLayout(root_unknown_header)

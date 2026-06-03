@@ -5,6 +5,11 @@ from pathlib import Path
 
 from mpmath import mp
 
+from datalab_latex.latex_formatting import (
+    calculate_dcolumn_format_for_column,
+    format_value_for_latex_file,
+    siunitx_column_spec,
+)
 from datalab_latex.sisetup_block import build_sisetup_block
 
 
@@ -54,17 +59,37 @@ def build_root_latex_document(
     lines = [line for line in lines if line]
     if caption:
         lines.append(f"\\section*{{{_escape_latex(caption)}}}")
-    lines.extend(_root_table(rows, digits=max(1, int(digits)), language=language))
+    lines.extend(
+        _root_table(
+            rows,
+            digits=max(1, int(digits)),
+            language=language,
+            include_dcolumn=include_dcolumn,
+        )
+    )
     lines.append("\\end{document}")
     return "\n".join(lines) + "\n"
 
 
-def _root_table(rows: Sequence[Mapping[str, object]], *, digits: int, language: str) -> list[str]:
+def _root_table(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    digits: int,
+    language: str,
+    include_dcolumn: bool,
+) -> list[str]:
     headers = _headers(language)
+    value_cells = [
+        _number_with_uncertainty(row.get("value", ""), row.get("uncertainty", ""), digits=digits, include_dcolumn=False)
+        for row in rows
+    ]
+    value_spec = calculate_dcolumn_format_for_column(value_cells, "root_value") if rows and include_dcolumn else "l"
+    if rows and not include_dcolumn:
+        value_spec = siunitx_column_spec(value_cells)
     lines = [
         "\\begin{table}[htbp]",
         "\\centering",
-        "\\begin{tabular}{lllllll}",
+        f"\\begin{{tabular}}{{lll{value_spec}ll}}",
         "\\toprule",
         " & ".join(_escape_latex(header) for header in headers) + r" \\",
         "\\midrule",
@@ -76,8 +101,12 @@ def _root_table(rows: Sequence[Mapping[str, object]], *, digits: int, language: 
                     _escape_latex(_text(row.get("input_row_index", ""))),
                     _escape_latex(_text(row.get("root_index", ""))),
                     _escape_latex(_text(row.get("name", ""))),
-                    _number(row.get("value", ""), digits=digits),
-                    _number(row.get("uncertainty", ""), digits=digits),
+                    _number_with_uncertainty(
+                        row.get("value", ""),
+                        row.get("uncertainty", ""),
+                        digits=digits,
+                        include_dcolumn=include_dcolumn,
+                    ),
                     _escape_latex(_text(row.get("backend", ""))),
                     _escape_latex(_text(row.get("mode", ""))),
                 ]
@@ -90,16 +119,26 @@ def _root_table(rows: Sequence[Mapping[str, object]], *, digits: int, language: 
 
 def _headers(language: str) -> list[str]:
     if language == "en":
-        return ["Input row", "Root", "Name", "Value", "Uncertainty", "Backend", "Mode"]
-    return ["输入行", "根序号", "名称", "值", "不确定度", "后端", "模式"]
+        return ["Input row", "Root", "Name", "Value", "Backend", "Mode"]
+    return ["输入行", "根序号", "名称", "值", "后端", "模式"]
 
 
-def _number(value: object, *, digits: int) -> str:
+def _number_with_uncertainty(value: object, uncertainty: object, *, digits: int, include_dcolumn: bool) -> str:
     text = _text(value)
     if not text:
         return ""
+    sigma_text = _text(uncertainty).strip()
     try:
-        return _escape_latex(mp.nstr(mp.mpf(text), n=digits))
+        sigma = mp.mpf(sigma_text) if sigma_text else None
+        return format_value_for_latex_file(
+            mp.mpf(text),
+            sigma,
+            use_dcolumn=include_dcolumn,
+            latex_input_decimals=None,
+            is_input=False,
+            uncertainty_digits=3,
+            zero_uncertainty_mantissa_decimals=max(1, digits - 1),
+        )
     except Exception:
         return _escape_latex(text)
 

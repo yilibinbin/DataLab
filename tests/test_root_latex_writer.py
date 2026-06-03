@@ -24,9 +24,10 @@ def test_root_latex_uses_raw_rows_and_latex_digits_independent_from_display_digi
     )
 
     assert "Root test" in latex
-    assert "1.23456789012" in latex
+    assert "1.234567890(123)" in latex
     assert "1.23457" not in latex
-    assert "0.000000123456789" in latex or "1.23456789e-7" in latex
+    assert "Uncertainty" not in latex
+    assert "(123)" in latex
 
 
 def test_root_latex_localizes_headers_for_chinese() -> None:
@@ -37,4 +38,24 @@ def test_root_latex_localizes_headers_for_chinese() -> None:
     )
 
     assert "输入行" in latex
-    assert "不确定度" in latex
+    assert "不确定度" not in latex
+
+
+def test_root_latex_uses_numeric_column_spec_controls() -> None:
+    rows = [
+        {
+            "input_row_index": "0",
+            "root_index": "0",
+            "name": "x",
+            "value": "123456789.0",
+            "uncertainty": "120000",
+            "backend": "mpmath",
+            "mode": "scalar",
+        }
+    ]
+
+    siunitx_latex = build_root_latex_document(rows=rows, include_dcolumn=False, language="en")
+    dcolumn_latex = build_root_latex_document(rows=rows, include_dcolumn=True, language="en")
+
+    assert r"\begin{tabular}{lllS" in siunitx_latex
+    assert r"\begin{tabular}{llld" in dcolumn_latex

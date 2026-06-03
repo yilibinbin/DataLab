@@ -381,6 +381,9 @@ $commonArgs = @(
     "--collect-all", "mpmath",
     "--hidden-import", "sympy",
     "--collect-all", "sympy",
+    # SciPy is used for precision-16 fitting and root-solving fast paths.
+    "--hidden-import", "scipy",
+    "--collect-all", "scipy",
     # emcee and corner sit behind ``HAS_EMCEE`` guards in
     # fitting.mcmc_fitter, so PyInstaller's static import graph won't
     # pick them up automatically; declare them explicitly so the bundled

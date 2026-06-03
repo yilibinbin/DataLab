@@ -61,6 +61,39 @@ def test_root_solving_page_has_required_widgets(window: Any) -> None:
     assert window.root_constants_editor.numeric_mode() == "uncertainty"
     assert window.root_constants_editor.isChecked() is False
     assert isinstance(window.root_formula_preview_button, QPushButton)
+    assert window.root_detect_unknowns_button.toolTip()
+    assert window.root_add_unknown_button.toolTip()
+    assert window.root_remove_unknown_button.toolTip()
+
+
+def test_main_splitter_clamps_left_panel_to_config_minimum(window: Any) -> None:
+    window.resize(1500, 920)
+    window.show()
+    QApplication.processEvents()
+
+    splitter = window._main_splitter
+    splitter.setSizes([1, 1499])
+    QApplication.processEvents()
+
+    assert splitter.sizes()[0] >= window._main_splitter_left_min_width
+
+
+def test_main_splitter_left_minimum_refreshes_after_mode_visibility(window: Any) -> None:
+    window.resize(1500, 920)
+    window.show()
+    QApplication.processEvents()
+
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    QApplication.processEvents()
+
+    left_scroll = window._left_scroll
+    expected = max(
+        320,
+        window.left_container.minimumSizeHint().width(),
+        window.left_container.sizeHint().width(),
+    )
+    assert window._main_splitter_left_min_width == expected
+    assert left_scroll.minimumWidth() == expected
 
 
 def test_root_solving_page_has_uncertainty_controls(window: Any) -> None:
@@ -181,6 +214,33 @@ def test_root_solving_job_uses_active_data_source_and_preserves_raw_cells(window
     assert job.data_headers == ("A",)
     assert job.data_rows == (("4.0(2)",), ("9.00(3)",))
     assert job.mode == "scalar"
+
+
+def test_root_solving_job_freezes_latex_settings(window: Any) -> None:
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    window.root_equations_edit.setPlainText("x**2 - A")
+    window.root_unknowns_table.set_rows([{"name": "x", "initial": "1", "lower": "", "upper": ""}])
+    window.manual_data_edit.setPlainText("A\n4.0(2)")
+    window._data_stack.setCurrentIndex(1)
+    window.caption_checkbox.setChecked(True)
+    window.caption_edit.setText("Launch caption")
+    window.latex_input_precision_spin.setValue(12)
+    window.latex_group_size_spin.setValue(4)
+    window.dcolumn_checkbox.setChecked(True)
+    window._apply_language("en")
+
+    job = window._build_root_solving_job(
+        data_path=None,
+        manual_content=window.manual_data_edit.toPlainText(),
+        generate_latex=True,
+        output_path="/tmp/root.tex",
+    )
+
+    assert job.latex_caption == "Launch caption"
+    assert job.latex_digits == 12
+    assert job.latex_group_size == 4
+    assert job.latex_include_dcolumn is True
+    assert job.latex_language == "en"
 
 
 def test_root_result_clears_stale_plot_state(window: Any, monkeypatch: pytest.MonkeyPatch) -> None:

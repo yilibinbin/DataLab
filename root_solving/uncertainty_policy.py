@@ -33,6 +33,8 @@ def attach_root_uncertainty(
 ) -> RootResult:
     if not uncertain_inputs:
         return result
+    if not result.roots:
+        return result
 
     active_uncertain_inputs = _active_uncertain_inputs(system, uncertain_inputs)
     if not active_uncertain_inputs:
