@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Any, cast
+from typing import Any, cast, get_args
 
 from shared.bilingual import _dual_msg
 from shared.computation_inputs import (
@@ -13,10 +13,19 @@ from shared.input_normalization import IDENTIFIER_RE, ConstantsState, normalize_
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS
 from shared.uncertainty import UncertainValue, parse_uncertainty_format
 
-from root_solving.models import RootInputValue, RootMode, RootProblem, RootScanConfig, RootUnknown
+from root_solving.models import (
+    RootInputValue,
+    RootMode,
+    RootProblem,
+    RootScanConfig,
+    RootUncertaintyMethod,
+    RootUncertaintyOptions,
+    RootUnknown,
+)
 
 _ROOT_MODES: set[str] = {"auto", "scalar", "polynomial", "system", "scan_multiple"}
 _UNKNOWN_SOURCES: set[str] = {"manual", "detected"}
+_ROOT_UNCERTAINTY_METHODS: set[str] = set(get_args(RootUncertaintyMethod))
 
 
 def normalize_root_problem(
@@ -31,6 +40,7 @@ def normalize_root_problem(
     mode: str = "auto",
     precision: Any = 16,
     scan_config: Mapping[str, Any] | RootScanConfig | None = None,
+    uncertainty_options: Mapping[str, Any] | RootUncertaintyOptions | None = None,
 ) -> tuple[RootProblem, dict[str, UncertainValue]]:
     clean_equations = tuple(str(equation).strip() for equation in equations if str(equation).strip())
     if not clean_equations:
@@ -69,6 +79,7 @@ def normalize_root_problem(
         mode=cast(RootMode, normalized_mode),
         precision=_clamp_precision(precision),
         scan_config=_normalize_scan_config(scan_config),
+        uncertainty_options=normalize_root_uncertainty_options(uncertainty_options),
     )
     return problem, uncertain_inputs
 
@@ -82,6 +93,7 @@ def normalize_root_problem_from_context(
     mode: str = "auto",
     precision: Any = 16,
     scan_config: Mapping[str, Any] | RootScanConfig | None = None,
+    uncertainty_options: Mapping[str, Any] | RootUncertaintyOptions | None = None,
 ) -> RootProblem:
     clean_equations = tuple(str(equation).strip() for equation in equations if str(equation).strip())
     if not clean_equations:
@@ -113,6 +125,7 @@ def normalize_root_problem_from_context(
         mode=cast(RootMode, normalized_mode),
         precision=_clamp_precision(precision),
         scan_config=_normalize_scan_config(scan_config),
+        uncertainty_options=normalize_root_uncertainty_options(uncertainty_options),
     )
 
 
@@ -219,6 +232,37 @@ def _normalize_scan_config(value: Mapping[str, Any] | RootScanConfig | None) -> 
         residual_tolerance=string_value(value.get("residual_tolerance")).strip(),
         cluster_tolerance=string_value(value.get("cluster_tolerance")).strip(),
     )
+
+
+def normalize_root_uncertainty_options(
+    raw: Mapping[str, Any] | RootUncertaintyOptions | None,
+) -> RootUncertaintyOptions:
+    if raw is None:
+        return RootUncertaintyOptions()
+    if isinstance(raw, RootUncertaintyOptions):
+        return raw
+    if not isinstance(raw, Mapping):
+        raise ValueError("Root uncertainty options must be a mapping.")
+
+    method = string_value(raw.get("method")).strip() or "auto"
+    if method not in _ROOT_UNCERTAINTY_METHODS:
+        raise ValueError(f"Unknown root uncertainty propagation method: {method}")
+
+    return RootUncertaintyOptions(
+        method=cast(RootUncertaintyMethod, method),
+        monte_carlo_samples=_normalize_monte_carlo_samples(raw.get("monte_carlo_samples", 2000)),
+        monte_carlo_seed=string_value(raw.get("monte_carlo_seed")).strip(),
+    )
+
+
+def _normalize_monte_carlo_samples(value: Any) -> int:
+    try:
+        samples = int(str(value).strip())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Monte Carlo sample count must be an integer.") from exc
+    if samples < 2 or samples > 50000:
+        raise ValueError("Monte Carlo sample count must be between 2 and 50000.")
+    return samples
 
 
 def _clamp_positive_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:

@@ -327,6 +327,11 @@ def _capture_root_config(window: Any) -> dict[str, Any]:
         "mode": _combo_data(getattr(window, "root_mode_combo", None), "auto"),
         "unknowns": _root_unknown_rows(window),
         "constants": _constants_editor_state(getattr(window, "root_constants_editor", None)),
+        "uncertainty_options": {
+            "method": _combo_data(getattr(window, "root_uncertainty_method_combo", None), "auto"),
+            "monte_carlo_samples": _value(getattr(window, "root_monte_carlo_samples_spin", None), 2000),
+            "monte_carlo_seed": _text(getattr(window, "root_monte_carlo_seed_edit", None), ""),
+        },
     }
 
 
@@ -584,6 +589,7 @@ def _restore_root_config(window: Any, config: Any) -> None:
         if table is not None and hasattr(table, "set_rows"):
             table.set_rows([])
         _restore_constants_editor_state(getattr(window, "root_constants_editor", None), None)
+        _restore_root_uncertainty_options(window, None)
         return
     _set_text(getattr(window, "root_equations_edit", None), str(config.get("equations") or ""))
     _set_combo_data(getattr(window, "root_mode_combo", None), str(config.get("mode") or "auto"))
@@ -604,6 +610,36 @@ def _restore_root_config(window: Any, config: Any) -> None:
             ]
             table.set_rows(clean_rows)
     _restore_constants_editor_state(getattr(window, "root_constants_editor", None), config.get("constants"))
+    _restore_root_uncertainty_options(window, config.get("uncertainty_options"))
+
+
+def _restore_root_uncertainty_options(window: Any, options: Any) -> None:
+    if not isinstance(options, dict):
+        options = {}
+    method = str(options.get("method") or "auto")
+    combo = getattr(window, "root_uncertainty_method_combo", None)
+    if combo is not None and combo.findData(method) < 0 and combo.findText(method) < 0:
+        method = "auto"
+    _set_combo_data(combo, method)
+    samples_widget = getattr(window, "root_monte_carlo_samples_spin", None)
+    if samples_widget is not None and hasattr(samples_widget, "setValue"):
+        samples_widget.setValue(_clamp_widget_int(samples_widget, _safe_int(options.get("monte_carlo_samples"), 2000)))
+    _set_text(getattr(window, "root_monte_carlo_seed_edit", None), str(options.get("monte_carlo_seed") or ""))
+
+
+def _clamp_widget_int(widget: Any, value: int) -> int:
+    minimum = _safe_int(getattr(widget, "minimum", lambda: value)(), value)
+    maximum = _safe_int(getattr(widget, "maximum", lambda: value)(), value)
+    if maximum < minimum:
+        return value
+    return max(minimum, min(value, maximum))
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 def _legacy_parameter_text_rows(parameter_text: Any) -> list[dict[str, str]]:

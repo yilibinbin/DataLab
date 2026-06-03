@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
 import pytest
 from mpmath import mp
 
-from root_solving.models import RootProblem
+from root_solving.models import RootProblem, RootUncertaintyOptions
 from root_solving.normalization import normalize_root_problem
 from root_solving.batch import solve_root_batch
 from root_solving.models import RootUnknown
@@ -26,6 +26,7 @@ def normalize(
     constants_text: str = "",
     mode: str = "auto",
     precision: Any = 16,
+    uncertainty_options: Mapping[str, Any] | RootUncertaintyOptions | None = None,
 ) -> tuple[RootProblem, dict[str, UncertainValue]]:
     return normalize_root_problem(
         equations=equations,
@@ -37,6 +38,7 @@ def normalize(
         constants_text=constants_text,
         mode=mode,
         precision=precision,
+        uncertainty_options=uncertainty_options,
     )
 
 
@@ -176,6 +178,52 @@ def test_normalize_root_problem_disabled_constants_do_not_create_uncertain_input
 
     assert problem.constants == {}
     assert "C" not in uncertain
+
+
+def test_root_problem_defaults_uncertainty_options_to_auto() -> None:
+    problem, _uncertain = normalize(
+        equations=("x^2 - C",),
+        unknown_rows=[{"name": "x", "initial": "2"}],
+        constants_enabled=True,
+        constants_rows=[{"name": "C", "value": "4.0"}],
+        mode="scalar",
+        precision=80,
+    )
+
+    assert problem.uncertainty_options.method == "auto"
+    assert problem.uncertainty_options.monte_carlo_samples == 2000
+    assert problem.uncertainty_options.monte_carlo_seed == ""
+
+
+def test_root_problem_normalizes_uncertainty_options_dict() -> None:
+    problem, _uncertain = normalize(
+        equations=("x^2 - C",),
+        unknown_rows=[{"name": "x", "initial": "2"}],
+        constants_enabled=True,
+        constants_rows=[{"name": "C", "value": "4.0"}],
+        mode="scalar",
+        precision=80,
+        uncertainty_options={
+            "method": "monte_carlo",
+            "monte_carlo_samples": "250",
+            "monte_carlo_seed": "123",
+        },
+    )
+
+    assert problem.uncertainty_options.method == "monte_carlo"
+    assert problem.uncertainty_options.monte_carlo_samples == 250
+    assert problem.uncertainty_options.monte_carlo_seed == "123"
+
+
+@pytest.mark.parametrize("samples", ["bad", "1", "50001"])  # type: ignore[untyped-decorator]
+def test_root_problem_rejects_invalid_monte_carlo_sample_count(samples: str) -> None:
+    with pytest.raises(ValueError, match="Monte Carlo sample count"):
+        normalize(
+            uncertainty_options={
+                "method": "monte_carlo",
+                "monte_carlo_samples": samples,
+            },
+        )
 
 
 def test_root_normalization_rejects_data_column_constant_collision() -> None:

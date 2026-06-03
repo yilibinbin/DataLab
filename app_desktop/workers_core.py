@@ -1152,6 +1152,7 @@ class RootSolvingJob:
     scan_config: dict[str, str | int | float | bool]
     precision: int
     display_digits: int
+    uncertainty_options: dict[str, object] = field(default_factory=lambda: {"method": "auto"})
 
 
 @dataclass
@@ -1187,6 +1188,7 @@ ROOT_SOLVING_SUBPROCESS_TIMEOUT_SECONDS = 300.0
 
 
 def _serialize_root_solving_job(job: RootSolvingJob) -> dict[str, Any]:
+    uncertainty_options = _normalize_root_uncertainty_payload(job.uncertainty_options)
     return {
         "equations": tuple(str(value) for value in job.equations),
         "unknown_rows": tuple(
@@ -1201,6 +1203,7 @@ def _serialize_root_solving_job(job: RootSolvingJob) -> dict[str, Any]:
         "constants_text": str(job.constants_text),
         "mode": str(job.mode),
         "scan_config": dict(job.scan_config),
+        "uncertainty_options": uncertainty_options,
         "precision": int(job.precision),
         "display_digits": int(job.display_digits),
     }
@@ -1242,9 +1245,26 @@ def _deserialize_root_solving_job(payload: Mapping[str, Any]) -> RootSolvingJob:
         constants_text=str(payload.get("constants_text", "")),
         mode=str(payload.get("mode", "auto")),
         scan_config=_deserialize_scan_config(payload.get("scan_config", {})),
+        uncertainty_options=_normalize_root_uncertainty_payload(payload.get("uncertainty_options", {})),
         precision=int(payload.get("precision", 16)),
         display_digits=int(payload.get("display_digits", 10)),
     )
+
+
+def _normalize_root_uncertainty_payload(value: Any) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        value = {}
+    raw_samples = value.get("monte_carlo_samples")
+    try:
+        samples = int(raw_samples) if raw_samples not in (None, "") else 2000
+    except (TypeError, ValueError, OverflowError):
+        samples = 2000
+    raw_seed = value.get("monte_carlo_seed")
+    return {
+        "method": str(value.get("method") or "auto"),
+        "monte_carlo_samples": samples,
+        "monte_carlo_seed": "" if raw_seed in (None, "") else str(raw_seed),
+    }
 
 
 def _legacy_known_rows_to_data(
@@ -1317,6 +1337,7 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         precision=job.precision,
         scan_config=job.scan_config,
         data_text_rows=job.data_rows,
+        uncertainty_options=job.uncertainty_options,
     )
     markdown, csv_rows, csv_headers = render_root_batch_result(batch, display_digits=job.display_digits)
     headers = csv_headers or list(_ROOT_CSV_HEADERS)

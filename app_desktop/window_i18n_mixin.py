@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
 
@@ -19,6 +20,7 @@ from .resources import (
 _LANG_ZH = "zh"
 _LANG_EN = "en"
 _LANG_AUTO = "auto"
+_LOGGER = logging.getLogger(__name__)
 
 
 class WindowI18nMixin:
@@ -342,6 +344,13 @@ class WindowI18nMixin:
         self._update_display_digits_label()
         self._update_model_hint()
         self._refresh_reference_auto_label()
+        if hasattr(self, "root_uncertainty_method_combo"):
+            try:
+                from app_desktop.panels import _on_root_uncertainty_method_changed
+
+                _on_root_uncertainty_method_changed(self)
+            except Exception:
+                _LOGGER.exception("Failed to refresh root uncertainty i18n")
 
     def _on_language_change(self, index: int):
         if index == 0:

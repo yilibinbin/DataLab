@@ -5,6 +5,7 @@ import base64
 import mpmath as mp
 import pytest
 from PySide6.QtWidgets import QTableWidgetItem
+from types import SimpleNamespace
 
 from fitting.hp_fitter import FitResult
 
@@ -18,6 +19,60 @@ def _set_combo_data(combo, value: str) -> None:
     idx = combo.findData(value)
     assert idx >= 0
     combo.setCurrentIndex(idx)
+
+
+class _FakeCombo:
+    def __init__(self, value: str = "auto") -> None:
+        self.value = value
+        self._pending_value = value
+
+    def currentData(self) -> str:
+        return self.value
+
+    def currentText(self) -> str:
+        return self.value
+
+    def findData(self, value: str) -> int:
+        if value not in {"auto", "off", "linear", "monte_carlo", "second_order"}:
+            return -1
+        self._pending_value = value
+        return 0
+
+    def findText(self, value: str) -> int:
+        return self.findData(value)
+
+    def setCurrentIndex(self, _index: int) -> None:
+        self.value = self._pending_value
+
+
+class _FakeSpin:
+    def __init__(self, value: int = 2000, *, minimum: int = 2, maximum: int = 50000) -> None:
+        self._value = value
+        self._minimum = minimum
+        self._maximum = maximum
+
+    def value(self) -> int:
+        return self._value
+
+    def setValue(self, value: int) -> None:
+        self._value = int(value)
+
+    def minimum(self) -> int:
+        return self._minimum
+
+    def maximum(self) -> int:
+        return self._maximum
+
+
+class _FakeLineEdit:
+    def __init__(self, value: str = "") -> None:
+        self._value = value
+
+    def text(self) -> str:
+        return self._value
+
+    def setText(self, value: str) -> None:
+        self._value = str(value)
 
 
 def _sample_fit_result() -> FitResult:
@@ -248,6 +303,11 @@ def test_workspace_preserves_root_solving_config(qtbot) -> None:
             "text": "# root draft\nC = 1.0(2)\n",
             "numeric_mode": "uncertainty",
         },
+        "uncertainty_options": {
+            "method": "auto",
+            "monte_carlo_samples": 2000,
+            "monte_carlo_seed": "",
+        },
     }
 
     target = ExtrapolationWindow()
@@ -266,6 +326,156 @@ def test_workspace_preserves_root_solving_config(qtbot) -> None:
     assert target.root_constants_editor.numeric_mode() == "uncertainty"
     assert target.root_constants_editor.rows() == [{"name": "C", "value": "1.0(2)"}]
     assert target.root_constants_editor.raw_text() == "# root draft\nC = 1.0(2)\n"
+
+
+def test_workspace_helpers_preserve_root_uncertainty_options_when_controls_exist() -> None:
+    from app_desktop.workspace_controller import _capture_root_config, _restore_root_config
+
+    source = SimpleNamespace(
+        root_equations_edit=None,
+        root_mode_combo=None,
+        root_unknowns_table=None,
+        root_constants_editor=None,
+        root_uncertainty_method_combo=_FakeCombo("monte_carlo"),
+        root_monte_carlo_samples_spin=_FakeSpin(321),
+        root_monte_carlo_seed_edit=_FakeLineEdit("11"),
+    )
+
+    config = _capture_root_config(source)
+
+    assert config["uncertainty_options"] == {
+        "method": "monte_carlo",
+        "monte_carlo_samples": 321,
+        "monte_carlo_seed": "11",
+    }
+
+    target = SimpleNamespace(
+        root_equations_edit=None,
+        root_mode_combo=None,
+        root_unknowns_table=None,
+        root_constants_editor=None,
+        root_uncertainty_method_combo=_FakeCombo("auto"),
+        root_monte_carlo_samples_spin=_FakeSpin(2000),
+        root_monte_carlo_seed_edit=_FakeLineEdit(""),
+    )
+
+    _restore_root_config(target, config)
+
+    assert target.root_uncertainty_method_combo.currentData() == "monte_carlo"
+    assert target.root_monte_carlo_samples_spin.value() == 321
+    assert target.root_monte_carlo_seed_edit.text() == "11"
+
+
+def test_workspace_preserves_root_uncertainty_options(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "root_solving")
+    _set_combo_data(source.root_uncertainty_method_combo, "monte_carlo")
+    source.root_monte_carlo_samples_spin.setValue(321)
+    source.root_monte_carlo_seed_edit.setText("11")
+
+    bundle = capture_workspace(source, title="root uncertainty")
+    root_options = bundle.manifest["workspace"]["config"]["root_solving"]["uncertainty_options"]
+
+    assert root_options == {
+        "method": "monte_carlo",
+        "monte_carlo_samples": 321,
+        "monte_carlo_seed": "11",
+    }
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.root_uncertainty_method_combo.currentData() == "monte_carlo"
+    assert target.root_monte_carlo_samples_spin.value() == 321
+    assert target.root_monte_carlo_seed_edit.text() == "11"
+
+
+def test_workspace_restore_root_uncertainty_options_falls_back_for_bad_sample_count() -> None:
+    from app_desktop.workspace_controller import _restore_root_config
+
+    target = SimpleNamespace(
+        root_equations_edit=None,
+        root_mode_combo=None,
+        root_unknowns_table=None,
+        root_constants_editor=None,
+        root_uncertainty_method_combo=_FakeCombo("auto"),
+        root_monte_carlo_samples_spin=_FakeSpin(123),
+        root_monte_carlo_seed_edit=_FakeLineEdit(""),
+    )
+
+    _restore_root_config(
+        target,
+        {
+            "uncertainty_options": {
+                "method": "monte_carlo",
+                "monte_carlo_samples": "bad",
+                "monte_carlo_seed": "11",
+            }
+        },
+    )
+
+    assert target.root_uncertainty_method_combo.currentData() == "monte_carlo"
+    assert target.root_monte_carlo_samples_spin.value() == 2000
+    assert target.root_monte_carlo_seed_edit.text() == "11"
+
+
+def test_workspace_restore_root_uncertainty_options_clamps_sample_count_to_widget_range() -> None:
+    from app_desktop.workspace_controller import _restore_root_config
+
+    target = SimpleNamespace(
+        root_equations_edit=None,
+        root_mode_combo=None,
+        root_unknowns_table=None,
+        root_constants_editor=None,
+        root_uncertainty_method_combo=_FakeCombo("auto"),
+        root_monte_carlo_samples_spin=_FakeSpin(123),
+        root_monte_carlo_seed_edit=_FakeLineEdit(""),
+    )
+
+    _restore_root_config(
+        target,
+        {
+            "uncertainty_options": {
+                "method": "monte_carlo",
+                "monte_carlo_samples": "999999",
+                "monte_carlo_seed": "11",
+            }
+        },
+    )
+
+    assert target.root_monte_carlo_samples_spin.value() == 50000
+
+
+def test_workspace_restore_root_uncertainty_options_resets_unknown_method_to_auto() -> None:
+    from app_desktop.workspace_controller import _restore_root_config
+
+    target = SimpleNamespace(
+        root_equations_edit=None,
+        root_mode_combo=None,
+        root_unknowns_table=None,
+        root_constants_editor=None,
+        root_uncertainty_method_combo=_FakeCombo("monte_carlo"),
+        root_monte_carlo_samples_spin=_FakeSpin(123),
+        root_monte_carlo_seed_edit=_FakeLineEdit(""),
+    )
+
+    _restore_root_config(
+        target,
+        {
+            "uncertainty_options": {
+                "method": "future_method",
+                "monte_carlo_samples": "200",
+                "monte_carlo_seed": "11",
+            }
+        },
+    )
+
+    assert target.root_uncertainty_method_combo.currentData() == "auto"
 
 
 def test_workspace_restore_without_root_config_clears_stale_root_ui(qtbot) -> None:

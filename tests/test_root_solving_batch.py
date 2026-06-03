@@ -5,7 +5,7 @@ from typing import Any, cast
 import pytest
 
 from root_solving.batch import solve_root_batch
-from root_solving.models import RootUnknown
+from root_solving.models import RootProblem, RootResult, RootUncertaintyOptions, RootUnknown, RootValue
 from shared.input_normalization import normalize_constants_state
 from shared.uncertainty import parse_uncertainty_format
 
@@ -104,6 +104,56 @@ def test_batch_scan_multiple_applies_max_roots_scan_config() -> None:
 
     assert result.rows[0].result is not None
     assert len(result.rows[0].result.roots) == 1
+
+
+def test_batch_forwards_uncertainty_options_to_row_problem(monkeypatch: pytest.MonkeyPatch) -> None:
+    constants_state = normalize_constants_state(enabled=False, rows=[], numeric_mode="uncertainty")
+    captured: list[RootProblem] = []
+
+    def fake_solve(problem: RootProblem, **_kwargs: object) -> RootResult:
+        captured.append(problem)
+        return RootResult(roots=(RootValue("x", 2),), backend="mpmath", mode="scalar")
+
+    monkeypatch.setattr("root_solving.batch.solve_root_problem", fake_solve)
+
+    result = solve_root_batch(
+        equations=("x**2 - A",),
+        unknowns=(RootUnknown("x", initial="2", lower="", upper=""),),
+        data_headers=("A",),
+        data_rows=((parse_uncertainty_format("4.0(2)"),),),
+        data_text_rows=(("4.0(2)",),),
+        constants_state=constants_state,
+        mode="scalar",
+        precision=80,
+        uncertainty_options={"method": "off"},
+    )
+
+    assert result.rows[0].result is not None
+    assert captured[0].uncertainty_options.method == "off"
+
+
+def test_batch_accepts_uncertainty_options_dataclass(monkeypatch: pytest.MonkeyPatch) -> None:
+    constants_state = normalize_constants_state(enabled=False, rows=[], numeric_mode="uncertainty")
+    captured: list[RootProblem] = []
+
+    def fake_solve(problem: RootProblem, **_kwargs: object) -> RootResult:
+        captured.append(problem)
+        return RootResult(roots=(RootValue("x", 2),), backend="mpmath", mode="scalar")
+
+    monkeypatch.setattr("root_solving.batch.solve_root_problem", fake_solve)
+
+    solve_root_batch(
+        equations=("x**2 - A",),
+        unknowns=(RootUnknown("x", initial="2", lower="", upper=""),),
+        data_headers=("A",),
+        data_rows=((parse_uncertainty_format("4.0(2)"),),),
+        constants_state=constants_state,
+        mode="scalar",
+        precision=80,
+        uncertainty_options=RootUncertaintyOptions(method="linear"),
+    )
+
+    assert captured[0].uncertainty_options.method == "linear"
 
 
 def test_batch_text_rows_ignore_empty_headers_without_aborting() -> None:

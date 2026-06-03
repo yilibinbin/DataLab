@@ -223,6 +223,10 @@ Notes:
   \item If samples hit invalid domains (e.g., $\sqrt{x}$ with $x<0$), the corresponding samples fail and must be discarded or modeled with a more appropriate input distribution.
 \end{itemize}
 
+\subsection{Root-solving uncertainty propagation}
+
+For implicit root solving, DataLab supports independent-input first-order propagation through the implicit function theorem. Monte Carlo propagation samples uncertain constants and data inputs, solves each sampled problem, and reports the sample standard deviation of the resulting roots. Scalar second-order propagation is local and intended for smooth scalar real roots; for systems, branch-sensitive equations, or root-count changes, Monte Carlo is preferred.
+
 \section{Fitting Methods (Fitting)}
 
 \subsection{Least squares and weighted $\chi^2$}

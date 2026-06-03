@@ -9,6 +9,7 @@ from root_solving.models import (
     RootProblem,
     RootResult,
     RootScanConfig,
+    RootUncertaintyOptions,
     RootUnknown,
     RootValue,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "RootProblem",
     "RootResult",
     "RootScanConfig",
+    "RootUncertaintyOptions",
     "RootUnknown",
     "RootValue",
     "attach_linear_uncertainty",

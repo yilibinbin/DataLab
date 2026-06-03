@@ -1422,6 +1422,45 @@ def build_left_panel(self):
     self.root_constants_editor.table_view.setMinimumHeight(120)
     root_layout.addWidget(self.root_constants_editor)
 
+    self.root_uncertainty_group = QGroupBox("根的不确定度传播")
+    self._register_title(self.root_uncertainty_group, "根的不确定度传播", "Root uncertainty propagation")
+    root_uncertainty_layout = QFormLayout(self.root_uncertainty_group)
+    self.root_uncertainty_method_combo = QComboBox()
+    root_uncertainty_method_items = [
+        ("自动", "Automatic", "auto"),
+        ("关闭", "Off", "off"),
+        ("线性隐函数", "Linear implicit", "linear"),
+        ("蒙特卡洛", "Monte Carlo", "monte_carlo"),
+        ("标量二阶", "Scalar second-order", "second_order"),
+    ]
+    for zh, _en, data in root_uncertainty_method_items:
+        self.root_uncertainty_method_combo.addItem(zh, data)
+    self._register_combo(self.root_uncertainty_method_combo, root_uncertainty_method_items)
+    lbl_root_uncertainty_method = QLabel("方法：")
+    self._register_text(lbl_root_uncertainty_method, "方法：", "Method:")
+    root_uncertainty_layout.addRow(lbl_root_uncertainty_method, self.root_uncertainty_method_combo)
+
+    self.root_monte_carlo_samples_label = QLabel("样本数：")
+    self._register_text(self.root_monte_carlo_samples_label, "样本数：", "Samples:")
+    self.root_monte_carlo_samples_spin = QSpinBox()
+    self.root_monte_carlo_samples_spin.setRange(2, 50000)
+    self.root_monte_carlo_samples_spin.setValue(2000)
+    root_uncertainty_layout.addRow(self.root_monte_carlo_samples_label, self.root_monte_carlo_samples_spin)
+
+    self.root_monte_carlo_seed_label = QLabel("随机种子：")
+    self._register_text(self.root_monte_carlo_seed_label, "随机种子：", "Seed:")
+    self.root_monte_carlo_seed_edit = QLineEdit()
+    root_uncertainty_layout.addRow(self.root_monte_carlo_seed_label, self.root_monte_carlo_seed_edit)
+
+    self.root_uncertainty_method_help_label = QLabel()
+    self.root_uncertainty_method_help_label.setWordWrap(True)
+    root_uncertainty_layout.addRow(self.root_uncertainty_method_help_label)
+    self.root_uncertainty_method_combo.currentIndexChanged.connect(
+        lambda _index: _on_root_uncertainty_method_changed(self)
+    )
+    root_layout.addWidget(self.root_uncertainty_group)
+    _on_root_uncertainty_method_changed(self)
+
     self.left_layout.addWidget(self.root_box)
     self.root_box.hide()
 
@@ -2171,6 +2210,29 @@ def _open_root_formula_preview(self) -> None:
         expression = "\n".join(lines)
         lhs = "F_i"
     open_formula_preview_dialog(self, expression, lhs)
+
+
+def _on_root_uncertainty_method_changed(self) -> None:
+    method = str(self.root_uncertainty_method_combo.currentData() or "auto")
+    show_monte_carlo = method == "monte_carlo"
+    for widget_name in (
+        "root_monte_carlo_samples_label",
+        "root_monte_carlo_samples_spin",
+        "root_monte_carlo_seed_label",
+        "root_monte_carlo_seed_edit",
+    ):
+        widget = getattr(self, widget_name, None)
+        if widget is not None:
+            widget.setVisible(show_monte_carlo)
+
+    help_text = {
+        "auto": self._tr("自动选择线性传播。", "Automatically uses linear propagation."),
+        "off": self._tr("不传播输入不确定度。", "Input uncertainty is not propagated."),
+        "linear": self._tr("使用一阶隐函数传播。", "Uses first-order implicit propagation."),
+        "monte_carlo": self._tr("对输入不确定度抽样后重新求根。", "Resolves roots from sampled uncertain inputs."),
+        "second_order": self._tr("对标量实根使用二阶有限差分传播。", "Uses scalar second-order finite differences."),
+    }.get(method, "")
+    self.root_uncertainty_method_help_label.setText(help_text)
 
 
 def _add_detected_rows_table_row(self, table_name: str) -> None:
