@@ -17,12 +17,13 @@ def test_render_root_with_uncertainty_to_markdown_and_csv() -> None:
 
     markdown, csv_rows, csv_headers = render_root_result(result, display_digits=6)
 
-    assert csv_headers == ["name", "value", "uncertainty", "backend", "mode", "residual_norm"]
+    assert csv_headers == ["name", "value", "uncertainty", "display_value", "backend", "mode", "residual_norm"]
     assert csv_rows == [
         {
             "name": "x",
             "value": "2.34568",
             "uncertainty": "0.00123457",
+            "display_value": "2.3457(12)",
             "backend": "mpmath",
             "mode": "scalar",
             "residual_norm": "1.0e-20",
@@ -30,9 +31,9 @@ def test_render_root_with_uncertainty_to_markdown_and_csv() -> None:
     ]
     assert markdown == "\n".join(
         [
-            "| name | value | uncertainty | backend | mode | residual_norm |",
-            "| --- | --- | --- | --- | --- | --- |",
-            "| x | 2.34568 | 0.00123457 | mpmath | scalar | 1.0e-20 |",
+            "| name | value | backend | mode | residual_norm |",
+            "| --- | --- | --- | --- | --- |",
+            "| x | 2.3457(12) | mpmath | scalar | 1.0e-20 |",
         ]
     )
 
@@ -49,7 +50,36 @@ def test_render_root_without_uncertainty_leaves_empty_uncertainty_fields() -> No
 
     assert csv_rows[0]["value"] == "1.2346e+8"
     assert csv_rows[0]["uncertainty"] == ""
-    assert "| x | 1.2346e+8 |  | scipy | scalar | 0.0 |" in markdown
+    assert csv_rows[0]["display_value"] == "1.2346e+8"
+    assert "| x | 1.2346e+8 | scipy | scalar | 0.0 |" in markdown
+
+
+def test_render_root_with_missing_value_falls_back_to_empty_display() -> None:
+    result = RootResult(
+        roots=(RootValue("x", None, uncertainty=mp.mpf("0.1")),),
+        backend="mpmath",
+        mode="scalar",
+    )
+
+    markdown, csv_rows, _ = render_root_result(result, display_digits=5)
+
+    assert csv_rows[0]["value"] == ""
+    assert csv_rows[0]["display_value"] == ""
+    assert "| x |  | mpmath | scalar |  |" in markdown
+
+
+def test_render_uncertainty_scientific_display_uses_plain_exponent() -> None:
+    result = RootResult(
+        roots=(RootValue("x", mp.mpf("123456789.0"), uncertainty=mp.mpf("120000")),),
+        backend="mpmath",
+        mode="scalar",
+    )
+
+    markdown, csv_rows, _ = render_root_result(result, display_digits=5)
+
+    assert csv_rows[0]["display_value"] == "1.2346(12)e+8"
+    assert r"\text" not in markdown
+    assert "1.2346(12)e+8" in markdown
 
 
 def test_render_complex_polynomial_roots_as_a_plus_b_i_without_uncertainty() -> None:
@@ -70,6 +100,7 @@ def test_render_complex_polynomial_roots_as_a_plus_b_i_without_uncertainty() -> 
             "name": "x1",
             "value": "0.0 + 1.0 i",
             "uncertainty": "",
+            "display_value": "0.0 + 1.0 i",
             "backend": "mpmath",
             "mode": "polynomial",
             "residual_norm": "2.5e-30",
@@ -78,13 +109,14 @@ def test_render_complex_polynomial_roots_as_a_plus_b_i_without_uncertainty() -> 
             "name": "x2",
             "value": "0.0 - 1.0 i",
             "uncertainty": "",
+            "display_value": "0.0 - 1.0 i",
             "backend": "mpmath",
             "mode": "polynomial",
             "residual_norm": "2.5e-30",
         },
     ]
-    assert "| x1 | 0.0 + 1.0 i |  | mpmath | polynomial | 2.5e-30 |" in markdown
-    assert "| x2 | 0.0 - 1.0 i |  | mpmath | polynomial | 2.5e-30 |" in markdown
+    assert "| x1 | 0.0 + 1.0 i | mpmath | polynomial | 2.5e-30 |" in markdown
+    assert "| x2 | 0.0 - 1.0 i | mpmath | polynomial | 2.5e-30 |" in markdown
 
 
 def test_render_warnings_below_result_table() -> None:
@@ -99,7 +131,7 @@ def test_render_warnings_below_result_table() -> None:
     markdown, _, _ = render_root_result(result, display_digits=3)
 
     table, warnings = markdown.split("\n\n", maxsplit=1)
-    assert table.endswith("| x | 2.0 |  | mpmath | scalar | 1.0e-12 |")
+    assert table.endswith("| x | 2.0 | mpmath | scalar | 1.0e-12 |")
     assert warnings == "\n".join(
         [
             "Warnings:",
@@ -124,7 +156,7 @@ def test_render_root_result_includes_uncertainty_method_details_without_csv_colu
 
     markdown, csv_rows, csv_headers = render_root_result(result, display_digits=6)
 
-    assert csv_headers == ["name", "value", "uncertainty", "backend", "mode", "residual_norm"]
+    assert csv_headers == ["name", "value", "uncertainty", "display_value", "backend", "mode", "residual_norm"]
     assert "uncertainty_method" not in csv_rows[0]
     assert "Details:" in markdown
     assert "- uncertainty method: monte_carlo" in markdown
@@ -233,6 +265,23 @@ def test_render_batch_result_aggregates_monte_carlo_detail_counters() -> None:
     assert "- monte carlo first failure: row 2 sample failed" in markdown
 
 
+def test_render_root_result_localizes_details_to_chinese() -> None:
+    result = RootResult(
+        roots=(RootValue("x", mp.mpf("2"), uncertainty=mp.mpf("0.05")),),
+        backend="mpmath",
+        mode="scalar",
+        details={"uncertainty_method": "taylor", "monte_carlo_failures": 0},
+    )
+
+    markdown, _, _ = render_root_result(result, display_digits=8, language="zh")
+
+    assert "详情:" in markdown
+    assert "- 不确定度方法: 泰勒" in markdown
+    assert "- 蒙特卡洛失败数: 0" in markdown
+    assert "Details:" not in markdown
+    assert "uncertainty method" not in markdown
+
+
 def test_render_row_failure_as_one_csv_row() -> None:
     batch = RootBatchResult(
         rows=(RootBatchRowResult(row_index=2, source_values={"A": "bad"}, failure="failed"),),
@@ -250,13 +299,14 @@ def test_render_row_failure_as_one_csv_row() -> None:
             "name": "",
             "value": "",
             "uncertainty": "",
+            "display_value": "",
             "backend": "",
             "mode": "",
             "residual_norm": "",
             "failure": "failed",
         }
     ]
-    assert "| 2 |  | bad |  |  |  |  |  |  | failed |" in markdown
+    assert "| 2 |  | bad |  |  |  |  |  | failed |" in markdown
 
 
 def test_render_batch_disambiguates_source_headers_that_match_result_columns() -> None:

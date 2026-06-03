@@ -167,7 +167,7 @@ def _solve_polynomial_scipy_or_fallback(problem: RootProblem, system: RootExpres
 
 
 def _solve_scipy(problem: RootProblem, system: RootExpressionSystem, mode: RootMode) -> _Candidate:
-    import scipy.optimize  # type: ignore[import-untyped]
+    import scipy.optimize
 
     if mode == "scalar":
         unknown = _single_unknown(problem)

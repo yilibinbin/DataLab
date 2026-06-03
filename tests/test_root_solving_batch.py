@@ -4,7 +4,7 @@ from typing import Any, cast
 
 import pytest
 
-from root_solving.batch import solve_root_batch
+from root_solving.batch import _deserialize_result_from_task, solve_root_batch
 import root_solving.batch as batch_module
 from root_solving.models import RootUncertaintyOptions, RootUnknown
 from shared.input_normalization import normalize_constants_state
@@ -41,6 +41,19 @@ def test_empty_data_runs_one_default_row_context() -> None:
     assert result.rows[0].failure is None
     assert result.rows[0].result is not None
     assert result.rows[0].result.roots[0].name == "x"
+
+
+def test_deserialize_result_treats_null_backend_and_mode_as_defaults() -> None:
+    result = _deserialize_result_from_task(
+        {
+            "roots": (),
+            "backend": None,
+            "mode": None,
+        }
+    )
+
+    assert result.backend == "mpmath"
+    assert result.mode == "scalar"
 
 
 def test_non_empty_data_solves_one_problem_per_row() -> None:

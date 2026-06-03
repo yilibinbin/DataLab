@@ -1159,6 +1159,11 @@ class RootSolvingJob:
     parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
     generate_latex: bool = False
     output_path: str = ""
+    latex_caption: str = ""
+    latex_digits: int = 16
+    latex_group_size: int = 3
+    latex_include_dcolumn: bool = False
+    latex_language: str = "en"
 
 
 @dataclass
@@ -1216,6 +1221,11 @@ def _serialize_root_solving_job(job: RootSolvingJob) -> dict[str, Any]:
         "parallel_config": _serialize_parallel_config(job.parallel_config),
         "generate_latex": bool(job.generate_latex),
         "output_path": str(job.output_path),
+        "latex_caption": str(job.latex_caption),
+        "latex_digits": int(job.latex_digits),
+        "latex_group_size": int(job.latex_group_size),
+        "latex_include_dcolumn": bool(job.latex_include_dcolumn),
+        "latex_language": str(job.latex_language),
     }
 
 
@@ -1262,6 +1272,11 @@ def _deserialize_root_solving_job(payload: Mapping[str, Any]) -> RootSolvingJob:
         parallel_config=_deserialize_parallel_config(cast(dict[str, Any] | None, payload.get("parallel_config"))),
         generate_latex=bool(payload.get("generate_latex", False)),
         output_path=str(payload.get("output_path", "")),
+        latex_caption=str(payload.get("latex_caption", "")),
+        latex_digits=int(payload.get("latex_digits", 16)),
+        latex_group_size=int(payload.get("latex_group_size", 3)),
+        latex_include_dcolumn=bool(payload.get("latex_include_dcolumn", False)),
+        latex_language=_deserialize_language(payload.get("latex_language", payload.get("language", "en"))),
     )
 
 
@@ -1392,6 +1407,11 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         "warnings": _localize_root_messages(warnings, language=job.language),
         "generate_latex": bool(job.generate_latex),
         "output_path": str(job.output_path),
+        "latex_caption": str(job.latex_caption),
+        "latex_digits": int(job.latex_digits),
+        "latex_group_size": int(job.latex_group_size),
+        "latex_include_dcolumn": bool(job.latex_include_dcolumn),
+        "latex_language": str(job.latex_language),
     }
 
 

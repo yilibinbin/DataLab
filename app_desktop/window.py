@@ -473,6 +473,10 @@ class ExtrapolationWindow(
         from . import panels as _panels
         _panels.build_left_panel(self)
 
+    def _refresh_main_splitter_left_min_width(self) -> None:
+        from . import panels as _panels
+        _panels._refresh_main_splitter_left_min_width(self)
+
     def _workspace_title(self) -> str:
         if self._workspace_path is None:
             if self._workspace_template_source is not None:
@@ -1453,6 +1457,11 @@ class ExtrapolationWindow(
             parallel_config=self._current_parallel_config(),
             generate_latex=generate_latex,
             output_path=output_path,
+            latex_caption=self._caption_value(require=False) if generate_latex else "",
+            latex_digits=self.latex_input_precision_spin.value() if hasattr(self, "latex_input_precision_spin") else 16,
+            latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+            latex_include_dcolumn=self.dcolumn_checkbox.isChecked() if hasattr(self, "dcolumn_checkbox") else False,
+            latex_language=self._current_output_language(),
         )
 
     def _current_output_language(self) -> str:
@@ -1680,6 +1689,8 @@ class ExtrapolationWindow(
                 self.root_box.hide()
         self._update_manual_placeholder(mode)
         self._update_log_scale_visibility()
+        if hasattr(self, "_refresh_main_splitter_left_min_width"):
+            self._refresh_main_splitter_left_min_width()
 
     def _update_method_state(self):
         method = self.method_combo.currentData()

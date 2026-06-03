@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 
 from mpmath import mp
 
+from datalab_latex.latex_formatting import format_result_with_uncertainty_latex
 from root_solving.messages import localize_root_message
 from root_solving.models import RootBatchResult, RootBatchRowResult, RootResult
 
-CSV_HEADERS = ["name", "value", "uncertainty", "backend", "mode", "residual_norm"]
+CSV_HEADERS = ["name", "value", "uncertainty", "display_value", "backend", "mode", "residual_norm"]
 BATCH_CSV_HEADERS = [
     "input_row_index",
     "root_index",
     "name",
     "value",
     "uncertainty",
+    "display_value",
     "backend",
     "mode",
     "residual_norm",
@@ -33,8 +36,9 @@ def render_root_result(
     csv_rows = [
         {
             "name": root.name,
-            "value": _format_root_value(root.value, digits),
+            "value": "" if root.value is None else _format_root_value(root.value, digits),
             "uncertainty": _format_optional_real(root.uncertainty, digits),
+            "display_value": _format_root_display_value(root, digits),
             "backend": result.backend,
             "mode": result.mode,
             "residual_norm": residual_norm,
@@ -58,6 +62,7 @@ def render_root_batch_result(
         "name",
         "value",
         "uncertainty",
+        "display_value",
         "backend",
         "mode",
         "residual_norm",
@@ -89,6 +94,7 @@ def render_root_batch_result(
                     "name": root.name,
                     "value": _format_root_value(root.value, digits),
                     "uncertainty": _format_optional_real(root.uncertainty, digits),
+                    "display_value": _format_root_display_value(root, digits),
                     "backend": batch_row.result.backend,
                     "mode": batch_row.result.mode,
                     "residual_norm": residual_norm,
@@ -112,6 +118,7 @@ def _batch_failure_row(
         "name": "",
         "value": "",
         "uncertainty": "",
+        "display_value": "",
         "backend": "",
         "mode": "",
         "residual_norm": "",
@@ -164,7 +171,8 @@ def _render_markdown_with_headers(
     details: Mapping[str, object] | None = None,
     language: str = "en",
 ) -> str:
-    display_headers = [_display_header(header, language=language) for header in headers]
+    markdown_headers = _markdown_headers(headers)
+    display_headers = [_display_header(header, language=language) for header in markdown_headers]
     lines = [
         "| " + " | ".join(display_headers) + " |",
         "| " + " | ".join("---" for _ in display_headers) + " |",
@@ -172,12 +180,15 @@ def _render_markdown_with_headers(
     for row in rows:
         lines.append(
             "| "
-            + " | ".join(_escape_markdown_cell(_display_cell(header, row.get(header, ""), language=language)) for header in headers)
+            + " | ".join(
+                _escape_markdown_cell(_display_cell(header, row.get(header, ""), language=language))
+                for header in markdown_headers
+            )
             + " |"
         )
-    detail_lines = _root_detail_lines(details or {})
+    detail_lines = _root_detail_lines(details or {}, language=language)
     if detail_lines:
-        lines.extend(["", "Details:"])
+        lines.extend(["", _details_label(language)])
         lines.extend(f"- {line}" for line in detail_lines)
     warning_lines = [warning for warning in warnings if warning]
     if warning_lines:
@@ -191,6 +202,7 @@ _ZH_HEADERS = {
     "root_index": "根序号",
     "name": "名称",
     "value": "值",
+    "display_value": "值",
     "uncertainty": "不确定度",
     "backend": "后端",
     "mode": "模式",
@@ -199,7 +211,15 @@ _ZH_HEADERS = {
 }
 
 
+def _markdown_headers(headers: list[str]) -> list[str]:
+    if "display_value" not in headers:
+        return headers
+    return [header for header in headers if header not in {"value", "uncertainty"}]
+
+
 def _display_header(header: str, *, language: str) -> str:
+    if header == "display_value" and language != "zh":
+        return "value"
     if language != "zh":
         return header
     if header.startswith("input_") and header not in _ZH_HEADERS:
@@ -211,13 +231,17 @@ def _warning_label(language: str) -> str:
     return "警告:" if language == "zh" else "Warnings:"
 
 
+def _details_label(language: str) -> str:
+    return "详情:" if language == "zh" else "Details:"
+
+
 def _display_cell(header: str, value: str, *, language: str) -> str:
     if header == "failure":
-        return localize_root_message(value, language=language)
+        return str(localize_root_message(value, language=language))
     return value
 
 
-def _root_detail_lines(details: Mapping[str, object]) -> list[str]:
+def _root_detail_lines(details: Mapping[str, object], *, language: str) -> list[str]:
     keys = (
         "uncertainty_method",
         "uncertainty_requested_method",
@@ -232,9 +256,41 @@ def _root_detail_lines(details: Mapping[str, object]) -> list[str]:
         value = details.get(key)
         if value is None or value == "":
             continue
-        label = key.replace("_", " ")
-        lines.append(f"{label}: {_escape_markdown_warning(str(value))}")
+        label = _detail_label(key, language=language)
+        lines.append(f"{label}: {_escape_markdown_warning(_detail_value(key, value, language=language))}")
     return lines
+
+
+def _detail_label(key: str, *, language: str) -> str:
+    if language != "zh":
+        return key.replace("_", " ")
+    labels = {
+        "uncertainty_method": "不确定度方法",
+        "uncertainty_requested_method": "请求的不确定度方法",
+        "monte_carlo_samples": "蒙特卡洛样本数",
+        "monte_carlo_failures": "蒙特卡洛失败数",
+        "monte_carlo_valid_samples": "蒙特卡洛有效样本数",
+        "monte_carlo_first_failure": "蒙特卡洛首个失败",
+        "uncertainty_bias": "不确定度均值偏移",
+    }
+    return labels.get(key, key)
+
+
+def _detail_value(key: str, value: object, *, language: str) -> str:
+    text = str(value)
+    if language != "zh":
+        return text
+    if key not in {"uncertainty_method", "uncertainty_requested_method"}:
+        return text
+    values = {
+        "taylor": "泰勒",
+        "linear": "线性",
+        "monte_carlo": "蒙特卡洛",
+        "off": "关闭",
+        "skipped": "跳过",
+        "mixed": "混合",
+    }
+    return values.get(text, text)
 
 
 def _merge_root_details(target: dict[str, object], source: Mapping[str, object]) -> None:
@@ -312,6 +368,29 @@ def _format_optional_real(value: mp.mpf | None, digits: int) -> str:
     if value is None:
         return ""
     return _format_real(value, digits)
+
+
+def _format_root_display_value(root: object, digits: int) -> str:
+    value = getattr(root, "value", None)
+    uncertainty = getattr(root, "uncertainty", None)
+    if value is None:
+        return ""
+    if uncertainty is None:
+        return _format_root_value(value, digits)
+    if isinstance(value, (mp.mpc, complex)):
+        return _format_root_value(value, digits)
+    try:
+        formatted = format_result_with_uncertainty_latex(value, uncertainty)
+    except (ValueError, TypeError, ArithmeticError):
+        return _format_root_value(value, digits)
+    return _latex_to_plain_uncertainty(formatted)
+
+
+def _latex_to_plain_uncertainty(value: str) -> str:
+    text = value.replace(r"\,", "")
+    text = re.sub(r"\[\\text\{([+-]?\d+)\}\]", r"e\1", text)
+    text = re.sub(r"\\text\{([^{}]*)\}", r"\1", text)
+    return text.replace("\\", "")
 
 
 def _format_real(value: mp.mpf, digits: int) -> str:

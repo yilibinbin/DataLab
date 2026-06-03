@@ -152,7 +152,7 @@ def _solve_root_batch_task(task: _RootBatchTask) -> _RootBatchTaskOutput:
             unknowns=task.unknowns,
             row_values=source_values,
             constants=task.constants,
-            mode=task.mode,  # type: ignore[arg-type]
+            mode=task.mode,
             precision=task.precision,
             scan_config=task.scan_config,
         )
@@ -161,13 +161,13 @@ def _solve_root_batch_task(task: _RootBatchTask) -> _RootBatchTaskOutput:
                 task.system,
                 nominal_inputs={name: parse_numeric_value(value) for name, value in task.nominal_inputs.items()},
             )
-        result = solve_prepared_root_problem(
-            problem,
-            system,
-            task.mode,  # type: ignore[arg-type]
-            uncertain_inputs=task.uncertain_inputs,
-            uncertainty_options=uncertainty_options,
-        )
+            result = solve_prepared_root_problem(
+                problem,
+                system,
+                task.mode,
+                uncertain_inputs=task.uncertain_inputs,
+                uncertainty_options=uncertainty_options,
+            )
         return _RootBatchTaskOutput(
             row_index=task.row_index,
             source_values=source_values,
@@ -215,24 +215,40 @@ def _task_output_to_row(output: _RootBatchTaskOutput) -> RootBatchRowResult:
 
 
 def _deserialize_result_from_task(payload: Mapping[str, object]) -> RootResult:
+    roots_payload = payload.get("roots", ())
+    if not isinstance(roots_payload, Sequence) or isinstance(roots_payload, (str, bytes)):
+        roots_payload = ()
+    warnings_payload = payload.get("warnings", ())
+    if not isinstance(warnings_payload, Sequence) or isinstance(warnings_payload, (str, bytes)):
+        warnings_payload = ()
+    details_payload = payload.get("details", {})
+    details = dict(details_payload) if isinstance(details_payload, Mapping) else {}
+    backend_value = payload.get("backend")
+    mode_value = payload.get("mode")
     return RootResult(
         roots=tuple(
             RootValue(
                 name=str(root_payload.get("name", "")),
-                value=root_payload.get("value"),  # type: ignore[arg-type]
-                uncertainty=root_payload.get("uncertainty"),  # type: ignore[arg-type]
-                contributions=dict(root_payload.get("contributions", {})),  # type: ignore[arg-type]
+                value=root_payload.get("value"),
+                uncertainty=root_payload.get("uncertainty"),
+                contributions=_mapping_dict(root_payload.get("contributions", {})),
             )
-            for root_payload in payload.get("roots", ())  # type: ignore[union-attr]
+            for root_payload in roots_payload
             if isinstance(root_payload, Mapping)
         ),
-        backend=payload.get("backend", "mpmath"),  # type: ignore[arg-type]
-        mode=payload.get("mode", "scalar"),  # type: ignore[arg-type]
-        residual_norm=payload.get("residual_norm"),  # type: ignore[arg-type]
-        jacobian_condition=payload.get("jacobian_condition"),  # type: ignore[arg-type]
-        warnings=tuple(str(warning) for warning in payload.get("warnings", ())),  # type: ignore[arg-type]
-        details=dict(payload.get("details", {})),  # type: ignore[arg-type]
+        backend=str(backend_value if backend_value is not None else "mpmath"),
+        mode=str(mode_value if mode_value is not None else "scalar"),
+        residual_norm=payload.get("residual_norm"),
+        jacobian_condition=payload.get("jacobian_condition"),
+        warnings=tuple(str(warning) for warning in warnings_payload),
+        details=details,
     )
+
+
+def _mapping_dict(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(key): item for key, item in value.items()}
 
 
 def _inner_root_parallel_config(config: ParallelConfig | None) -> ParallelConfig:
