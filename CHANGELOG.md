@@ -6,6 +6,20 @@ DataLab follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [2.7.2] — 2026-06-03
+
+### Changed
+- Simplified root-solving uncertainty controls by replacing the visible
+  automatic mode with explicit Taylor, Monte Carlo, and disabled options.
+- Added a Taylor order control that supports first- and second-order
+  derivative propagation while preserving legacy workspace compatibility.
+
+### Fixed
+- Kept root-solving uncertainty normalization shared between desktop workers
+  and the root-solving backend.
+- Persisted Taylor-order changes in workspace dirty tracking and workspace
+  restore paths.
+
 ## [2.7.1] — 2026-06-03
 
 ### Added
