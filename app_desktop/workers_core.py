@@ -56,6 +56,7 @@ from fitting.hp_fitter import FitResult
 from root_solving.batch import solve_root_batch
 from root_solving.formatting import render_root_batch_result
 from root_solving.models import RootUnknown
+from root_solving.normalization import normalize_root_uncertainty_options
 from shared.input_normalization import normalize_constants_state
 # Private-by-convention logger name — matches the rest of DataLab
 # (_logger in sse.py, collaborate.py, mcmc_fitter.py, etc.). The
@@ -1152,7 +1153,7 @@ class RootSolvingJob:
     scan_config: dict[str, str | int | float | bool]
     precision: int
     display_digits: int
-    uncertainty_options: dict[str, object] = field(default_factory=lambda: {"method": "auto"})
+    uncertainty_options: dict[str, object] = field(default_factory=lambda: {"method": "taylor", "taylor_order": 1})
 
 
 @dataclass
@@ -1252,18 +1253,20 @@ def _deserialize_root_solving_job(payload: Mapping[str, Any]) -> RootSolvingJob:
 
 
 def _normalize_root_uncertainty_payload(value: Any) -> dict[str, object]:
-    if not isinstance(value, Mapping):
-        value = {}
-    raw_samples = value.get("monte_carlo_samples")
     try:
-        samples = int(raw_samples) if raw_samples not in (None, "") else 2000
-    except (TypeError, ValueError, OverflowError):
-        samples = 2000
-    raw_seed = value.get("monte_carlo_seed")
+        normalized = normalize_root_uncertainty_options(value if isinstance(value, Mapping) else {})
+    except ValueError:
+        fallback = dict(value) if isinstance(value, Mapping) else {}
+        fallback["monte_carlo_samples"] = 2000
+        try:
+            normalized = normalize_root_uncertainty_options(fallback)
+        except ValueError:
+            normalized = normalize_root_uncertainty_options({})
     return {
-        "method": str(value.get("method") or "auto"),
-        "monte_carlo_samples": samples,
-        "monte_carlo_seed": "" if raw_seed in (None, "") else str(raw_seed),
+        "method": normalized.method,
+        "taylor_order": normalized.taylor_order,
+        "monte_carlo_samples": normalized.monte_carlo_samples,
+        "monte_carlo_seed": normalized.monte_carlo_seed,
     }
 
 

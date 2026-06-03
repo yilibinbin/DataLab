@@ -602,6 +602,7 @@ class ExtrapolationWindow(
             "poly_degree_spin",
             "implicit_max_iterations_spin",
             "implicit_timeout_spin",
+            "root_uncertainty_order_spin",
             "root_monte_carlo_samples_spin",
         ):
             spin = getattr(self, spin_name, None)
@@ -1430,8 +1431,12 @@ class ExtrapolationWindow(
             display_digits=int(self._display_digits_limit()),
             uncertainty_options={
                 "method": str(
-                    getattr(getattr(self, "root_uncertainty_method_combo", None), "currentData", lambda: "auto")()
-                    or "auto"
+                    getattr(getattr(self, "root_uncertainty_method_combo", None), "currentData", lambda: "taylor")()
+                    or "taylor"
+                ),
+                "taylor_order": int(
+                    getattr(getattr(self, "root_uncertainty_order_spin", None), "value", lambda: 1)()
+                    or 1
                 ),
                 "monte_carlo_samples": int(
                     getattr(getattr(self, "root_monte_carlo_samples_spin", None), "value", lambda: 2000)()

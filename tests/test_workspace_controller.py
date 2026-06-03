@@ -22,7 +22,7 @@ def _set_combo_data(combo, value: str) -> None:
 
 
 class _FakeCombo:
-    def __init__(self, value: str = "auto") -> None:
+    def __init__(self, value: str = "taylor") -> None:
         self.value = value
         self._pending_value = value
 
@@ -33,7 +33,7 @@ class _FakeCombo:
         return self.value
 
     def findData(self, value: str) -> int:
-        if value not in {"auto", "off", "linear", "monte_carlo", "second_order"}:
+        if value not in {"taylor", "off", "monte_carlo"}:
             return -1
         self._pending_value = value
         return 0
@@ -304,7 +304,8 @@ def test_workspace_preserves_root_solving_config(qtbot) -> None:
             "numeric_mode": "uncertainty",
         },
         "uncertainty_options": {
-            "method": "auto",
+            "method": "taylor",
+            "taylor_order": 1,
             "monte_carlo_samples": 2000,
             "monte_carlo_seed": "",
         },
@@ -337,6 +338,7 @@ def test_workspace_helpers_preserve_root_uncertainty_options_when_controls_exist
         root_unknowns_table=None,
         root_constants_editor=None,
         root_uncertainty_method_combo=_FakeCombo("monte_carlo"),
+        root_uncertainty_order_spin=_FakeSpin(1, minimum=1, maximum=2),
         root_monte_carlo_samples_spin=_FakeSpin(321),
         root_monte_carlo_seed_edit=_FakeLineEdit("11"),
     )
@@ -345,6 +347,7 @@ def test_workspace_helpers_preserve_root_uncertainty_options_when_controls_exist
 
     assert config["uncertainty_options"] == {
         "method": "monte_carlo",
+        "taylor_order": 1,
         "monte_carlo_samples": 321,
         "monte_carlo_seed": "11",
     }
@@ -354,7 +357,8 @@ def test_workspace_helpers_preserve_root_uncertainty_options_when_controls_exist
         root_mode_combo=None,
         root_unknowns_table=None,
         root_constants_editor=None,
-        root_uncertainty_method_combo=_FakeCombo("auto"),
+        root_uncertainty_method_combo=_FakeCombo("taylor"),
+        root_uncertainty_order_spin=_FakeSpin(1, minimum=1, maximum=2),
         root_monte_carlo_samples_spin=_FakeSpin(2000),
         root_monte_carlo_seed_edit=_FakeLineEdit(""),
     )
@@ -382,6 +386,7 @@ def test_workspace_preserves_root_uncertainty_options(qtbot) -> None:
 
     assert root_options == {
         "method": "monte_carlo",
+        "taylor_order": 1,
         "monte_carlo_samples": 321,
         "monte_carlo_seed": "11",
     }
@@ -395,6 +400,30 @@ def test_workspace_preserves_root_uncertainty_options(qtbot) -> None:
     assert target.root_monte_carlo_seed_edit.text() == "11"
 
 
+def test_workspace_preserves_root_taylor_order(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "root_solving")
+    _set_combo_data(source.root_uncertainty_method_combo, "taylor")
+    source.root_uncertainty_order_spin.setValue(2)
+
+    bundle = capture_workspace(source, title="root taylor order")
+    root_options = bundle.manifest["workspace"]["config"]["root_solving"]["uncertainty_options"]
+
+    assert root_options["method"] == "taylor"
+    assert root_options["taylor_order"] == 2
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.root_uncertainty_method_combo.currentData() == "taylor"
+    assert target.root_uncertainty_order_spin.value() == 2
+
+
 def test_workspace_restore_root_uncertainty_options_falls_back_for_bad_sample_count() -> None:
     from app_desktop.workspace_controller import _restore_root_config
 
@@ -403,7 +432,8 @@ def test_workspace_restore_root_uncertainty_options_falls_back_for_bad_sample_co
         root_mode_combo=None,
         root_unknowns_table=None,
         root_constants_editor=None,
-        root_uncertainty_method_combo=_FakeCombo("auto"),
+        root_uncertainty_method_combo=_FakeCombo("taylor"),
+        root_uncertainty_order_spin=_FakeSpin(1, minimum=1, maximum=2),
         root_monte_carlo_samples_spin=_FakeSpin(123),
         root_monte_carlo_seed_edit=_FakeLineEdit(""),
     )
@@ -432,7 +462,8 @@ def test_workspace_restore_root_uncertainty_options_clamps_sample_count_to_widge
         root_mode_combo=None,
         root_unknowns_table=None,
         root_constants_editor=None,
-        root_uncertainty_method_combo=_FakeCombo("auto"),
+        root_uncertainty_method_combo=_FakeCombo("taylor"),
+        root_uncertainty_order_spin=_FakeSpin(1, minimum=1, maximum=2),
         root_monte_carlo_samples_spin=_FakeSpin(123),
         root_monte_carlo_seed_edit=_FakeLineEdit(""),
     )
@@ -451,7 +482,34 @@ def test_workspace_restore_root_uncertainty_options_clamps_sample_count_to_widge
     assert target.root_monte_carlo_samples_spin.value() == 50000
 
 
-def test_workspace_restore_root_uncertainty_options_resets_unknown_method_to_auto() -> None:
+def test_workspace_restore_root_uncertainty_options_clamps_taylor_order_to_widget_range() -> None:
+    from app_desktop.workspace_controller import _restore_root_config
+
+    target = SimpleNamespace(
+        root_equations_edit=None,
+        root_mode_combo=None,
+        root_unknowns_table=None,
+        root_constants_editor=None,
+        root_uncertainty_method_combo=_FakeCombo("taylor"),
+        root_uncertainty_order_spin=_FakeSpin(1, minimum=1, maximum=2),
+        root_monte_carlo_samples_spin=_FakeSpin(123),
+        root_monte_carlo_seed_edit=_FakeLineEdit(""),
+    )
+
+    _restore_root_config(
+        target,
+        {
+            "uncertainty_options": {
+                "method": "taylor",
+                "taylor_order": "99",
+            }
+        },
+    )
+
+    assert target.root_uncertainty_order_spin.value() == 2
+
+
+def test_workspace_restore_root_uncertainty_options_resets_unknown_method_to_taylor() -> None:
     from app_desktop.workspace_controller import _restore_root_config
 
     target = SimpleNamespace(
@@ -460,6 +518,7 @@ def test_workspace_restore_root_uncertainty_options_resets_unknown_method_to_aut
         root_unknowns_table=None,
         root_constants_editor=None,
         root_uncertainty_method_combo=_FakeCombo("monte_carlo"),
+        root_uncertainty_order_spin=_FakeSpin(1, minimum=1, maximum=2),
         root_monte_carlo_samples_spin=_FakeSpin(123),
         root_monte_carlo_seed_edit=_FakeLineEdit(""),
     )
@@ -475,7 +534,7 @@ def test_workspace_restore_root_uncertainty_options_resets_unknown_method_to_aut
         },
     )
 
-    assert target.root_uncertainty_method_combo.currentData() == "auto"
+    assert target.root_uncertainty_method_combo.currentData() == "taylor"
 
 
 def test_workspace_restore_without_root_config_clears_stale_root_ui(qtbot) -> None:

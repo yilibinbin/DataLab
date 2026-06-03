@@ -267,7 +267,8 @@ def _base_config() -> dict[str, Any]:
                 "numeric_mode": "uncertainty",
             },
             "uncertainty_options": {
-                "method": "linear",
+                "method": "taylor",
+                "taylor_order": 1,
                 "monte_carlo_samples": 2000,
                 "monte_carlo_seed": "",
             },
@@ -515,6 +516,7 @@ def build_examples() -> dict[str, dict[str, Any]]:
     root_monte_carlo_config = _base_config()
     root_monte_carlo_config["root_solving"]["uncertainty_options"] = {
         "method": "monte_carlo",
+        "taylor_order": 1,
         "monte_carlo_samples": 2000,
         "monte_carlo_seed": "42",
     }
@@ -539,7 +541,8 @@ def build_examples() -> dict[str, dict[str, Any]]:
             "numeric_mode": "uncertainty",
         },
         "uncertainty_options": {
-            "method": "linear",
+            "method": "taylor",
+            "taylor_order": 1,
             "monte_carlo_samples": 2000,
             "monte_carlo_seed": "",
         },

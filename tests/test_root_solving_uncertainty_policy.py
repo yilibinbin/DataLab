@@ -36,14 +36,15 @@ def test_uncertainty_method_off_suppresses_uncertainty() -> None:
     assert result.details["uncertainty_method"] == "off"
 
 
-def test_uncertainty_method_auto_uses_linear_for_real_roots() -> None:
+def test_uncertainty_method_taylor_order_one_uses_linear_for_real_roots() -> None:
     result = solve_root_problem(
         _quadratic_problem(RootUncertaintyOptions(method="auto")),
         uncertain_inputs={"C": UncertainValue("4.0", "0.2")},
     )
 
     assert mp.almosteq(result.roots[0].uncertainty, mp.mpf("0.05"), rel_eps=mp.mpf("1e-50"))
-    assert result.details["uncertainty_method"] == "linear"
+    assert result.details["uncertainty_method"] == "taylor"
+    assert result.details["taylor_order"] == 1
 
 
 def test_uncertainty_method_reports_skipped_when_linear_cannot_attach() -> None:
@@ -273,7 +274,7 @@ def test_second_order_ignores_unused_uncertain_batch_columns() -> None:
         mode="scalar",
         precision=80,
         data_text_rows=(("4.0(2)", "10.0(1.0)"),),
-        uncertainty_options={"method": "second_order"},
+        uncertainty_options={"method": "taylor", "taylor_order": 2},
     )
 
     assert batch.rows[0].failure is None
@@ -281,16 +282,18 @@ def test_second_order_ignores_unused_uncertain_batch_columns() -> None:
     assert result is not None
     root = result.roots[0]
     assert root.uncertainty is not None
-    assert result.details["uncertainty_method"] == "second_order"
+    assert result.details["uncertainty_method"] == "taylor"
+    assert result.details["taylor_order"] == 2
 
 
 def test_uncertainty_method_second_order_scalar_reports_bias_and_uncertainty() -> None:
     result = solve_root_problem(
-        _quadratic_problem(RootUncertaintyOptions(method="second_order")),
+        _quadratic_problem(RootUncertaintyOptions(method="taylor", taylor_order=2)),
         uncertain_inputs={"C": UncertainValue("4.0", "0.2")},
     )
 
-    assert result.details["uncertainty_method"] == "second_order"
+    assert result.details["uncertainty_method"] == "taylor"
+    assert result.details["taylor_order"] == 2
     assert result.roots[0].uncertainty is not None
     assert mp.mpf("0.049") < result.roots[0].uncertainty < mp.mpf("0.052")
     assert "uncertainty_bias" in result.details
@@ -304,13 +307,14 @@ def test_second_order_multi_input_scalar_falls_back_to_linear_with_warning() -> 
             constants={"A": "2.0", "B": "3.0"},
             mode="scalar",
             precision=80,
-            uncertainty_options=RootUncertaintyOptions(method="second_order"),
+            uncertainty_options=RootUncertaintyOptions(method="taylor", taylor_order=2),
         ),
         uncertain_inputs={"A": UncertainValue("2.0", "0.5"), "B": UncertainValue("3.0", "0.25")},
     )
 
-    assert result.details["uncertainty_method"] == "linear"
-    assert result.details["uncertainty_requested_method"] == "second_order"
+    assert result.details["uncertainty_method"] == "taylor"
+    assert result.details["taylor_order"] == 1
+    assert result.details["uncertainty_requested_method"] == "taylor_order_2"
     assert result.roots[0].uncertainty is not None
     assert mp.almosteq(result.roots[0].uncertainty, mp.sqrt(mp.mpf("2.5")), abs_eps=mp.mpf("1e-15"))
     assert any("multiple uncertain inputs" in warning for warning in result.warnings)

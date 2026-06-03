@@ -49,7 +49,7 @@ def attach_root_uncertainty(
             warnings=(*result.warnings, _COMPLEX_UNCERTAINTY_WARNING),
         )
 
-    if options.method in {"auto", "linear"}:
+    if options.method == "taylor" and options.taylor_order == 1:
         return _with_linear_method(
             attach_linear_uncertainty_with_system(
                 system,
@@ -62,7 +62,7 @@ def attach_root_uncertainty(
     if options.method == "monte_carlo":
         return _attach_monte_carlo(problem, system, result, active_uncertain_inputs, solve_nominal, options)
 
-    if options.method == "second_order":
+    if options.method == "taylor" and options.taylor_order == 2:
         return _attach_scalar_second_order(problem, system, result, active_uncertain_inputs, solve_nominal)
 
     return result
@@ -73,8 +73,12 @@ def _with_method(result: RootResult, method: str) -> RootResult:
 
 
 def _with_linear_method(result: RootResult) -> RootResult:
-    method = "linear" if any(root.uncertainty is not None for root in result.roots) else "skipped"
-    return replace(result, details={**result.details, "uncertainty_method": method})
+    details = {**result.details, "taylor_order": 1}
+    if any(root.uncertainty is not None for root in result.roots):
+        details["uncertainty_method"] = "taylor"
+    else:
+        details["uncertainty_method"] = "skipped"
+    return replace(result, details=details)
 
 
 def _attach_monte_carlo(
@@ -188,8 +192,9 @@ def _attach_scalar_second_order(
             linear,
             details={
                 **linear.details,
-                "uncertainty_method": "linear",
-                "uncertainty_requested_method": "second_order",
+                "uncertainty_method": "taylor",
+                "taylor_order": 1,
+                "uncertainty_requested_method": "taylor_order_2",
             },
             warnings=(*linear.warnings, _SECOND_ORDER_SYSTEM_WARNING),
         )
@@ -203,8 +208,9 @@ def _attach_scalar_second_order(
             _with_linear_method(linear),
             details={
                 **linear.details,
-                "uncertainty_method": "linear",
-                "uncertainty_requested_method": "second_order",
+                "uncertainty_method": "taylor",
+                "taylor_order": 1,
+                "uncertainty_requested_method": "taylor_order_2",
             },
             warnings=(*linear.warnings, _SECOND_ORDER_MULTI_INPUT_WARNING),
         )
@@ -224,8 +230,9 @@ def _attach_scalar_second_order(
                     _with_linear_method(linear),
                     details={
                         **linear.details,
-                        "uncertainty_method": "linear",
-                        "uncertainty_requested_method": "second_order",
+                        "uncertainty_method": "taylor",
+                        "taylor_order": 1,
+                        "uncertainty_requested_method": "taylor_order_2",
                     },
                     warnings=(*linear.warnings, "Second-order root uncertainty fell back to linear propagation."),
                 )
@@ -238,7 +245,12 @@ def _attach_scalar_second_order(
     return replace(
         linear,
         roots=(replace(root, value=mp.mpf(root.value) + bias, uncertainty=mp.sqrt(variance)),),
-        details={**linear.details, "uncertainty_method": "second_order", "uncertainty_bias": mp.nstr(bias, 20)},
+        details={
+            **linear.details,
+            "uncertainty_method": "taylor",
+            "taylor_order": 2,
+            "uncertainty_bias": mp.nstr(bias, 20),
+        },
     )
 
 
