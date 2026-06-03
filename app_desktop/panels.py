@@ -1427,11 +1427,9 @@ def build_left_panel(self):
     root_uncertainty_layout = QFormLayout(self.root_uncertainty_group)
     self.root_uncertainty_method_combo = QComboBox()
     root_uncertainty_method_items = [
-        ("自动", "Automatic", "auto"),
+        ("Taylor（偏导）", "Taylor (derivative)", "taylor"),
+        ("Monte Carlo", "Monte Carlo", "monte_carlo"),
         ("关闭", "Off", "off"),
-        ("线性隐函数", "Linear implicit", "linear"),
-        ("蒙特卡洛", "Monte Carlo", "monte_carlo"),
-        ("标量二阶", "Scalar second-order", "second_order"),
     ]
     for zh, _en, data in root_uncertainty_method_items:
         self.root_uncertainty_method_combo.addItem(zh, data)
@@ -1440,10 +1438,30 @@ def build_left_panel(self):
     self._register_text(lbl_root_uncertainty_method, "方法：", "Method:")
     root_uncertainty_layout.addRow(lbl_root_uncertainty_method, self.root_uncertainty_method_combo)
 
+    self.root_uncertainty_taylor_widget = QWidget()
+    root_taylor_layout = QHBoxLayout(self.root_uncertainty_taylor_widget)
+    root_taylor_layout.setContentsMargins(0, 0, 0, 0)
+    root_taylor_layout.setSpacing(6)
+    self.root_uncertainty_order_label = QLabel("阶数：")
+    self._register_text(self.root_uncertainty_order_label, "阶数：", "Order:")
+    self.root_uncertainty_order_spin = QSpinBox()
+    self.root_uncertainty_order_spin.setRange(1, 2)
+    self.root_uncertainty_order_spin.setValue(1)
+    self.root_uncertainty_order_spin.setToolTip(
+        self._tr(
+            "1 阶：隐函数线性传播；2 阶：对标量实根使用二阶有限差分传播。",
+            "Order 1: linear implicit propagation; order 2: scalar second-order finite-difference propagation.",
+        )
+    )
+    root_taylor_layout.addWidget(self.root_uncertainty_order_label)
+    root_taylor_layout.addWidget(self.root_uncertainty_order_spin)
+    root_taylor_layout.addStretch()
+    root_uncertainty_layout.addRow("", self.root_uncertainty_taylor_widget)
+
     self.root_monte_carlo_samples_label = QLabel("样本数：")
     self._register_text(self.root_monte_carlo_samples_label, "样本数：", "Samples:")
     self.root_monte_carlo_samples_spin = QSpinBox()
-    self.root_monte_carlo_samples_spin.setRange(2, 50000)
+    self.root_monte_carlo_samples_spin.setRange(100, 50000)
     self.root_monte_carlo_samples_spin.setValue(2000)
     root_uncertainty_layout.addRow(self.root_monte_carlo_samples_label, self.root_monte_carlo_samples_spin)
 
@@ -2213,8 +2231,12 @@ def _open_root_formula_preview(self) -> None:
 
 
 def _on_root_uncertainty_method_changed(self) -> None:
-    method = str(self.root_uncertainty_method_combo.currentData() or "auto")
+    method = str(self.root_uncertainty_method_combo.currentData() or "taylor")
     show_monte_carlo = method == "monte_carlo"
+    show_taylor = method == "taylor"
+    taylor_widget = getattr(self, "root_uncertainty_taylor_widget", None)
+    if taylor_widget is not None:
+        taylor_widget.setVisible(show_taylor)
     for widget_name in (
         "root_monte_carlo_samples_label",
         "root_monte_carlo_samples_spin",
@@ -2226,11 +2248,9 @@ def _on_root_uncertainty_method_changed(self) -> None:
             widget.setVisible(show_monte_carlo)
 
     help_text = {
-        "auto": self._tr("自动选择线性传播。", "Automatically uses linear propagation."),
         "off": self._tr("不传播输入不确定度。", "Input uncertainty is not propagated."),
-        "linear": self._tr("使用一阶隐函数传播。", "Uses first-order implicit propagation."),
+        "taylor": self._tr("使用 Taylor 传播；阶数由下方控件设置。", "Uses Taylor propagation; order is set below."),
         "monte_carlo": self._tr("对输入不确定度抽样后重新求根。", "Resolves roots from sampled uncertain inputs."),
-        "second_order": self._tr("对标量实根使用二阶有限差分传播。", "Uses scalar second-order finite differences."),
     }.get(method, "")
     self.root_uncertainty_method_help_label.setText(help_text)
 

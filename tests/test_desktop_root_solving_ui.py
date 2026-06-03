@@ -66,13 +66,14 @@ def test_root_solving_page_has_uncertainty_controls(window: Any) -> None:
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
 
     assert _combo_data(window.root_uncertainty_method_combo) == [
-        "auto",
-        "off",
-        "linear",
+        "taylor",
         "monte_carlo",
-        "second_order",
+        "off",
     ]
-    assert window.root_monte_carlo_samples_spin.minimum() == 2
+    assert "auto" not in _combo_data(window.root_uncertainty_method_combo)
+    assert window.root_uncertainty_order_spin.minimum() == 1
+    assert window.root_uncertainty_order_spin.maximum() == 2
+    assert window.root_monte_carlo_samples_spin.minimum() == 100
     assert window.root_monte_carlo_samples_spin.maximum() == 50000
     assert window.root_monte_carlo_samples_spin.value() == 2000
     assert window.root_uncertainty_method_help_label.text()
@@ -84,8 +85,9 @@ def test_root_monte_carlo_controls_visible_only_for_monte_carlo(window: Any, qtb
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
     QApplication.processEvents()
 
-    window.root_uncertainty_method_combo.setCurrentIndex(window.root_uncertainty_method_combo.findData("auto"))
+    window.root_uncertainty_method_combo.setCurrentIndex(window.root_uncertainty_method_combo.findData("taylor"))
     QApplication.processEvents()
+    assert window.root_uncertainty_taylor_widget.isVisible()
     assert not window.root_monte_carlo_samples_spin.isVisible()
     assert not window.root_monte_carlo_seed_edit.isVisible()
 
@@ -93,6 +95,7 @@ def test_root_monte_carlo_controls_visible_only_for_monte_carlo(window: Any, qtb
         window.root_uncertainty_method_combo.findData("monte_carlo")
     )
     QApplication.processEvents()
+    assert not window.root_uncertainty_taylor_widget.isVisible()
     assert window.root_monte_carlo_samples_spin.isVisible()
     assert window.root_monte_carlo_seed_edit.isVisible()
 
@@ -120,6 +123,7 @@ def test_root_job_collects_uncertainty_options(window: Any) -> None:
 
     assert job.uncertainty_options == {
         "method": "monte_carlo",
+        "taylor_order": 1,
         "monte_carlo_samples": 123,
         "monte_carlo_seed": "5",
     }

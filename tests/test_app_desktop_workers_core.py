@@ -147,6 +147,7 @@ def test_root_worker_payload_preserves_uncertainty_options() -> None:
 
     assert restored.uncertainty_options == {
         "method": "monte_carlo",
+        "taylor_order": 1,
         "monte_carlo_samples": 25,
         "monte_carlo_seed": "7",
     }
@@ -177,9 +178,33 @@ def test_root_worker_payload_safely_normalizes_bad_uncertainty_options() -> None
 
     assert restored.uncertainty_options == {
         "method": "monte_carlo",
+        "taylor_order": 1,
         "monte_carlo_samples": 2000,
         "monte_carlo_seed": "0",
     }
+
+
+def test_root_worker_payload_safely_normalizes_unknown_uncertainty_method() -> None:
+    payload = {
+        "equations": ("x^2 - C",),
+        "unknown_rows": ({"name": "x", "initial": "2", "lower": "", "upper": ""},),
+        "data_headers": (),
+        "data_rows": (),
+        "constants_enabled": True,
+        "constants_rows": ({"name": "C", "value": "4.0(2)"},),
+        "constants_view": "table",
+        "constants_text": "",
+        "mode": "scalar",
+        "scan_config": {},
+        "precision": 80,
+        "display_digits": 20,
+        "uncertainty_options": {"method": "future_method"},
+    }
+
+    restored = _deserialize_root_solving_job(payload)
+
+    assert restored.uncertainty_options["method"] == "taylor"
+    assert restored.uncertainty_options["taylor_order"] == 1
 
 
 def test_execute_root_solving_job_payload_forwards_uncertainty_options(

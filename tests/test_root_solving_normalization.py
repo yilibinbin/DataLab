@@ -180,7 +180,7 @@ def test_normalize_root_problem_disabled_constants_do_not_create_uncertain_input
     assert "C" not in uncertain
 
 
-def test_root_problem_defaults_uncertainty_options_to_auto() -> None:
+def test_root_problem_defaults_uncertainty_options_to_taylor_order_one() -> None:
     problem, _uncertain = normalize(
         equations=("x^2 - C",),
         unknown_rows=[{"name": "x", "initial": "2"}],
@@ -190,7 +190,8 @@ def test_root_problem_defaults_uncertainty_options_to_auto() -> None:
         precision=80,
     )
 
-    assert problem.uncertainty_options.method == "auto"
+    assert problem.uncertainty_options.method == "taylor"
+    assert problem.uncertainty_options.taylor_order == 1
     assert problem.uncertainty_options.monte_carlo_samples == 2000
     assert problem.uncertainty_options.monte_carlo_seed == ""
 
@@ -211,8 +212,29 @@ def test_root_problem_normalizes_uncertainty_options_dict() -> None:
     )
 
     assert problem.uncertainty_options.method == "monte_carlo"
+    assert problem.uncertainty_options.taylor_order == 1
     assert problem.uncertainty_options.monte_carlo_samples == 250
     assert problem.uncertainty_options.monte_carlo_seed == "123"
+
+
+def test_root_problem_migrates_legacy_uncertainty_methods_to_taylor_order() -> None:
+    linear, _ = normalize(uncertainty_options={"method": "auto"})
+    second, _ = normalize(uncertainty_options={"method": "second_order"})
+
+    assert linear.uncertainty_options.method == "taylor"
+    assert linear.uncertainty_options.taylor_order == 1
+    assert second.uncertainty_options.method == "taylor"
+    assert second.uncertainty_options.taylor_order == 2
+
+
+def test_root_problem_normalizes_monte_carlo_alias_and_clamps_taylor_order() -> None:
+    monte_carlo, _ = normalize(uncertainty_options={"method": "monte-carlo", "monte_carlo_samples": "250"})
+    taylor, _ = normalize(uncertainty_options={"method": "taylor", "taylor_order": "99"})
+
+    assert monte_carlo.uncertainty_options.method == "monte_carlo"
+    assert monte_carlo.uncertainty_options.monte_carlo_samples == 250
+    assert taylor.uncertainty_options.method == "taylor"
+    assert taylor.uncertainty_options.taylor_order == 2
 
 
 @pytest.mark.parametrize("samples", ["bad", "1", "50001"])  # type: ignore[untyped-decorator]

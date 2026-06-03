@@ -9,7 +9,7 @@ from mpmath import mp
 
 RootMode = Literal["auto", "scalar", "polynomial", "system", "scan_multiple"]
 RootBackend = Literal["scipy", "mpmath"]
-RootUncertaintyMethod = Literal["auto", "off", "linear", "monte_carlo", "second_order"]
+RootUncertaintyMethod = Literal["off", "taylor", "monte_carlo"]
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
@@ -45,9 +45,31 @@ class RootScanConfig:
 
 @dataclass(frozen=True)
 class RootUncertaintyOptions:
-    method: RootUncertaintyMethod = "auto"
+    method: RootUncertaintyMethod = "taylor"
+    taylor_order: int = 1
     monte_carlo_samples: int = 2000
     monte_carlo_seed: str = ""
+
+    def __post_init__(self) -> None:
+        method = str(self.method or "taylor").strip().lower()
+        if method in {"auto", "linear", "first_order", "first-order"}:
+            method = "taylor"
+            order = 1
+        elif method in {"second_order", "second-order"}:
+            method = "taylor"
+            order = 2
+        else:
+            order = self.taylor_order
+        if method not in {"off", "taylor", "monte_carlo"}:
+            method = "taylor"
+        try:
+            order = int(order)
+        except (TypeError, ValueError, OverflowError):
+            order = 1
+        if order not in {1, 2}:
+            order = 1
+        object.__setattr__(self, "method", method)
+        object.__setattr__(self, "taylor_order", order)
 
 
 @dataclass(frozen=True)

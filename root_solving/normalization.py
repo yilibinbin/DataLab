@@ -244,15 +244,49 @@ def normalize_root_uncertainty_options(
     if not isinstance(raw, Mapping):
         raise ValueError("Root uncertainty options must be a mapping.")
 
-    method = string_value(raw.get("method")).strip() or "auto"
+    raw_method = string_value(raw.get("method")).strip().lower()
+    method, taylor_order = _normalize_uncertainty_method_and_order(
+        raw_method,
+        raw.get("taylor_order", raw.get("order", 1)),
+    )
     if method not in _ROOT_UNCERTAINTY_METHODS:
         raise ValueError(f"Unknown root uncertainty propagation method: {method}")
 
     return RootUncertaintyOptions(
         method=cast(RootUncertaintyMethod, method),
+        taylor_order=taylor_order,
         monte_carlo_samples=_normalize_monte_carlo_samples(raw.get("monte_carlo_samples", 2000)),
         monte_carlo_seed=string_value(raw.get("monte_carlo_seed")).strip(),
     )
+
+
+def _normalize_uncertainty_method_and_order(raw_method: str, raw_order: Any) -> tuple[str, int]:
+    method = raw_method or "taylor"
+    aliases = {
+        "auto": "taylor",
+        "linear": "taylor",
+        "first_order": "taylor",
+        "first-order": "taylor",
+        "second_order": "taylor",
+        "second-order": "taylor",
+        "mc": "monte_carlo",
+        "montecarlo": "monte_carlo",
+        "monte-carlo": "monte_carlo",
+    }
+    method = aliases.get(method, method)
+    if raw_method in {"auto", "linear", "first_order", "first-order"}:
+        return method, 1
+    if raw_method in {"second_order", "second-order"}:
+        return method, 2
+    return method, _normalize_taylor_order(raw_order)
+
+
+def _normalize_taylor_order(value: Any) -> int:
+    try:
+        order = int(str(value).strip())
+    except (TypeError, ValueError, OverflowError):
+        order = 1
+    return max(1, min(2, order))
 
 
 def _normalize_monte_carlo_samples(value: Any) -> int:

@@ -150,10 +150,11 @@ def test_batch_accepts_uncertainty_options_dataclass(monkeypatch: pytest.MonkeyP
         constants_state=constants_state,
         mode="scalar",
         precision=80,
-        uncertainty_options=RootUncertaintyOptions(method="linear"),
+        uncertainty_options=RootUncertaintyOptions(method="taylor", taylor_order=1),
     )
 
-    assert captured[0].uncertainty_options.method == "linear"
+    assert captured[0].uncertainty_options.method == "taylor"
+    assert captured[0].uncertainty_options.taylor_order == 1
 
 
 def test_batch_text_rows_ignore_empty_headers_without_aborting() -> None:

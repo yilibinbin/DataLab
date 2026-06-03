@@ -139,9 +139,15 @@ def test_root_uncertainty_examples_store_expected_options() -> None:
     monte_carlo = read_workspace(Path("examples/workspaces/root-monte-carlo-uncertainty.datalab")).manifest["workspace"]
     batch = read_workspace(Path("examples/workspaces/root-batch-quadratic.datalab")).manifest["workspace"]
 
-    assert scalar["config"]["root_solving"]["uncertainty_options"]["method"] == "linear"
+    assert scalar["config"]["root_solving"]["uncertainty_options"] == {
+        "method": "taylor",
+        "taylor_order": 1,
+        "monte_carlo_samples": 2000,
+        "monte_carlo_seed": "",
+    }
     assert monte_carlo["config"]["root_solving"]["uncertainty_options"] == {
         "method": "monte_carlo",
+        "taylor_order": 1,
         "monte_carlo_samples": 2000,
         "monte_carlo_seed": "42",
     }

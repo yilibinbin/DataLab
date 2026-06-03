@@ -328,7 +328,8 @@ def _capture_root_config(window: Any) -> dict[str, Any]:
         "unknowns": _root_unknown_rows(window),
         "constants": _constants_editor_state(getattr(window, "root_constants_editor", None)),
         "uncertainty_options": {
-            "method": _combo_data(getattr(window, "root_uncertainty_method_combo", None), "auto"),
+            "method": _combo_data(getattr(window, "root_uncertainty_method_combo", None), "taylor"),
+            "taylor_order": _value(getattr(window, "root_uncertainty_order_spin", None), 1),
             "monte_carlo_samples": _value(getattr(window, "root_monte_carlo_samples_spin", None), 2000),
             "monte_carlo_seed": _text(getattr(window, "root_monte_carlo_seed_edit", None), ""),
         },
@@ -616,11 +617,22 @@ def _restore_root_config(window: Any, config: Any) -> None:
 def _restore_root_uncertainty_options(window: Any, options: Any) -> None:
     if not isinstance(options, dict):
         options = {}
-    method = str(options.get("method") or "auto")
+    method = str(options.get("method") or "taylor")
+    if method in {"auto", "linear", "first_order", "first-order"}:
+        method = "taylor"
+        taylor_order = 1
+    elif method in {"second_order", "second-order"}:
+        method = "taylor"
+        taylor_order = 2
+    else:
+        taylor_order = _safe_int(options.get("taylor_order", options.get("order", 1)), 1)
     combo = getattr(window, "root_uncertainty_method_combo", None)
     if combo is not None and combo.findData(method) < 0 and combo.findText(method) < 0:
-        method = "auto"
+        method = "taylor"
     _set_combo_data(combo, method)
+    order_widget = getattr(window, "root_uncertainty_order_spin", None)
+    if order_widget is not None and hasattr(order_widget, "setValue"):
+        order_widget.setValue(_clamp_widget_int(order_widget, taylor_order))
     samples_widget = getattr(window, "root_monte_carlo_samples_spin", None)
     if samples_widget is not None and hasattr(samples_widget, "setValue"):
         samples_widget.setValue(_clamp_widget_int(samples_widget, _safe_int(options.get("monte_carlo_samples"), 2000)))
