@@ -1782,6 +1782,7 @@ def build_left_panel(self):
 
 def build_right_panel(self, layout: QVBoxLayout):
     self.tabs = QTabWidget()
+    self.tabs.setProperty("datalab_schema_key", "main.result_tabs")
     layout.addWidget(self.tabs)
 
     # Result tab
@@ -1789,11 +1790,20 @@ def build_right_panel(self, layout: QVBoxLayout):
     result_layout = QVBoxLayout(result_widget)
     self.result_tabs = QTabWidget()
     result_layout.addWidget(self.result_tabs)
+    self.result_tabs.setProperty("datalab_schema_key", "results.tabs")
+    self.result_tabs.setProperty(
+        "datalab_schema_tabs",
+        {
+            "numeric": "results.numeric",
+            "image": "results.image",
+        },
+    )
     self.result_tab_titles = {"numeric": "数值结果", "image": "图片"}
 
     numeric_tab = QWidget()
     numeric_layout = QVBoxLayout(numeric_tab)
     self.result_edit = QTextBrowser()
+    self.result_edit.setProperty("datalab_schema_key", "results.numeric.markdown")
     self.fit_result_edit = self.result_edit
     self.result_edit.setReadOnly(True)
     self.result_edit.setOpenExternalLinks(False)
@@ -1903,11 +1913,13 @@ def build_right_panel(self, layout: QVBoxLayout):
     image_layout.addLayout(controls_layout)
 
     self.result_plot_scroll = QScrollArea()
+    self.result_plot_scroll.setProperty("datalab_schema_key", "results.image.preview")
     self.result_plot_scroll.setWidgetResizable(False)
     self.result_plot_scroll.setAlignment(Qt.AlignCenter)
     self.result_plot_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     self.result_plot_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     self.result_plot_label = QLabel(self._tr("尚无图片", "No image yet"))
+    self.result_plot_label.setProperty("datalab_schema_key", "results.image.preview")
     self.result_plot_label.setAlignment(Qt.AlignCenter)
     self.result_plot_label.setMinimumHeight(320)
     self.result_plot_scroll.setWidget(self.result_plot_label)
@@ -1928,6 +1940,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     log_widget = QWidget()
     log_layout = QVBoxLayout(log_widget)
     self.log_edit = QPlainTextEdit()
+    self.log_edit.setProperty("datalab_schema_key", "results.log")
     self.log_edit.setReadOnly(True)
     self._add_font_control_row(log_layout, self.log_edit, "字体大小：")
     log_layout.addWidget(self.log_edit)
@@ -1940,14 +1953,17 @@ def build_right_panel(self, layout: QVBoxLayout):
     open_btn = QPushButton("打开…")
     open_btn.clicked.connect(self.open_latex_file)
     self._register_text(open_btn, "打开…", "Open…")
+    self.latex_open_button = open_btn
     toolbar.addWidget(open_btn)
     save_btn = QPushButton("保存")
     save_btn.clicked.connect(self.save_latex_editor)
     self._register_text(save_btn, "保存", "Save")
+    self.latex_save_button = save_btn
     toolbar.addWidget(save_btn)
     reload_btn = QPushButton("重新载入")
     reload_btn.clicked.connect(lambda: self.reload_latex_editor(show_message=True))
     self._register_text(reload_btn, "重新载入", "Reload")
+    self.latex_reload_button = reload_btn
     toolbar.addWidget(reload_btn)
     compile_btn = QPushButton("编译 PDF")
     compile_btn.clicked.connect(self.compile_latex_to_pdf)
@@ -1961,6 +1977,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     toolbar.addWidget(view_btn)
     toolbar.addStretch()
     self.latex_status_label = QLabel("未加载 LaTeX 文件")
+    self.latex_status_label.setProperty("datalab_schema_key", "results.latex.status")
     self._register_text(self.latex_status_label, "未加载 LaTeX 文件", "No LaTeX loaded")
     toolbar.addWidget(self.latex_status_label)
     latex_layout.addLayout(toolbar)
@@ -1971,6 +1988,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     # messages reference line numbers (``error: 1.tex:57: ...``) and
     # users have to find the offending line by scrolling without that.
     self.latex_edit = NumberedTextEdit()
+    self.latex_edit.setProperty("datalab_schema_key", "results.latex.source")
     self.latex_edit.setPlaceholderText("% LaTeX 内容将在此显示…")
     # Attach syntax highlighter
     from app_desktop.latex_highlighter import LatexHighlighter
@@ -2028,6 +2046,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     pdf_layout = QVBoxLayout(pdf_widget)
     pdf_toolbar = QHBoxLayout()
     self.pdf_status_label = QLabel("暂无 PDF 预览")
+    self.pdf_status_label.setProperty("datalab_schema_key", "results.pdf.status")
     self._register_text(self.pdf_status_label, "暂无 PDF 预览", "No PDF preview")
     pdf_toolbar.addWidget(self.pdf_status_label)
     pdf_toolbar.addStretch()
@@ -2081,12 +2100,22 @@ def build_right_panel(self, layout: QVBoxLayout):
         "numeric": 0,
         "image": 1,
     }
+    _bind_result_area_schema_fields(self)
     self.main_tabs_indices = {
         "result": self.tabs.indexOf(result_widget),
         "log": self.tabs.indexOf(log_widget),
         "latex": self.tabs.indexOf(latex_widget),
         "pdf": self.tabs.indexOf(pdf_widget),
     }
+    self.tabs.setProperty(
+        "datalab_schema_tabs",
+        {
+            "result": "results.overview",
+            "log": "results.log",
+            "latex": "results.latex",
+            "pdf": "results.pdf",
+        },
+    )
     self._update_image_status()
 
 
@@ -3207,6 +3236,170 @@ def _bind_result_latex_pdf_schema_fields(
         (pdf_zoom_in_field, self.pdf_zoom_in_button, LocalizedText("放大 PDF", "Zoom PDF in")),
         (pdf_zoom_out_field, self.pdf_zoom_out_button, LocalizedText("缩小 PDF", "Zoom PDF out")),
         (pdf_zoom_reset_field, self.pdf_zoom_reset_button, LocalizedText("重置 PDF 缩放", "Reset PDF zoom")),
+    ]:
+        _bind_schema_command_button(
+            self,
+            button,
+            field=field,
+            accessible_name=accessible_name,
+            lang=lang,
+        )
+
+
+def _bind_result_area_schema_fields(self) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    numeric_result_field = FormFieldSpec(
+        key="results.numeric.markdown",
+        widget_kind="textarea",
+        label=LocalizedText("数值结果", "Numeric results"),
+        tooltip=LocalizedText("显示当前计算的数值结果和摘要。", "Shows numeric results and summaries for the current calculation."),
+        required=False,
+    )
+    csv_export_field = FormFieldSpec(
+        key="results.export.csv",
+        widget_kind="button",
+        label=LocalizedText("导出 CSV", "Export CSV"),
+        tooltip=LocalizedText("导出当前结果表格为 CSV 文件。", "Export the current result table as a CSV file."),
+        required=False,
+    )
+    image_preview_field = FormFieldSpec(
+        key="results.image.preview",
+        widget_kind="image",
+        label=LocalizedText("图片", "Image"),
+        tooltip=LocalizedText("显示当前计算生成的图片。", "Displays plots generated by the current calculation."),
+        required=False,
+    )
+    image_status_field = FormFieldSpec(
+        key="results.image.status",
+        widget_kind="text",
+        label=LocalizedText("图片状态", "Image status"),
+        tooltip=LocalizedText("当前图片页和加载状态。", "Current image page and loading status."),
+        required=False,
+    )
+    image_zoom_in_field = FormFieldSpec(
+        key="results.image.zoom_in",
+        widget_kind="button",
+        label=LocalizedText("放大图片", "Zoom image in"),
+        tooltip=LocalizedText("放大结果图片。", "Zoom result image in."),
+        required=False,
+    )
+    image_zoom_out_field = FormFieldSpec(
+        key="results.image.zoom_out",
+        widget_kind="button",
+        label=LocalizedText("缩小图片", "Zoom image out"),
+        tooltip=LocalizedText("缩小结果图片。", "Zoom result image out."),
+        required=False,
+    )
+    image_zoom_reset_field = FormFieldSpec(
+        key="results.image.zoom_reset",
+        widget_kind="button",
+        label=LocalizedText("重置图片缩放", "Reset image zoom"),
+        tooltip=LocalizedText("重置结果图片缩放。", "Reset result image zoom."),
+        required=False,
+    )
+    image_export_field = FormFieldSpec(
+        key="results.image.export",
+        widget_kind="button",
+        label=LocalizedText("导出图片", "Export image"),
+        tooltip=LocalizedText("导出当前结果图片。", "Export the current result image."),
+        required=False,
+    )
+    image_page_field = FormFieldSpec(
+        key="results.image.page",
+        widget_kind="number",
+        label=LocalizedText("图片页", "Image page"),
+        tooltip=LocalizedText("选择要查看的结果图片页。", "Image page to view."),
+        required=False,
+    )
+    image_prev_field = FormFieldSpec(
+        key="results.image.previous",
+        widget_kind="button",
+        label=LocalizedText("上一张图片", "Previous image"),
+        tooltip=LocalizedText("查看上一张结果图片。", "View the previous result image."),
+        required=False,
+    )
+    image_next_field = FormFieldSpec(
+        key="results.image.next",
+        widget_kind="button",
+        label=LocalizedText("下一张图片", "Next image"),
+        tooltip=LocalizedText("查看下一张结果图片。", "View the next result image."),
+        required=False,
+    )
+    log_field = FormFieldSpec(
+        key="results.log",
+        widget_kind="textarea",
+        label=LocalizedText("日志", "Log"),
+        tooltip=LocalizedText("显示计算日志和警告。", "Shows calculation logs and warnings."),
+        required=False,
+    )
+    latex_source_field = FormFieldSpec(
+        key="results.latex.source",
+        widget_kind="textarea",
+        label=LocalizedText("LaTeX 源码", "LaTeX source"),
+        tooltip=LocalizedText("显示或编辑当前 LaTeX 输出内容。", "Shows or edits the current LaTeX output content."),
+        required=False,
+    )
+    latex_status_field = FormFieldSpec(
+        key="results.latex.status",
+        widget_kind="text",
+        label=LocalizedText("LaTeX 状态", "LaTeX status"),
+        tooltip=LocalizedText("当前 LaTeX 文件加载和保存状态。", "Current LaTeX file load/save status."),
+        required=False,
+    )
+    latex_open_field = FormFieldSpec(
+        key="results.latex.open",
+        widget_kind="button",
+        label=LocalizedText("打开 LaTeX 文件", "Open LaTeX file"),
+        tooltip=LocalizedText("打开已有 LaTeX 文件到编辑器。", "Open an existing LaTeX file in the editor."),
+        required=False,
+    )
+    latex_save_field = FormFieldSpec(
+        key="results.latex.save",
+        widget_kind="button",
+        label=LocalizedText("保存 LaTeX 文件", "Save LaTeX file"),
+        tooltip=LocalizedText("保存当前 LaTeX 编辑器内容。", "Save the current LaTeX editor content."),
+        required=False,
+    )
+    latex_reload_field = FormFieldSpec(
+        key="results.latex.reload",
+        widget_kind="button",
+        label=LocalizedText("重新载入 LaTeX 文件", "Reload LaTeX file"),
+        tooltip=LocalizedText("从磁盘重新载入当前 LaTeX 文件。", "Reload the current LaTeX file from disk."),
+        required=False,
+    )
+    pdf_status_field = FormFieldSpec(
+        key="results.pdf.status",
+        widget_kind="text",
+        label=LocalizedText("PDF 状态", "PDF status"),
+        tooltip=LocalizedText("当前 PDF 预览状态。", "Current PDF preview status."),
+        required=False,
+    )
+
+    for field, widget in [
+        (numeric_result_field, self.result_edit),
+        (image_preview_field, self.result_plot_scroll),
+        (image_preview_field, self.result_plot_label),
+        (image_status_field, self.image_status_label),
+        (log_field, self.log_edit),
+        (latex_source_field, self.latex_edit),
+        (latex_status_field, self.latex_status_label),
+        (pdf_status_field, self.pdf_status_label),
+        (image_page_field, self.image_page_spin),
+    ]:
+        bind_field(field=field, widget=widget, lang=lang)
+        _register_schema_text_refresh(self, field, widget=widget)
+
+    for field, button, accessible_name in [
+        (csv_export_field, self.export_csv_btn, LocalizedText("导出 CSV", "Export CSV")),
+        (image_zoom_in_field, self.result_zoom_in_btn, LocalizedText("放大图片", "Zoom image in")),
+        (image_zoom_out_field, self.result_zoom_out_btn, LocalizedText("缩小图片", "Zoom image out")),
+        (image_zoom_reset_field, self.result_zoom_reset_btn, LocalizedText("重置图片缩放", "Reset image zoom")),
+        (image_export_field, self.result_export_btn, LocalizedText("导出图片", "Export image")),
+        (image_prev_field, self.image_prev_btn, LocalizedText("上一张图片", "Previous image")),
+        (image_next_field, self.image_next_btn, LocalizedText("下一张图片", "Next image")),
+        (latex_open_field, self.latex_open_button, LocalizedText("打开 LaTeX 文件", "Open LaTeX file")),
+        (latex_save_field, self.latex_save_button, LocalizedText("保存 LaTeX 文件", "Save LaTeX file")),
+        (latex_reload_field, self.latex_reload_button, LocalizedText("重新载入 LaTeX 文件", "Reload LaTeX file")),
     ]:
         _bind_schema_command_button(
             self,
