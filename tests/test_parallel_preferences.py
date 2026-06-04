@@ -225,8 +225,23 @@ def test_fitting_dataset_preserves_uncertainty_objects_from_parenthesized_tokens
 def test_left_panel_minimum_width_is_not_formula_size_hint(window: Any) -> None:
     left_scroll = window._main_splitter.widget(0)
 
-    assert left_scroll.minimumWidth() <= 360
-    assert window.left_container.sizeHint().width() >= left_scroll.minimumWidth()
+    window.resize(1300, 790)
+    window.show()
+    QApplication.processEvents()
+    before_width = left_scroll.minimumWidth()
+
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
+    window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("self_consistent"))
+    long_formula = "d0 + " + " + ".join(f"d{i}/(n-delta)^{i}" for i in range(2, 40))
+    window.implicit_equation_edit.setPlainText(long_formula)
+    window.implicit_output_edit.setPlainText(long_formula)
+    QApplication.processEvents()
+
+    assert left_scroll.minimumWidth() == before_width
+    window._main_splitter.setSizes([1, 1299])
+    QApplication.processEvents()
+    assert left_scroll.viewport().width() >= window.left_container.minimumSizeHint().width()
+    assert left_scroll.horizontalScrollBar().maximum() == 0
 
 
 def test_current_parallel_config_defaults_when_controls_are_absent() -> None:

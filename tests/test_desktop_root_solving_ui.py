@@ -78,6 +78,24 @@ def test_main_splitter_clamps_left_panel_to_config_minimum(window: Any) -> None:
     assert splitter.sizes()[0] >= window._main_splitter_left_min_width
 
 
+def test_main_splitter_minimum_prevents_left_horizontal_scrollbar(window: Any) -> None:
+    window.resize(1300, 790)
+    window.show()
+    QApplication.processEvents()
+
+    for mode in ("extrapolation", "error", "fitting", "root_solving", "statistics"):
+        window.mode_combo.setCurrentIndex(window.mode_combo.findData(mode))
+        QApplication.processEvents()
+        window._refresh_main_splitter_left_min_width()
+        window._main_splitter.setSizes([1, 1299])
+        QApplication.processEvents()
+
+        horizontal_bar = window._left_scroll.horizontalScrollBar()
+        assert window._main_splitter.sizes()[0] >= window._main_splitter_left_min_width
+        assert horizontal_bar.maximum() == 0, mode
+        assert not horizontal_bar.isVisible(), mode
+
+
 def test_main_splitter_left_minimum_refreshes_after_mode_visibility(window: Any) -> None:
     window.resize(1500, 920)
     window.show()
@@ -90,8 +108,7 @@ def test_main_splitter_left_minimum_refreshes_after_mode_visibility(window: Any)
     expected = max(
         320,
         window.left_container.minimumSizeHint().width(),
-        window.left_container.sizeHint().width(),
-    )
+    ) + left_scroll.frameWidth() * 2 + left_scroll.verticalScrollBar().sizeHint().width()
     assert window._main_splitter_left_min_width == expected
     assert left_scroll.minimumWidth() == expected
 
