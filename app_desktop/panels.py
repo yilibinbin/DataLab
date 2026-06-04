@@ -936,6 +936,15 @@ def build_left_panel(self):
     mc_layout.addRow(lbl_mc_seed, self.error_mc_seed_edit)
     error_layout.addWidget(self.error_mc_widget)
     self.error_mc_widget.hide()
+    _bind_error_schema_fields(
+        self,
+        lbl_error_formula=lbl_error_formula,
+        lbl_error_method=lbl_err_method,
+        error_method_items=error_method_items,
+        lbl_error_order=lbl_err_order,
+        lbl_mc_samples=lbl_mc_samples,
+        lbl_mc_seed=lbl_mc_seed,
+    )
 
     self.left_layout.addWidget(self.error_box)
     self._on_constants_source_toggle(self.use_constants_file_checkbox.isChecked())
@@ -2447,6 +2456,175 @@ def _bind_fitting_schema_fields(
     bind_field(field=implicit_timeout_field, label=lbl_implicit_timeout, widget=self.implicit_timeout_spin, lang=lang)
     bind_field(field=implicit_constants_field, widget=self.implicit_constants_editor, lang=lang)
     bind_field(field=implicit_params_field, label=lbl_implicit_params, widget=self.implicit_params_table, lang=lang)
+
+
+def _register_schema_text_refresh(
+    self,
+    field: FormFieldSpec,
+    *,
+    widget: QWidget | None = None,
+    help_button: QWidget | None = None,
+) -> None:
+    if widget is not None:
+        if field.tooltip.zh or field.tooltip.en:
+            self._register_text(widget, field.tooltip.zh, field.tooltip.en, "setToolTip")
+        if field.placeholder.zh or field.placeholder.en:
+            self._register_text(widget, field.placeholder.zh, field.placeholder.en, "setPlaceholderText")
+    if help_button is not None and (field.tooltip.zh or field.tooltip.en):
+        self._register_text(help_button, field.tooltip.zh, field.tooltip.en, "setToolTip")
+
+
+def _bind_error_schema_fields(
+    self,
+    *,
+    lbl_error_formula: QLabel,
+    lbl_error_method: QLabel,
+    error_method_items: list[tuple[str, str, str]],
+    lbl_error_order: QLabel,
+    lbl_mc_samples: QLabel,
+    lbl_mc_seed: QLabel,
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    formula_field = FormFieldSpec(
+        key="error.formula",
+        widget_kind="textarea",
+        label=LocalizedText("公式：", "Formula:"),
+        placeholder=LocalizedText(
+            "公式（使用列名或 x1, x2 …）",
+            "Formula (use column names or x1, x2 …)",
+        ),
+        tooltip=LocalizedText(
+            "输入要传播不确定度的公式，可使用数据列名或 x1、x2 等变量。",
+            "Enter the formula whose uncertainty should be propagated; use column names or variables such as x1 and x2.",
+        ),
+        required=True,
+    )
+    function_help_field = FormFieldSpec(
+        key="error.functions",
+        widget_kind="button",
+        label=LocalizedText("函数支持", "Functions"),
+        tooltip=LocalizedText(
+            "查看公式中支持的函数和表达式语法。",
+            "View supported functions and expression syntax for formulas.",
+        ),
+        required=False,
+    )
+    constants_use_file_field = FormFieldSpec(
+        key="error.constants.use_file",
+        widget_kind="checkbox",
+        label=LocalizedText("使用常数文件", "Use constants file"),
+        tooltip=LocalizedText(
+            "启用后从外部常数文件读取固定量；关闭时使用下方常数表。",
+            "When enabled, fixed values are read from an external constants file; otherwise the constants table below is used.",
+        ),
+        required=False,
+    )
+    constants_file_field = FormFieldSpec(
+        key="error.constants.file_path",
+        widget_kind="file",
+        label=LocalizedText("常数文件…", "Constants file…"),
+        placeholder=LocalizedText("选择常数文件", "Choose a constants file"),
+        tooltip=LocalizedText(
+            "常数文件每行填写名称和值，例如 ALPHA 7.2973525693(11)[-3]。",
+            "Constants files use one name and value per line, for example ALPHA 7.2973525693(11)[-3].",
+        ),
+        required=False,
+    )
+    constants_field = FormFieldSpec(
+        key="error.constants",
+        widget_kind="table",
+        label=LocalizedText("常数设置", "Constants"),
+        tooltip=LocalizedText(
+            "可选常数设置，支持表格和文本视图；关闭时不会向误差传递公式代入这些常数。",
+            "Optional constants for table or text entry; when disabled they are not substituted into the error propagation formula.",
+        ),
+        required=False,
+    )
+    method_field = FormFieldSpec(
+        key="error.method",
+        widget_kind="select",
+        label=LocalizedText("方法：", "Method:"),
+        tooltip=LocalizedText(
+            "Taylor 使用偏导传播不确定度；Monte Carlo 通过随机采样估计不确定度。",
+            "Taylor propagates uncertainty with derivatives; Monte Carlo estimates uncertainty by random sampling.",
+        ),
+        required=True,
+        choices=[ChoiceSpec(value=data, label=LocalizedText(zh, en)) for zh, en, data in error_method_items],
+    )
+    order_field = FormFieldSpec(
+        key="error.taylor.order",
+        widget_kind="number",
+        label=LocalizedText("阶数：", "Order:"),
+        tooltip=LocalizedText(
+            "1 阶：线性误差估计；2 阶：包含 Hessian（二阶偏导）贡献。",
+            "Order 1: linear propagation; order 2: includes Hessian (second-derivative) contributions.",
+        ),
+        required=False,
+    )
+    mc_samples_field = FormFieldSpec(
+        key="error.monte_carlo.samples",
+        widget_kind="number",
+        label=LocalizedText("MC 样本数：", "MC samples:"),
+        tooltip=LocalizedText(
+            "Monte Carlo 样本数（越大越稳定，但耗时更长），至少 100。",
+            "Monte Carlo sample count (larger is more stable but slower), minimum 100.",
+        ),
+        required=False,
+    )
+    mc_seed_field = FormFieldSpec(
+        key="error.monte_carlo.seed",
+        widget_kind="text",
+        label=LocalizedText("随机种子（可选）：", "Seed (optional):"),
+        placeholder=LocalizedText("留空=随机", "blank=random"),
+        tooltip=LocalizedText(
+            "留空表示每次随机；填写整数可复现实验结果。",
+            "Leave blank for random each run; set an integer for reproducibility.",
+        ),
+        required=False,
+    )
+
+    bind_field(
+        field=formula_field,
+        label=lbl_error_formula,
+        widget=self.formula_edit,
+        help_button=self.error_formula_preview_button,
+        lang=lang,
+    )
+    _register_schema_text_refresh(self, formula_field, widget=self.formula_edit, help_button=self.error_formula_preview_button)
+    bind_field(field=function_help_field, widget=self.func_help_btn, lang=lang)
+    _register_schema_text_refresh(self, function_help_field, widget=self.func_help_btn)
+    bind_field(field=constants_use_file_field, widget=self.use_constants_file_checkbox, lang=lang)
+    _register_schema_text_refresh(self, constants_use_file_field, widget=self.use_constants_file_checkbox)
+    bind_field(
+        field=constants_file_field,
+        widget=self.constants_file_edit,
+        help_button=self.constants_hint_btn,
+        lang=lang,
+    )
+    _register_schema_text_refresh(self, constants_file_field, widget=self.constants_file_edit)
+    bind_field(
+        field=constants_field,
+        widget=self.error_constants_editor,
+        help_button=self.error_constants_editor.help_button,
+        lang=lang,
+    )
+    self.error_constants_editor.checkbox.setToolTip(constants_field.tooltip.for_lang(lang))
+    _register_schema_text_refresh(self, constants_field, widget=self.error_constants_editor, help_button=self.error_constants_editor.help_button)
+    self._register_text(
+        self.error_constants_editor.checkbox,
+        constants_field.tooltip.zh,
+        constants_field.tooltip.en,
+        "setToolTip",
+    )
+    bind_field(field=method_field, label=lbl_error_method, widget=self.error_method_combo, lang=lang)
+    bind_choices(self.error_method_combo, method_field.choices, lang=lang)
+    _register_schema_text_refresh(self, method_field, widget=self.error_method_combo)
+    bind_field(field=order_field, label=lbl_error_order, widget=self.error_order_spin, lang=lang)
+    _register_schema_text_refresh(self, order_field, widget=self.error_order_spin)
+    bind_field(field=mc_samples_field, label=lbl_mc_samples, widget=self.error_mc_samples_spin, lang=lang)
+    _register_schema_text_refresh(self, mc_samples_field, widget=self.error_mc_samples_spin)
+    bind_field(field=mc_seed_field, label=lbl_mc_seed, widget=self.error_mc_seed_edit, lang=lang)
+    _register_schema_text_refresh(self, mc_seed_field, widget=self.error_mc_seed_edit)
 
 
 def _bind_root_schema_fields(
