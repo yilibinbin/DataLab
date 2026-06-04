@@ -1567,6 +1567,7 @@ def build_left_panel(self):
 
     # Options
     options_box = QGroupBox("选项")
+    self.options_box = options_box
     self._register_title(options_box, "选项", "Options")
     options_layout = QVBoxLayout(options_box)
     precision_layout = QHBoxLayout()
@@ -1694,6 +1695,7 @@ def build_left_panel(self):
     out_btn = QPushButton("选择…")
     out_btn.clicked.connect(self.browse_output_file)
     self._register_text(out_btn, "选择…", "Browse…")
+    self.output_browse_button = out_btn
     output_row = QHBoxLayout()
     output_row.addWidget(self.output_file_edit)
     output_row.addWidget(out_btn)
@@ -1748,6 +1750,20 @@ def build_left_panel(self):
     self.verbose_checkbox = QCheckBox("显示详细日志")
     self._register_text(self.verbose_checkbox, "显示详细日志", "Verbose log")
     options_layout.addWidget(self.verbose_checkbox)
+    _bind_global_options_schema_fields(
+        self,
+        label_precision=label_precision,
+        unc_label=unc_label,
+        lbl_parallel_mode=lbl_parallel_mode,
+        lbl_parallel_workers=lbl_parallel_workers,
+        lbl_parallel_reserve=lbl_parallel_reserve,
+        lbl_nested_policy=lbl_nested_policy,
+        parallel_mode_items=parallel_mode_items,
+        nested_policy_items=nested_policy_items,
+        lbl_output=lbl_output,
+        prec_label=prec_label,
+        group_size_label=group_size_label,
+    )
 
     # NOTE: ``latex_engine_combo`` + the engine-path picker were moved
     # into the LaTeX output tab (next to the font-size row) because
@@ -1936,10 +1952,12 @@ def build_right_panel(self, layout: QVBoxLayout):
     compile_btn = QPushButton("编译 PDF")
     compile_btn.clicked.connect(self.compile_latex_to_pdf)
     self._register_text(compile_btn, "编译 PDF", "Compile PDF")
+    self.latex_compile_button = compile_btn
     toolbar.addWidget(compile_btn)
     view_btn = QPushButton("查看 PDF")
     view_btn.clicked.connect(self.open_compiled_pdf)
     self._register_text(view_btn, "查看 PDF", "View PDF")
+    self.latex_view_pdf_button = view_btn
     toolbar.addWidget(view_btn)
     toolbar.addStretch()
     self.latex_status_label = QLabel("未加载 LaTeX 文件")
@@ -1997,6 +2015,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     engine_btn = QPushButton("选择引擎路径…")
     engine_btn.clicked.connect(self._prompt_engine_selection)
     self._register_text(engine_btn, "选择引擎路径…", "Select engine path…")
+    self.latex_engine_path_button = engine_btn
     latex_controls_row.addWidget(engine_btn)
     latex_controls_row.addStretch()
     latex_layout.addLayout(latex_controls_row)
@@ -2017,12 +2036,14 @@ def build_right_panel(self, layout: QVBoxLayout):
     self._set_zoom_icon(zoom_out_btn, "out")
     self._style_round_icon_button(zoom_out_btn)
     zoom_out_btn.clicked.connect(lambda: self._apply_pdf_zoom(self.pdf_zoom * 0.75))
+    self.pdf_zoom_out_button = zoom_out_btn
     pdf_toolbar.addWidget(zoom_out_btn)
     zoom_in_btn = QPushButton()
     self._register_text(zoom_in_btn, "放大", "Zoom in", "setToolTip")
     self._set_zoom_icon(zoom_in_btn, "in")
     self._style_round_icon_button(zoom_in_btn)
     zoom_in_btn.clicked.connect(lambda: self._apply_pdf_zoom(self.pdf_zoom * 1.25))
+    self.pdf_zoom_in_button = zoom_in_btn
     pdf_toolbar.addWidget(zoom_in_btn)
     lbl_zoom = QLabel("缩放%：")
     self._register_text(lbl_zoom, "缩放%：", "Zoom %:")
@@ -2037,6 +2058,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     reset_zoom_btn = QPushButton("重置")
     self._register_text(reset_zoom_btn, "重置", "Reset")
     reset_zoom_btn.clicked.connect(self._reset_pdf_zoom)
+    self.pdf_zoom_reset_button = reset_zoom_btn
     pdf_toolbar.addWidget(reset_zoom_btn)
     pdf_layout.addLayout(pdf_toolbar)
 
@@ -2048,6 +2070,12 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.pdf_scroll.setWidget(self.pdf_container)
     pdf_layout.addWidget(self.pdf_scroll)
     self.tabs.addTab(pdf_widget, "PDF 预览")
+    _bind_result_latex_pdf_schema_fields(
+        self,
+        lbl_digits=lbl_digits,
+        lbl_engine=lbl_engine,
+        lbl_zoom=lbl_zoom,
+    )
     # record tab indexes for translation
     self.result_tabs_indices = {
         "numeric": 0,
@@ -2853,6 +2881,340 @@ def _bind_schema_command_button(
         button.setAccessibleDescription(field.tooltip.for_lang(lang))
         self._register_text(button, field.tooltip.zh, field.tooltip.en, "setAccessibleDescription")
     self._register_text(button, accessible_name.zh, accessible_name.en, "setAccessibleName")
+
+
+def _mark_schema_choices(combo: QComboBox) -> None:
+    combo.setProperty("datalab_schema_choices", True)
+
+
+def _bind_global_options_schema_fields(
+    self,
+    *,
+    label_precision: QLabel,
+    unc_label: QLabel,
+    lbl_parallel_mode: QLabel,
+    lbl_parallel_workers: QLabel,
+    lbl_parallel_reserve: QLabel,
+    lbl_nested_policy: QLabel,
+    parallel_mode_items: list[tuple[str, str, str]],
+    nested_policy_items: list[tuple[str, str, str]],
+    lbl_output: QLabel,
+    prec_label: QLabel,
+    group_size_label: QLabel,
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    precision_field = FormFieldSpec(
+        key="options.precision_digits",
+        widget_kind="number",
+        label=LocalizedText("数值精度位数：", "Precision digits:"),
+        tooltip=LocalizedText(
+            "数值计算精度位数。16 位及以下通常使用双精度快速路径；更高位数使用多精度计算。",
+            "Numerical precision digits. Values up to 16 usually use the double-precision fast path; higher values use multiprecision calculation.",
+        ),
+        required=True,
+    )
+    uncertainty_digits_field = FormFieldSpec(
+        key="options.uncertainty_digits",
+        widget_kind="number",
+        label=LocalizedText("不确定度位数：", "Uncertainty digits:"),
+        tooltip=LocalizedText(
+            "控制结果中括号不确定度的有效位数。",
+            "Controls the significant digits shown for parenthesized uncertainties.",
+        ),
+        required=True,
+    )
+    parallel_mode_field = FormFieldSpec(
+        key="parallel.mode",
+        widget_kind="select",
+        label=LocalizedText("资源策略：", "Resource policy:"),
+        tooltip=LocalizedText(
+            "资源调度偏好；需要快速取消和进程隔离的任务仍会使用独立进程。",
+            "Resource scheduling preference; tasks that need fast cancellation or process isolation may still use separate processes.",
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value=data, label=LocalizedText(zh, en))
+            for zh, en, data in parallel_mode_items
+        ],
+    )
+    max_workers_field = FormFieldSpec(
+        key="parallel.max_workers",
+        widget_kind="number",
+        label=LocalizedText("最大 workers：", "Max workers:"),
+        tooltip=LocalizedText(
+            "最大并行 worker 数。0 表示自动根据任务和机器资源决定。",
+            "Maximum parallel worker count. 0 means automatic selection based on workload and machine resources.",
+        ),
+        required=False,
+    )
+    reserve_cores_field = FormFieldSpec(
+        key="parallel.reserve_cores",
+        widget_kind="number",
+        label=LocalizedText("保留核心：", "Reserve cores:"),
+        tooltip=LocalizedText(
+            "为系统和界面响应保留的 CPU 核心数。",
+            "CPU cores reserved for the system and UI responsiveness.",
+        ),
+        required=False,
+    )
+    nested_policy_field = FormFieldSpec(
+        key="parallel.nested_policy",
+        widget_kind="select",
+        label=LocalizedText("嵌套策略：", "Nested policy:"),
+        tooltip=LocalizedText(
+            "当一个并行任务内部再次请求并行时如何处理。",
+            "How to handle a parallel request made from inside another parallel task.",
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value=data, label=LocalizedText(zh, en))
+            for zh, en, data in nested_policy_items
+        ],
+    )
+    generate_latex_field = FormFieldSpec(
+        key="output.latex.enabled",
+        widget_kind="checkbox",
+        label=LocalizedText("生成 LaTeX 文件", "Generate LaTeX"),
+        tooltip=LocalizedText("启用后将计算结果写入 LaTeX 文件。", "When enabled, write calculation results to a LaTeX file."),
+        required=False,
+    )
+    output_path_field = FormFieldSpec(
+        key="output.latex.path",
+        widget_kind="file",
+        label=LocalizedText("LaTeX 输出路径：", "LaTeX output path:"),
+        placeholder=LocalizedText("选择 .tex 输出文件", "Choose a .tex output file"),
+        tooltip=LocalizedText("LaTeX 结果文件的保存路径。", "Save path for the LaTeX result file."),
+        required=False,
+    )
+    output_browse_field = FormFieldSpec(
+        key="output.latex.path",
+        widget_kind="button",
+        label=LocalizedText("选择 LaTeX 输出路径", "Choose LaTeX output path"),
+        tooltip=LocalizedText("选择 LaTeX 输出文件路径。", "Choose the LaTeX output file path."),
+        required=False,
+    )
+    input_digits_field = FormFieldSpec(
+        key="output.latex.input_digits",
+        widget_kind="number",
+        label=LocalizedText("输入列位数：", "Input digits:"),
+        tooltip=LocalizedText("LaTeX 表格中输入列保留的数字位数。", "Digit count retained for input columns in LaTeX tables."),
+        required=False,
+    )
+    dcolumn_field = FormFieldSpec(
+        key="output.latex.dcolumn",
+        widget_kind="checkbox",
+        label=LocalizedText("使用 dcolumn 排版", "Use dcolumn"),
+        tooltip=LocalizedText("使用 dcolumn 对齐数字列。", "Use dcolumn to align numeric columns."),
+        required=False,
+    )
+    group_size_field = FormFieldSpec(
+        key="output.latex.group_size",
+        widget_kind="number",
+        label=LocalizedText("分组位数：", "Group size:"),
+        tooltip=LocalizedText("LaTeX 数字分组的位数；0 表示不分组。", "Digit group size in LaTeX numbers; 0 disables grouping."),
+        required=False,
+    )
+    caption_enabled_field = FormFieldSpec(
+        key="output.latex.caption.enabled",
+        widget_kind="checkbox",
+        label=LocalizedText("使用标题", "Use caption"),
+        tooltip=LocalizedText("启用 LaTeX 表格标题。", "Enable a LaTeX table caption."),
+        required=False,
+    )
+    caption_field = FormFieldSpec(
+        key="output.latex.caption",
+        widget_kind="text",
+        label=LocalizedText("标题内容", "Caption text"),
+        placeholder=LocalizedText("表格标题", "Table caption"),
+        tooltip=LocalizedText("LaTeX 表格标题文本。", "LaTeX table caption text."),
+        required=False,
+    )
+    plots_field = FormFieldSpec(
+        key="output.plots.enabled",
+        widget_kind="checkbox",
+        label=LocalizedText("生成图片", "Generate plots"),
+        tooltip=LocalizedText("启用后生成当前计算模块支持的图片。", "When enabled, generate plots supported by the current calculation module."),
+        required=False,
+    )
+    verbose_field = FormFieldSpec(
+        key="options.verbose_log",
+        widget_kind="checkbox",
+        label=LocalizedText("显示详细日志", "Verbose log"),
+        tooltip=LocalizedText("显示更详细的计算日志。", "Show more detailed calculation logs."),
+        required=False,
+    )
+
+    field_bindings = [
+        (precision_field, label_precision, self.mpmath_precision_spin),
+        (uncertainty_digits_field, unc_label, self.uncertainty_digits_spin),
+        (parallel_mode_field, lbl_parallel_mode, self.parallel_mode_combo),
+        (max_workers_field, lbl_parallel_workers, self.parallel_max_workers_spin),
+        (reserve_cores_field, lbl_parallel_reserve, self.parallel_reserve_cores_spin),
+        (nested_policy_field, lbl_nested_policy, self.parallel_nested_policy_combo),
+        (output_path_field, lbl_output, self.output_file_edit),
+        (input_digits_field, prec_label, self.latex_input_precision_spin),
+        (group_size_field, group_size_label, self.latex_group_size_spin),
+    ]
+    for field, label, widget in field_bindings:
+        bind_field(field=field, label=label, widget=widget, lang=lang)
+        _register_schema_text_refresh(self, field, widget=widget)
+
+    for combo in (self.parallel_mode_combo, self.parallel_nested_policy_combo):
+        _mark_schema_choices(combo)
+
+    for field, widget in [
+        (generate_latex_field, self.generate_latex_checkbox),
+        (dcolumn_field, self.dcolumn_checkbox),
+        (caption_enabled_field, self.caption_checkbox),
+        (caption_field, self.caption_edit),
+        (plots_field, self.generate_plots_checkbox),
+        (verbose_field, self.verbose_checkbox),
+    ]:
+        bind_field(field=field, widget=widget, lang=lang)
+        _register_schema_text_refresh(self, field, widget=widget)
+
+    _bind_schema_command_button(
+        self,
+        self.output_browse_button,
+        field=output_browse_field,
+        accessible_name=LocalizedText("选择 LaTeX 输出路径", "Choose LaTeX output path"),
+        lang=lang,
+    )
+
+
+def _bind_result_latex_pdf_schema_fields(
+    self,
+    *,
+    lbl_digits: QLabel,
+    lbl_engine: QLabel,
+    lbl_zoom: QLabel,
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    display_scientific_field = FormFieldSpec(
+        key="results.display.scientific",
+        widget_kind="checkbox",
+        label=LocalizedText("使用科学计数法显示结果", "Display results in scientific notation"),
+        tooltip=LocalizedText("切换数值结果是否使用科学计数法显示。", "Toggle scientific notation for numeric result display."),
+        required=False,
+    )
+    display_digits_field = FormFieldSpec(
+        key="results.display.decimal_places",
+        widget_kind="number",
+        label=LocalizedText("小数位数：", "Decimal places:"),
+        tooltip=LocalizedText("控制数值结果显示的小数位数。", "Controls decimal places shown in numeric results."),
+        required=False,
+    )
+    image_zoom_field = FormFieldSpec(
+        key="results.image.zoom_percent",
+        widget_kind="number",
+        label=LocalizedText("图片缩放", "Image zoom"),
+        tooltip=LocalizedText("结果图片缩放百分比。", "Result image zoom percentage."),
+        required=False,
+    )
+    log_x_field = FormFieldSpec(
+        key="results.image.log_x",
+        widget_kind="checkbox",
+        label=LocalizedText("x 轴", "log x"),
+        tooltip=LocalizedText("使用 x 轴对数坐标。", "Use logarithmic x axis."),
+        required=False,
+    )
+    log_y_field = FormFieldSpec(
+        key="results.image.log_y",
+        widget_kind="checkbox",
+        label=LocalizedText("y 轴", "log y"),
+        tooltip=LocalizedText("使用 y 轴对数坐标。", "Use logarithmic y axis."),
+        required=False,
+    )
+    latex_compile_field = FormFieldSpec(
+        key="latex.compile",
+        widget_kind="button",
+        label=LocalizedText("编译 PDF", "Compile PDF"),
+        tooltip=LocalizedText("将当前 LaTeX 内容编译为 PDF。", "Compile the current LaTeX content into a PDF."),
+        required=False,
+    )
+    latex_view_field = FormFieldSpec(
+        key="latex.view_pdf",
+        widget_kind="button",
+        label=LocalizedText("查看 PDF", "View PDF"),
+        tooltip=LocalizedText("打开已编译的 PDF 文件。", "Open the compiled PDF file."),
+        required=False,
+    )
+    latex_engine_field = FormFieldSpec(
+        key="latex.engine",
+        widget_kind="select",
+        label=LocalizedText("LaTeX 引擎：", "LaTeX engine:"),
+        tooltip=LocalizedText("选择用于编译 PDF 的 LaTeX 引擎。", "Choose the LaTeX engine used to compile PDF output."),
+        required=False,
+    )
+    latex_engine_path_field = FormFieldSpec(
+        key="latex.engine_path",
+        widget_kind="button",
+        label=LocalizedText("选择引擎路径", "Select engine path"),
+        tooltip=LocalizedText("手动选择 LaTeX 引擎可执行文件路径。", "Manually select the LaTeX engine executable path."),
+        required=False,
+    )
+    pdf_zoom_field = FormFieldSpec(
+        key="pdf.zoom_percent",
+        widget_kind="number",
+        label=LocalizedText("缩放%：", "Zoom %:"),
+        tooltip=LocalizedText("PDF 预览缩放百分比。", "PDF preview zoom percentage."),
+        required=False,
+    )
+    pdf_zoom_in_field = FormFieldSpec(
+        key="pdf.zoom_in",
+        widget_kind="button",
+        label=LocalizedText("放大 PDF", "Zoom PDF in"),
+        tooltip=LocalizedText("放大 PDF 预览。", "Zoom PDF preview in."),
+        required=False,
+    )
+    pdf_zoom_out_field = FormFieldSpec(
+        key="pdf.zoom_out",
+        widget_kind="button",
+        label=LocalizedText("缩小 PDF", "Zoom PDF out"),
+        tooltip=LocalizedText("缩小 PDF 预览。", "Zoom PDF preview out."),
+        required=False,
+    )
+    pdf_zoom_reset_field = FormFieldSpec(
+        key="pdf.zoom_reset",
+        widget_kind="button",
+        label=LocalizedText("重置 PDF 缩放", "Reset PDF zoom"),
+        tooltip=LocalizedText("重置 PDF 预览缩放。", "Reset PDF preview zoom."),
+        required=False,
+    )
+
+    for field, label, widget in [
+        (display_digits_field, lbl_digits, self.display_digits_spin),
+        (latex_engine_field, lbl_engine, self.latex_engine_combo),
+        (pdf_zoom_field, lbl_zoom, self.pdf_zoom_spin),
+    ]:
+        bind_field(field=field, label=label, widget=widget, lang=lang)
+        _register_schema_text_refresh(self, field, widget=widget)
+    _mark_schema_choices(self.latex_engine_combo)
+
+    for field, widget in [
+        (display_scientific_field, self.scientific_checkbox),
+        (image_zoom_field, self.zoom_percent_spin),
+        (log_x_field, self.log_x_checkbox),
+        (log_y_field, self.log_y_checkbox),
+    ]:
+        bind_field(field=field, widget=widget, lang=lang)
+        _register_schema_text_refresh(self, field, widget=widget)
+
+    for field, button, accessible_name in [
+        (latex_compile_field, self.latex_compile_button, LocalizedText("编译 PDF", "Compile PDF")),
+        (latex_view_field, self.latex_view_pdf_button, LocalizedText("查看 PDF", "View PDF")),
+        (latex_engine_path_field, self.latex_engine_path_button, LocalizedText("选择引擎路径", "Select engine path")),
+        (pdf_zoom_in_field, self.pdf_zoom_in_button, LocalizedText("放大 PDF", "Zoom PDF in")),
+        (pdf_zoom_out_field, self.pdf_zoom_out_button, LocalizedText("缩小 PDF", "Zoom PDF out")),
+        (pdf_zoom_reset_field, self.pdf_zoom_reset_button, LocalizedText("重置 PDF 缩放", "Reset PDF zoom")),
+    ]:
+        _bind_schema_command_button(
+            self,
+            button,
+            field=field,
+            accessible_name=accessible_name,
+            lang=lang,
+        )
 
 
 def _bind_error_schema_fields(
