@@ -62,7 +62,9 @@ from app_desktop.parallel_preferences import (
     apply_parallel_config_to_widgets,
     save_current_parallel_config,
 )
+from app_desktop.ui_schema_binder import bind_choices, bind_field
 from shared.parallel_config import NestedParallelPolicy, ParallelMode
+from shared.ui_schema import ChoiceSpec, FormFieldSpec, LocalizedText
 from shared.ui_specs import (
     CUSTOM_FORMULA_PARAMS,
     EXTRAPOLATION_METHOD_SPECS,
@@ -1446,6 +1448,7 @@ def build_left_panel(self):
     self.root_constants_editor.table_view.setStyleSheet(_get_table_style())
     self.root_constants_editor.table_view.setMinimumHeight(120)
     root_layout.addWidget(self.root_constants_editor)
+    _bind_root_schema_fields(self, lbl_root_equations, lbl_root_mode, lbl_root_unknowns, root_mode_items)
     _refresh_root_field_help(self)
 
     self.root_uncertainty_group = QGroupBox("根的不确定度传播")
@@ -2235,6 +2238,88 @@ def _make_small_help_button() -> QPushButton:
     button.setFocusPolicy(Qt.NoFocus)
     button.setFixedWidth(24)
     return button
+
+
+def _bind_root_schema_fields(
+    self,
+    lbl_root_equations: QLabel,
+    lbl_root_mode: QLabel,
+    lbl_root_unknowns: QLabel,
+    root_mode_items: list[tuple[str, str, object]],
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    root_equations_field = FormFieldSpec(
+        key="root.equations",
+        widget_kind="textarea",
+        label=LocalizedText("方程：", "Equations:"),
+        placeholder=LocalizedText(
+            "每行一个方程，按 F_i(...)=0 求解；示例：x^2 - A",
+            "One equation per line as F_i(...)=0; example: x^2 - A",
+        ),
+        tooltip=LocalizedText(
+            "输入要求解的方程。留空不会使用示例；示例只显示在背景提示中。",
+            "Enter equations to solve. Leaving it blank does not use the example; the example is only placeholder text.",
+        ),
+        required=True,
+    )
+    root_mode_field = FormFieldSpec(
+        key="root.mode",
+        widget_kind="select",
+        label=LocalizedText("求解模式：", "Solve mode:"),
+        tooltip=LocalizedText(
+            "标量：单未知量单根；扫描多根：从区间/采样查找多个根；多项式：一元多项式根；方程组：多个未知量联立求解。",
+            "Scalar: one unknown and one root; Scan multiple: search multiple roots by interval/sampling; Polynomial: univariate polynomial roots; System: solve coupled equations.",
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value=data, label=LocalizedText(zh, en))
+            for zh, en, data in root_mode_items
+        ],
+    )
+    root_unknowns_field = FormFieldSpec(
+        key="root.unknowns",
+        widget_kind="table",
+        label=LocalizedText("未知量：", "Unknowns:"),
+        tooltip=LocalizedText(
+            "不同模式需要的列不同：标量通常填名称和初始值；扫描多根还可填下界/上界；多项式可只填名称；方程组每个未知量一行。",
+            "Columns depend on mode: scalar usually needs name and initial; scan can use lower/upper; polynomial can use only name; system uses one row per unknown.",
+        ),
+        required=True,
+    )
+    root_constants_field = FormFieldSpec(
+        key="root.constants",
+        widget_kind="table",
+        label=LocalizedText("常数设置", "Constants"),
+        tooltip=LocalizedText(
+            "常数设置：填写方程中的固定量，支持 1.23(4) 和 1.23(4)[-5] 这类不确定度写法。关闭时不会代入常数表。",
+            "Constants: fixed quantities used by equations; accepts uncertainty notation such as 1.23(4) and 1.23(4)[-5]. When disabled, constants are not substituted.",
+        ),
+        required=False,
+    )
+
+    bind_field(
+        field=root_equations_field,
+        label=lbl_root_equations,
+        widget=self.root_equations_edit,
+        help_button=self.root_equations_help_button,
+        lang=lang,
+    )
+    bind_field(
+        field=root_mode_field,
+        label=lbl_root_mode,
+        widget=self.root_mode_combo,
+        help_button=self.root_mode_help_button,
+        lang=lang,
+    )
+    bind_choices(self.root_mode_combo, root_mode_field.choices, lang=lang)
+    bind_field(
+        field=root_unknowns_field,
+        label=lbl_root_unknowns,
+        widget=self.root_unknowns_table,
+        help_button=self.root_unknowns_help_button,
+        lang=lang,
+    )
+    bind_field(field=root_constants_field, widget=self.root_constants_editor, lang=lang)
 
 
 def _refresh_root_field_help(self) -> None:

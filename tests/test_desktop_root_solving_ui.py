@@ -13,6 +13,8 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QPushButton
 
+from app_desktop.ui_schema_binder import find_unbound_required_widgets
+
 
 @pytest.fixture  # type: ignore[untyped-decorator]
 def window(qtbot: Any) -> Any:
@@ -89,6 +91,30 @@ def test_root_solving_page_has_required_widgets(window: Any) -> None:
     assert window.root_detect_unknowns_button.toolTip()
     assert window.root_add_unknown_button.toolTip()
     assert window.root_remove_unknown_button.toolTip()
+
+
+def test_root_controls_have_schema_bindings(window: Any) -> None:
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    QApplication.processEvents()
+
+    assert window.root_equations_edit.property("datalab_schema_key") == "root.equations"
+    assert window.root_equations_edit.property("datalab_schema_required") is True
+    assert window.root_equations_help_button.property("datalab_schema_key") == "root.equations"
+
+    assert window.root_mode_combo.property("datalab_schema_key") == "root.mode"
+    assert window.root_mode_combo.property("datalab_schema_required") is True
+    assert window.root_mode_combo.property("datalab_schema_choices") is True
+    assert _combo_data(window.root_mode_combo) == ["scalar", "scan_multiple", "polynomial", "system"]
+    assert window.root_mode_help_button.property("datalab_schema_key") == "root.mode"
+
+    assert window.root_unknowns_table.property("datalab_schema_key") == "root.unknowns"
+    assert window.root_unknowns_table.property("datalab_schema_required") is True
+    assert window.root_unknowns_help_button.property("datalab_schema_key") == "root.unknowns"
+
+    assert window.root_constants_editor.property("datalab_schema_key") == "root.constants"
+    assert window.root_constants_editor.property("datalab_schema_required") is False
+    assert window.root_constants_editor.table_view.property("datalab_schema_key") is None
+    assert find_unbound_required_widgets(window.root_box) == []
 
 
 def test_root_mode_empty_manual_table_defaults_to_one_column(window: Any) -> None:
