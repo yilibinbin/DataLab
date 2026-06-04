@@ -96,3 +96,18 @@ def test_visibility_rule_in_set_materializes_iterables() -> None:
 
     assert rule.values == ("custom", "self_consistent")
     assert rule.evaluate({"fit_model": "custom"}) is True
+
+
+def test_ui_specs_reexports_new_schema_types() -> None:
+    from shared.ui_specs import FormFieldSpec, LocalizedText, VisibilityRule
+
+    assert FormFieldSpec.__name__ == "FormFieldSpec"
+    assert LocalizedText("中", "En").for_lang("en") == "En"
+    assert VisibilityRule.equals("mode", "root").evaluate({"mode": "root"}) is True
+
+
+def test_ui_specs_preserves_existing_formula_help_compatibility_names() -> None:
+    import shared.ui_specs as ui_specs
+
+    assert hasattr(ui_specs, "EXTRAPOLATION_METHODS")
+    assert callable(ui_specs.get_method_parameters)

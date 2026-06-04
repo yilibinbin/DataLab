@@ -23,14 +23,25 @@ Institution: 中国科学院精密测量院外场理论组
 from typing import Any, Literal
 from dataclasses import dataclass, field
 
+from shared.ui_schema import (
+    ChoiceSpec,
+    FormFieldSpec,
+    FormSectionSpec,
+    LocalizedText,
+    PlotBudget,
+    PlotSpec,
+    ResultViewSpec,
+    VisibilityRule,
+)
+
 # Import help text from shared formula_help module
 from formula_help import (
+    EXTRAPOLATION_METHODS,  # noqa: F401 - preserve module-level compatibility
     get_function_help,
     get_function_tooltip,
     get_method_description,
     get_method_name,
-    get_method_parameters,
-    EXTRAPOLATION_METHODS,
+    get_method_parameters,  # noqa: F401 - preserve module-level compatibility
 )
 
 
@@ -586,6 +597,16 @@ __all__ = [
     "SelectWidgetSpec",
     "TextAreaWidgetSpec",
     "ParameterGroupSpec",
+
+    # Unified schema primitives
+    "ChoiceSpec",
+    "FormFieldSpec",
+    "FormSectionSpec",
+    "LocalizedText",
+    "PlotBudget",
+    "PlotSpec",
+    "ResultViewSpec",
+    "VisibilityRule",
 
     # Method specifications
     "MethodSpec",
