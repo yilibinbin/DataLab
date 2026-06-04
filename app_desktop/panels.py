@@ -647,6 +647,7 @@ def build_left_panel(self):
     func_btn.setFocusPolicy(Qt.NoFocus)
     func_btn.clicked.connect(self._show_error_functions)
     self._register_text(func_btn, "函数支持", "Functions")
+    self.custom_formula_function_button = func_btn
     custom_hint_row.addWidget(func_btn)
     hint_lbl = QLabel(
         self._tr(
@@ -666,11 +667,13 @@ def build_left_panel(self):
     self._register_title(self.power_box, "幂律参数", "Power-law parameters")
     power_layout = QFormLayout(self.power_box)
     self.power_x_edits: list[QLineEdit] = []
+    power_x_labels: list[QLabel] = []
     for idx, default in enumerate((10, 20, 40), start=1):
         edit = QLineEdit(str(default))
         self.power_x_edits.append(edit)
         lbl_x = QLabel(f"x{idx}：")
         self._register_text(lbl_x, f"x{idx}：", f"x{idx}:")
+        power_x_labels.append(lbl_x)
         power_layout.addRow(lbl_x, edit)
     self.power_p_edit = QLineEdit()
     self.power_p_edit.setPlaceholderText(self._tr("留空则自动求解 p", "Leave blank to solve p automatically"))
@@ -786,8 +789,24 @@ def build_left_panel(self):
     refresh_uncert_btn.setToolTip(self._tr("重新扫描数据以列出可选的不确定度参考列。", "Rescan data to list available uncertainty columns."))
     self._register_text(refresh_uncert_btn, "刷新", "Refresh")
     refresh_uncert_btn.clicked.connect(self._refresh_uncertainty_from_source)
+    self.uncertainty_refresh_btn = refresh_uncert_btn
     uncert_layout.addWidget(refresh_uncert_btn)
     extrap_layout.addLayout(uncert_layout)
+    _bind_extrapolation_schema_fields(
+        self,
+        method_label=method_label,
+        lbl_custom=lbl_custom,
+        power_x_labels=power_x_labels,
+        lbl_p=lbl_p,
+        lbl_seed=lbl_seed,
+        lbl_variant=lbl_variant,
+        lbl_order=lbl_order,
+        lbl_weight=lbl_weight,
+        lbl_beta=lbl_beta,
+        lbl_richardson_p=lbl_richardson_p,
+        lbl_uncert=lbl_uncert,
+        combo_items=combo_items,
+    )
     self.left_layout.addWidget(self.extrap_box)
 
     # Error propagation settings
@@ -987,6 +1006,15 @@ def build_left_panel(self):
     lbl_stats_sample = QLabel("样本/总体：")
     self._register_text(lbl_stats_sample, "样本/总体：", "Sample/Population:")
     stats_layout.addRow(lbl_stats_sample, self.stats_sample_checkbox)
+    _bind_statistics_schema_fields(
+        self,
+        lbl_stats_value=lbl_stats_value,
+        lbl_stats_sigma=lbl_stats_sigma,
+        lbl_stats_type=lbl_stats_type,
+        lbl_weight_var=lbl_weight_var,
+        lbl_stats_sample=lbl_stats_sample,
+        stats_items=stats_items,
+    )
     self.left_layout.addWidget(self.stats_box)
     self.stats_box.hide()
     self.stats_mode_combo.currentIndexChanged.connect(self._on_stats_mode_change)
@@ -2266,6 +2294,342 @@ def _make_small_help_button() -> QPushButton:
     return button
 
 
+def _bind_extrapolation_schema_fields(
+    self,
+    *,
+    method_label: QLabel,
+    lbl_custom: QLabel,
+    power_x_labels: list[QLabel],
+    lbl_p: QLabel,
+    lbl_seed: QLabel,
+    lbl_variant: QLabel,
+    lbl_order: QLabel,
+    lbl_weight: QLabel,
+    lbl_beta: QLabel,
+    lbl_richardson_p: QLabel,
+    lbl_uncert: QLabel,
+    combo_items: list[tuple[str, str, str]],
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    method_field = FormFieldSpec(
+        key="extrapolation.method",
+        widget_kind="select",
+        label=LocalizedText("外推方法：", "Method:"),
+        tooltip=LocalizedText(
+            "选择外推算法。不同方法会显示对应的参数设置。",
+            "Choose the extrapolation algorithm. Different methods show their relevant parameter settings.",
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value=data, label=LocalizedText(zh, en))
+            for zh, en, data in combo_items
+        ],
+    )
+    method_help_field = FormFieldSpec(
+        key="extrapolation.method",
+        widget_kind="button",
+        label=LocalizedText("外推方法帮助", "Extrapolation method help"),
+        tooltip=LocalizedText(
+            "点击查看当前外推方法的详细说明、适用场景和参数解释。",
+            "Click to view detailed description, applicable scenarios, and parameter explanations for the current method.",
+        ),
+        required=False,
+    )
+    custom_formula_field = FormFieldSpec(
+        key="extrapolation.custom.formula",
+        widget_kind="textarea",
+        label=LocalizedText("自定义公式：", "Custom formula:"),
+        placeholder=LocalizedText(
+            "示例: (C - B)^2/(B - A) + C 或 Exp[-x1]*Sin[x2]",
+            "Example: (C - B)^2/(B - A) + C or Exp[-x1]*Sin[x2]",
+        ),
+        tooltip=LocalizedText(
+            "输入自定义三点外推公式。可使用 A/B/C、列名或 x1/x2/x3，并支持数学函数。",
+            "Enter a custom three-point extrapolation formula. Use A/B/C, column names, or x1/x2/x3; math functions are supported.",
+        ),
+        required=True,
+    )
+    custom_formula_preview_field = FormFieldSpec(
+        key="extrapolation.custom.formula",
+        widget_kind="button",
+        label=LocalizedText("预览公式", "Preview formula"),
+        tooltip=LocalizedText(
+            "打开渲染后的自定义外推公式预览。",
+            "Open a rendered preview of the custom extrapolation formula.",
+        ),
+        required=False,
+    )
+    custom_functions_field = FormFieldSpec(
+        key="extrapolation.custom.functions",
+        widget_kind="button",
+        label=LocalizedText("函数支持", "Functions"),
+        tooltip=LocalizedText(
+            "查看自定义外推公式支持的函数和表达式语法。",
+            "View supported functions and expression syntax for custom extrapolation formulas.",
+        ),
+        required=False,
+    )
+    power_x_fields = [
+        FormFieldSpec(
+            key=f"extrapolation.power_law.x{idx}",
+            widget_kind="text",
+            label=LocalizedText(f"x{idx}：", f"x{idx}:"),
+            tooltip=LocalizedText(
+                f"幂律三点外推的第 {idx} 个自变量值。",
+                f"Input x value {idx} for three-point power-law extrapolation.",
+            ),
+            required=True,
+        )
+        for idx in range(1, 4)
+    ]
+    power_p_field = FormFieldSpec(
+        key="extrapolation.power_law.p",
+        widget_kind="text",
+        label=LocalizedText("自定义 p（可选）：", "Custom p (optional):"),
+        placeholder=LocalizedText("留空则自动求解 p", "Leave blank to solve p automatically"),
+        tooltip=LocalizedText(
+            "可选幂指数。留空时由程序根据数据自动求解。",
+            "Optional power exponent. Leave blank for automatic solving from the data.",
+        ),
+        required=False,
+    )
+    power_seed_field = FormFieldSpec(
+        key="extrapolation.power_law.seed_guesses",
+        widget_kind="text",
+        label=LocalizedText("p 种子列表（可选）：", "p seed list (optional):"),
+        placeholder=LocalizedText("如 0.5, 1, 2, -1", "e.g. 0.5, 1, 2, -1"),
+        tooltip=LocalizedText(
+            "用于自动求解 p 的候选初值，多个值用逗号分隔。",
+            "Candidate initial guesses for solving p automatically, separated by commas.",
+        ),
+        required=False,
+    )
+    levin_variant_field = FormFieldSpec(
+        key="extrapolation.levin.variant",
+        widget_kind="select",
+        label=LocalizedText("变换类型：", "Variant:"),
+        tooltip=LocalizedText(
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[0].tooltip_zh,
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[0].tooltip_en,
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value="u", label=LocalizedText("u (最常用)", "u (most common)")),
+            ChoiceSpec(value="t", label=LocalizedText("t (级数)", "t (series)")),
+            ChoiceSpec(value="v", label=LocalizedText("v (积分)", "v (integrals)")),
+        ],
+    )
+    levin_order_field = FormFieldSpec(
+        key="extrapolation.levin.order",
+        widget_kind="number",
+        label=LocalizedText("变换阶数：", "Transform order:"),
+        tooltip=LocalizedText(
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[1].tooltip_zh,
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[1].tooltip_en,
+        ),
+        required=True,
+    )
+    levin_weight_field = FormFieldSpec(
+        key="extrapolation.levin.weight",
+        widget_kind="select",
+        label=LocalizedText("权重函数：", "Weight function:"),
+        tooltip=LocalizedText(
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[2].tooltip_zh,
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[2].tooltip_en,
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value="default", label=LocalizedText("默认 (1)", "Default (1)")),
+            ChoiceSpec(value="reciprocal", label=LocalizedText("1/(n+1)", "1/(n+1)")),
+            ChoiceSpec(value="reciprocal_beta", label=LocalizedText("1/(n+β)", "1/(n+β)")),
+        ],
+    )
+    levin_beta_field = FormFieldSpec(
+        key="extrapolation.levin.beta",
+        widget_kind="number",
+        label=LocalizedText("β 参数：", "β parameter:"),
+        tooltip=LocalizedText(
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[3].tooltip_zh,
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[3].tooltip_en,
+        ),
+        required=False,
+    )
+    richardson_p_field = FormFieldSpec(
+        key="extrapolation.richardson.p",
+        widget_kind="number",
+        label=LocalizedText("收敛幂指数 p：", "Convergence power p:"),
+        tooltip=LocalizedText(
+            EXTRAPOLATION_METHOD_SPECS["richardson"].parameter_groups[0].parameters[0].tooltip_zh,
+            EXTRAPOLATION_METHOD_SPECS["richardson"].parameter_groups[0].parameters[0].tooltip_en,
+        ),
+        required=True,
+    )
+    uncertainty_field = FormFieldSpec(
+        key="extrapolation.uncertainty.reference_column",
+        widget_kind="select",
+        label=LocalizedText("不确定度参考列：", "Uncertainty ref column:"),
+        tooltip=LocalizedText(
+            "重新扫描数据以列出可选的不确定度参考列。",
+            "Rescan data to list available uncertainty columns.",
+        ),
+        required=False,
+    )
+    uncertainty_refresh_field = FormFieldSpec(
+        key="extrapolation.uncertainty.reference_column",
+        widget_kind="button",
+        label=LocalizedText("刷新不确定度列", "Refresh uncertainty columns"),
+        tooltip=LocalizedText(
+            "重新扫描数据以列出可选的不确定度参考列。",
+            "Rescan data to list available uncertainty columns.",
+        ),
+        required=False,
+    )
+
+    bind_field(field=method_field, label=method_label, widget=self.method_combo, lang=lang)
+    bind_choices(self.method_combo, method_field.choices, lang=lang)
+    _register_schema_text_refresh(self, method_field, widget=self.method_combo)
+    bind_field(field=method_help_field, help_button=self.method_help_btn, lang=lang)
+    _register_schema_text_refresh(self, method_help_field, help_button=self.method_help_btn)
+    bind_field(
+        field=custom_formula_field,
+        label=lbl_custom,
+        widget=self.custom_formula_edit,
+        lang=lang,
+    )
+    _register_schema_text_refresh(
+        self,
+        custom_formula_field,
+        widget=self.custom_formula_edit,
+    )
+    _bind_schema_command_button(
+        self,
+        self.custom_formula_preview_button,
+        field=custom_formula_preview_field,
+        accessible_name=LocalizedText("预览公式", "Preview formula"),
+        lang=lang,
+    )
+    bind_field(field=custom_functions_field, widget=self.custom_formula_function_button, lang=lang)
+    _register_schema_text_refresh(self, custom_functions_field, widget=self.custom_formula_function_button)
+    for field, label, edit in zip(power_x_fields, power_x_labels, self.power_x_edits, strict=True):
+        bind_field(field=field, label=label, widget=edit, lang=lang)
+        _register_schema_text_refresh(self, field, widget=edit)
+    bind_field(field=power_p_field, label=lbl_p, widget=self.power_p_edit, lang=lang)
+    _register_schema_text_refresh(self, power_p_field, widget=self.power_p_edit)
+    bind_field(field=power_seed_field, label=lbl_seed, widget=self.power_seed_guesses_edit, lang=lang)
+    _register_schema_text_refresh(self, power_seed_field, widget=self.power_seed_guesses_edit)
+    bind_field(field=levin_variant_field, label=lbl_variant, widget=self.levin_variant_combo, lang=lang)
+    bind_choices(self.levin_variant_combo, levin_variant_field.choices, lang=lang)
+    _register_schema_text_refresh(self, levin_variant_field, widget=self.levin_variant_combo)
+    bind_field(field=levin_order_field, label=lbl_order, widget=self.levin_order_spin, lang=lang)
+    _register_schema_text_refresh(self, levin_order_field, widget=self.levin_order_spin)
+    bind_field(field=levin_weight_field, label=lbl_weight, widget=self.levin_weight_combo, lang=lang)
+    bind_choices(self.levin_weight_combo, levin_weight_field.choices, lang=lang)
+    _register_schema_text_refresh(self, levin_weight_field, widget=self.levin_weight_combo)
+    bind_field(field=levin_beta_field, label=lbl_beta, widget=self.levin_beta_spin, lang=lang)
+    _register_schema_text_refresh(self, levin_beta_field, widget=self.levin_beta_spin)
+    bind_field(field=richardson_p_field, label=lbl_richardson_p, widget=self.richardson_p_spin, lang=lang)
+    _register_schema_text_refresh(self, richardson_p_field, widget=self.richardson_p_spin)
+    bind_field(
+        field=uncertainty_field,
+        label=lbl_uncert,
+        widget=self.uncertainty_combo,
+        lang=lang,
+    )
+    _register_schema_text_refresh(self, uncertainty_field, widget=self.uncertainty_combo)
+    _bind_schema_command_button(
+        self,
+        self.uncertainty_refresh_btn,
+        field=uncertainty_refresh_field,
+        accessible_name=LocalizedText("刷新不确定度列", "Refresh uncertainty columns"),
+        lang=lang,
+    )
+
+
+def _bind_statistics_schema_fields(
+    self,
+    *,
+    lbl_stats_value: QLabel,
+    lbl_stats_sigma: QLabel,
+    lbl_stats_type: QLabel,
+    lbl_weight_var: QLabel,
+    lbl_stats_sample: QLabel,
+    stats_items: list[tuple[str, str, str]],
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    value_field = FormFieldSpec(
+        key="statistics.value_column",
+        widget_kind="text",
+        label=LocalizedText("数值列：", "Value column:"),
+        tooltip=LocalizedText(
+            "数值数据所在列，例如 A 或列名。",
+            "Column containing measured values, for example A or a header name.",
+        ),
+        required=True,
+    )
+    sigma_field = FormFieldSpec(
+        key="statistics.sigma_column",
+        widget_kind="text",
+        label=LocalizedText("不确定度列（可选）：", "Sigma column (optional):"),
+        placeholder=LocalizedText("留空则不使用不确定度列", "Leave blank to ignore sigma values"),
+        tooltip=LocalizedText(
+            "可选的不确定度列。加权平均模式会使用该列作为 σ。",
+            "Optional uncertainty column. Weighted mean mode uses this column as sigma.",
+        ),
+        required=False,
+    )
+    mode_field = FormFieldSpec(
+        key="statistics.mode",
+        widget_kind="select",
+        label=LocalizedText("统计类型：", "Statistics type:"),
+        tooltip=LocalizedText(
+            "选择算术平均或使用 σ 值作为权重的加权平均。",
+            "Choose arithmetic mean or weighted mean. Use sigma values as weights for weighted statistics.",
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value=data, label=LocalizedText(zh, en))
+            for zh, en, data in stats_items
+        ],
+    )
+    weight_variance_field = FormFieldSpec(
+        key="statistics.weight_variance",
+        widget_kind="checkbox",
+        label=LocalizedText("方差/标准误差：", "Variance/SE:"),
+        tooltip=LocalizedText(
+            "启用后，方差和标准误差也按权重计算。",
+            "When enabled, variance and standard error are also computed with weights.",
+        ),
+        required=False,
+    )
+    sample_field = FormFieldSpec(
+        key="statistics.sample_mode",
+        widget_kind="checkbox",
+        label=LocalizedText("样本/总体：", "Sample/Population:"),
+        tooltip=LocalizedText(
+            "启用样本模式时使用 n-1 自由度；关闭时使用总体模式。",
+            "Sample mode uses n-1 degrees of freedom; otherwise population mode is used.",
+        ),
+        required=False,
+    )
+
+    bind_field(field=value_field, label=lbl_stats_value, widget=self.stats_value_column_edit, lang=lang)
+    _register_schema_text_refresh(self, value_field, widget=self.stats_value_column_edit)
+    bind_field(field=sigma_field, label=lbl_stats_sigma, widget=self.stats_sigma_column_edit, lang=lang)
+    _register_schema_text_refresh(self, sigma_field, widget=self.stats_sigma_column_edit)
+    bind_field(field=mode_field, label=lbl_stats_type, widget=self.stats_mode_combo, lang=lang)
+    bind_choices(self.stats_mode_combo, mode_field.choices, lang=lang)
+    _register_schema_text_refresh(self, mode_field, widget=self.stats_mode_combo)
+    bind_field(
+        field=weight_variance_field,
+        label=lbl_weight_var,
+        widget=self.stats_weight_variance_checkbox,
+        lang=lang,
+    )
+    _register_schema_text_refresh(self, weight_variance_field, widget=self.stats_weight_variance_checkbox)
+    bind_field(field=sample_field, label=lbl_stats_sample, widget=self.stats_sample_checkbox, lang=lang)
+    _register_schema_text_refresh(self, sample_field, widget=self.stats_sample_checkbox)
+
+
 def _bind_fitting_schema_fields(
     self,
     *,
@@ -2472,6 +2836,23 @@ def _register_schema_text_refresh(
             self._register_text(widget, field.placeholder.zh, field.placeholder.en, "setPlaceholderText")
     if help_button is not None and (field.tooltip.zh or field.tooltip.en):
         self._register_text(help_button, field.tooltip.zh, field.tooltip.en, "setToolTip")
+
+
+def _bind_schema_command_button(
+    self,
+    button: QWidget,
+    *,
+    field: FormFieldSpec,
+    accessible_name: LocalizedText,
+    lang: str,
+) -> None:
+    bind_field(field=field, widget=button, lang=lang)
+    _register_schema_text_refresh(self, field, widget=button)
+    button.setAccessibleName(accessible_name.for_lang(lang))
+    if field.tooltip.zh or field.tooltip.en:
+        button.setAccessibleDescription(field.tooltip.for_lang(lang))
+        self._register_text(button, field.tooltip.zh, field.tooltip.en, "setAccessibleDescription")
+    self._register_text(button, accessible_name.zh, accessible_name.en, "setAccessibleName")
 
 
 def _bind_error_schema_fields(
