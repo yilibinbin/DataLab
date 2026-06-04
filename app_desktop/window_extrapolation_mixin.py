@@ -553,6 +553,7 @@ class WindowExtrapolationMixin:
                 rows=raw_rows,
                 caption=str(payload.get("latex_caption", "") or ""),
                 digits=int(payload.get("latex_digits", 16)),
+                uncertainty_digits=int(payload.get("uncertainty_digits", 1)),
                 group_size=int(payload.get("latex_group_size", 3)),
                 include_dcolumn=bool(payload.get("latex_include_dcolumn", False)),
                 language=str(payload.get("latex_language", "zh") or "zh"),

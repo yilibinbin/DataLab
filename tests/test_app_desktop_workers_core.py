@@ -114,6 +114,7 @@ def test_root_solving_job_payload_uses_data_rows_and_is_spawn_picklable() -> Non
         scan_config={},
         precision=16,
         display_digits=10,
+        uncertainty_digits=2,
         generate_latex=True,
         output_path="/tmp/root.tex",
         latex_caption="Frozen caption",
@@ -130,6 +131,7 @@ def test_root_solving_job_payload_uses_data_rows_and_is_spawn_picklable() -> Non
     assert restored["data_headers"] == ("A",)
     assert restored["data_rows"] == (("4.0(2)",),)
     assert restored["scan_config"] == {}
+    assert restored["uncertainty_digits"] == 2
     assert restored["latex_caption"] == "Frozen caption"
     assert restored["latex_digits"] == 12
     assert restored["latex_group_size"] == 4
@@ -151,6 +153,7 @@ def test_root_worker_payload_round_trips_frozen_latex_settings() -> None:
         scan_config={},
         precision=16,
         display_digits=10,
+        uncertainty_digits=2,
         generate_latex=True,
         output_path="/tmp/root.tex",
         latex_caption="Root run",
@@ -167,6 +170,7 @@ def test_root_worker_payload_round_trips_frozen_latex_settings() -> None:
     assert restored.latex_group_size == 2
     assert restored.latex_include_dcolumn is True
     assert restored.latex_language == "en"
+    assert restored.uncertainty_digits == 2
 
 
 def test_root_worker_payload_defaults_latex_language_to_job_language() -> None:
@@ -205,6 +209,7 @@ def test_root_worker_payload_preserves_uncertainty_options() -> None:
         scan_config={},
         precision=80,
         display_digits=20,
+        uncertainty_digits=3,
         uncertainty_options={"method": "monte_carlo", "monte_carlo_samples": 25, "monte_carlo_seed": "7"},
     )
 
@@ -290,6 +295,7 @@ def test_execute_root_solving_job_payload_forwards_uncertainty_options(
         scan_config={},
         precision=80,
         display_digits=20,
+        uncertainty_digits=3,
         uncertainty_options={"method": "monte_carlo", "monte_carlo_samples": 25, "monte_carlo_seed": "7"},
     )
 
@@ -301,9 +307,11 @@ def test_execute_root_solving_job_payload_forwards_uncertainty_options(
         _batch: object,
         *,
         display_digits: int,
+        uncertainty_digits: int,
         language: str,
     ) -> tuple[str, list[dict[str, str]], list[str]]:
         captured["display_digits"] = display_digits
+        captured["uncertainty_digits"] = uncertainty_digits
         captured["language"] = language
         return "markdown", [], ["name"]
 
@@ -319,6 +327,7 @@ def test_execute_root_solving_job_payload_forwards_uncertainty_options(
         "monte_carlo_seed": "7",
     }
     assert captured["display_digits"] == 20
+    assert captured["uncertainty_digits"] == 3
     assert captured["language"] == "en"
 
 

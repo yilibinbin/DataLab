@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
@@ -54,10 +54,20 @@ class ConstantsEditor(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(6)
         self.checkbox = QCheckBox(checkbox_text)
         self.checkbox.setChecked(bool(checked))
         self.checkbox.toggled.connect(self._on_checked_changed)
-        layout.addWidget(self.checkbox)
+        header_layout.addWidget(self.checkbox)
+        self.help_button = QPushButton("?")
+        self.help_button.setFlat(True)
+        self.help_button.setFocusPolicy(Qt.NoFocus)
+        self.help_button.setFixedWidth(24)
+        header_layout.addWidget(self.help_button)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
 
         self.controls_widget = QWidget()
         controls_layout = QHBoxLayout(self.controls_widget)
@@ -103,6 +113,9 @@ class ConstantsEditor(QWidget):
 
     def setChecked(self, checked: bool) -> None:  # noqa: N802 - Qt-style API
         self.checkbox.setChecked(bool(checked))
+
+    def set_table_headers(self, name: str, value: str) -> None:
+        self.table_view.setHorizontalHeaderLabels([name, value])
 
     def isChecked(self) -> bool:  # noqa: N802 - Qt-style API
         return bool(self.checkbox.isChecked())

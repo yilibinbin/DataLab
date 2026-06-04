@@ -131,6 +131,13 @@ class WindowI18nMixin:
             self.fit_expr_edit.setPlaceholderText(
                 self._tr("自定义模型表达式，例如 A*x**(-p) + C", "Custom model expression, e.g., A*x**(-p) + C")
             )
+        if hasattr(self, "root_equations_edit"):
+            self.root_equations_edit.setPlaceholderText(
+                self._tr(
+                    "每行一个方程，按 F(...)=0 求解；示例：x^2 - A",
+                    "One equation per line, solved as F(...)=0; example: x^2 - A",
+                )
+            )
         if hasattr(self, "func_help_btn"):
             lang = "en" if self._is_en() else "zh"
             self.func_help_btn.setToolTip(get_function_tooltip(lang))
@@ -346,8 +353,9 @@ class WindowI18nMixin:
         self._refresh_reference_auto_label()
         if hasattr(self, "root_uncertainty_method_combo"):
             try:
-                from app_desktop.panels import _on_root_uncertainty_method_changed
+                from app_desktop.panels import _on_root_uncertainty_method_changed, _refresh_root_field_help
 
+                _refresh_root_field_help(self)
                 _on_root_uncertainty_method_changed(self)
             except Exception:
                 _LOGGER.exception("Failed to refresh root uncertainty i18n")

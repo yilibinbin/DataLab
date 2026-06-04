@@ -15,7 +15,7 @@ def test_render_root_with_uncertainty_to_markdown_and_csv() -> None:
         residual_norm=mp.mpf("1e-20"),
     )
 
-    markdown, csv_rows, csv_headers = render_root_result(result, display_digits=6)
+    markdown, csv_rows, csv_headers = render_root_result(result, display_digits=6, uncertainty_digits=2)
 
     assert csv_headers == ["name", "value", "uncertainty", "display_value", "backend", "mode", "residual_norm"]
     assert csv_rows == [
@@ -75,11 +75,26 @@ def test_render_uncertainty_scientific_display_uses_plain_exponent() -> None:
         mode="scalar",
     )
 
-    markdown, csv_rows, _ = render_root_result(result, display_digits=5)
+    markdown, csv_rows, _ = render_root_result(result, display_digits=5, uncertainty_digits=2)
 
     assert csv_rows[0]["display_value"] == "1.2346(12)e+8"
     assert r"\text" not in markdown
     assert "1.2346(12)e+8" in markdown
+
+
+def test_render_root_uncertainty_digits_controls_compact_display() -> None:
+    result = RootResult(
+        roots=(RootValue("x", mp.mpf("2.3456789"), uncertainty=mp.mpf("0.001234567")),),
+        backend="mpmath",
+        mode="scalar",
+    )
+
+    one_digit, one_rows, _ = render_root_result(result, display_digits=8, uncertainty_digits=1)
+    three_digits, three_rows, _ = render_root_result(result, display_digits=8, uncertainty_digits=3)
+
+    assert one_rows[0]["display_value"] != three_rows[0]["display_value"]
+    assert one_rows[0]["display_value"] in one_digit
+    assert three_rows[0]["display_value"] in three_digits
 
 
 def test_render_complex_polynomial_roots_as_a_plus_b_i_without_uncertainty() -> None:

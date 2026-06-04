@@ -19,6 +19,7 @@ def write_root_latex(
     rows: Sequence[Mapping[str, object]],
     caption: str | None = None,
     digits: int = 16,
+    uncertainty_digits: int = 1,
     group_size: int = 3,
     include_dcolumn: bool = False,
     language: str = "zh",
@@ -30,6 +31,7 @@ def write_root_latex(
             rows=rows,
             caption=caption,
             digits=digits,
+            uncertainty_digits=uncertainty_digits,
             group_size=group_size,
             include_dcolumn=include_dcolumn,
             language=language,
@@ -44,6 +46,7 @@ def build_root_latex_document(
     rows: Sequence[Mapping[str, object]],
     caption: str | None = None,
     digits: int = 16,
+    uncertainty_digits: int = 1,
     group_size: int = 3,
     include_dcolumn: bool = False,
     language: str = "zh",
@@ -63,6 +66,7 @@ def build_root_latex_document(
         _root_table(
             rows,
             digits=max(1, int(digits)),
+            uncertainty_digits=max(1, int(uncertainty_digits)),
             language=language,
             include_dcolumn=include_dcolumn,
         )
@@ -75,12 +79,19 @@ def _root_table(
     rows: Sequence[Mapping[str, object]],
     *,
     digits: int,
+    uncertainty_digits: int,
     language: str,
     include_dcolumn: bool,
 ) -> list[str]:
     headers = _headers(language)
     value_cells = [
-        _number_with_uncertainty(row.get("value", ""), row.get("uncertainty", ""), digits=digits, include_dcolumn=False)
+        _number_with_uncertainty(
+            row.get("value", ""),
+            row.get("uncertainty", ""),
+            digits=digits,
+            uncertainty_digits=uncertainty_digits,
+            include_dcolumn=False,
+        )
         for row in rows
     ]
     value_spec = calculate_dcolumn_format_for_column(value_cells, "root_value") if rows and include_dcolumn else "l"
@@ -105,6 +116,7 @@ def _root_table(
                         row.get("value", ""),
                         row.get("uncertainty", ""),
                         digits=digits,
+                        uncertainty_digits=uncertainty_digits,
                         include_dcolumn=include_dcolumn,
                     ),
                     _escape_latex(_text(row.get("backend", ""))),
@@ -123,7 +135,14 @@ def _headers(language: str) -> list[str]:
     return ["输入行", "根序号", "名称", "值", "后端", "模式"]
 
 
-def _number_with_uncertainty(value: object, uncertainty: object, *, digits: int, include_dcolumn: bool) -> str:
+def _number_with_uncertainty(
+    value: object,
+    uncertainty: object,
+    *,
+    digits: int,
+    uncertainty_digits: int,
+    include_dcolumn: bool,
+) -> str:
     text = _text(value)
     if not text:
         return ""
@@ -136,7 +155,7 @@ def _number_with_uncertainty(value: object, uncertainty: object, *, digits: int,
             use_dcolumn=include_dcolumn,
             latex_input_decimals=None,
             is_input=False,
-            uncertainty_digits=3,
+            uncertainty_digits=uncertainty_digits,
             zero_uncertainty_mantissa_decimals=max(1, digits - 1),
         )
     except Exception:

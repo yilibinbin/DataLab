@@ -1364,6 +1364,8 @@ def build_left_panel(self):
     lbl_root_equations = QLabel("方程：")
     self._register_text(lbl_root_equations, "方程：", "Equations:")
     root_equation_title_row.addWidget(lbl_root_equations)
+    self.root_equations_help_button = _make_small_help_button()
+    root_equation_title_row.addWidget(self.root_equations_help_button)
     root_equation_title_row.addStretch()
     self.root_formula_preview_button = _make_formula_preview_button(
         self,
@@ -1376,10 +1378,10 @@ def build_left_panel(self):
     root_equation_title_row.addWidget(self.root_formula_preview_button)
     root_layout.addLayout(root_equation_title_row)
 
-    self.root_equations_edit = QPlainTextEdit("x^2 - 2")
+    self.root_equations_edit = QPlainTextEdit()
     self.root_equations_edit.setMinimumHeight(96)
     self.root_equations_edit.setPlaceholderText(
-        "每行一个方程，按 F_i(...)=0 求解 / One equation per line, interpreted as F_i(...)=0"
+        "每行一个方程，按 F_i(...)=0 求解；示例：x^2 - A / One equation per line as F_i(...)=0; example: x^2 - A"
     )
     root_layout.addWidget(self.root_equations_edit)
 
@@ -1396,13 +1398,20 @@ def build_left_panel(self):
     self._register_combo(self.root_mode_combo, root_mode_items)
     lbl_root_mode = QLabel("求解模式：")
     self._register_text(lbl_root_mode, "求解模式：", "Solve mode:")
-    root_mode_layout.addRow(lbl_root_mode, self.root_mode_combo)
+    root_mode_row = QHBoxLayout()
+    root_mode_row.addWidget(self.root_mode_combo)
+    self.root_mode_help_button = _make_small_help_button()
+    root_mode_row.addWidget(self.root_mode_help_button)
+    root_mode_row.addStretch()
+    root_mode_layout.addRow(lbl_root_mode, root_mode_row)
     root_layout.addLayout(root_mode_layout)
 
     root_unknown_header = QHBoxLayout()
     lbl_root_unknowns = QLabel("未知量：")
     self._register_text(lbl_root_unknowns, "未知量：", "Unknowns:")
     root_unknown_header.addWidget(lbl_root_unknowns)
+    self.root_unknowns_help_button = _make_small_help_button()
+    root_unknown_header.addWidget(self.root_unknowns_help_button)
     root_unknown_header.addStretch()
     self.root_detect_unknowns_button = QPushButton("识别未知量")
     self._register_text(self.root_detect_unknowns_button, "识别未知量", "Detect")
@@ -1423,7 +1432,7 @@ def build_left_panel(self):
 
     self.root_unknowns_table = DetectedRowsTable(
         columns=("name", "initial", "lower", "upper"),
-        headers=("Name", "Initial", "Lower", "Upper"),
+        headers=("名称", "初始值", "下界", "上界"),
         min_rows=2,
     )
     self.root_unknowns_table.table_view.setMinimumHeight(140)
@@ -1437,6 +1446,7 @@ def build_left_panel(self):
     self.root_constants_editor.table_view.setStyleSheet(_get_table_style())
     self.root_constants_editor.table_view.setMinimumHeight(120)
     root_layout.addWidget(self.root_constants_editor)
+    _refresh_root_field_help(self)
 
     self.root_uncertainty_group = QGroupBox("根的不确定度传播")
     self._register_title(self.root_uncertainty_group, "根的不确定度传播", "Root uncertainty propagation")
@@ -2219,6 +2229,93 @@ def _make_formula_preview_button(
     return button
 
 
+def _make_small_help_button() -> QPushButton:
+    button = QPushButton("?")
+    button.setFlat(True)
+    button.setFocusPolicy(Qt.NoFocus)
+    button.setFixedWidth(24)
+    return button
+
+
+def _refresh_root_field_help(self) -> None:
+    is_en = bool(getattr(self, "_is_en", lambda: False)())
+    unknown_headers = (
+        ("Name", "Initial", "Lower", "Upper")
+        if is_en
+        else ("名称", "初始值", "下界", "上界")
+    )
+    constants_headers = ("Name", "Value") if is_en else ("名称", "值")
+    unknowns_table = getattr(self, "root_unknowns_table", None)
+    if unknowns_table is not None:
+        unknowns_table.set_headers(unknown_headers)
+        unknowns_table.setToolTip(
+            self._tr(
+                "未知量表：名称为要求解的变量；初始值用于数值迭代；下界/上界可选，仅部分求解器使用。不同模式可只填写需要的列。",
+                "Unknowns table: Name is the variable to solve; Initial seeds numeric iteration; Lower/Upper are optional and used only by supported solvers. Fill only the columns needed by the selected mode.",
+            )
+        )
+    constants_editor = getattr(self, "root_constants_editor", None)
+    if constants_editor is not None:
+        constants_editor.set_table_headers(*constants_headers)
+        constants_tooltip = self._tr(
+            "常数设置：填写方程中的固定量，支持 1.23(4) 和 1.23(4)[-5] 这类不确定度写法。关闭时不会代入常数表。",
+            "Constants: fixed quantities used by equations; accepts uncertainty notation such as 1.23(4) and 1.23(4)[-5]. When disabled, constants are not substituted.",
+        )
+        constants_editor.setToolTip(constants_tooltip)
+        if hasattr(constants_editor, "help_button"):
+            constants_editor.help_button.setToolTip(constants_tooltip)
+        if hasattr(constants_editor, "checkbox"):
+            constants_editor.checkbox.setToolTip(constants_tooltip)
+    tooltip_pairs = (
+        (
+            "root_equations_help_button",
+            "方程按 F(...)=0 求解；可写多行方程组。示例：x^2 - A。",
+            "Equations are solved as F(...)=0; use multiple lines for a system. Example: x^2 - A.",
+        ),
+        (
+            "root_mode_help_button",
+            "标量：单未知量单根；扫描多根：从区间/采样查找多个根；多项式：一元多项式根；方程组：多个未知量联立求解。",
+            "Scalar: one unknown and one root; Scan multiple: search multiple roots by interval/sampling; Polynomial: univariate polynomial roots; System: solve coupled equations.",
+        ),
+        (
+            "root_unknowns_help_button",
+            "不同模式需要的列不同：标量通常填名称和初始值；扫描多根还可填下界/上界；多项式可只填名称；方程组每个未知量一行。",
+            "Columns depend on mode: scalar usually needs name and initial; scan can use lower/upper; polynomial can use only name; system uses one row per unknown.",
+        ),
+    )
+    for attr, zh, en in tooltip_pairs:
+        widget = getattr(self, attr, None)
+        if widget is not None:
+            widget.setToolTip(self._tr(zh, en))
+    if hasattr(self, "root_equations_edit"):
+        self.root_equations_edit.setToolTip(
+            self._tr(
+                "输入要求解的方程。留空不会使用示例；示例只显示在背景提示中。",
+                "Enter equations to solve. Leaving it blank does not use the example; the example is only placeholder text.",
+            )
+        )
+    if hasattr(self, "root_mode_combo"):
+        self.root_mode_combo.setToolTip(getattr(self, "root_mode_help_button", self.root_mode_combo).toolTip())
+    button_tooltips = {
+        "root_detect_unknowns_button": (
+            "按当前方程、数据列和常数重新识别未知量；已删除的已识别行会被移除。",
+            "Detect unknowns from the current equations, data columns, and constants; removed detected symbols are removed from the table.",
+        ),
+        "root_add_unknown_button": (
+            "手动添加未知量行，用于补充或覆盖自动识别。",
+            "Add an unknown row manually to supplement or override detection.",
+        ),
+        "root_remove_unknown_button": (
+            "删除选中的未知量行。",
+            "Remove selected unknown rows.",
+        ),
+    }
+    for attr, (zh, en) in button_tooltips.items():
+        widget = getattr(self, attr, None)
+        if widget is not None:
+            widget.setToolTip(self._tr(zh, en))
+
+
 def _open_formula_preview(self, edit_widget, lhs=None) -> None:
     if hasattr(edit_widget, "toPlainText"):
         text = edit_widget.toPlainText().strip()
@@ -2314,9 +2411,11 @@ def _remove_parameter_table_rows(self, table_name: str) -> None:
 def _clear_table(self):
     """Clear all data in the manual table."""
     table = self.manual_table
+    mode = self.mode_combo.currentData() if hasattr(self, "mode_combo") else None
+    column_count = 1 if mode == "root_solving" else 3
     table.setRowCount(6)
-    table.setColumnCount(3)
-    table.setHorizontalHeaderLabels(["A", "B", "C"])
+    table.setColumnCount(column_count)
+    table.setHorizontalHeaderLabels([chr(65 + index) for index in range(column_count)])
     table.clearContents()
     _apply_equal_column_stretch(table)
 

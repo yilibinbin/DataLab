@@ -1154,6 +1154,7 @@ class RootSolvingJob:
     scan_config: dict[str, str | int | float | bool]
     precision: int
     display_digits: int
+    uncertainty_digits: int = 1
     uncertainty_options: dict[str, object] = field(default_factory=lambda: {"method": "taylor", "taylor_order": 1})
     language: str = "en"
     parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
@@ -1217,6 +1218,7 @@ def _serialize_root_solving_job(job: RootSolvingJob) -> dict[str, Any]:
         "uncertainty_options": uncertainty_options,
         "precision": int(job.precision),
         "display_digits": int(job.display_digits),
+        "uncertainty_digits": int(job.uncertainty_digits),
         "language": str(job.language),
         "parallel_config": _serialize_parallel_config(job.parallel_config),
         "generate_latex": bool(job.generate_latex),
@@ -1268,6 +1270,7 @@ def _deserialize_root_solving_job(payload: Mapping[str, Any]) -> RootSolvingJob:
         uncertainty_options=_normalize_root_uncertainty_payload(payload.get("uncertainty_options", {})),
         precision=int(payload.get("precision", 16)),
         display_digits=int(payload.get("display_digits", 10)),
+        uncertainty_digits=int(payload.get("uncertainty_digits", 1)),
         language=_deserialize_language(payload.get("language", "en")),
         parallel_config=_deserialize_parallel_config(cast(dict[str, Any] | None, payload.get("parallel_config"))),
         generate_latex=bool(payload.get("generate_latex", False)),
@@ -1379,6 +1382,7 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
     markdown, csv_rows, csv_headers = render_root_batch_result(
         batch,
         display_digits=job.display_digits,
+        uncertainty_digits=job.uncertainty_digits,
         language=job.language,
     )
     headers = csv_headers or list(_ROOT_CSV_HEADERS)
@@ -1409,6 +1413,7 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         "output_path": str(job.output_path),
         "latex_caption": str(job.latex_caption),
         "latex_digits": int(job.latex_digits),
+        "uncertainty_digits": int(job.uncertainty_digits),
         "latex_group_size": int(job.latex_group_size),
         "latex_include_dcolumn": bool(job.latex_include_dcolumn),
         "latex_language": str(job.latex_language),

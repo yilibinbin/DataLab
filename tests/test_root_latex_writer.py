@@ -20,6 +20,7 @@ def test_root_latex_uses_raw_rows_and_latex_digits_independent_from_display_digi
         rows=raw_rows,
         caption="Root test",
         digits=12,
+        uncertainty_digits=3,
         language="en",
     )
 
@@ -28,6 +29,27 @@ def test_root_latex_uses_raw_rows_and_latex_digits_independent_from_display_digi
     assert "1.23457" not in latex
     assert "Uncertainty" not in latex
     assert "(123)" in latex
+
+
+def test_root_latex_uncertainty_digits_follow_option() -> None:
+    raw_rows = [
+        {
+            "input_row_index": "0",
+            "root_index": "0",
+            "name": "x",
+            "value": "1.23456789",
+            "uncertainty": "0.001234567",
+            "backend": "mpmath",
+            "mode": "scalar",
+        }
+    ]
+
+    one_digit = build_root_latex_document(rows=raw_rows, digits=12, uncertainty_digits=1, language="en")
+    three_digits = build_root_latex_document(rows=raw_rows, digits=12, uncertainty_digits=3, language="en")
+
+    assert one_digit != three_digits
+    assert "(1)" in one_digit
+    assert "(123)" in three_digits
 
 
 def test_root_latex_localizes_headers_for_chinese() -> None:

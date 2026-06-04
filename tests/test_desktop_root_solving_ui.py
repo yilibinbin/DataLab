@@ -42,9 +42,12 @@ def test_mode_combo_contains_root_solving(window: Any) -> None:
 def test_root_solving_page_has_required_widgets(window: Any) -> None:
     required = [
         "root_equations_edit",
+        "root_equations_help_button",
         "root_formula_preview_button",
         "root_mode_combo",
+        "root_mode_help_button",
         "root_unknowns_table",
+        "root_unknowns_help_button",
         "root_add_unknown_button",
         "root_remove_unknown_button",
         "root_detect_unknowns_button",
@@ -54,16 +57,53 @@ def test_root_solving_page_has_required_widgets(window: Any) -> None:
         assert hasattr(window, name), name
 
     assert _combo_data(window.root_mode_combo) == ["scalar", "scan_multiple", "polynomial", "system"]
+    assert window.root_equations_edit.toPlainText() == ""
+    assert "x^2 - A" in window.root_equations_edit.placeholderText()
+    window._apply_language("zh")
+    assert [
+        window.root_unknowns_table.table_view.horizontalHeaderItem(index).text()
+        for index in range(window.root_unknowns_table.table_view.columnCount())
+    ] == ["名称", "初始值", "下界", "上界"]
+    assert window.root_constants_editor.table_view.horizontalHeaderItem(0).text() == "名称"
+    assert window.root_constants_editor.table_view.horizontalHeaderItem(1).text() == "值"
+    window._apply_language("en")
     assert [
         window.root_unknowns_table.table_view.horizontalHeaderItem(index).text()
         for index in range(window.root_unknowns_table.table_view.columnCount())
     ] == ["Name", "Initial", "Lower", "Upper"]
+    assert window.root_constants_editor.table_view.horizontalHeaderItem(0).text() == "Name"
+    assert window.root_constants_editor.table_view.horizontalHeaderItem(1).text() == "Value"
     assert window.root_constants_editor.numeric_mode() == "uncertainty"
     assert window.root_constants_editor.isChecked() is False
     assert isinstance(window.root_formula_preview_button, QPushButton)
+    assert window.root_constants_editor.help_button.text() == "?"
+    assert window.root_equations_help_button.toolTip()
+    assert window.root_mode_help_button.toolTip()
+    assert window.root_unknowns_help_button.toolTip()
+    assert window.root_equations_edit.toolTip()
+    assert window.root_mode_combo.toolTip()
+    assert window.root_unknowns_table.toolTip()
+    assert window.root_constants_editor.toolTip()
+    assert window.root_constants_editor.help_button.toolTip()
+    assert window.root_constants_editor.checkbox.toolTip()
     assert window.root_detect_unknowns_button.toolTip()
     assert window.root_add_unknown_button.toolTip()
     assert window.root_remove_unknown_button.toolTip()
+
+
+def test_root_mode_empty_manual_table_defaults_to_one_column(window: Any) -> None:
+    assert window.manual_table.columnCount() == 3
+
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    QApplication.processEvents()
+
+    assert window.manual_table.columnCount() == 1
+    assert window.manual_table.horizontalHeaderItem(0).text() == "A"
+
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("extrapolation"))
+    QApplication.processEvents()
+
+    assert window.manual_table.columnCount() == 3
 
 
 def test_main_splitter_clamps_left_panel_to_config_minimum(window: Any) -> None:
@@ -458,6 +498,7 @@ def test_root_solving_run_uses_background_worker(window: Any, monkeypatch: pytes
     window.root_constants_editor.set_rows([{"name": "C", "value": "4.00000000000000000001(2)"}])
     window.root_constants_editor.setChecked(True)
     window.root_mode_combo.setCurrentIndex(window.root_mode_combo.findData("scalar"))
+    window.uncertainty_digits_spin.setValue(3)
     window.manual_data_edit.setPlainText("A\n4.0(2)")
     window._data_stack.setCurrentIndex(1)
 
@@ -473,3 +514,4 @@ def test_root_solving_run_uses_background_worker(window: Any, monkeypatch: pytes
     assert job.data_headers == ("A",)
     assert job.data_rows == (("4.0(2)",),)
     assert job.mode == "scalar"
+    assert job.uncertainty_digits == 3
