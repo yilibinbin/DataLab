@@ -103,6 +103,14 @@ class ResultViewSpec:
     key: str
     title: LocalizedText
     attachment_key: str = ""
+    display_columns: Sequence[ChoiceSpec] = ()
+    raw_columns: Sequence[str] = ()
+    controls: Sequence[FormFieldSpec] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "display_columns", tuple(self.display_columns))
+        object.__setattr__(self, "raw_columns", tuple(self.raw_columns))
+        object.__setattr__(self, "controls", tuple(self.controls))
 
 
 @dataclass(frozen=True)
