@@ -1127,7 +1127,7 @@ def build_left_panel(self):
     self.fit_formula_preview_button = _make_formula_preview_button(self, None, lhs="y", title="Preview formula")
     fit_expr_title_row.addWidget(self.fit_formula_preview_button)
     fit_layout.addLayout(fit_expr_title_row)
-    self.fit_expr_edit = QPlainTextEdit("A*x**(-p) + C")
+    self.fit_expr_edit = QPlainTextEdit("")
     self.fit_expr_edit.setPlaceholderText("自定义模型表达式，例如 A*x**(-p) + C / Custom model expression")
     fit_layout.addWidget(self.fit_expr_edit)
     self.fit_formula_preview_button.clicked.connect(
@@ -1187,9 +1187,9 @@ def build_left_panel(self):
     self._register_title(self.implicit_model_widget, "自洽隐式模型", "Self-consistent / implicit")
     implicit_layout = QVBoxLayout(self.implicit_model_widget)
 
-    self.implicit_equation_edit = QPlainTextEdit("a + b*Cos[u] + c*x")
+    self.implicit_equation_edit = QPlainTextEdit("")
     self.implicit_equation_edit.setMinimumHeight(84)
-    self.implicit_equation_edit.setPlaceholderText("u = g(x, u, parameters)")
+    self.implicit_equation_edit.setPlaceholderText("示例：a + b*Cos[u] + c*x / Example: a + b*Cos[u] + c*x")
     lbl_implicit_eq = QLabel("自洽方程：")
     self._register_text(lbl_implicit_eq, "自洽方程：", "Self-consistent equation:")
     implicit_equation_title_row = QHBoxLayout()
@@ -1207,9 +1207,9 @@ def build_left_panel(self):
     implicit_layout.addLayout(implicit_equation_title_row)
     implicit_layout.addWidget(self.implicit_equation_edit)
 
-    self.implicit_output_edit = QPlainTextEdit("u")
+    self.implicit_output_edit = QPlainTextEdit("")
     self.implicit_output_edit.setMinimumHeight(84)
-    self.implicit_output_edit.setPlaceholderText("y = f(x, u, parameters)")
+    self.implicit_output_edit.setPlaceholderText("示例：u / Example: u")
     lbl_implicit_output = QLabel("输出表达式：")
     self._register_text(lbl_implicit_output, "输出表达式：", "Output expression:")
     implicit_output_title_row = QHBoxLayout()
@@ -1308,6 +1308,23 @@ def build_left_panel(self):
     implicit_layout.addLayout(implicit_solver_layout)
     fit_layout.addWidget(self.implicit_model_widget)
     self.implicit_model_widget.hide()
+    _bind_fitting_schema_fields(
+        self,
+        lbl_model=lbl_model,
+        fit_items=fit_items,
+        lbl_fit_expr=lbl_fit_expr,
+        lbl_implicit_eq=lbl_implicit_eq,
+        lbl_implicit_output=lbl_implicit_output,
+        lbl_implicit_var=lbl_implicit_var,
+        lbl_implicit_initial=lbl_implicit_initial,
+        lbl_implicit_tol=lbl_implicit_tol,
+        lbl_implicit_iter=lbl_implicit_iter,
+        lbl_implicit_method=lbl_implicit_method,
+        implicit_method_items=implicit_method_items,
+        lbl_implicit_timeout=lbl_implicit_timeout,
+        lbl_custom_params=lbl_custom_params,
+        lbl_implicit_params=lbl_implicit_params,
+    )
 
     var_header = QHBoxLayout()
     lbl_varmap = QLabel("变量映射：")
@@ -2238,6 +2255,198 @@ def _make_small_help_button() -> QPushButton:
     button.setFocusPolicy(Qt.NoFocus)
     button.setFixedWidth(24)
     return button
+
+
+def _bind_fitting_schema_fields(
+    self,
+    *,
+    lbl_model: QLabel,
+    fit_items: list[tuple[str, str, str]],
+    lbl_fit_expr: QLabel,
+    lbl_implicit_eq: QLabel,
+    lbl_implicit_output: QLabel,
+    lbl_implicit_var: QLabel,
+    lbl_implicit_initial: QLabel,
+    lbl_implicit_tol: QLabel,
+    lbl_implicit_iter: QLabel,
+    lbl_implicit_method: QLabel,
+    implicit_method_items: list[tuple[str, str, str]],
+    lbl_implicit_timeout: QLabel,
+    lbl_custom_params: QLabel,
+    lbl_implicit_params: QLabel,
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    fit_model_field = FormFieldSpec(
+        key="fitting.model",
+        widget_kind="select",
+        label=LocalizedText("拟合模型：", "Model:"),
+        tooltip=LocalizedText(
+            "选择拟合模型。自定义模型允许编辑表达式；其他模型会显示只读预览。",
+            "Choose the fitting model. Custom models allow expression editing; other models show read-only previews.",
+        ),
+        required=True,
+        choices=[ChoiceSpec(value=data, label=LocalizedText(zh, en)) for zh, en, data in fit_items],
+    )
+    custom_expression_field = FormFieldSpec(
+        key="fitting.custom.expression",
+        widget_kind="textarea",
+        label=LocalizedText("模型表达式：", "Model expression:"),
+        placeholder=LocalizedText("示例：A*x**(-p) + C", "Example: A*x**(-p) + C"),
+        tooltip=LocalizedText(
+            "输入自定义拟合表达式。留空不会使用示例；示例只显示在背景提示中。",
+            "Enter the custom fitting expression. Leaving it blank does not use the example; the example is only placeholder text.",
+        ),
+        required=True,
+    )
+    custom_constants_field = FormFieldSpec(
+        key="fitting.custom.constants",
+        widget_kind="table",
+        label=LocalizedText("常数设置", "Constants"),
+        tooltip=LocalizedText(
+            "可选常数表。启用后，常数名会从参数识别和拟合参数中排除。",
+            "Optional constants table. When enabled, constant names are excluded from parameter detection and fit parameters.",
+        ),
+        required=False,
+    )
+    custom_params_field = FormFieldSpec(
+        key="fitting.custom.parameters",
+        widget_kind="table",
+        label=LocalizedText("参数列表：", "Parameters:"),
+        tooltip=LocalizedText(
+            "自定义模型参数及初值、固定值和约束。",
+            "Custom model parameters with initial values, fixed values, and constraints.",
+        ),
+        required=False,
+    )
+    implicit_equation_field = FormFieldSpec(
+        key="fitting.implicit.equation",
+        widget_kind="textarea",
+        label=LocalizedText("自洽方程：", "Self-consistent equation:"),
+        placeholder=LocalizedText("示例：a + b*Cos[u] + c*x", "Example: a + b*Cos[u] + c*x"),
+        tooltip=LocalizedText(
+            "输入自洽方程。留空不会使用示例；示例只显示在背景提示中。",
+            "Enter the self-consistent equation. Leaving it blank does not use the example; the example is only placeholder text.",
+        ),
+        required=True,
+    )
+    implicit_output_field = FormFieldSpec(
+        key="fitting.implicit.output_expression",
+        widget_kind="textarea",
+        label=LocalizedText("输出表达式：", "Output expression:"),
+        placeholder=LocalizedText("示例：u", "Example: u"),
+        tooltip=LocalizedText(
+            "输入由隐式变量和输入变量计算目标列的输出表达式。",
+            "Enter the output expression that maps the implicit and input variables to the target column.",
+        ),
+        required=True,
+    )
+    implicit_variable_field = FormFieldSpec(
+        key="fitting.implicit.variable",
+        widget_kind="text",
+        label=LocalizedText("隐式变量：", "Implicit variable:"),
+        tooltip=LocalizedText("自洽方程中要求解的变量名。", "Variable solved by the self-consistent equation."),
+        required=True,
+    )
+    implicit_initial_field = FormFieldSpec(
+        key="fitting.implicit.initial",
+        widget_kind="text",
+        label=LocalizedText("初始值：", "Initial:"),
+        tooltip=LocalizedText("隐式变量求解初值。", "Initial value for solving the implicit variable."),
+        required=True,
+    )
+    implicit_tolerance_field = FormFieldSpec(
+        key="fitting.implicit.tolerance",
+        widget_kind="text",
+        label=LocalizedText("求解容差：", "Tolerance:"),
+        tooltip=LocalizedText("隐式变量求解容差。", "Tolerance for solving the implicit variable."),
+        required=True,
+    )
+    implicit_iterations_field = FormFieldSpec(
+        key="fitting.implicit.max_iterations",
+        widget_kind="number",
+        label=LocalizedText("最大迭代：", "Max iterations:"),
+        tooltip=LocalizedText("每次隐式变量求解允许的最大迭代次数。", "Maximum iterations allowed for each implicit solve."),
+        required=True,
+    )
+    implicit_method_field = FormFieldSpec(
+        key="fitting.implicit.method",
+        widget_kind="select",
+        label=LocalizedText("求解方法：", "Method:"),
+        tooltip=LocalizedText(
+            "固定点用于 u=g(...) 形式；求根用于 F(...)=0 形式。",
+            "Fixed point is for u=g(...) forms; Root is for F(...)=0 forms.",
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value=data, label=LocalizedText(zh, en))
+            for zh, en, data in implicit_method_items
+        ],
+    )
+    implicit_timeout_field = FormFieldSpec(
+        key="fitting.implicit.timeout_seconds",
+        widget_kind="number",
+        label=LocalizedText("最长运行秒数：", "Max runtime (s):"),
+        tooltip=LocalizedText(
+            "0 表示不自动超时，只能手动停止。",
+            "0 disables automatic timeout; use Stop to cancel.",
+        ),
+        required=True,
+    )
+    implicit_constants_field = FormFieldSpec(
+        key="fitting.implicit.constants",
+        widget_kind="table",
+        label=LocalizedText("常数设置", "Constants"),
+        tooltip=LocalizedText(
+            "可选常数表。启用后，常数名会从隐式参数识别和拟合参数中排除。",
+            "Optional constants table. When enabled, constant names are excluded from implicit parameter detection and fit parameters.",
+        ),
+        required=False,
+    )
+    implicit_params_field = FormFieldSpec(
+        key="fitting.implicit.parameters",
+        widget_kind="table",
+        label=LocalizedText("参数列表：", "Parameters:"),
+        tooltip=LocalizedText(
+            "自洽隐式模型参数及初值、固定值和约束。",
+            "Self-consistent implicit model parameters with initial values, fixed values, and constraints.",
+        ),
+        required=False,
+    )
+
+    bind_field(field=fit_model_field, label=lbl_model, widget=self.fit_model_combo, lang=lang)
+    bind_choices(self.fit_model_combo, fit_model_field.choices, lang=lang)
+    bind_field(
+        field=custom_expression_field,
+        label=lbl_fit_expr,
+        widget=self.fit_expr_edit,
+        help_button=self.fit_formula_preview_button,
+        lang=lang,
+    )
+    bind_field(field=custom_constants_field, widget=self.custom_constants_editor, lang=lang)
+    bind_field(field=custom_params_field, label=lbl_custom_params, widget=self.custom_params_table, lang=lang)
+    bind_field(
+        field=implicit_equation_field,
+        label=lbl_implicit_eq,
+        widget=self.implicit_equation_edit,
+        help_button=self.implicit_equation_preview_button,
+        lang=lang,
+    )
+    bind_field(
+        field=implicit_output_field,
+        label=lbl_implicit_output,
+        widget=self.implicit_output_edit,
+        help_button=self.implicit_output_preview_button,
+        lang=lang,
+    )
+    bind_field(field=implicit_variable_field, label=lbl_implicit_var, widget=self.implicit_variable_edit, lang=lang)
+    bind_field(field=implicit_initial_field, label=lbl_implicit_initial, widget=self.implicit_initial_edit, lang=lang)
+    bind_field(field=implicit_tolerance_field, label=lbl_implicit_tol, widget=self.implicit_tolerance_edit, lang=lang)
+    bind_field(field=implicit_iterations_field, label=lbl_implicit_iter, widget=self.implicit_max_iterations_spin, lang=lang)
+    bind_field(field=implicit_method_field, label=lbl_implicit_method, widget=self.implicit_method_combo, lang=lang)
+    bind_choices(self.implicit_method_combo, implicit_method_field.choices, lang=lang)
+    bind_field(field=implicit_timeout_field, label=lbl_implicit_timeout, widget=self.implicit_timeout_spin, lang=lang)
+    bind_field(field=implicit_constants_field, widget=self.implicit_constants_editor, lang=lang)
+    bind_field(field=implicit_params_field, label=lbl_implicit_params, widget=self.implicit_params_table, lang=lang)
 
 
 def _bind_root_schema_fields(

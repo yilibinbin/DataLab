@@ -37,8 +37,10 @@ def test_implicit_controls_exist_and_method_options(window) -> None:
 
     assert window.fit_model_combo.currentData() == "self_consistent"
     assert window.implicit_variable_edit.text() == "u"
-    assert window.implicit_equation_edit.toPlainText() == "a + b*Cos[u] + c*x"
-    assert window.implicit_output_edit.toPlainText() == "u"
+    assert window.implicit_equation_edit.toPlainText() == ""
+    assert "a + b*Cos[u] + c*x" in window.implicit_equation_edit.placeholderText()
+    assert window.implicit_output_edit.toPlainText() == ""
+    assert "u" in window.implicit_output_edit.placeholderText()
     assert window.implicit_initial_edit.text() == "0.3"
     assert window.implicit_tolerance_edit.text() == "1e-30"
     assert window.implicit_max_iterations_spin.value() == 80
@@ -61,14 +63,18 @@ def test_implicit_ui_is_formula_first_and_generic(window) -> None:
     assert window.implicit_output_edit.minimumHeight() >= 70
 
     assert window.implicit_variable_edit.text() == "u"
-    assert window.implicit_equation_edit.toPlainText() == "a + b*Cos[u] + c*x"
-    assert window.implicit_output_edit.toPlainText() == "u"
+    assert window.implicit_equation_edit.toPlainText() == ""
+    assert "a + b*Cos[u] + c*x" in window.implicit_equation_edit.placeholderText()
+    assert window.implicit_output_edit.toPlainText() == ""
+    assert "u" in window.implicit_output_edit.placeholderText()
     assert window.implicit_timeout_spin.value() == 300
     assert not hasattr(window, "quantum_defect_preset_btn") or not window.quantum_defect_preset_btn.isVisible()
 
 
 def test_default_implicit_config_uses_x_as_variable_not_parameter(window) -> None:
     _select_model(window, "self_consistent")
+    window.implicit_equation_edit.setPlainText("a + b*Cos[u] + c*x")
+    window.implicit_output_edit.setPlainText("u")
 
     config = window._collect_implicit_config(validate_parameters=False)
 
@@ -80,6 +86,53 @@ def test_default_implicit_config_uses_x_as_variable_not_parameter(window) -> Non
     assert config["parameter_names"] == ("a", "b", "c")
     assert "x" not in config["parameter_names"]
     assert "u" not in config["parameter_names"]
+
+
+def test_fresh_custom_model_uses_empty_expression_with_placeholder(window) -> None:
+    _select_model(window, "custom")
+
+    assert window.fit_expr_edit.toPlainText() == ""
+    assert "A*x**(-p) + C" in window.fit_expr_edit.placeholderText()
+    assert window.fit_expr_edit.isReadOnly() is False
+    assert window.fit_expr_edit.property("datalab_schema_key") == "fitting.custom.expression"
+    assert window.fit_expr_edit.property("datalab_schema_required") is True
+
+
+def test_non_custom_model_preview_is_populated_and_read_only(window) -> None:
+    _select_model(window, "polynomial")
+
+    assert window.fit_expr_edit.toPlainText()
+    assert "b0" in window.fit_expr_edit.toPlainText()
+    assert window.fit_expr_edit.isReadOnly() is True
+
+
+def test_fitting_and_implicit_controls_have_schema_bindings(window) -> None:
+    assert window.fit_model_combo.property("datalab_schema_key") == "fitting.model"
+    assert window.fit_model_combo.property("datalab_schema_choices") is True
+    assert window.custom_constants_editor.property("datalab_schema_key") == "fitting.custom.constants"
+    assert window.custom_params_table.property("datalab_schema_key") == "fitting.custom.parameters"
+
+    _select_model(window, "self_consistent")
+
+    assert window.implicit_equation_edit.property("datalab_schema_key") == "fitting.implicit.equation"
+    assert window.implicit_equation_edit.property("datalab_schema_required") is True
+    assert window.implicit_equation_preview_button.property("datalab_schema_key") == "fitting.implicit.equation"
+    assert window.implicit_output_edit.property("datalab_schema_key") == "fitting.implicit.output_expression"
+    assert window.implicit_output_edit.property("datalab_schema_required") is True
+    assert window.implicit_output_preview_button.property("datalab_schema_key") == (
+        "fitting.implicit.output_expression"
+    )
+    assert window.implicit_variable_edit.property("datalab_schema_key") == "fitting.implicit.variable"
+    assert window.implicit_initial_edit.property("datalab_schema_key") == "fitting.implicit.initial"
+    assert window.implicit_tolerance_edit.property("datalab_schema_key") == "fitting.implicit.tolerance"
+    assert window.implicit_max_iterations_spin.property("datalab_schema_key") == (
+        "fitting.implicit.max_iterations"
+    )
+    assert window.implicit_method_combo.property("datalab_schema_key") == "fitting.implicit.method"
+    assert window.implicit_method_combo.property("datalab_schema_choices") is True
+    assert window.implicit_timeout_spin.property("datalab_schema_key") == "fitting.implicit.timeout_seconds"
+    assert window.implicit_constants_editor.property("datalab_schema_key") == "fitting.implicit.constants"
+    assert window.implicit_params_table.property("datalab_schema_key") == "fitting.implicit.parameters"
 
 
 def test_implicit_detect_defaults_to_x_when_no_variable_rows(window) -> None:
@@ -314,6 +367,8 @@ def test_implicit_constants_table_excludes_constants_from_parameters(window) -> 
 
 def test_implicit_constants_table_rejects_duplicate_names(window) -> None:
     _select_model(window, "self_consistent")
+    window.implicit_equation_edit.setPlainText("d0")
+    window.implicit_output_edit.setPlainText("En - K/(n-u)^2")
     window._reset_implicit_constants_rows({})
 
     window.implicit_constants_editor.set_rows(
@@ -326,6 +381,8 @@ def test_implicit_constants_table_rejects_duplicate_names(window) -> None:
 
 def test_implicit_constants_table_rejects_invalid_numeric_values(window) -> None:
     _select_model(window, "self_consistent")
+    window.implicit_equation_edit.setPlainText("d0")
+    window.implicit_output_edit.setPlainText("En - K/(n-u)^2")
     window._reset_implicit_constants_rows({"K": "not-a-number"})
 
     with pytest.raises(ValueError, match="Invalid value for constant K|常数 K 的取值无效"):
@@ -334,6 +391,8 @@ def test_implicit_constants_table_rejects_invalid_numeric_values(window) -> None
 
 def test_implicit_constants_accept_compact_uncertainty_notation(window) -> None:
     _select_model(window, "self_consistent")
+    window.implicit_equation_edit.setPlainText("d0")
+    window.implicit_output_edit.setPlainText("En - K/(n-u)^2")
     window._reset_implicit_constants_rows({"K": "1.23(4)"})
 
     config = window._collect_implicit_config(validate_parameters=False)

@@ -651,8 +651,10 @@ def test_workspace_restore_old_fitting_config_without_implicit(qtbot) -> None:
 
     assert target.custom_params_table.rows() == [{"name": "A", "initial": "1.0", "fixed": "", "min": "", "max": ""}]
     assert target.implicit_variable_edit.text() == "u"
-    assert target.implicit_equation_edit.toPlainText() == "a + b*Cos[u] + c*x"
-    assert target.implicit_output_edit.toPlainText() == "u"
+    assert target.implicit_equation_edit.toPlainText() == ""
+    assert "a + b*Cos[u] + c*x" in target.implicit_equation_edit.placeholderText()
+    assert target.implicit_output_edit.toPlainText() == ""
+    assert "u" in target.implicit_output_edit.placeholderText()
     assert [(row[0].text(), row[1].text()) for row in target.variable_rows] == [("x", "A")]
 
 
