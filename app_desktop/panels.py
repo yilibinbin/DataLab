@@ -3514,14 +3514,8 @@ def _bind_error_schema_fields(
         help_button=self.error_constants_editor.help_button,
         lang=lang,
     )
-    self.error_constants_editor.checkbox.setToolTip(constants_field.tooltip.for_lang(lang))
     register_schema_text_refresh(self, constants_field, widget=self.error_constants_editor, help_button=self.error_constants_editor.help_button)
-    self._register_text(
-        self.error_constants_editor.checkbox,
-        constants_field.tooltip.zh,
-        constants_field.tooltip.en,
-        "setToolTip",
-    )
+    register_schema_text_refresh(self, constants_field, widget=self.error_constants_editor.checkbox)
     bind_field(field=method_field, label=lbl_error_method, widget=self.error_method_combo, lang=lang)
     bind_choices(self.error_method_combo, method_field.choices, lang=lang)
     register_schema_text_refresh(self, method_field, widget=self.error_method_combo)

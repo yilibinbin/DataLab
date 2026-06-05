@@ -95,6 +95,8 @@ def test_error_schema_tooltips_and_choices_refresh_with_language(window: Any) ->
     assert window.error_method_combo.currentData() == "monte_carlo"
     assert "输入要传播不确定度的公式" in window.formula_edit.toolTip()
     assert "外部常数文件" in window.use_constants_file_checkbox.toolTip()
+    assert "可选常数" in window.error_constants_editor.help_button.toolTip()
+    assert "可选常数" in window.error_constants_editor.checkbox.toolTip()
     assert window.error_method_combo.itemText(window.error_method_combo.findData("taylor")) == "Taylor（偏导）"
 
 
