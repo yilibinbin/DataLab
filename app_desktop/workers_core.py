@@ -57,7 +57,8 @@ from root_solving.batch import solve_root_batch
 from root_solving.formatting import render_root_batch_result
 from root_solving.messages import localize_root_message
 from root_solving.models import RootUnknown
-from root_solving.normalization import normalize_root_uncertainty_options
+from root_solving.normalization import normalize_root_problem_from_context, normalize_root_uncertainty_options
+from root_solving.plotting import RootPlotBudget, render_nominal_root_plots
 from shared.input_normalization import normalize_constants_state
 # Private-by-convention logger name — matches the rest of DataLab
 # (_logger in sse.py, collaborate.py, mcmc_fitter.py, etc.). The
@@ -1165,6 +1166,7 @@ class RootSolvingJob:
     latex_group_size: int = 3
     latex_include_dcolumn: bool = False
     latex_language: str = "en"
+    render_plots: bool = False
 
 
 @dataclass
@@ -1228,6 +1230,7 @@ def _serialize_root_solving_job(job: RootSolvingJob) -> dict[str, Any]:
         "latex_group_size": int(job.latex_group_size),
         "latex_include_dcolumn": bool(job.latex_include_dcolumn),
         "latex_language": str(job.latex_language),
+        "render_plots": bool(job.render_plots),
     }
 
 
@@ -1280,6 +1283,7 @@ def _deserialize_root_solving_job(payload: Mapping[str, Any]) -> RootSolvingJob:
         latex_group_size=int(payload.get("latex_group_size", 3)),
         latex_include_dcolumn=bool(payload.get("latex_include_dcolumn", False)),
         latex_language=_deserialize_language(payload.get("latex_language", payload.get("language", "en"))),
+        render_plots=bool(payload.get("render_plots", False)),
     )
 
 
@@ -1379,6 +1383,19 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         uncertainty_options=job.uncertainty_options,
         parallel_config=job.parallel_config,
     )
+    plot_selection = None
+    if job.render_plots and _root_batch_has_successful_roots(batch):
+        plot_problem = normalize_root_problem_from_context(
+            equations=job.equations,
+            unknown_rows=tuple(dict(row) for row in job.unknown_rows),
+            row_values={header: "0" for header in job.data_headers},
+            constants_state=constants_state,
+            mode=job.mode,
+            precision=job.precision,
+            scan_config=job.scan_config,
+            uncertainty_options=job.uncertainty_options,
+        )
+        plot_selection = render_nominal_root_plots(batch, plot_problem, budget=RootPlotBudget())
     markdown, csv_rows, csv_headers = render_root_batch_result(
         batch,
         display_digits=job.display_digits,
@@ -1392,8 +1409,10 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         warnings.extend(row.warnings)
         if row.result is not None:
             warnings.extend(row.result.warnings)
+    if plot_selection is not None:
+        warnings.extend(plot_selection.warnings)
     warnings = _deduplicate_strings(warnings)
-    return {
+    payload: dict[str, object] = {
         "kind": "root_solving",
         "markdown": markdown,
         "csv_rows": csv_rows,
@@ -1418,6 +1437,17 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         "latex_include_dcolumn": bool(job.latex_include_dcolumn),
         "latex_language": str(job.latex_language),
     }
+    if plot_selection is not None and plot_selection.images:
+        first_image = plot_selection.images[0]
+        payload["plot_bytes"] = first_image.image_bytes
+    return payload
+
+
+def _root_batch_has_successful_roots(batch: Any) -> bool:
+    return any(
+        row.result is not None and row.failure is None and bool(row.result.roots)
+        for row in getattr(batch, "rows", ())
+    )
 
 
 def _root_log_text(

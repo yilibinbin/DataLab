@@ -1463,6 +1463,10 @@ class ExtrapolationWindow(
             latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
             latex_include_dcolumn=self.dcolumn_checkbox.isChecked() if hasattr(self, "dcolumn_checkbox") else False,
             latex_language=self._current_output_language(),
+            render_plots=bool(
+                getattr(self, "generate_plots_checkbox", None)
+                and self.generate_plots_checkbox.isChecked()
+            ),
         )
 
     def _current_output_language(self) -> str:

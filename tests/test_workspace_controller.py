@@ -234,6 +234,38 @@ def test_workspace_controller_restores_snapshot_without_live_payloads(qtbot) -> 
     assert not target.display_digits_spin.isEnabled()
 
 
+def test_workspace_preserves_root_result_plot_attachment(qtbot, monkeypatch) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    monkeypatch.setattr("app_desktop.window_extrapolation_mixin.QMessageBox.information", lambda *args: None)
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "root_solving")
+    source._on_root_solving_finished(
+        {
+            "markdown": "| root |\n|---|\n| 1 |",
+            "csv_headers": ["root"],
+            "csv_rows": [{"root": "1"}],
+            "warnings": [],
+            "plot_bytes": PNG_1X1,
+        }
+    )
+
+    bundle = capture_workspace(source, title="root result")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    assert snapshot["kind"] == "root_solving"
+    assert snapshot["plots"][0]["path"] == "attachments/plots/plot-001.png"
+    assert bundle.attachments["attachments/plots/plot-001.png"] == PNG_1X1
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.result_plot_bytes == PNG_1X1
+    assert target._csv_rows == [{"root": "1"}]
+
+
 def test_workspace_preserves_rendered_result_markdown_table(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace

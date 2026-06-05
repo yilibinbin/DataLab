@@ -246,6 +246,21 @@ def test_root_job_collects_uncertainty_options(window: Any) -> None:
     }
 
 
+def test_root_job_honors_generate_plots_checkbox(window: Any) -> None:
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    window.root_equations_edit.setPlainText("x**2 - 2")
+    window.root_unknowns_table.set_rows([{"name": "x", "initial": "1", "lower": "", "upper": ""}])
+
+    window.generate_plots_checkbox.setChecked(False)
+    disabled_job = window._build_root_solving_job(data_path=None, manual_content="")
+
+    window.generate_plots_checkbox.setChecked(True)
+    enabled_job = window._build_root_solving_job(data_path=None, manual_content="")
+
+    assert disabled_job.render_plots is False
+    assert enabled_job.render_plots is True
+
+
 def test_root_solving_page_has_no_known_values_table(window: Any) -> None:
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
 
@@ -353,6 +368,29 @@ def test_root_result_clears_stale_plot_state(window: Any, monkeypatch: pytest.Mo
     assert window.current_extrap_figures == []
     assert window._image_mode is None
     assert window._csv_rows == [{"root": "1"}]
+
+
+def test_root_result_displays_payload_plot_bytes(window: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app_desktop.window_extrapolation_mixin.QMessageBox.information", lambda *args: None)
+    png = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\xf8\x0f"
+        b"\x00\x01\x01\x01\x00\x18\xdd\x8d\xb0\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+
+    window._on_root_solving_finished(
+        {
+            "markdown": "| root |\n|---|\n| 1 |",
+            "csv_headers": ["root"],
+            "csv_rows": [{"root": "1"}],
+            "warnings": [],
+            "plot_bytes": png,
+        }
+    )
+
+    assert window.result_plot_bytes == png
+    assert window._result_plot_base_pixmap is not None
+    assert window._image_mode == "root_solving"
 
 
 def test_root_solving_controls_mark_workspace_dirty(window: Any) -> None:
