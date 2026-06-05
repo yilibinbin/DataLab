@@ -32,7 +32,7 @@ def extract_preamble(tex_content: str) -> list[str]:
         if '\\begin{document}' in line:
             break
         preamble.append(line.strip())
-    return [l for l in preamble if l]  # Remove empty lines
+    return [line for line in preamble if line]  # Remove empty lines
 
 
 def check_preamble_packages(preamble: list[str], label: str):

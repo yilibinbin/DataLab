@@ -17,7 +17,6 @@ TinyTeX's bootstrap URL is the contract that's most likely to drift.
 
 from __future__ import annotations
 
-import os
 import stat
 from pathlib import Path
 

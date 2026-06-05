@@ -34,7 +34,6 @@ def _post_with_csrf(client, path, app):
     token. Issues a GET first to seed the session cookie, extracts
     the token via the context-processor helper, and replays the
     POST with the ``X-CSRF-Token`` header set."""
-    from app_web._security_shim import get_csrf_token
 
     # Seed session cookie
     client.get("/")

@@ -27,7 +27,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from typing import Any, Dict  # noqa: E402
 
 import pytest  # noqa: E402
-from PySide6.QtCore import QByteArray  # noqa: E402
 
 from shared.presets import (  # noqa: E402
     MAX_PRESET_BYTES,

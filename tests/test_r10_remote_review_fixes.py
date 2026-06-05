@@ -139,7 +139,6 @@ def test_bug002_benign_text_still_accepted():
     """Whitespace-tolerant regex must not false-positive on benign TeX."""
     from app_web.latex_security import validate_latex_content
 
-    benign = r"A document with \write to a log file, not \write18."
     # "\write18" literal is still caught above; we avoid it here and include
     # a near-miss like `\writefancy` to make sure \b prevents accidental hits.
     is_safe, warnings = validate_latex_content(

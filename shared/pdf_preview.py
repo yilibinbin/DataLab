@@ -15,25 +15,23 @@ Features:
 """
 
 import logging
-import tempfile
 import os
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, TYPE_CHECKING
+from typing import Optional, Dict, Any, TYPE_CHECKING
 from dataclasses import dataclass
 from enum import Enum
-from functools import lru_cache
 from collections import OrderedDict
 from threading import Lock
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
-    QScrollArea, QSpinBox, QDoubleSpinBox, QPushButton, QMessageBox
+    QScrollArea
 )
-from PySide6.QtCore import Qt, QTimer, QSize, Signal, QObject, QThread, QUrl
-from PySide6.QtGui import QIcon, QPixmap, QImage, QCursor
-from PIL import Image, ImageOps
+from PySide6.QtCore import Qt, Signal, QObject, QThread, QUrl
+from PySide6.QtGui import QPixmap, QImage
+from PIL import Image
 
 if TYPE_CHECKING:
     # WebEngine / QtPdf imports live inside the backend ``__init__`` so a

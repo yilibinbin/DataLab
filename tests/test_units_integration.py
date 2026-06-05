@@ -49,7 +49,7 @@ def test_to_siunitx_falls_back_when_pint_absent():
 
 
 def test_parse_quantity_roundtrip_when_pint_present():
-    pint = pytest.importorskip("pint")
+    pytest.importorskip("pint")
 
     from shared.units import parse_quantity
 
@@ -60,7 +60,7 @@ def test_parse_quantity_roundtrip_when_pint_present():
 
 
 def test_to_siunitx_produces_valid_latex_when_pint_present():
-    pint = pytest.importorskip("pint")
+    pytest.importorskip("pint")
 
     from shared.units import to_siunitx
 
@@ -72,7 +72,7 @@ def test_to_siunitx_produces_valid_latex_when_pint_present():
 
 
 def test_parse_quantity_rejects_malformed_string_when_pint_present():
-    pint = pytest.importorskip("pint")
+    pytest.importorskip("pint")
 
     from shared.units import parse_quantity
 
@@ -81,7 +81,7 @@ def test_parse_quantity_rejects_malformed_string_when_pint_present():
 
 
 def test_dimensional_arithmetic_when_pint_present():
-    pint = pytest.importorskip("pint")
+    pytest.importorskip("pint")
 
     from shared.units import parse_quantity
 

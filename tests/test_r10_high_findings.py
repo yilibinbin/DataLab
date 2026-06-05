@@ -5,7 +5,6 @@ from __future__ import annotations
 import inspect
 
 import pytest
-from unittest.mock import patch
 
 # ---------------------------------------------------------------------------
 # H1: _security_shim fallback compile_latex_safe must include -no-shell-escape

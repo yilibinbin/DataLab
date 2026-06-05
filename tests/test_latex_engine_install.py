@@ -14,7 +14,6 @@ binary, but we don't run it on CI by default.
 from __future__ import annotations
 
 import io
-import os
 import stat
 import tarfile
 import zipfile

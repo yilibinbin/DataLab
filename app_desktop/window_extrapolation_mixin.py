@@ -521,6 +521,10 @@ class WindowExtrapolationMixin:
             self.result_plot_label.setText(self._tr("尚无图片", "No image yet"))
         if hasattr(self, "_update_image_status"):
             self._update_image_status()
+        plot_bytes = payload.get("plot_bytes")
+        if isinstance(plot_bytes, bytes) and plot_bytes:
+            self._image_mode = "root_solving"
+            self._update_result_plot(plot_bytes)
         self._set_result_text(markdown)
         if isinstance(csv_rows, list) and csv_rows:
             headers = [str(header) for header in csv_headers] if isinstance(csv_headers, list) else None
@@ -553,6 +557,7 @@ class WindowExtrapolationMixin:
                 rows=raw_rows,
                 caption=str(payload.get("latex_caption", "") or ""),
                 digits=int(payload.get("latex_digits", 16)),
+                uncertainty_digits=int(payload.get("uncertainty_digits", 1)),
                 group_size=int(payload.get("latex_group_size", 3)),
                 include_dcolumn=bool(payload.get("latex_include_dcolumn", False)),
                 language=str(payload.get("latex_language", "zh") or "zh"),

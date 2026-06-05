@@ -5,7 +5,32 @@ This package contains shared specifications used by both desktop GUI and web int
 to ensure perfect alignment and consistency.
 """
 
-from .ui_specs import *
+from .ui_specs import (
+    CUSTOM_FORMULA_FUNCTION_HELP,
+    CUSTOM_FORMULA_PARAMS,
+    ERROR_FORMULA_FUNCTION_HELP,
+    ERROR_FORMULA_SPEC,
+    EXTRAPOLATION_METHOD_SPECS,
+    LEVIN_U_PARAMS,
+    METHOD_DISPLAY_ORDER,
+    METHOD_HELP_BUTTON,
+    POWER_LAW_PARAMS,
+    RICHARDSON_PARAMS,
+    SHANKS_PARAMS,
+    WYNN_EPSILON_PARAMS,
+    FunctionHelpSpec,
+    MethodHelpButtonSpec,
+    MethodSpec,
+    NumberWidgetSpec,
+    ParameterGroupSpec,
+    SelectWidgetSpec,
+    TextAreaWidgetSpec,
+    TextWidgetSpec,
+    WidgetSpec,
+    get_method_options,
+    get_parameter_visibility_rules,
+    validate_method_parameters,
+)
 from formula_help import (
     get_function_help,
     get_function_tooltip,

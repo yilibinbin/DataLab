@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
+from mpmath import mp
+
 from root_solving.expression import RootExpressionSystem, build_root_expression_system
 from root_solving.models import (
     RootBatchResult,
@@ -168,6 +170,14 @@ def _solve_root_batch_task(task: _RootBatchTask) -> _RootBatchTaskOutput:
                 uncertain_inputs=task.uncertain_inputs,
                 uncertainty_options=uncertainty_options,
             )
+            if task.uncertain_inputs:
+                result = replace(
+                    result,
+                    details={
+                        **result.details,
+                        "plot_uncertain_inputs": _plot_uncertain_inputs_payload(task.uncertain_inputs),
+                    },
+                )
         return _RootBatchTaskOutput(
             row_index=task.row_index,
             source_values=source_values,
@@ -200,6 +210,17 @@ def _serialize_result_for_task(result: RootResult) -> dict[str, object]:
         "jacobian_condition": result.jacobian_condition,
         "warnings": tuple(result.warnings),
         "details": dict(result.details),
+    }
+
+
+def _plot_uncertain_inputs_payload(values: Mapping[str, UncertainValue]) -> dict[str, dict[str, str]]:
+    return {
+        name: {
+            "value": str(value.value),
+            "uncertainty": str(value.uncertainty),
+        }
+        for name, value in values.items()
+        if mp.isfinite(value.uncertainty) and value.uncertainty > 0
     }
 
 

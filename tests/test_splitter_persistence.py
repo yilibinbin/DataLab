@@ -29,7 +29,6 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from shared.settings_store import (  # noqa: E402
     KEY_MAIN_SPLITTER_STATE,
-    SettingsStore,
 )
 
 

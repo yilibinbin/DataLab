@@ -13,6 +13,8 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QPushButton
 
+from app_desktop.ui_schema_binder import find_unbound_required_widgets
+
 
 @pytest.fixture  # type: ignore[untyped-decorator]
 def window(qtbot: Any) -> Any:
@@ -42,9 +44,12 @@ def test_mode_combo_contains_root_solving(window: Any) -> None:
 def test_root_solving_page_has_required_widgets(window: Any) -> None:
     required = [
         "root_equations_edit",
+        "root_equations_help_button",
         "root_formula_preview_button",
         "root_mode_combo",
+        "root_mode_help_button",
         "root_unknowns_table",
+        "root_unknowns_help_button",
         "root_add_unknown_button",
         "root_remove_unknown_button",
         "root_detect_unknowns_button",
@@ -54,16 +59,77 @@ def test_root_solving_page_has_required_widgets(window: Any) -> None:
         assert hasattr(window, name), name
 
     assert _combo_data(window.root_mode_combo) == ["scalar", "scan_multiple", "polynomial", "system"]
+    assert window.root_equations_edit.toPlainText() == ""
+    assert "x^2 - A" in window.root_equations_edit.placeholderText()
+    window._apply_language("zh")
+    assert [
+        window.root_unknowns_table.table_view.horizontalHeaderItem(index).text()
+        for index in range(window.root_unknowns_table.table_view.columnCount())
+    ] == ["名称", "初始值", "下界", "上界"]
+    assert window.root_constants_editor.table_view.horizontalHeaderItem(0).text() == "名称"
+    assert window.root_constants_editor.table_view.horizontalHeaderItem(1).text() == "值"
+    window._apply_language("en")
     assert [
         window.root_unknowns_table.table_view.horizontalHeaderItem(index).text()
         for index in range(window.root_unknowns_table.table_view.columnCount())
     ] == ["Name", "Initial", "Lower", "Upper"]
+    assert window.root_constants_editor.table_view.horizontalHeaderItem(0).text() == "Name"
+    assert window.root_constants_editor.table_view.horizontalHeaderItem(1).text() == "Value"
     assert window.root_constants_editor.numeric_mode() == "uncertainty"
     assert window.root_constants_editor.isChecked() is False
     assert isinstance(window.root_formula_preview_button, QPushButton)
+    assert window.root_constants_editor.help_button.text() == "?"
+    assert window.root_equations_help_button.toolTip()
+    assert window.root_mode_help_button.toolTip()
+    assert window.root_unknowns_help_button.toolTip()
+    assert window.root_equations_edit.toolTip()
+    assert window.root_mode_combo.toolTip()
+    assert window.root_unknowns_table.toolTip()
+    assert window.root_constants_editor.toolTip()
+    assert window.root_constants_editor.help_button.toolTip()
+    assert window.root_constants_editor.checkbox.toolTip()
     assert window.root_detect_unknowns_button.toolTip()
     assert window.root_add_unknown_button.toolTip()
     assert window.root_remove_unknown_button.toolTip()
+
+
+def test_root_controls_have_schema_bindings(window: Any) -> None:
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    QApplication.processEvents()
+
+    assert window.root_equations_edit.property("datalab_schema_key") == "root.equations"
+    assert window.root_equations_edit.property("datalab_schema_required") is True
+    assert window.root_equations_help_button.property("datalab_schema_key") == "root.equations"
+
+    assert window.root_mode_combo.property("datalab_schema_key") == "root.mode"
+    assert window.root_mode_combo.property("datalab_schema_required") is True
+    assert window.root_mode_combo.property("datalab_schema_choices") is True
+    assert _combo_data(window.root_mode_combo) == ["scalar", "scan_multiple", "polynomial", "system"]
+    assert window.root_mode_help_button.property("datalab_schema_key") == "root.mode"
+
+    assert window.root_unknowns_table.property("datalab_schema_key") == "root.unknowns"
+    assert window.root_unknowns_table.property("datalab_schema_required") is True
+    assert window.root_unknowns_help_button.property("datalab_schema_key") == "root.unknowns"
+
+    assert window.root_constants_editor.property("datalab_schema_key") == "root.constants"
+    assert window.root_constants_editor.property("datalab_schema_required") is False
+    assert window.root_constants_editor.table_view.property("datalab_schema_key") is None
+    assert find_unbound_required_widgets(window.root_box) == []
+
+
+def test_root_mode_empty_manual_table_defaults_to_one_column(window: Any) -> None:
+    assert window.manual_table.columnCount() == 3
+
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    QApplication.processEvents()
+
+    assert window.manual_table.columnCount() == 1
+    assert window.manual_table.horizontalHeaderItem(0).text() == "A"
+
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("extrapolation"))
+    QApplication.processEvents()
+
+    assert window.manual_table.columnCount() == 3
 
 
 def test_main_splitter_clamps_left_panel_to_config_minimum(window: Any) -> None:
@@ -78,6 +144,24 @@ def test_main_splitter_clamps_left_panel_to_config_minimum(window: Any) -> None:
     assert splitter.sizes()[0] >= window._main_splitter_left_min_width
 
 
+def test_main_splitter_minimum_prevents_left_horizontal_scrollbar(window: Any) -> None:
+    window.resize(1300, 790)
+    window.show()
+    QApplication.processEvents()
+
+    for mode in ("extrapolation", "error", "fitting", "root_solving", "statistics"):
+        window.mode_combo.setCurrentIndex(window.mode_combo.findData(mode))
+        QApplication.processEvents()
+        window._refresh_main_splitter_left_min_width()
+        window._main_splitter.setSizes([1, 1299])
+        QApplication.processEvents()
+
+        horizontal_bar = window._left_scroll.horizontalScrollBar()
+        assert window._main_splitter.sizes()[0] >= window._main_splitter_left_min_width
+        assert horizontal_bar.maximum() == 0, mode
+        assert not horizontal_bar.isVisible(), mode
+
+
 def test_main_splitter_left_minimum_refreshes_after_mode_visibility(window: Any) -> None:
     window.resize(1500, 920)
     window.show()
@@ -90,8 +174,7 @@ def test_main_splitter_left_minimum_refreshes_after_mode_visibility(window: Any)
     expected = max(
         320,
         window.left_container.minimumSizeHint().width(),
-        window.left_container.sizeHint().width(),
-    )
+    ) + left_scroll.frameWidth() * 2 + left_scroll.verticalScrollBar().sizeHint().width()
     assert window._main_splitter_left_min_width == expected
     assert left_scroll.minimumWidth() == expected
 
@@ -161,6 +244,21 @@ def test_root_job_collects_uncertainty_options(window: Any) -> None:
         "monte_carlo_samples": 123,
         "monte_carlo_seed": "5",
     }
+
+
+def test_root_job_honors_generate_plots_checkbox(window: Any) -> None:
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    window.root_equations_edit.setPlainText("x**2 - 2")
+    window.root_unknowns_table.set_rows([{"name": "x", "initial": "1", "lower": "", "upper": ""}])
+
+    window.generate_plots_checkbox.setChecked(False)
+    disabled_job = window._build_root_solving_job(data_path=None, manual_content="")
+
+    window.generate_plots_checkbox.setChecked(True)
+    enabled_job = window._build_root_solving_job(data_path=None, manual_content="")
+
+    assert disabled_job.render_plots is False
+    assert enabled_job.render_plots is True
 
 
 def test_root_solving_page_has_no_known_values_table(window: Any) -> None:
@@ -270,6 +368,29 @@ def test_root_result_clears_stale_plot_state(window: Any, monkeypatch: pytest.Mo
     assert window.current_extrap_figures == []
     assert window._image_mode is None
     assert window._csv_rows == [{"root": "1"}]
+
+
+def test_root_result_displays_payload_plot_bytes(window: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app_desktop.window_extrapolation_mixin.QMessageBox.information", lambda *args: None)
+    png = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\xf8\x0f"
+        b"\x00\x01\x01\x01\x00\x18\xdd\x8d\xb0\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+
+    window._on_root_solving_finished(
+        {
+            "markdown": "| root |\n|---|\n| 1 |",
+            "csv_headers": ["root"],
+            "csv_rows": [{"root": "1"}],
+            "warnings": [],
+            "plot_bytes": png,
+        }
+    )
+
+    assert window.result_plot_bytes == png
+    assert window._result_plot_base_pixmap is not None
+    assert window._image_mode == "root_solving"
 
 
 def test_root_solving_controls_mark_workspace_dirty(window: Any) -> None:
@@ -441,6 +562,7 @@ def test_root_solving_run_uses_background_worker(window: Any, monkeypatch: pytes
     window.root_constants_editor.set_rows([{"name": "C", "value": "4.00000000000000000001(2)"}])
     window.root_constants_editor.setChecked(True)
     window.root_mode_combo.setCurrentIndex(window.root_mode_combo.findData("scalar"))
+    window.uncertainty_digits_spin.setValue(3)
     window.manual_data_edit.setPlainText("A\n4.0(2)")
     window._data_stack.setCurrentIndex(1)
 
@@ -456,3 +578,4 @@ def test_root_solving_run_uses_background_worker(window: Any, monkeypatch: pytes
     assert job.data_headers == ("A",)
     assert job.data_rows == (("4.0(2)",),)
     assert job.mode == "scalar"
+    assert job.uncertainty_digits == 3

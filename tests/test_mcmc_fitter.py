@@ -89,7 +89,7 @@ def test_run_mcmc_recovers_gaussian_posterior_when_emcee_present():
     """For a 2D Gaussian likelihood at known truth, MCMC median
     should match truth within statistical error and 95% CI should
     contain truth."""
-    emcee = pytest.importorskip("emcee")
+    pytest.importorskip("emcee")
     np = pytest.importorskip("numpy")
 
     from fitting.mcmc_fitter import run_mcmc

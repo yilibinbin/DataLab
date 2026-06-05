@@ -114,6 +114,7 @@ def test_root_solving_job_payload_uses_data_rows_and_is_spawn_picklable() -> Non
         scan_config={},
         precision=16,
         display_digits=10,
+        uncertainty_digits=2,
         generate_latex=True,
         output_path="/tmp/root.tex",
         latex_caption="Frozen caption",
@@ -121,6 +122,7 @@ def test_root_solving_job_payload_uses_data_rows_and_is_spawn_picklable() -> Non
         latex_group_size=4,
         latex_include_dcolumn=True,
         latex_language="zh",
+        render_plots=True,
     )
 
     payload = _serialize_root_solving_job(job)
@@ -130,11 +132,13 @@ def test_root_solving_job_payload_uses_data_rows_and_is_spawn_picklable() -> Non
     assert restored["data_headers"] == ("A",)
     assert restored["data_rows"] == (("4.0(2)",),)
     assert restored["scan_config"] == {}
+    assert restored["uncertainty_digits"] == 2
     assert restored["latex_caption"] == "Frozen caption"
     assert restored["latex_digits"] == 12
     assert restored["latex_group_size"] == 4
     assert restored["latex_include_dcolumn"] is True
     assert restored["latex_language"] == "zh"
+    assert restored["render_plots"] is True
 
 
 def test_root_worker_payload_round_trips_frozen_latex_settings() -> None:
@@ -151,6 +155,7 @@ def test_root_worker_payload_round_trips_frozen_latex_settings() -> None:
         scan_config={},
         precision=16,
         display_digits=10,
+        uncertainty_digits=2,
         generate_latex=True,
         output_path="/tmp/root.tex",
         latex_caption="Root run",
@@ -167,6 +172,28 @@ def test_root_worker_payload_round_trips_frozen_latex_settings() -> None:
     assert restored.latex_group_size == 2
     assert restored.latex_include_dcolumn is True
     assert restored.latex_language == "en"
+    assert restored.uncertainty_digits == 2
+
+
+def test_root_worker_payload_defaults_legacy_render_plots_to_false() -> None:
+    payload = {
+        "equations": ("x**2 - 2",),
+        "unknown_rows": ({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        "data_headers": (),
+        "data_rows": (),
+        "constants_enabled": False,
+        "constants_rows": (),
+        "constants_view": "table",
+        "constants_text": "",
+        "mode": "scalar",
+        "scan_config": {},
+        "precision": 16,
+        "display_digits": 10,
+    }
+
+    restored = _deserialize_root_solving_job(payload)
+
+    assert restored.render_plots is False
 
 
 def test_root_worker_payload_defaults_latex_language_to_job_language() -> None:
@@ -205,6 +232,7 @@ def test_root_worker_payload_preserves_uncertainty_options() -> None:
         scan_config={},
         precision=80,
         display_digits=20,
+        uncertainty_digits=3,
         uncertainty_options={"method": "monte_carlo", "monte_carlo_samples": 25, "monte_carlo_seed": "7"},
     )
 
@@ -290,6 +318,7 @@ def test_execute_root_solving_job_payload_forwards_uncertainty_options(
         scan_config={},
         precision=80,
         display_digits=20,
+        uncertainty_digits=3,
         uncertainty_options={"method": "monte_carlo", "monte_carlo_samples": 25, "monte_carlo_seed": "7"},
     )
 
@@ -301,9 +330,11 @@ def test_execute_root_solving_job_payload_forwards_uncertainty_options(
         _batch: object,
         *,
         display_digits: int,
+        uncertainty_digits: int,
         language: str,
     ) -> tuple[str, list[dict[str, str]], list[str]]:
         captured["display_digits"] = display_digits
+        captured["uncertainty_digits"] = uncertainty_digits
         captured["language"] = language
         return "markdown", [], ["name"]
 
@@ -319,6 +350,7 @@ def test_execute_root_solving_job_payload_forwards_uncertainty_options(
         "monte_carlo_seed": "7",
     }
     assert captured["display_digits"] == 20
+    assert captured["uncertainty_digits"] == 3
     assert captured["language"] == "en"
 
 
@@ -385,6 +417,144 @@ def test_execute_root_solving_job_payload_returns_markdown_csv_and_log() -> None
     log = payload["log"]
     assert isinstance(log, str)
     assert "root solving completed" in log
+
+
+def test_execute_root_solving_job_payload_skips_root_plot_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_render(*args: object, **kwargs: object) -> object:
+        raise AssertionError("root plotting should not run")
+
+    monkeypatch.setattr(workers_core, "render_nominal_root_plots", fail_render)
+    job = RootSolvingJob(
+        equations=("x**2 - 2",),
+        unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=16,
+        display_digits=10,
+        render_plots=False,
+    )
+
+    payload = _execute_root_solving_job_payload(job)
+
+    assert "plot_bytes" not in payload
+
+
+def test_execute_root_solving_job_payload_returns_first_root_plot_png(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    png = b"\x89PNG\r\n\x1a\nroot"
+    captured: dict[str, object] = {}
+
+    def fake_render(batch: object, problem: object, *, budget: object = None) -> object:
+        captured["batch"] = batch
+        captured["problem"] = problem
+        captured["budget"] = budget
+        return SimpleNamespace(
+            images=(SimpleNamespace(image_bytes=png, metadata={"row_index": 0}),),
+            warnings=("plot warning",),
+        )
+
+    monkeypatch.setattr(workers_core, "render_nominal_root_plots", fake_render)
+    job = RootSolvingJob(
+        equations=("x**2 - 2",),
+        unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=16,
+        display_digits=10,
+        render_plots=True,
+    )
+
+    payload = _execute_root_solving_job_payload(job)
+
+    assert payload["plot_bytes"] == png
+    assert "plot_images" not in payload
+    assert "plot warning" in payload["warnings"]
+    assert captured["budget"] is not None
+
+
+def test_execute_root_solving_job_payload_returns_real_png_when_root_plots_enabled() -> None:
+    job = RootSolvingJob(
+        equations=("x**2 - 2",),
+        unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=16,
+        display_digits=10,
+        render_plots=True,
+    )
+
+    payload = _execute_root_solving_job_payload(job)
+
+    plot_bytes = payload["plot_bytes"]
+    assert isinstance(plot_bytes, bytes)
+    assert plot_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_execute_root_solving_job_payload_does_not_plot_failed_root_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_solve_root_batch(**_kwargs: object) -> object:
+        return SimpleNamespace(
+            rows=(SimpleNamespace(row_index=0, source_values={}, failure="no root", result=None, warnings=()),),
+            warnings=(),
+            headers=(),
+        )
+
+    def fake_render_root_batch_result(
+        _batch: object,
+        *,
+        display_digits: int,
+        uncertainty_digits: int,
+        language: str,
+    ) -> tuple[str, list[dict[str, str]], list[str]]:
+        return "failed", [], ["name"]
+
+    def fail_render(*args: object, **kwargs: object) -> object:
+        raise AssertionError("root plotting should only run for successful root rows")
+
+    monkeypatch.setattr(workers_core, "solve_root_batch", fake_solve_root_batch)
+    monkeypatch.setattr(workers_core, "render_root_batch_result", fake_render_root_batch_result)
+    monkeypatch.setattr(workers_core, "render_nominal_root_plots", fail_render)
+    job = RootSolvingJob(
+        equations=("x**2 - 2",),
+        unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=16,
+        display_digits=10,
+        render_plots=True,
+    )
+
+    payload = _execute_root_solving_job_payload(job)
+
+    assert "plot_bytes" not in payload
 
 
 def test_execute_root_solving_job_payload_localizes_root_output_to_chinese() -> None:

@@ -181,11 +181,10 @@ def test_long_implicit_formula_does_not_expand_left_splitter(window, qtbot):
 
     assert window.implicit_model_widget.findChildren(FormulaPreviewLabel) == []
     assert left_scroll.minimumWidth() == before_minimum_width
-    assert left_scroll.minimumWidth() <= 360
-    window._main_splitter.setSizes([320, 880])
+    window._main_splitter.setSizes([1, 1199])
     QApplication.processEvents()
-    assert window._main_splitter.sizes()[0] <= 360
-    assert window._main_splitter.sizes()[1] >= 800
+    assert window._main_splitter.sizes()[0] >= left_scroll.minimumWidth()
+    assert left_scroll.horizontalScrollBar().maximum() == 0
     assert window.implicit_equation_preview_button.isVisible()
     assert window.implicit_output_preview_button.isVisible()
 

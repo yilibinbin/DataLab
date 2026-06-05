@@ -206,6 +206,9 @@ class DetectedRowsTable(QWidget):
     def rows(self) -> list[dict[str, str]]:
         return self.detected_rows_controller.rows()
 
+    def set_headers(self, headers: Sequence[str]) -> None:
+        self.table_view.setHorizontalHeaderLabels(list(headers))
+
     def set_rows(self, rows: Iterable[dict[str, Any]] | None) -> None:
         self._syncing = True
         try:

@@ -18,8 +18,6 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
-from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtGui import QKeyEvent, QWheelEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app_desktop.log_scale_spinner import LogScaleSpinner  # noqa: E402

@@ -1435,6 +1435,7 @@ class ExtrapolationWindow(
             scan_config={},
             precision=int(self._read_precision()),
             display_digits=int(self._display_digits_limit()),
+            uncertainty_digits=int(self._uncertainty_digits_value()),
             uncertainty_options={
                 "method": str(
                     getattr(getattr(self, "root_uncertainty_method_combo", None), "currentData", lambda: "taylor")()
@@ -1462,6 +1463,10 @@ class ExtrapolationWindow(
             latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
             latex_include_dcolumn=self.dcolumn_checkbox.isChecked() if hasattr(self, "dcolumn_checkbox") else False,
             latex_language=self._current_output_language(),
+            render_plots=bool(
+                getattr(self, "generate_plots_checkbox", None)
+                and self.generate_plots_checkbox.isChecked()
+            ),
         )
 
     def _current_output_language(self) -> str:
@@ -1651,6 +1656,7 @@ class ExtrapolationWindow(
 
     def _on_mode_change(self):
         mode = self.mode_combo.currentData()
+        self._sync_manual_table_columns_for_mode(mode)
         if mode == "extrapolation":
             self.extrap_box.show()
             self.error_box.hide()
@@ -1691,6 +1697,30 @@ class ExtrapolationWindow(
         self._update_log_scale_visibility()
         if hasattr(self, "_refresh_main_splitter_left_min_width"):
             self._refresh_main_splitter_left_min_width()
+
+    def _sync_manual_table_columns_for_mode(self, mode: str | None) -> None:
+        table = getattr(self, "manual_table", None)
+        if table is None or self._manual_table_has_content():
+            return
+        desired_columns = 1 if mode == "root_solving" else 3
+        if table.columnCount() == desired_columns:
+            return
+        table.setColumnCount(desired_columns)
+        table.setHorizontalHeaderLabels([chr(65 + index) for index in range(desired_columns)])
+        from app_desktop.panels import _apply_equal_column_stretch
+
+        _apply_equal_column_stretch(table)
+
+    def _manual_table_has_content(self) -> bool:
+        table = getattr(self, "manual_table", None)
+        if table is None:
+            return False
+        for row in range(table.rowCount()):
+            for column in range(table.columnCount()):
+                item = table.item(row, column)
+                if item is not None and item.text().strip():
+                    return True
+        return False
 
     def _update_method_state(self):
         method = self.method_combo.currentData()

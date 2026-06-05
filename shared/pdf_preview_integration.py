@@ -7,10 +7,9 @@ and the existing MainWindow PDF preview area.
 
 import logging
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton, QSpinBox, QDoubleSpinBox
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
 
 from .pdf_preview import PdfPreviewController, PdfRenderMode, create_pdf_toolbar
 

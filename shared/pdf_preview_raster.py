@@ -4,7 +4,6 @@ Integrates with existing PDF-to-image conversion pipeline.
 """
 
 import logging
-import os
 import subprocess
 import tempfile
 import shutil

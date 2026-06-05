@@ -152,7 +152,7 @@ def _flask_client():
     """Build a Flask test client against the real app_web blueprint.
     Skips if the optional flask dep isn't available (same pattern as
     other web tests in this repo)."""
-    flask = pytest.importorskip("flask")
+    pytest.importorskip("flask")
     from app_web import server as srv
 
     app = srv.create_app()

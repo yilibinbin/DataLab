@@ -62,7 +62,13 @@ from app_desktop.parallel_preferences import (
     apply_parallel_config_to_widgets,
     save_current_parallel_config,
 )
+from app_desktop.ui_schema_binder import bind_choices, bind_field
+from app_desktop.ui_schema_runtime import (
+    bind_schema_command_button,
+    register_schema_text_refresh,
+)
 from shared.parallel_config import NestedParallelPolicy, ParallelMode
+from shared.ui_schema import ChoiceSpec, FormFieldSpec, LocalizedText
 from shared.ui_specs import (
     CUSTOM_FORMULA_PARAMS,
     EXTRAPOLATION_METHOD_SPECS,
@@ -453,12 +459,11 @@ def _refresh_main_splitter_left_min_width(self) -> None:
     left_scroll = getattr(self, "_left_scroll", None)
     if left_container is None or left_scroll is None:
         return
-    if getattr(self, "mode_combo", None) is not None and self.mode_combo.currentData() == "root_solving":
-        base_min_width = max(320, left_container.minimumSizeHint().width())
-        left_min_width = max(base_min_width, left_container.sizeHint().width())
-    else:
-        base_min_width = max(300, left_container.minimumSizeHint().width())
-        left_min_width = min(max(base_min_width, 300), 360)
+    viewport_overhead = (
+        left_scroll.frameWidth() * 2
+        + left_scroll.verticalScrollBar().sizeHint().width()
+    )
+    left_min_width = max(320, left_container.minimumSizeHint().width()) + viewport_overhead
     self._main_splitter_left_min_width = left_min_width
     left_scroll.setMinimumWidth(left_min_width)
 
@@ -646,6 +651,7 @@ def build_left_panel(self):
     func_btn.setFocusPolicy(Qt.NoFocus)
     func_btn.clicked.connect(self._show_error_functions)
     self._register_text(func_btn, "函数支持", "Functions")
+    self.custom_formula_function_button = func_btn
     custom_hint_row.addWidget(func_btn)
     hint_lbl = QLabel(
         self._tr(
@@ -665,11 +671,13 @@ def build_left_panel(self):
     self._register_title(self.power_box, "幂律参数", "Power-law parameters")
     power_layout = QFormLayout(self.power_box)
     self.power_x_edits: list[QLineEdit] = []
+    power_x_labels: list[QLabel] = []
     for idx, default in enumerate((10, 20, 40), start=1):
         edit = QLineEdit(str(default))
         self.power_x_edits.append(edit)
         lbl_x = QLabel(f"x{idx}：")
         self._register_text(lbl_x, f"x{idx}：", f"x{idx}:")
+        power_x_labels.append(lbl_x)
         power_layout.addRow(lbl_x, edit)
     self.power_p_edit = QLineEdit()
     self.power_p_edit.setPlaceholderText(self._tr("留空则自动求解 p", "Leave blank to solve p automatically"))
@@ -785,8 +793,24 @@ def build_left_panel(self):
     refresh_uncert_btn.setToolTip(self._tr("重新扫描数据以列出可选的不确定度参考列。", "Rescan data to list available uncertainty columns."))
     self._register_text(refresh_uncert_btn, "刷新", "Refresh")
     refresh_uncert_btn.clicked.connect(self._refresh_uncertainty_from_source)
+    self.uncertainty_refresh_btn = refresh_uncert_btn
     uncert_layout.addWidget(refresh_uncert_btn)
     extrap_layout.addLayout(uncert_layout)
+    _bind_extrapolation_schema_fields(
+        self,
+        method_label=method_label,
+        lbl_custom=lbl_custom,
+        power_x_labels=power_x_labels,
+        lbl_p=lbl_p,
+        lbl_seed=lbl_seed,
+        lbl_variant=lbl_variant,
+        lbl_order=lbl_order,
+        lbl_weight=lbl_weight,
+        lbl_beta=lbl_beta,
+        lbl_richardson_p=lbl_richardson_p,
+        lbl_uncert=lbl_uncert,
+        combo_items=combo_items,
+    )
     self.left_layout.addWidget(self.extrap_box)
 
     # Error propagation settings
@@ -935,6 +959,15 @@ def build_left_panel(self):
     mc_layout.addRow(lbl_mc_seed, self.error_mc_seed_edit)
     error_layout.addWidget(self.error_mc_widget)
     self.error_mc_widget.hide()
+    _bind_error_schema_fields(
+        self,
+        lbl_error_formula=lbl_error_formula,
+        lbl_error_method=lbl_err_method,
+        error_method_items=error_method_items,
+        lbl_error_order=lbl_err_order,
+        lbl_mc_samples=lbl_mc_samples,
+        lbl_mc_seed=lbl_mc_seed,
+    )
 
     self.left_layout.addWidget(self.error_box)
     self._on_constants_source_toggle(self.use_constants_file_checkbox.isChecked())
@@ -977,6 +1010,15 @@ def build_left_panel(self):
     lbl_stats_sample = QLabel("样本/总体：")
     self._register_text(lbl_stats_sample, "样本/总体：", "Sample/Population:")
     stats_layout.addRow(lbl_stats_sample, self.stats_sample_checkbox)
+    _bind_statistics_schema_fields(
+        self,
+        lbl_stats_value=lbl_stats_value,
+        lbl_stats_sigma=lbl_stats_sigma,
+        lbl_stats_type=lbl_stats_type,
+        lbl_weight_var=lbl_weight_var,
+        lbl_stats_sample=lbl_stats_sample,
+        stats_items=stats_items,
+    )
     self.left_layout.addWidget(self.stats_box)
     self.stats_box.hide()
     self.stats_mode_combo.currentIndexChanged.connect(self._on_stats_mode_change)
@@ -1126,7 +1168,7 @@ def build_left_panel(self):
     self.fit_formula_preview_button = _make_formula_preview_button(self, None, lhs="y", title="Preview formula")
     fit_expr_title_row.addWidget(self.fit_formula_preview_button)
     fit_layout.addLayout(fit_expr_title_row)
-    self.fit_expr_edit = QPlainTextEdit("A*x**(-p) + C")
+    self.fit_expr_edit = QPlainTextEdit("")
     self.fit_expr_edit.setPlaceholderText("自定义模型表达式，例如 A*x**(-p) + C / Custom model expression")
     fit_layout.addWidget(self.fit_expr_edit)
     self.fit_formula_preview_button.clicked.connect(
@@ -1186,9 +1228,9 @@ def build_left_panel(self):
     self._register_title(self.implicit_model_widget, "自洽隐式模型", "Self-consistent / implicit")
     implicit_layout = QVBoxLayout(self.implicit_model_widget)
 
-    self.implicit_equation_edit = QPlainTextEdit("a + b*Cos[u] + c*x")
+    self.implicit_equation_edit = QPlainTextEdit("")
     self.implicit_equation_edit.setMinimumHeight(84)
-    self.implicit_equation_edit.setPlaceholderText("u = g(x, u, parameters)")
+    self.implicit_equation_edit.setPlaceholderText("示例：a + b*Cos[u] + c*x / Example: a + b*Cos[u] + c*x")
     lbl_implicit_eq = QLabel("自洽方程：")
     self._register_text(lbl_implicit_eq, "自洽方程：", "Self-consistent equation:")
     implicit_equation_title_row = QHBoxLayout()
@@ -1206,9 +1248,9 @@ def build_left_panel(self):
     implicit_layout.addLayout(implicit_equation_title_row)
     implicit_layout.addWidget(self.implicit_equation_edit)
 
-    self.implicit_output_edit = QPlainTextEdit("u")
+    self.implicit_output_edit = QPlainTextEdit("")
     self.implicit_output_edit.setMinimumHeight(84)
-    self.implicit_output_edit.setPlaceholderText("y = f(x, u, parameters)")
+    self.implicit_output_edit.setPlaceholderText("示例：u / Example: u")
     lbl_implicit_output = QLabel("输出表达式：")
     self._register_text(lbl_implicit_output, "输出表达式：", "Output expression:")
     implicit_output_title_row = QHBoxLayout()
@@ -1307,6 +1349,23 @@ def build_left_panel(self):
     implicit_layout.addLayout(implicit_solver_layout)
     fit_layout.addWidget(self.implicit_model_widget)
     self.implicit_model_widget.hide()
+    _bind_fitting_schema_fields(
+        self,
+        lbl_model=lbl_model,
+        fit_items=fit_items,
+        lbl_fit_expr=lbl_fit_expr,
+        lbl_implicit_eq=lbl_implicit_eq,
+        lbl_implicit_output=lbl_implicit_output,
+        lbl_implicit_var=lbl_implicit_var,
+        lbl_implicit_initial=lbl_implicit_initial,
+        lbl_implicit_tol=lbl_implicit_tol,
+        lbl_implicit_iter=lbl_implicit_iter,
+        lbl_implicit_method=lbl_implicit_method,
+        implicit_method_items=implicit_method_items,
+        lbl_implicit_timeout=lbl_implicit_timeout,
+        lbl_custom_params=lbl_custom_params,
+        lbl_implicit_params=lbl_implicit_params,
+    )
 
     var_header = QHBoxLayout()
     lbl_varmap = QLabel("变量映射：")
@@ -1365,6 +1424,8 @@ def build_left_panel(self):
     lbl_root_equations = QLabel("方程：")
     self._register_text(lbl_root_equations, "方程：", "Equations:")
     root_equation_title_row.addWidget(lbl_root_equations)
+    self.root_equations_help_button = _make_small_help_button()
+    root_equation_title_row.addWidget(self.root_equations_help_button)
     root_equation_title_row.addStretch()
     self.root_formula_preview_button = _make_formula_preview_button(
         self,
@@ -1377,10 +1438,10 @@ def build_left_panel(self):
     root_equation_title_row.addWidget(self.root_formula_preview_button)
     root_layout.addLayout(root_equation_title_row)
 
-    self.root_equations_edit = QPlainTextEdit("x^2 - 2")
+    self.root_equations_edit = QPlainTextEdit()
     self.root_equations_edit.setMinimumHeight(96)
     self.root_equations_edit.setPlaceholderText(
-        "每行一个方程，按 F_i(...)=0 求解 / One equation per line, interpreted as F_i(...)=0"
+        "每行一个方程，按 F_i(...)=0 求解；示例：x^2 - A / One equation per line as F_i(...)=0; example: x^2 - A"
     )
     root_layout.addWidget(self.root_equations_edit)
 
@@ -1397,13 +1458,20 @@ def build_left_panel(self):
     self._register_combo(self.root_mode_combo, root_mode_items)
     lbl_root_mode = QLabel("求解模式：")
     self._register_text(lbl_root_mode, "求解模式：", "Solve mode:")
-    root_mode_layout.addRow(lbl_root_mode, self.root_mode_combo)
+    root_mode_row = QHBoxLayout()
+    root_mode_row.addWidget(self.root_mode_combo)
+    self.root_mode_help_button = _make_small_help_button()
+    root_mode_row.addWidget(self.root_mode_help_button)
+    root_mode_row.addStretch()
+    root_mode_layout.addRow(lbl_root_mode, root_mode_row)
     root_layout.addLayout(root_mode_layout)
 
     root_unknown_header = QHBoxLayout()
     lbl_root_unknowns = QLabel("未知量：")
     self._register_text(lbl_root_unknowns, "未知量：", "Unknowns:")
     root_unknown_header.addWidget(lbl_root_unknowns)
+    self.root_unknowns_help_button = _make_small_help_button()
+    root_unknown_header.addWidget(self.root_unknowns_help_button)
     root_unknown_header.addStretch()
     self.root_detect_unknowns_button = QPushButton("识别未知量")
     self._register_text(self.root_detect_unknowns_button, "识别未知量", "Detect")
@@ -1424,7 +1492,7 @@ def build_left_panel(self):
 
     self.root_unknowns_table = DetectedRowsTable(
         columns=("name", "initial", "lower", "upper"),
-        headers=("Name", "Initial", "Lower", "Upper"),
+        headers=("名称", "初始值", "下界", "上界"),
         min_rows=2,
     )
     self.root_unknowns_table.table_view.setMinimumHeight(140)
@@ -1438,6 +1506,8 @@ def build_left_panel(self):
     self.root_constants_editor.table_view.setStyleSheet(_get_table_style())
     self.root_constants_editor.table_view.setMinimumHeight(120)
     root_layout.addWidget(self.root_constants_editor)
+    _bind_root_schema_fields(self, lbl_root_equations, lbl_root_mode, lbl_root_unknowns, root_mode_items)
+    _refresh_root_field_help(self)
 
     self.root_uncertainty_group = QGroupBox("根的不确定度传播")
     self._register_title(self.root_uncertainty_group, "根的不确定度传播", "Root uncertainty propagation")
@@ -1501,6 +1571,7 @@ def build_left_panel(self):
 
     # Options
     options_box = QGroupBox("选项")
+    self.options_box = options_box
     self._register_title(options_box, "选项", "Options")
     options_layout = QVBoxLayout(options_box)
     precision_layout = QHBoxLayout()
@@ -1628,6 +1699,7 @@ def build_left_panel(self):
     out_btn = QPushButton("选择…")
     out_btn.clicked.connect(self.browse_output_file)
     self._register_text(out_btn, "选择…", "Browse…")
+    self.output_browse_button = out_btn
     output_row = QHBoxLayout()
     output_row.addWidget(self.output_file_edit)
     output_row.addWidget(out_btn)
@@ -1682,6 +1754,20 @@ def build_left_panel(self):
     self.verbose_checkbox = QCheckBox("显示详细日志")
     self._register_text(self.verbose_checkbox, "显示详细日志", "Verbose log")
     options_layout.addWidget(self.verbose_checkbox)
+    _bind_global_options_schema_fields(
+        self,
+        label_precision=label_precision,
+        unc_label=unc_label,
+        lbl_parallel_mode=lbl_parallel_mode,
+        lbl_parallel_workers=lbl_parallel_workers,
+        lbl_parallel_reserve=lbl_parallel_reserve,
+        lbl_nested_policy=lbl_nested_policy,
+        parallel_mode_items=parallel_mode_items,
+        nested_policy_items=nested_policy_items,
+        lbl_output=lbl_output,
+        prec_label=prec_label,
+        group_size_label=group_size_label,
+    )
 
     # NOTE: ``latex_engine_combo`` + the engine-path picker were moved
     # into the LaTeX output tab (next to the font-size row) because
@@ -1700,6 +1786,7 @@ def build_left_panel(self):
 
 def build_right_panel(self, layout: QVBoxLayout):
     self.tabs = QTabWidget()
+    self.tabs.setProperty("datalab_schema_key", "main.result_tabs")
     layout.addWidget(self.tabs)
 
     # Result tab
@@ -1707,11 +1794,20 @@ def build_right_panel(self, layout: QVBoxLayout):
     result_layout = QVBoxLayout(result_widget)
     self.result_tabs = QTabWidget()
     result_layout.addWidget(self.result_tabs)
+    self.result_tabs.setProperty("datalab_schema_key", "results.tabs")
+    self.result_tabs.setProperty(
+        "datalab_schema_tabs",
+        {
+            "numeric": "results.numeric",
+            "image": "results.image",
+        },
+    )
     self.result_tab_titles = {"numeric": "数值结果", "image": "图片"}
 
     numeric_tab = QWidget()
     numeric_layout = QVBoxLayout(numeric_tab)
     self.result_edit = QTextBrowser()
+    self.result_edit.setProperty("datalab_schema_key", "results.numeric.markdown")
     self.fit_result_edit = self.result_edit
     self.result_edit.setReadOnly(True)
     self.result_edit.setOpenExternalLinks(False)
@@ -1821,11 +1917,13 @@ def build_right_panel(self, layout: QVBoxLayout):
     image_layout.addLayout(controls_layout)
 
     self.result_plot_scroll = QScrollArea()
+    self.result_plot_scroll.setProperty("datalab_schema_key", "results.image.preview")
     self.result_plot_scroll.setWidgetResizable(False)
     self.result_plot_scroll.setAlignment(Qt.AlignCenter)
     self.result_plot_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     self.result_plot_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     self.result_plot_label = QLabel(self._tr("尚无图片", "No image yet"))
+    self.result_plot_label.setProperty("datalab_schema_key", "results.image.preview")
     self.result_plot_label.setAlignment(Qt.AlignCenter)
     self.result_plot_label.setMinimumHeight(320)
     self.result_plot_scroll.setWidget(self.result_plot_label)
@@ -1846,6 +1944,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     log_widget = QWidget()
     log_layout = QVBoxLayout(log_widget)
     self.log_edit = QPlainTextEdit()
+    self.log_edit.setProperty("datalab_schema_key", "results.log")
     self.log_edit.setReadOnly(True)
     self._add_font_control_row(log_layout, self.log_edit, "字体大小：")
     log_layout.addWidget(self.log_edit)
@@ -1858,25 +1957,31 @@ def build_right_panel(self, layout: QVBoxLayout):
     open_btn = QPushButton("打开…")
     open_btn.clicked.connect(self.open_latex_file)
     self._register_text(open_btn, "打开…", "Open…")
+    self.latex_open_button = open_btn
     toolbar.addWidget(open_btn)
     save_btn = QPushButton("保存")
     save_btn.clicked.connect(self.save_latex_editor)
     self._register_text(save_btn, "保存", "Save")
+    self.latex_save_button = save_btn
     toolbar.addWidget(save_btn)
     reload_btn = QPushButton("重新载入")
     reload_btn.clicked.connect(lambda: self.reload_latex_editor(show_message=True))
     self._register_text(reload_btn, "重新载入", "Reload")
+    self.latex_reload_button = reload_btn
     toolbar.addWidget(reload_btn)
     compile_btn = QPushButton("编译 PDF")
     compile_btn.clicked.connect(self.compile_latex_to_pdf)
     self._register_text(compile_btn, "编译 PDF", "Compile PDF")
+    self.latex_compile_button = compile_btn
     toolbar.addWidget(compile_btn)
     view_btn = QPushButton("查看 PDF")
     view_btn.clicked.connect(self.open_compiled_pdf)
     self._register_text(view_btn, "查看 PDF", "View PDF")
+    self.latex_view_pdf_button = view_btn
     toolbar.addWidget(view_btn)
     toolbar.addStretch()
     self.latex_status_label = QLabel("未加载 LaTeX 文件")
+    self.latex_status_label.setProperty("datalab_schema_key", "results.latex.status")
     self._register_text(self.latex_status_label, "未加载 LaTeX 文件", "No LaTeX loaded")
     toolbar.addWidget(self.latex_status_label)
     latex_layout.addLayout(toolbar)
@@ -1887,6 +1992,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     # messages reference line numbers (``error: 1.tex:57: ...``) and
     # users have to find the offending line by scrolling without that.
     self.latex_edit = NumberedTextEdit()
+    self.latex_edit.setProperty("datalab_schema_key", "results.latex.source")
     self.latex_edit.setPlaceholderText("% LaTeX 内容将在此显示…")
     # Attach syntax highlighter
     from app_desktop.latex_highlighter import LatexHighlighter
@@ -1931,6 +2037,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     engine_btn = QPushButton("选择引擎路径…")
     engine_btn.clicked.connect(self._prompt_engine_selection)
     self._register_text(engine_btn, "选择引擎路径…", "Select engine path…")
+    self.latex_engine_path_button = engine_btn
     latex_controls_row.addWidget(engine_btn)
     latex_controls_row.addStretch()
     latex_layout.addLayout(latex_controls_row)
@@ -1943,6 +2050,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     pdf_layout = QVBoxLayout(pdf_widget)
     pdf_toolbar = QHBoxLayout()
     self.pdf_status_label = QLabel("暂无 PDF 预览")
+    self.pdf_status_label.setProperty("datalab_schema_key", "results.pdf.status")
     self._register_text(self.pdf_status_label, "暂无 PDF 预览", "No PDF preview")
     pdf_toolbar.addWidget(self.pdf_status_label)
     pdf_toolbar.addStretch()
@@ -1951,12 +2059,14 @@ def build_right_panel(self, layout: QVBoxLayout):
     self._set_zoom_icon(zoom_out_btn, "out")
     self._style_round_icon_button(zoom_out_btn)
     zoom_out_btn.clicked.connect(lambda: self._apply_pdf_zoom(self.pdf_zoom * 0.75))
+    self.pdf_zoom_out_button = zoom_out_btn
     pdf_toolbar.addWidget(zoom_out_btn)
     zoom_in_btn = QPushButton()
     self._register_text(zoom_in_btn, "放大", "Zoom in", "setToolTip")
     self._set_zoom_icon(zoom_in_btn, "in")
     self._style_round_icon_button(zoom_in_btn)
     zoom_in_btn.clicked.connect(lambda: self._apply_pdf_zoom(self.pdf_zoom * 1.25))
+    self.pdf_zoom_in_button = zoom_in_btn
     pdf_toolbar.addWidget(zoom_in_btn)
     lbl_zoom = QLabel("缩放%：")
     self._register_text(lbl_zoom, "缩放%：", "Zoom %:")
@@ -1971,6 +2081,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     reset_zoom_btn = QPushButton("重置")
     self._register_text(reset_zoom_btn, "重置", "Reset")
     reset_zoom_btn.clicked.connect(self._reset_pdf_zoom)
+    self.pdf_zoom_reset_button = reset_zoom_btn
     pdf_toolbar.addWidget(reset_zoom_btn)
     pdf_layout.addLayout(pdf_toolbar)
 
@@ -1982,17 +2093,33 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.pdf_scroll.setWidget(self.pdf_container)
     pdf_layout.addWidget(self.pdf_scroll)
     self.tabs.addTab(pdf_widget, "PDF 预览")
+    _bind_result_latex_pdf_schema_fields(
+        self,
+        lbl_digits=lbl_digits,
+        lbl_engine=lbl_engine,
+        lbl_zoom=lbl_zoom,
+    )
     # record tab indexes for translation
     self.result_tabs_indices = {
         "numeric": 0,
         "image": 1,
     }
+    _bind_result_area_schema_fields(self)
     self.main_tabs_indices = {
         "result": self.tabs.indexOf(result_widget),
         "log": self.tabs.indexOf(log_widget),
         "latex": self.tabs.indexOf(latex_widget),
         "pdf": self.tabs.indexOf(pdf_widget),
     }
+    self.tabs.setProperty(
+        "datalab_schema_tabs",
+        {
+            "result": "results.overview",
+            "log": "results.log",
+            "latex": "results.latex",
+            "pdf": "results.pdf",
+        },
+    )
     self._update_image_status()
 
 
@@ -2220,6 +2347,1347 @@ def _make_formula_preview_button(
     return button
 
 
+def _make_small_help_button() -> QPushButton:
+    button = QPushButton("?")
+    button.setFlat(True)
+    button.setFocusPolicy(Qt.NoFocus)
+    button.setFixedWidth(24)
+    return button
+
+
+def _bind_extrapolation_schema_fields(
+    self,
+    *,
+    method_label: QLabel,
+    lbl_custom: QLabel,
+    power_x_labels: list[QLabel],
+    lbl_p: QLabel,
+    lbl_seed: QLabel,
+    lbl_variant: QLabel,
+    lbl_order: QLabel,
+    lbl_weight: QLabel,
+    lbl_beta: QLabel,
+    lbl_richardson_p: QLabel,
+    lbl_uncert: QLabel,
+    combo_items: list[tuple[str, str, str]],
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    method_field = FormFieldSpec(
+        key="extrapolation.method",
+        widget_kind="select",
+        label=LocalizedText("外推方法：", "Method:"),
+        tooltip=LocalizedText(
+            "选择外推算法。不同方法会显示对应的参数设置。",
+            "Choose the extrapolation algorithm. Different methods show their relevant parameter settings.",
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value=data, label=LocalizedText(zh, en))
+            for zh, en, data in combo_items
+        ],
+    )
+    method_help_field = FormFieldSpec(
+        key="extrapolation.method",
+        widget_kind="button",
+        label=LocalizedText("外推方法帮助", "Extrapolation method help"),
+        tooltip=LocalizedText(
+            "点击查看当前外推方法的详细说明、适用场景和参数解释。",
+            "Click to view detailed description, applicable scenarios, and parameter explanations for the current method.",
+        ),
+        required=False,
+    )
+    custom_formula_field = FormFieldSpec(
+        key="extrapolation.custom.formula",
+        widget_kind="textarea",
+        label=LocalizedText("自定义公式：", "Custom formula:"),
+        placeholder=LocalizedText(
+            "示例: (C - B)^2/(B - A) + C 或 Exp[-x1]*Sin[x2]",
+            "Example: (C - B)^2/(B - A) + C or Exp[-x1]*Sin[x2]",
+        ),
+        tooltip=LocalizedText(
+            "输入自定义三点外推公式。可使用 A/B/C、列名或 x1/x2/x3，并支持数学函数。",
+            "Enter a custom three-point extrapolation formula. Use A/B/C, column names, or x1/x2/x3; math functions are supported.",
+        ),
+        required=True,
+    )
+    custom_formula_preview_field = FormFieldSpec(
+        key="extrapolation.custom.formula",
+        widget_kind="button",
+        label=LocalizedText("预览公式", "Preview formula"),
+        tooltip=LocalizedText(
+            "打开渲染后的自定义外推公式预览。",
+            "Open a rendered preview of the custom extrapolation formula.",
+        ),
+        required=False,
+    )
+    custom_functions_field = FormFieldSpec(
+        key="extrapolation.custom.functions",
+        widget_kind="button",
+        label=LocalizedText("函数支持", "Functions"),
+        tooltip=LocalizedText(
+            "查看自定义外推公式支持的函数和表达式语法。",
+            "View supported functions and expression syntax for custom extrapolation formulas.",
+        ),
+        required=False,
+    )
+    power_x_fields = [
+        FormFieldSpec(
+            key=f"extrapolation.power_law.x{idx}",
+            widget_kind="text",
+            label=LocalizedText(f"x{idx}：", f"x{idx}:"),
+            tooltip=LocalizedText(
+                f"幂律三点外推的第 {idx} 个自变量值。",
+                f"Input x value {idx} for three-point power-law extrapolation.",
+            ),
+            required=True,
+        )
+        for idx in range(1, 4)
+    ]
+    power_p_field = FormFieldSpec(
+        key="extrapolation.power_law.p",
+        widget_kind="text",
+        label=LocalizedText("自定义 p（可选）：", "Custom p (optional):"),
+        placeholder=LocalizedText("留空则自动求解 p", "Leave blank to solve p automatically"),
+        tooltip=LocalizedText(
+            "可选幂指数。留空时由程序根据数据自动求解。",
+            "Optional power exponent. Leave blank for automatic solving from the data.",
+        ),
+        required=False,
+    )
+    power_seed_field = FormFieldSpec(
+        key="extrapolation.power_law.seed_guesses",
+        widget_kind="text",
+        label=LocalizedText("p 种子列表（可选）：", "p seed list (optional):"),
+        placeholder=LocalizedText("如 0.5, 1, 2, -1", "e.g. 0.5, 1, 2, -1"),
+        tooltip=LocalizedText(
+            "用于自动求解 p 的候选初值，多个值用逗号分隔。",
+            "Candidate initial guesses for solving p automatically, separated by commas.",
+        ),
+        required=False,
+    )
+    levin_variant_field = FormFieldSpec(
+        key="extrapolation.levin.variant",
+        widget_kind="select",
+        label=LocalizedText("变换类型：", "Variant:"),
+        tooltip=LocalizedText(
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[0].tooltip_zh,
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[0].tooltip_en,
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value="u", label=LocalizedText("u (最常用)", "u (most common)")),
+            ChoiceSpec(value="t", label=LocalizedText("t (级数)", "t (series)")),
+            ChoiceSpec(value="v", label=LocalizedText("v (积分)", "v (integrals)")),
+        ],
+    )
+    levin_order_field = FormFieldSpec(
+        key="extrapolation.levin.order",
+        widget_kind="number",
+        label=LocalizedText("变换阶数：", "Transform order:"),
+        tooltip=LocalizedText(
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[1].tooltip_zh,
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[1].tooltip_en,
+        ),
+        required=True,
+    )
+    levin_weight_field = FormFieldSpec(
+        key="extrapolation.levin.weight",
+        widget_kind="select",
+        label=LocalizedText("权重函数：", "Weight function:"),
+        tooltip=LocalizedText(
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[2].tooltip_zh,
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[2].tooltip_en,
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value="default", label=LocalizedText("默认 (1)", "Default (1)")),
+            ChoiceSpec(value="reciprocal", label=LocalizedText("1/(n+1)", "1/(n+1)")),
+            ChoiceSpec(value="reciprocal_beta", label=LocalizedText("1/(n+β)", "1/(n+β)")),
+        ],
+    )
+    levin_beta_field = FormFieldSpec(
+        key="extrapolation.levin.beta",
+        widget_kind="number",
+        label=LocalizedText("β 参数：", "β parameter:"),
+        tooltip=LocalizedText(
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[3].tooltip_zh,
+            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[3].tooltip_en,
+        ),
+        required=False,
+    )
+    richardson_p_field = FormFieldSpec(
+        key="extrapolation.richardson.p",
+        widget_kind="number",
+        label=LocalizedText("收敛幂指数 p：", "Convergence power p:"),
+        tooltip=LocalizedText(
+            EXTRAPOLATION_METHOD_SPECS["richardson"].parameter_groups[0].parameters[0].tooltip_zh,
+            EXTRAPOLATION_METHOD_SPECS["richardson"].parameter_groups[0].parameters[0].tooltip_en,
+        ),
+        required=True,
+    )
+    uncertainty_field = FormFieldSpec(
+        key="extrapolation.uncertainty.reference_column",
+        widget_kind="select",
+        label=LocalizedText("不确定度参考列：", "Uncertainty ref column:"),
+        tooltip=LocalizedText(
+            "重新扫描数据以列出可选的不确定度参考列。",
+            "Rescan data to list available uncertainty columns.",
+        ),
+        required=False,
+    )
+    uncertainty_refresh_field = FormFieldSpec(
+        key="extrapolation.uncertainty.reference_column",
+        widget_kind="button",
+        label=LocalizedText("刷新不确定度列", "Refresh uncertainty columns"),
+        tooltip=LocalizedText(
+            "重新扫描数据以列出可选的不确定度参考列。",
+            "Rescan data to list available uncertainty columns.",
+        ),
+        required=False,
+    )
+
+    bind_field(field=method_field, label=method_label, widget=self.method_combo, lang=lang)
+    bind_choices(self.method_combo, method_field.choices, lang=lang)
+    register_schema_text_refresh(self, method_field, widget=self.method_combo)
+    bind_field(field=method_help_field, help_button=self.method_help_btn, lang=lang)
+    register_schema_text_refresh(self, method_help_field, help_button=self.method_help_btn)
+    bind_field(
+        field=custom_formula_field,
+        label=lbl_custom,
+        widget=self.custom_formula_edit,
+        lang=lang,
+    )
+    register_schema_text_refresh(
+        self,
+        custom_formula_field,
+        widget=self.custom_formula_edit,
+    )
+    bind_schema_command_button(
+        self,
+        self.custom_formula_preview_button,
+        field=custom_formula_preview_field,
+        accessible_name=LocalizedText("预览公式", "Preview formula"),
+        lang=lang,
+    )
+    bind_field(field=custom_functions_field, widget=self.custom_formula_function_button, lang=lang)
+    register_schema_text_refresh(self, custom_functions_field, widget=self.custom_formula_function_button)
+    for field, label, edit in zip(power_x_fields, power_x_labels, self.power_x_edits, strict=True):
+        bind_field(field=field, label=label, widget=edit, lang=lang)
+        register_schema_text_refresh(self, field, widget=edit)
+    bind_field(field=power_p_field, label=lbl_p, widget=self.power_p_edit, lang=lang)
+    register_schema_text_refresh(self, power_p_field, widget=self.power_p_edit)
+    bind_field(field=power_seed_field, label=lbl_seed, widget=self.power_seed_guesses_edit, lang=lang)
+    register_schema_text_refresh(self, power_seed_field, widget=self.power_seed_guesses_edit)
+    bind_field(field=levin_variant_field, label=lbl_variant, widget=self.levin_variant_combo, lang=lang)
+    bind_choices(self.levin_variant_combo, levin_variant_field.choices, lang=lang)
+    register_schema_text_refresh(self, levin_variant_field, widget=self.levin_variant_combo)
+    bind_field(field=levin_order_field, label=lbl_order, widget=self.levin_order_spin, lang=lang)
+    register_schema_text_refresh(self, levin_order_field, widget=self.levin_order_spin)
+    bind_field(field=levin_weight_field, label=lbl_weight, widget=self.levin_weight_combo, lang=lang)
+    bind_choices(self.levin_weight_combo, levin_weight_field.choices, lang=lang)
+    register_schema_text_refresh(self, levin_weight_field, widget=self.levin_weight_combo)
+    bind_field(field=levin_beta_field, label=lbl_beta, widget=self.levin_beta_spin, lang=lang)
+    register_schema_text_refresh(self, levin_beta_field, widget=self.levin_beta_spin)
+    bind_field(field=richardson_p_field, label=lbl_richardson_p, widget=self.richardson_p_spin, lang=lang)
+    register_schema_text_refresh(self, richardson_p_field, widget=self.richardson_p_spin)
+    bind_field(
+        field=uncertainty_field,
+        label=lbl_uncert,
+        widget=self.uncertainty_combo,
+        lang=lang,
+    )
+    register_schema_text_refresh(self, uncertainty_field, widget=self.uncertainty_combo)
+    bind_schema_command_button(
+        self,
+        self.uncertainty_refresh_btn,
+        field=uncertainty_refresh_field,
+        accessible_name=LocalizedText("刷新不确定度列", "Refresh uncertainty columns"),
+        lang=lang,
+    )
+
+
+def _bind_statistics_schema_fields(
+    self,
+    *,
+    lbl_stats_value: QLabel,
+    lbl_stats_sigma: QLabel,
+    lbl_stats_type: QLabel,
+    lbl_weight_var: QLabel,
+    lbl_stats_sample: QLabel,
+    stats_items: list[tuple[str, str, str]],
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    value_field = FormFieldSpec(
+        key="statistics.value_column",
+        widget_kind="text",
+        label=LocalizedText("数值列：", "Value column:"),
+        tooltip=LocalizedText(
+            "数值数据所在列，例如 A 或列名。",
+            "Column containing measured values, for example A or a header name.",
+        ),
+        required=True,
+    )
+    sigma_field = FormFieldSpec(
+        key="statistics.sigma_column",
+        widget_kind="text",
+        label=LocalizedText("不确定度列（可选）：", "Sigma column (optional):"),
+        placeholder=LocalizedText("留空则不使用不确定度列", "Leave blank to ignore sigma values"),
+        tooltip=LocalizedText(
+            "可选的不确定度列。加权平均模式会使用该列作为 σ。",
+            "Optional uncertainty column. Weighted mean mode uses this column as sigma.",
+        ),
+        required=False,
+    )
+    mode_field = FormFieldSpec(
+        key="statistics.mode",
+        widget_kind="select",
+        label=LocalizedText("统计类型：", "Statistics type:"),
+        tooltip=LocalizedText(
+            "选择算术平均或使用 σ 值作为权重的加权平均。",
+            "Choose arithmetic mean or weighted mean. Use sigma values as weights for weighted statistics.",
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value=data, label=LocalizedText(zh, en))
+            for zh, en, data in stats_items
+        ],
+    )
+    weight_variance_field = FormFieldSpec(
+        key="statistics.weight_variance",
+        widget_kind="checkbox",
+        label=LocalizedText("方差/标准误差：", "Variance/SE:"),
+        tooltip=LocalizedText(
+            "启用后，方差和标准误差也按权重计算。",
+            "When enabled, variance and standard error are also computed with weights.",
+        ),
+        required=False,
+    )
+    sample_field = FormFieldSpec(
+        key="statistics.sample_mode",
+        widget_kind="checkbox",
+        label=LocalizedText("样本/总体：", "Sample/Population:"),
+        tooltip=LocalizedText(
+            "启用样本模式时使用 n-1 自由度；关闭时使用总体模式。",
+            "Sample mode uses n-1 degrees of freedom; otherwise population mode is used.",
+        ),
+        required=False,
+    )
+
+    bind_field(field=value_field, label=lbl_stats_value, widget=self.stats_value_column_edit, lang=lang)
+    register_schema_text_refresh(self, value_field, widget=self.stats_value_column_edit)
+    bind_field(field=sigma_field, label=lbl_stats_sigma, widget=self.stats_sigma_column_edit, lang=lang)
+    register_schema_text_refresh(self, sigma_field, widget=self.stats_sigma_column_edit)
+    bind_field(field=mode_field, label=lbl_stats_type, widget=self.stats_mode_combo, lang=lang)
+    bind_choices(self.stats_mode_combo, mode_field.choices, lang=lang)
+    register_schema_text_refresh(self, mode_field, widget=self.stats_mode_combo)
+    bind_field(
+        field=weight_variance_field,
+        label=lbl_weight_var,
+        widget=self.stats_weight_variance_checkbox,
+        lang=lang,
+    )
+    register_schema_text_refresh(self, weight_variance_field, widget=self.stats_weight_variance_checkbox)
+    bind_field(field=sample_field, label=lbl_stats_sample, widget=self.stats_sample_checkbox, lang=lang)
+    register_schema_text_refresh(self, sample_field, widget=self.stats_sample_checkbox)
+
+
+def _bind_fitting_schema_fields(
+    self,
+    *,
+    lbl_model: QLabel,
+    fit_items: list[tuple[str, str, str]],
+    lbl_fit_expr: QLabel,
+    lbl_implicit_eq: QLabel,
+    lbl_implicit_output: QLabel,
+    lbl_implicit_var: QLabel,
+    lbl_implicit_initial: QLabel,
+    lbl_implicit_tol: QLabel,
+    lbl_implicit_iter: QLabel,
+    lbl_implicit_method: QLabel,
+    implicit_method_items: list[tuple[str, str, str]],
+    lbl_implicit_timeout: QLabel,
+    lbl_custom_params: QLabel,
+    lbl_implicit_params: QLabel,
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    fit_model_field = FormFieldSpec(
+        key="fitting.model",
+        widget_kind="select",
+        label=LocalizedText("拟合模型：", "Model:"),
+        tooltip=LocalizedText(
+            "选择拟合模型。自定义模型允许编辑表达式；其他模型会显示只读预览。",
+            "Choose the fitting model. Custom models allow expression editing; other models show read-only previews.",
+        ),
+        required=True,
+        choices=[ChoiceSpec(value=data, label=LocalizedText(zh, en)) for zh, en, data in fit_items],
+    )
+    custom_expression_field = FormFieldSpec(
+        key="fitting.custom.expression",
+        widget_kind="textarea",
+        label=LocalizedText("模型表达式：", "Model expression:"),
+        placeholder=LocalizedText("示例：A*x**(-p) + C", "Example: A*x**(-p) + C"),
+        tooltip=LocalizedText(
+            "输入自定义拟合表达式。留空不会使用示例；示例只显示在背景提示中。",
+            "Enter the custom fitting expression. Leaving it blank does not use the example; the example is only placeholder text.",
+        ),
+        required=True,
+    )
+    custom_constants_field = FormFieldSpec(
+        key="fitting.custom.constants",
+        widget_kind="table",
+        label=LocalizedText("常数设置", "Constants"),
+        tooltip=LocalizedText(
+            "可选常数表。启用后，常数名会从参数识别和拟合参数中排除。",
+            "Optional constants table. When enabled, constant names are excluded from parameter detection and fit parameters.",
+        ),
+        required=False,
+    )
+    custom_params_field = FormFieldSpec(
+        key="fitting.custom.parameters",
+        widget_kind="table",
+        label=LocalizedText("参数列表：", "Parameters:"),
+        tooltip=LocalizedText(
+            "自定义模型参数及初值、固定值和约束。",
+            "Custom model parameters with initial values, fixed values, and constraints.",
+        ),
+        required=False,
+    )
+    implicit_equation_field = FormFieldSpec(
+        key="fitting.implicit.equation",
+        widget_kind="textarea",
+        label=LocalizedText("自洽方程：", "Self-consistent equation:"),
+        placeholder=LocalizedText("示例：a + b*Cos[u] + c*x", "Example: a + b*Cos[u] + c*x"),
+        tooltip=LocalizedText(
+            "输入自洽方程。留空不会使用示例；示例只显示在背景提示中。",
+            "Enter the self-consistent equation. Leaving it blank does not use the example; the example is only placeholder text.",
+        ),
+        required=True,
+    )
+    implicit_output_field = FormFieldSpec(
+        key="fitting.implicit.output_expression",
+        widget_kind="textarea",
+        label=LocalizedText("输出表达式：", "Output expression:"),
+        placeholder=LocalizedText("示例：u", "Example: u"),
+        tooltip=LocalizedText(
+            "输入由隐式变量和输入变量计算目标列的输出表达式。",
+            "Enter the output expression that maps the implicit and input variables to the target column.",
+        ),
+        required=True,
+    )
+    implicit_variable_field = FormFieldSpec(
+        key="fitting.implicit.variable",
+        widget_kind="text",
+        label=LocalizedText("隐式变量：", "Implicit variable:"),
+        tooltip=LocalizedText("自洽方程中要求解的变量名。", "Variable solved by the self-consistent equation."),
+        required=True,
+    )
+    implicit_initial_field = FormFieldSpec(
+        key="fitting.implicit.initial",
+        widget_kind="text",
+        label=LocalizedText("初始值：", "Initial:"),
+        tooltip=LocalizedText("隐式变量求解初值。", "Initial value for solving the implicit variable."),
+        required=True,
+    )
+    implicit_tolerance_field = FormFieldSpec(
+        key="fitting.implicit.tolerance",
+        widget_kind="text",
+        label=LocalizedText("求解容差：", "Tolerance:"),
+        tooltip=LocalizedText("隐式变量求解容差。", "Tolerance for solving the implicit variable."),
+        required=True,
+    )
+    implicit_iterations_field = FormFieldSpec(
+        key="fitting.implicit.max_iterations",
+        widget_kind="number",
+        label=LocalizedText("最大迭代：", "Max iterations:"),
+        tooltip=LocalizedText("每次隐式变量求解允许的最大迭代次数。", "Maximum iterations allowed for each implicit solve."),
+        required=True,
+    )
+    implicit_method_field = FormFieldSpec(
+        key="fitting.implicit.method",
+        widget_kind="select",
+        label=LocalizedText("求解方法：", "Method:"),
+        tooltip=LocalizedText(
+            "固定点用于 u=g(...) 形式；求根用于 F(...)=0 形式。",
+            "Fixed point is for u=g(...) forms; Root is for F(...)=0 forms.",
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value=data, label=LocalizedText(zh, en))
+            for zh, en, data in implicit_method_items
+        ],
+    )
+    implicit_timeout_field = FormFieldSpec(
+        key="fitting.implicit.timeout_seconds",
+        widget_kind="number",
+        label=LocalizedText("最长运行秒数：", "Max runtime (s):"),
+        tooltip=LocalizedText(
+            "0 表示不自动超时，只能手动停止。",
+            "0 disables automatic timeout; use Stop to cancel.",
+        ),
+        required=True,
+    )
+    implicit_constants_field = FormFieldSpec(
+        key="fitting.implicit.constants",
+        widget_kind="table",
+        label=LocalizedText("常数设置", "Constants"),
+        tooltip=LocalizedText(
+            "可选常数表。启用后，常数名会从隐式参数识别和拟合参数中排除。",
+            "Optional constants table. When enabled, constant names are excluded from implicit parameter detection and fit parameters.",
+        ),
+        required=False,
+    )
+    implicit_params_field = FormFieldSpec(
+        key="fitting.implicit.parameters",
+        widget_kind="table",
+        label=LocalizedText("参数列表：", "Parameters:"),
+        tooltip=LocalizedText(
+            "自洽隐式模型参数及初值、固定值和约束。",
+            "Self-consistent implicit model parameters with initial values, fixed values, and constraints.",
+        ),
+        required=False,
+    )
+
+    bind_field(field=fit_model_field, label=lbl_model, widget=self.fit_model_combo, lang=lang)
+    bind_choices(self.fit_model_combo, fit_model_field.choices, lang=lang)
+    bind_field(
+        field=custom_expression_field,
+        label=lbl_fit_expr,
+        widget=self.fit_expr_edit,
+        help_button=self.fit_formula_preview_button,
+        lang=lang,
+    )
+    bind_field(field=custom_constants_field, widget=self.custom_constants_editor, lang=lang)
+    bind_field(field=custom_params_field, label=lbl_custom_params, widget=self.custom_params_table, lang=lang)
+    bind_field(
+        field=implicit_equation_field,
+        label=lbl_implicit_eq,
+        widget=self.implicit_equation_edit,
+        help_button=self.implicit_equation_preview_button,
+        lang=lang,
+    )
+    bind_field(
+        field=implicit_output_field,
+        label=lbl_implicit_output,
+        widget=self.implicit_output_edit,
+        help_button=self.implicit_output_preview_button,
+        lang=lang,
+    )
+    bind_field(field=implicit_variable_field, label=lbl_implicit_var, widget=self.implicit_variable_edit, lang=lang)
+    bind_field(field=implicit_initial_field, label=lbl_implicit_initial, widget=self.implicit_initial_edit, lang=lang)
+    bind_field(field=implicit_tolerance_field, label=lbl_implicit_tol, widget=self.implicit_tolerance_edit, lang=lang)
+    bind_field(field=implicit_iterations_field, label=lbl_implicit_iter, widget=self.implicit_max_iterations_spin, lang=lang)
+    bind_field(field=implicit_method_field, label=lbl_implicit_method, widget=self.implicit_method_combo, lang=lang)
+    bind_choices(self.implicit_method_combo, implicit_method_field.choices, lang=lang)
+    bind_field(field=implicit_timeout_field, label=lbl_implicit_timeout, widget=self.implicit_timeout_spin, lang=lang)
+    bind_field(field=implicit_constants_field, widget=self.implicit_constants_editor, lang=lang)
+    bind_field(field=implicit_params_field, label=lbl_implicit_params, widget=self.implicit_params_table, lang=lang)
+
+def _mark_schema_choices(combo: QComboBox) -> None:
+    combo.setProperty("datalab_schema_choices", True)
+
+
+def _bind_global_options_schema_fields(
+    self,
+    *,
+    label_precision: QLabel,
+    unc_label: QLabel,
+    lbl_parallel_mode: QLabel,
+    lbl_parallel_workers: QLabel,
+    lbl_parallel_reserve: QLabel,
+    lbl_nested_policy: QLabel,
+    parallel_mode_items: list[tuple[str, str, str]],
+    nested_policy_items: list[tuple[str, str, str]],
+    lbl_output: QLabel,
+    prec_label: QLabel,
+    group_size_label: QLabel,
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    precision_field = FormFieldSpec(
+        key="options.precision_digits",
+        widget_kind="number",
+        label=LocalizedText("数值精度位数：", "Precision digits:"),
+        tooltip=LocalizedText(
+            "数值计算精度位数。16 位及以下通常使用双精度快速路径；更高位数使用多精度计算。",
+            "Numerical precision digits. Values up to 16 usually use the double-precision fast path; higher values use multiprecision calculation.",
+        ),
+        required=True,
+    )
+    uncertainty_digits_field = FormFieldSpec(
+        key="options.uncertainty_digits",
+        widget_kind="number",
+        label=LocalizedText("不确定度位数：", "Uncertainty digits:"),
+        tooltip=LocalizedText(
+            "控制结果中括号不确定度的有效位数。",
+            "Controls the significant digits shown for parenthesized uncertainties.",
+        ),
+        required=True,
+    )
+    parallel_mode_field = FormFieldSpec(
+        key="parallel.mode",
+        widget_kind="select",
+        label=LocalizedText("资源策略：", "Resource policy:"),
+        tooltip=LocalizedText(
+            "资源调度偏好；需要快速取消和进程隔离的任务仍会使用独立进程。",
+            "Resource scheduling preference; tasks that need fast cancellation or process isolation may still use separate processes.",
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value=data, label=LocalizedText(zh, en))
+            for zh, en, data in parallel_mode_items
+        ],
+    )
+    max_workers_field = FormFieldSpec(
+        key="parallel.max_workers",
+        widget_kind="number",
+        label=LocalizedText("最大 workers：", "Max workers:"),
+        tooltip=LocalizedText(
+            "最大并行 worker 数。0 表示自动根据任务和机器资源决定。",
+            "Maximum parallel worker count. 0 means automatic selection based on workload and machine resources.",
+        ),
+        required=False,
+    )
+    reserve_cores_field = FormFieldSpec(
+        key="parallel.reserve_cores",
+        widget_kind="number",
+        label=LocalizedText("保留核心：", "Reserve cores:"),
+        tooltip=LocalizedText(
+            "为系统和界面响应保留的 CPU 核心数。",
+            "CPU cores reserved for the system and UI responsiveness.",
+        ),
+        required=False,
+    )
+    nested_policy_field = FormFieldSpec(
+        key="parallel.nested_policy",
+        widget_kind="select",
+        label=LocalizedText("嵌套策略：", "Nested policy:"),
+        tooltip=LocalizedText(
+            "当一个并行任务内部再次请求并行时如何处理。",
+            "How to handle a parallel request made from inside another parallel task.",
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value=data, label=LocalizedText(zh, en))
+            for zh, en, data in nested_policy_items
+        ],
+    )
+    generate_latex_field = FormFieldSpec(
+        key="output.latex.enabled",
+        widget_kind="checkbox",
+        label=LocalizedText("生成 LaTeX 文件", "Generate LaTeX"),
+        tooltip=LocalizedText("启用后将计算结果写入 LaTeX 文件。", "When enabled, write calculation results to a LaTeX file."),
+        required=False,
+    )
+    output_path_field = FormFieldSpec(
+        key="output.latex.path",
+        widget_kind="file",
+        label=LocalizedText("LaTeX 输出路径：", "LaTeX output path:"),
+        placeholder=LocalizedText("选择 .tex 输出文件", "Choose a .tex output file"),
+        tooltip=LocalizedText("LaTeX 结果文件的保存路径。", "Save path for the LaTeX result file."),
+        required=False,
+    )
+    output_browse_field = FormFieldSpec(
+        key="output.latex.path",
+        widget_kind="button",
+        label=LocalizedText("选择 LaTeX 输出路径", "Choose LaTeX output path"),
+        tooltip=LocalizedText("选择 LaTeX 输出文件路径。", "Choose the LaTeX output file path."),
+        required=False,
+    )
+    input_digits_field = FormFieldSpec(
+        key="output.latex.input_digits",
+        widget_kind="number",
+        label=LocalizedText("输入列位数：", "Input digits:"),
+        tooltip=LocalizedText("LaTeX 表格中输入列保留的数字位数。", "Digit count retained for input columns in LaTeX tables."),
+        required=False,
+    )
+    dcolumn_field = FormFieldSpec(
+        key="output.latex.dcolumn",
+        widget_kind="checkbox",
+        label=LocalizedText("使用 dcolumn 排版", "Use dcolumn"),
+        tooltip=LocalizedText("使用 dcolumn 对齐数字列。", "Use dcolumn to align numeric columns."),
+        required=False,
+    )
+    group_size_field = FormFieldSpec(
+        key="output.latex.group_size",
+        widget_kind="number",
+        label=LocalizedText("分组位数：", "Group size:"),
+        tooltip=LocalizedText("LaTeX 数字分组的位数；0 表示不分组。", "Digit group size in LaTeX numbers; 0 disables grouping."),
+        required=False,
+    )
+    caption_enabled_field = FormFieldSpec(
+        key="output.latex.caption.enabled",
+        widget_kind="checkbox",
+        label=LocalizedText("使用标题", "Use caption"),
+        tooltip=LocalizedText("启用 LaTeX 表格标题。", "Enable a LaTeX table caption."),
+        required=False,
+    )
+    caption_field = FormFieldSpec(
+        key="output.latex.caption",
+        widget_kind="text",
+        label=LocalizedText("标题内容", "Caption text"),
+        placeholder=LocalizedText("表格标题", "Table caption"),
+        tooltip=LocalizedText("LaTeX 表格标题文本。", "LaTeX table caption text."),
+        required=False,
+    )
+    plots_field = FormFieldSpec(
+        key="output.plots.enabled",
+        widget_kind="checkbox",
+        label=LocalizedText("生成图片", "Generate plots"),
+        tooltip=LocalizedText("启用后生成当前计算模块支持的图片。", "When enabled, generate plots supported by the current calculation module."),
+        required=False,
+    )
+    verbose_field = FormFieldSpec(
+        key="options.verbose_log",
+        widget_kind="checkbox",
+        label=LocalizedText("显示详细日志", "Verbose log"),
+        tooltip=LocalizedText("显示更详细的计算日志。", "Show more detailed calculation logs."),
+        required=False,
+    )
+
+    field_bindings = [
+        (precision_field, label_precision, self.mpmath_precision_spin),
+        (uncertainty_digits_field, unc_label, self.uncertainty_digits_spin),
+        (parallel_mode_field, lbl_parallel_mode, self.parallel_mode_combo),
+        (max_workers_field, lbl_parallel_workers, self.parallel_max_workers_spin),
+        (reserve_cores_field, lbl_parallel_reserve, self.parallel_reserve_cores_spin),
+        (nested_policy_field, lbl_nested_policy, self.parallel_nested_policy_combo),
+        (output_path_field, lbl_output, self.output_file_edit),
+        (input_digits_field, prec_label, self.latex_input_precision_spin),
+        (group_size_field, group_size_label, self.latex_group_size_spin),
+    ]
+    for field, label, widget in field_bindings:
+        bind_field(field=field, label=label, widget=widget, lang=lang)
+        register_schema_text_refresh(self, field, widget=widget)
+
+    for combo in (self.parallel_mode_combo, self.parallel_nested_policy_combo):
+        _mark_schema_choices(combo)
+
+    for field, widget in [
+        (generate_latex_field, self.generate_latex_checkbox),
+        (dcolumn_field, self.dcolumn_checkbox),
+        (caption_enabled_field, self.caption_checkbox),
+        (caption_field, self.caption_edit),
+        (plots_field, self.generate_plots_checkbox),
+        (verbose_field, self.verbose_checkbox),
+    ]:
+        bind_field(field=field, widget=widget, lang=lang)
+        register_schema_text_refresh(self, field, widget=widget)
+
+    bind_schema_command_button(
+        self,
+        self.output_browse_button,
+        field=output_browse_field,
+        accessible_name=LocalizedText("选择 LaTeX 输出路径", "Choose LaTeX output path"),
+        lang=lang,
+    )
+
+
+def _bind_result_latex_pdf_schema_fields(
+    self,
+    *,
+    lbl_digits: QLabel,
+    lbl_engine: QLabel,
+    lbl_zoom: QLabel,
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    display_scientific_field = FormFieldSpec(
+        key="results.display.scientific",
+        widget_kind="checkbox",
+        label=LocalizedText("使用科学计数法显示结果", "Display results in scientific notation"),
+        tooltip=LocalizedText("切换数值结果是否使用科学计数法显示。", "Toggle scientific notation for numeric result display."),
+        required=False,
+    )
+    display_digits_field = FormFieldSpec(
+        key="results.display.decimal_places",
+        widget_kind="number",
+        label=LocalizedText("小数位数：", "Decimal places:"),
+        tooltip=LocalizedText("控制数值结果显示的小数位数。", "Controls decimal places shown in numeric results."),
+        required=False,
+    )
+    image_zoom_field = FormFieldSpec(
+        key="results.image.zoom_percent",
+        widget_kind="number",
+        label=LocalizedText("图片缩放", "Image zoom"),
+        tooltip=LocalizedText("结果图片缩放百分比。", "Result image zoom percentage."),
+        required=False,
+    )
+    log_x_field = FormFieldSpec(
+        key="results.image.log_x",
+        widget_kind="checkbox",
+        label=LocalizedText("x 轴", "log x"),
+        tooltip=LocalizedText("使用 x 轴对数坐标。", "Use logarithmic x axis."),
+        required=False,
+    )
+    log_y_field = FormFieldSpec(
+        key="results.image.log_y",
+        widget_kind="checkbox",
+        label=LocalizedText("y 轴", "log y"),
+        tooltip=LocalizedText("使用 y 轴对数坐标。", "Use logarithmic y axis."),
+        required=False,
+    )
+    latex_compile_field = FormFieldSpec(
+        key="latex.compile",
+        widget_kind="button",
+        label=LocalizedText("编译 PDF", "Compile PDF"),
+        tooltip=LocalizedText("将当前 LaTeX 内容编译为 PDF。", "Compile the current LaTeX content into a PDF."),
+        required=False,
+    )
+    latex_view_field = FormFieldSpec(
+        key="latex.view_pdf",
+        widget_kind="button",
+        label=LocalizedText("查看 PDF", "View PDF"),
+        tooltip=LocalizedText("打开已编译的 PDF 文件。", "Open the compiled PDF file."),
+        required=False,
+    )
+    latex_engine_field = FormFieldSpec(
+        key="latex.engine",
+        widget_kind="select",
+        label=LocalizedText("LaTeX 引擎：", "LaTeX engine:"),
+        tooltip=LocalizedText("选择用于编译 PDF 的 LaTeX 引擎。", "Choose the LaTeX engine used to compile PDF output."),
+        required=False,
+    )
+    latex_engine_path_field = FormFieldSpec(
+        key="latex.engine_path",
+        widget_kind="button",
+        label=LocalizedText("选择引擎路径", "Select engine path"),
+        tooltip=LocalizedText("手动选择 LaTeX 引擎可执行文件路径。", "Manually select the LaTeX engine executable path."),
+        required=False,
+    )
+    pdf_zoom_field = FormFieldSpec(
+        key="pdf.zoom_percent",
+        widget_kind="number",
+        label=LocalizedText("缩放%：", "Zoom %:"),
+        tooltip=LocalizedText("PDF 预览缩放百分比。", "PDF preview zoom percentage."),
+        required=False,
+    )
+    pdf_zoom_in_field = FormFieldSpec(
+        key="pdf.zoom_in",
+        widget_kind="button",
+        label=LocalizedText("放大 PDF", "Zoom PDF in"),
+        tooltip=LocalizedText("放大 PDF 预览。", "Zoom PDF preview in."),
+        required=False,
+    )
+    pdf_zoom_out_field = FormFieldSpec(
+        key="pdf.zoom_out",
+        widget_kind="button",
+        label=LocalizedText("缩小 PDF", "Zoom PDF out"),
+        tooltip=LocalizedText("缩小 PDF 预览。", "Zoom PDF preview out."),
+        required=False,
+    )
+    pdf_zoom_reset_field = FormFieldSpec(
+        key="pdf.zoom_reset",
+        widget_kind="button",
+        label=LocalizedText("重置 PDF 缩放", "Reset PDF zoom"),
+        tooltip=LocalizedText("重置 PDF 预览缩放。", "Reset PDF preview zoom."),
+        required=False,
+    )
+
+    for field, label, widget in [
+        (display_digits_field, lbl_digits, self.display_digits_spin),
+        (latex_engine_field, lbl_engine, self.latex_engine_combo),
+        (pdf_zoom_field, lbl_zoom, self.pdf_zoom_spin),
+    ]:
+        bind_field(field=field, label=label, widget=widget, lang=lang)
+        register_schema_text_refresh(self, field, widget=widget)
+    _mark_schema_choices(self.latex_engine_combo)
+
+    for field, widget in [
+        (display_scientific_field, self.scientific_checkbox),
+        (image_zoom_field, self.zoom_percent_spin),
+        (log_x_field, self.log_x_checkbox),
+        (log_y_field, self.log_y_checkbox),
+    ]:
+        bind_field(field=field, widget=widget, lang=lang)
+        register_schema_text_refresh(self, field, widget=widget)
+
+    for field, button, accessible_name in [
+        (latex_compile_field, self.latex_compile_button, LocalizedText("编译 PDF", "Compile PDF")),
+        (latex_view_field, self.latex_view_pdf_button, LocalizedText("查看 PDF", "View PDF")),
+        (latex_engine_path_field, self.latex_engine_path_button, LocalizedText("选择引擎路径", "Select engine path")),
+        (pdf_zoom_in_field, self.pdf_zoom_in_button, LocalizedText("放大 PDF", "Zoom PDF in")),
+        (pdf_zoom_out_field, self.pdf_zoom_out_button, LocalizedText("缩小 PDF", "Zoom PDF out")),
+        (pdf_zoom_reset_field, self.pdf_zoom_reset_button, LocalizedText("重置 PDF 缩放", "Reset PDF zoom")),
+    ]:
+        bind_schema_command_button(
+            self,
+            button,
+            field=field,
+            accessible_name=accessible_name,
+            lang=lang,
+        )
+
+
+def _bind_result_area_schema_fields(self) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    numeric_result_field = FormFieldSpec(
+        key="results.numeric.markdown",
+        widget_kind="textarea",
+        label=LocalizedText("数值结果", "Numeric results"),
+        tooltip=LocalizedText("显示当前计算的数值结果和摘要。", "Shows numeric results and summaries for the current calculation."),
+        required=False,
+    )
+    csv_export_field = FormFieldSpec(
+        key="results.export.csv",
+        widget_kind="button",
+        label=LocalizedText("导出 CSV", "Export CSV"),
+        tooltip=LocalizedText("导出当前结果表格为 CSV 文件。", "Export the current result table as a CSV file."),
+        required=False,
+    )
+    image_preview_field = FormFieldSpec(
+        key="results.image.preview",
+        widget_kind="image",
+        label=LocalizedText("图片", "Image"),
+        tooltip=LocalizedText("显示当前计算生成的图片。", "Displays plots generated by the current calculation."),
+        required=False,
+    )
+    image_status_field = FormFieldSpec(
+        key="results.image.status",
+        widget_kind="text",
+        label=LocalizedText("图片状态", "Image status"),
+        tooltip=LocalizedText("当前图片页和加载状态。", "Current image page and loading status."),
+        required=False,
+    )
+    image_zoom_in_field = FormFieldSpec(
+        key="results.image.zoom_in",
+        widget_kind="button",
+        label=LocalizedText("放大图片", "Zoom image in"),
+        tooltip=LocalizedText("放大结果图片。", "Zoom result image in."),
+        required=False,
+    )
+    image_zoom_out_field = FormFieldSpec(
+        key="results.image.zoom_out",
+        widget_kind="button",
+        label=LocalizedText("缩小图片", "Zoom image out"),
+        tooltip=LocalizedText("缩小结果图片。", "Zoom result image out."),
+        required=False,
+    )
+    image_zoom_reset_field = FormFieldSpec(
+        key="results.image.zoom_reset",
+        widget_kind="button",
+        label=LocalizedText("重置图片缩放", "Reset image zoom"),
+        tooltip=LocalizedText("重置结果图片缩放。", "Reset result image zoom."),
+        required=False,
+    )
+    image_export_field = FormFieldSpec(
+        key="results.image.export",
+        widget_kind="button",
+        label=LocalizedText("导出图片", "Export image"),
+        tooltip=LocalizedText("导出当前结果图片。", "Export the current result image."),
+        required=False,
+    )
+    image_page_field = FormFieldSpec(
+        key="results.image.page",
+        widget_kind="number",
+        label=LocalizedText("图片页", "Image page"),
+        tooltip=LocalizedText("选择要查看的结果图片页。", "Image page to view."),
+        required=False,
+    )
+    image_prev_field = FormFieldSpec(
+        key="results.image.previous",
+        widget_kind="button",
+        label=LocalizedText("上一张图片", "Previous image"),
+        tooltip=LocalizedText("查看上一张结果图片。", "View the previous result image."),
+        required=False,
+    )
+    image_next_field = FormFieldSpec(
+        key="results.image.next",
+        widget_kind="button",
+        label=LocalizedText("下一张图片", "Next image"),
+        tooltip=LocalizedText("查看下一张结果图片。", "View the next result image."),
+        required=False,
+    )
+    log_field = FormFieldSpec(
+        key="results.log",
+        widget_kind="textarea",
+        label=LocalizedText("日志", "Log"),
+        tooltip=LocalizedText("显示计算日志和警告。", "Shows calculation logs and warnings."),
+        required=False,
+    )
+    latex_source_field = FormFieldSpec(
+        key="results.latex.source",
+        widget_kind="textarea",
+        label=LocalizedText("LaTeX 源码", "LaTeX source"),
+        tooltip=LocalizedText("显示或编辑当前 LaTeX 输出内容。", "Shows or edits the current LaTeX output content."),
+        required=False,
+    )
+    latex_status_field = FormFieldSpec(
+        key="results.latex.status",
+        widget_kind="text",
+        label=LocalizedText("LaTeX 状态", "LaTeX status"),
+        tooltip=LocalizedText("当前 LaTeX 文件加载和保存状态。", "Current LaTeX file load/save status."),
+        required=False,
+    )
+    latex_open_field = FormFieldSpec(
+        key="results.latex.open",
+        widget_kind="button",
+        label=LocalizedText("打开 LaTeX 文件", "Open LaTeX file"),
+        tooltip=LocalizedText("打开已有 LaTeX 文件到编辑器。", "Open an existing LaTeX file in the editor."),
+        required=False,
+    )
+    latex_save_field = FormFieldSpec(
+        key="results.latex.save",
+        widget_kind="button",
+        label=LocalizedText("保存 LaTeX 文件", "Save LaTeX file"),
+        tooltip=LocalizedText("保存当前 LaTeX 编辑器内容。", "Save the current LaTeX editor content."),
+        required=False,
+    )
+    latex_reload_field = FormFieldSpec(
+        key="results.latex.reload",
+        widget_kind="button",
+        label=LocalizedText("重新载入 LaTeX 文件", "Reload LaTeX file"),
+        tooltip=LocalizedText("从磁盘重新载入当前 LaTeX 文件。", "Reload the current LaTeX file from disk."),
+        required=False,
+    )
+    pdf_status_field = FormFieldSpec(
+        key="results.pdf.status",
+        widget_kind="text",
+        label=LocalizedText("PDF 状态", "PDF status"),
+        tooltip=LocalizedText("当前 PDF 预览状态。", "Current PDF preview status."),
+        required=False,
+    )
+
+    for field, widget in [
+        (numeric_result_field, self.result_edit),
+        (image_preview_field, self.result_plot_scroll),
+        (image_preview_field, self.result_plot_label),
+        (image_status_field, self.image_status_label),
+        (log_field, self.log_edit),
+        (latex_source_field, self.latex_edit),
+        (latex_status_field, self.latex_status_label),
+        (pdf_status_field, self.pdf_status_label),
+        (image_page_field, self.image_page_spin),
+    ]:
+        bind_field(field=field, widget=widget, lang=lang)
+        register_schema_text_refresh(self, field, widget=widget)
+
+    for field, button, accessible_name in [
+        (csv_export_field, self.export_csv_btn, LocalizedText("导出 CSV", "Export CSV")),
+        (image_zoom_in_field, self.result_zoom_in_btn, LocalizedText("放大图片", "Zoom image in")),
+        (image_zoom_out_field, self.result_zoom_out_btn, LocalizedText("缩小图片", "Zoom image out")),
+        (image_zoom_reset_field, self.result_zoom_reset_btn, LocalizedText("重置图片缩放", "Reset image zoom")),
+        (image_export_field, self.result_export_btn, LocalizedText("导出图片", "Export image")),
+        (image_prev_field, self.image_prev_btn, LocalizedText("上一张图片", "Previous image")),
+        (image_next_field, self.image_next_btn, LocalizedText("下一张图片", "Next image")),
+        (latex_open_field, self.latex_open_button, LocalizedText("打开 LaTeX 文件", "Open LaTeX file")),
+        (latex_save_field, self.latex_save_button, LocalizedText("保存 LaTeX 文件", "Save LaTeX file")),
+        (latex_reload_field, self.latex_reload_button, LocalizedText("重新载入 LaTeX 文件", "Reload LaTeX file")),
+    ]:
+        bind_schema_command_button(
+            self,
+            button,
+            field=field,
+            accessible_name=accessible_name,
+            lang=lang,
+        )
+
+
+def _bind_error_schema_fields(
+    self,
+    *,
+    lbl_error_formula: QLabel,
+    lbl_error_method: QLabel,
+    error_method_items: list[tuple[str, str, str]],
+    lbl_error_order: QLabel,
+    lbl_mc_samples: QLabel,
+    lbl_mc_seed: QLabel,
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    formula_field = FormFieldSpec(
+        key="error.formula",
+        widget_kind="textarea",
+        label=LocalizedText("公式：", "Formula:"),
+        placeholder=LocalizedText(
+            "公式（使用列名或 x1, x2 …）",
+            "Formula (use column names or x1, x2 …)",
+        ),
+        tooltip=LocalizedText(
+            "输入要传播不确定度的公式，可使用数据列名或 x1、x2 等变量。",
+            "Enter the formula whose uncertainty should be propagated; use column names or variables such as x1 and x2.",
+        ),
+        required=True,
+    )
+    function_help_field = FormFieldSpec(
+        key="error.functions",
+        widget_kind="button",
+        label=LocalizedText("函数支持", "Functions"),
+        tooltip=LocalizedText(
+            "查看公式中支持的函数和表达式语法。",
+            "View supported functions and expression syntax for formulas.",
+        ),
+        required=False,
+    )
+    constants_use_file_field = FormFieldSpec(
+        key="error.constants.use_file",
+        widget_kind="checkbox",
+        label=LocalizedText("使用常数文件", "Use constants file"),
+        tooltip=LocalizedText(
+            "启用后从外部常数文件读取固定量；关闭时使用下方常数表。",
+            "When enabled, fixed values are read from an external constants file; otherwise the constants table below is used.",
+        ),
+        required=False,
+    )
+    constants_file_field = FormFieldSpec(
+        key="error.constants.file_path",
+        widget_kind="file",
+        label=LocalizedText("常数文件…", "Constants file…"),
+        placeholder=LocalizedText("选择常数文件", "Choose a constants file"),
+        tooltip=LocalizedText(
+            "常数文件每行填写名称和值，例如 ALPHA 7.2973525693(11)[-3]。",
+            "Constants files use one name and value per line, for example ALPHA 7.2973525693(11)[-3].",
+        ),
+        required=False,
+    )
+    constants_field = FormFieldSpec(
+        key="error.constants",
+        widget_kind="table",
+        label=LocalizedText("常数设置", "Constants"),
+        tooltip=LocalizedText(
+            "可选常数设置，支持表格和文本视图；关闭时不会向误差传递公式代入这些常数。",
+            "Optional constants for table or text entry; when disabled they are not substituted into the error propagation formula.",
+        ),
+        required=False,
+    )
+    method_field = FormFieldSpec(
+        key="error.method",
+        widget_kind="select",
+        label=LocalizedText("方法：", "Method:"),
+        tooltip=LocalizedText(
+            "Taylor 使用偏导传播不确定度；Monte Carlo 通过随机采样估计不确定度。",
+            "Taylor propagates uncertainty with derivatives; Monte Carlo estimates uncertainty by random sampling.",
+        ),
+        required=True,
+        choices=[ChoiceSpec(value=data, label=LocalizedText(zh, en)) for zh, en, data in error_method_items],
+    )
+    order_field = FormFieldSpec(
+        key="error.taylor.order",
+        widget_kind="number",
+        label=LocalizedText("阶数：", "Order:"),
+        tooltip=LocalizedText(
+            "1 阶：线性误差估计；2 阶：包含 Hessian（二阶偏导）贡献。",
+            "Order 1: linear propagation; order 2: includes Hessian (second-derivative) contributions.",
+        ),
+        required=False,
+    )
+    mc_samples_field = FormFieldSpec(
+        key="error.monte_carlo.samples",
+        widget_kind="number",
+        label=LocalizedText("MC 样本数：", "MC samples:"),
+        tooltip=LocalizedText(
+            "Monte Carlo 样本数（越大越稳定，但耗时更长），至少 100。",
+            "Monte Carlo sample count (larger is more stable but slower), minimum 100.",
+        ),
+        required=False,
+    )
+    mc_seed_field = FormFieldSpec(
+        key="error.monte_carlo.seed",
+        widget_kind="text",
+        label=LocalizedText("随机种子（可选）：", "Seed (optional):"),
+        placeholder=LocalizedText("留空=随机", "blank=random"),
+        tooltip=LocalizedText(
+            "留空表示每次随机；填写整数可复现实验结果。",
+            "Leave blank for random each run; set an integer for reproducibility.",
+        ),
+        required=False,
+    )
+
+    bind_field(
+        field=formula_field,
+        label=lbl_error_formula,
+        widget=self.formula_edit,
+        help_button=self.error_formula_preview_button,
+        lang=lang,
+    )
+    register_schema_text_refresh(self, formula_field, widget=self.formula_edit, help_button=self.error_formula_preview_button)
+    bind_field(field=function_help_field, widget=self.func_help_btn, lang=lang)
+    register_schema_text_refresh(self, function_help_field, widget=self.func_help_btn)
+    bind_field(field=constants_use_file_field, widget=self.use_constants_file_checkbox, lang=lang)
+    register_schema_text_refresh(self, constants_use_file_field, widget=self.use_constants_file_checkbox)
+    bind_field(
+        field=constants_file_field,
+        widget=self.constants_file_edit,
+        help_button=self.constants_hint_btn,
+        lang=lang,
+    )
+    register_schema_text_refresh(self, constants_file_field, widget=self.constants_file_edit)
+    bind_field(
+        field=constants_field,
+        widget=self.error_constants_editor,
+        help_button=self.error_constants_editor.help_button,
+        lang=lang,
+    )
+    register_schema_text_refresh(self, constants_field, widget=self.error_constants_editor, help_button=self.error_constants_editor.help_button)
+    register_schema_text_refresh(self, constants_field, widget=self.error_constants_editor.checkbox)
+    bind_field(field=method_field, label=lbl_error_method, widget=self.error_method_combo, lang=lang)
+    bind_choices(self.error_method_combo, method_field.choices, lang=lang)
+    register_schema_text_refresh(self, method_field, widget=self.error_method_combo)
+    bind_field(field=order_field, label=lbl_error_order, widget=self.error_order_spin, lang=lang)
+    register_schema_text_refresh(self, order_field, widget=self.error_order_spin)
+    bind_field(field=mc_samples_field, label=lbl_mc_samples, widget=self.error_mc_samples_spin, lang=lang)
+    register_schema_text_refresh(self, mc_samples_field, widget=self.error_mc_samples_spin)
+    bind_field(field=mc_seed_field, label=lbl_mc_seed, widget=self.error_mc_seed_edit, lang=lang)
+    register_schema_text_refresh(self, mc_seed_field, widget=self.error_mc_seed_edit)
+
+
+def _bind_root_schema_fields(
+    self,
+    lbl_root_equations: QLabel,
+    lbl_root_mode: QLabel,
+    lbl_root_unknowns: QLabel,
+    root_mode_items: list[tuple[str, str, object]],
+) -> None:
+    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
+    root_equations_field = FormFieldSpec(
+        key="root.equations",
+        widget_kind="textarea",
+        label=LocalizedText("方程：", "Equations:"),
+        placeholder=LocalizedText(
+            "每行一个方程，按 F_i(...)=0 求解；示例：x^2 - A",
+            "One equation per line as F_i(...)=0; example: x^2 - A",
+        ),
+        tooltip=LocalizedText(
+            "输入要求解的方程。留空不会使用示例；示例只显示在背景提示中。",
+            "Enter equations to solve. Leaving it blank does not use the example; the example is only placeholder text.",
+        ),
+        required=True,
+    )
+    root_mode_field = FormFieldSpec(
+        key="root.mode",
+        widget_kind="select",
+        label=LocalizedText("求解模式：", "Solve mode:"),
+        tooltip=LocalizedText(
+            "标量：单未知量单根；扫描多根：从区间/采样查找多个根；多项式：一元多项式根；方程组：多个未知量联立求解。",
+            "Scalar: one unknown and one root; Scan multiple: search multiple roots by interval/sampling; Polynomial: univariate polynomial roots; System: solve coupled equations.",
+        ),
+        required=True,
+        choices=[
+            ChoiceSpec(value=data, label=LocalizedText(zh, en))
+            for zh, en, data in root_mode_items
+        ],
+    )
+    root_unknowns_field = FormFieldSpec(
+        key="root.unknowns",
+        widget_kind="table",
+        label=LocalizedText("未知量：", "Unknowns:"),
+        tooltip=LocalizedText(
+            "不同模式需要的列不同：标量通常填名称和初始值；扫描多根还可填下界/上界；多项式可只填名称；方程组每个未知量一行。",
+            "Columns depend on mode: scalar usually needs name and initial; scan can use lower/upper; polynomial can use only name; system uses one row per unknown.",
+        ),
+        required=True,
+    )
+    root_constants_field = FormFieldSpec(
+        key="root.constants",
+        widget_kind="table",
+        label=LocalizedText("常数设置", "Constants"),
+        tooltip=LocalizedText(
+            "常数设置：填写方程中的固定量，支持 1.23(4) 和 1.23(4)[-5] 这类不确定度写法。关闭时不会代入常数表。",
+            "Constants: fixed quantities used by equations; accepts uncertainty notation such as 1.23(4) and 1.23(4)[-5]. When disabled, constants are not substituted.",
+        ),
+        required=False,
+    )
+
+    bind_field(
+        field=root_equations_field,
+        label=lbl_root_equations,
+        widget=self.root_equations_edit,
+        help_button=self.root_equations_help_button,
+        lang=lang,
+    )
+    bind_field(
+        field=root_mode_field,
+        label=lbl_root_mode,
+        widget=self.root_mode_combo,
+        help_button=self.root_mode_help_button,
+        lang=lang,
+    )
+    bind_choices(self.root_mode_combo, root_mode_field.choices, lang=lang)
+    bind_field(
+        field=root_unknowns_field,
+        label=lbl_root_unknowns,
+        widget=self.root_unknowns_table,
+        help_button=self.root_unknowns_help_button,
+        lang=lang,
+    )
+    bind_field(field=root_constants_field, widget=self.root_constants_editor, lang=lang)
+
+
+def _refresh_root_field_help(self) -> None:
+    is_en = bool(getattr(self, "_is_en", lambda: False)())
+    unknown_headers = (
+        ("Name", "Initial", "Lower", "Upper")
+        if is_en
+        else ("名称", "初始值", "下界", "上界")
+    )
+    constants_headers = ("Name", "Value") if is_en else ("名称", "值")
+    unknowns_table = getattr(self, "root_unknowns_table", None)
+    if unknowns_table is not None:
+        unknowns_table.set_headers(unknown_headers)
+        unknowns_table.setToolTip(
+            self._tr(
+                "未知量表：名称为要求解的变量；初始值用于数值迭代；下界/上界可选，仅部分求解器使用。不同模式可只填写需要的列。",
+                "Unknowns table: Name is the variable to solve; Initial seeds numeric iteration; Lower/Upper are optional and used only by supported solvers. Fill only the columns needed by the selected mode.",
+            )
+        )
+    constants_editor = getattr(self, "root_constants_editor", None)
+    if constants_editor is not None:
+        constants_editor.set_table_headers(*constants_headers)
+        constants_tooltip = self._tr(
+            "常数设置：填写方程中的固定量，支持 1.23(4) 和 1.23(4)[-5] 这类不确定度写法。关闭时不会代入常数表。",
+            "Constants: fixed quantities used by equations; accepts uncertainty notation such as 1.23(4) and 1.23(4)[-5]. When disabled, constants are not substituted.",
+        )
+        constants_editor.setToolTip(constants_tooltip)
+        if hasattr(constants_editor, "help_button"):
+            constants_editor.help_button.setToolTip(constants_tooltip)
+        if hasattr(constants_editor, "checkbox"):
+            constants_editor.checkbox.setToolTip(constants_tooltip)
+    tooltip_pairs = (
+        (
+            "root_equations_help_button",
+            "方程按 F(...)=0 求解；可写多行方程组。示例：x^2 - A。",
+            "Equations are solved as F(...)=0; use multiple lines for a system. Example: x^2 - A.",
+        ),
+        (
+            "root_mode_help_button",
+            "标量：单未知量单根；扫描多根：从区间/采样查找多个根；多项式：一元多项式根；方程组：多个未知量联立求解。",
+            "Scalar: one unknown and one root; Scan multiple: search multiple roots by interval/sampling; Polynomial: univariate polynomial roots; System: solve coupled equations.",
+        ),
+        (
+            "root_unknowns_help_button",
+            "不同模式需要的列不同：标量通常填名称和初始值；扫描多根还可填下界/上界；多项式可只填名称；方程组每个未知量一行。",
+            "Columns depend on mode: scalar usually needs name and initial; scan can use lower/upper; polynomial can use only name; system uses one row per unknown.",
+        ),
+    )
+    for attr, zh, en in tooltip_pairs:
+        widget = getattr(self, attr, None)
+        if widget is not None:
+            widget.setToolTip(self._tr(zh, en))
+    if hasattr(self, "root_equations_edit"):
+        self.root_equations_edit.setToolTip(
+            self._tr(
+                "输入要求解的方程。留空不会使用示例；示例只显示在背景提示中。",
+                "Enter equations to solve. Leaving it blank does not use the example; the example is only placeholder text.",
+            )
+        )
+    if hasattr(self, "root_mode_combo"):
+        self.root_mode_combo.setToolTip(getattr(self, "root_mode_help_button", self.root_mode_combo).toolTip())
+    button_tooltips = {
+        "root_detect_unknowns_button": (
+            "按当前方程、数据列和常数重新识别未知量；已删除的已识别行会被移除。",
+            "Detect unknowns from the current equations, data columns, and constants; removed detected symbols are removed from the table.",
+        ),
+        "root_add_unknown_button": (
+            "手动添加未知量行，用于补充或覆盖自动识别。",
+            "Add an unknown row manually to supplement or override detection.",
+        ),
+        "root_remove_unknown_button": (
+            "删除选中的未知量行。",
+            "Remove selected unknown rows.",
+        ),
+    }
+    for attr, (zh, en) in button_tooltips.items():
+        widget = getattr(self, attr, None)
+        if widget is not None:
+            widget.setToolTip(self._tr(zh, en))
+
+
 def _open_formula_preview(self, edit_widget, lhs=None) -> None:
     if hasattr(edit_widget, "toPlainText"):
         text = edit_widget.toPlainText().strip()
@@ -2315,9 +3783,11 @@ def _remove_parameter_table_rows(self, table_name: str) -> None:
 def _clear_table(self):
     """Clear all data in the manual table."""
     table = self.manual_table
+    mode = self.mode_combo.currentData() if hasattr(self, "mode_combo") else None
+    column_count = 1 if mode == "root_solving" else 3
     table.setRowCount(6)
-    table.setColumnCount(3)
-    table.setHorizontalHeaderLabels(["A", "B", "C"])
+    table.setColumnCount(column_count)
+    table.setHorizontalHeaderLabels([chr(65 + index) for index in range(column_count)])
     table.clearContents()
     _apply_equal_column_stretch(table)
 

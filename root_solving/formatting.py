@@ -28,7 +28,11 @@ _BATCH_RESULT_COLUMNS = frozenset(BATCH_CSV_HEADERS)
 
 
 def render_root_result(
-    result: RootResult, *, display_digits: int = 10, language: str = "en"
+    result: RootResult,
+    *,
+    display_digits: int = 10,
+    uncertainty_digits: int = 1,
+    language: str = "en",
 ) -> tuple[str, list[dict[str, str]], list[str]]:
     """Render a root-solving result for desktop markdown and CSV plumbing."""
     digits = max(1, int(display_digits))
@@ -38,7 +42,7 @@ def render_root_result(
             "name": root.name,
             "value": "" if root.value is None else _format_root_value(root.value, digits),
             "uncertainty": _format_optional_real(root.uncertainty, digits),
-            "display_value": _format_root_display_value(root, digits),
+            "display_value": _format_root_display_value(root, digits, uncertainty_digits),
             "backend": result.backend,
             "mode": result.mode,
             "residual_norm": residual_norm,
@@ -49,7 +53,11 @@ def render_root_result(
 
 
 def render_root_batch_result(
-    batch: RootBatchResult, *, display_digits: int = 10, language: str = "en"
+    batch: RootBatchResult,
+    *,
+    display_digits: int = 10,
+    uncertainty_digits: int = 1,
+    language: str = "en",
 ) -> tuple[str, list[dict[str, str]], list[str]]:
     """Render a root batch result as a flat table for desktop result plumbing."""
     digits = max(1, int(display_digits))
@@ -94,7 +102,7 @@ def render_root_batch_result(
                     "name": root.name,
                     "value": _format_root_value(root.value, digits),
                     "uncertainty": _format_optional_real(root.uncertainty, digits),
-                    "display_value": _format_root_display_value(root, digits),
+                    "display_value": _format_root_display_value(root, digits, uncertainty_digits),
                     "backend": batch_row.result.backend,
                     "mode": batch_row.result.mode,
                     "residual_norm": residual_norm,
@@ -370,7 +378,7 @@ def _format_optional_real(value: mp.mpf | None, digits: int) -> str:
     return _format_real(value, digits)
 
 
-def _format_root_display_value(root: object, digits: int) -> str:
+def _format_root_display_value(root: object, digits: int, uncertainty_digits: int) -> str:
     value = getattr(root, "value", None)
     uncertainty = getattr(root, "uncertainty", None)
     if value is None:
@@ -380,7 +388,7 @@ def _format_root_display_value(root: object, digits: int) -> str:
     if isinstance(value, (mp.mpc, complex)):
         return _format_root_value(value, digits)
     try:
-        formatted = format_result_with_uncertainty_latex(value, uncertainty)
+        formatted = format_result_with_uncertainty_latex(value, uncertainty, max(1, int(uncertainty_digits)))
     except (ValueError, TypeError, ArithmeticError):
         return _format_root_value(value, digits)
     return _latex_to_plain_uncertainty(formatted)

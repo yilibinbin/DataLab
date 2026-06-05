@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 
 import mpmath as mp
 import pytest
@@ -233,6 +234,38 @@ def test_workspace_controller_restores_snapshot_without_live_payloads(qtbot) -> 
     assert not target.display_digits_spin.isEnabled()
 
 
+def test_workspace_preserves_root_result_plot_attachment(qtbot, monkeypatch) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    monkeypatch.setattr("app_desktop.window_extrapolation_mixin.QMessageBox.information", lambda *args: None)
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "root_solving")
+    source._on_root_solving_finished(
+        {
+            "markdown": "| root |\n|---|\n| 1 |",
+            "csv_headers": ["root"],
+            "csv_rows": [{"root": "1"}],
+            "warnings": [],
+            "plot_bytes": PNG_1X1,
+        }
+    )
+
+    bundle = capture_workspace(source, title="root result")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    assert snapshot["kind"] == "root_solving"
+    assert snapshot["plots"][0]["path"] == "attachments/plots/plot-001.png"
+    assert bundle.attachments["attachments/plots/plot-001.png"] == PNG_1X1
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.result_plot_bytes == PNG_1X1
+    assert target._csv_rows == [{"root": "1"}]
+
+
 def test_workspace_preserves_rendered_result_markdown_table(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace
@@ -263,6 +296,47 @@ def test_workspace_preserves_rendered_result_markdown_table(qtbot) -> None:
     assert "<table" in target.result_edit.toHtml()
     assert "Parameter" in target.result_edit.toPlainText()
     assert "| Parameter |" not in target.result_edit.toPlainText()
+
+
+def test_legacy_result_snapshot_fixture_round_trips_display_and_attachment(qtbot, tmp_path) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import restore_workspace
+    from shared.workspace_io import read_workspace
+
+    fixture_path = (
+        Path(__file__).parent / "fixtures" / "workspaces" / "pre_schema_result_snapshot.datalab"
+    )
+    loaded = read_workspace(fixture_path)
+
+    restored = ExtrapolationWindow()
+    qtbot.addWidget(restored)
+    restore_workspace(restored, loaded.manifest, loaded.attachments)
+
+    assert "<table" in restored.result_edit.toHtml()
+    assert "Legacy parameter" in restored.result_edit.toPlainText()
+    assert "| Legacy parameter |" not in restored.result_edit.toPlainText()
+    assert restored.log_edit.toPlainText() == "legacy log line"
+    assert "\\begin{tabular}" in restored.latex_edit.toPlainText()
+    assert restored._csv_headers == ["name", "value"]
+    assert restored._csv_rows == [{"name": "legacy", "value": "1.23(4)"}]
+    assert restored.result_plot_bytes == PNG_1X1
+
+    round_trip_path = tmp_path / "round-trip.datalab"
+    assert restored._save_workspace_to_path(round_trip_path)
+
+    reopened = ExtrapolationWindow()
+    qtbot.addWidget(reopened)
+    assert reopened._open_workspace_from_path(round_trip_path)
+
+    assert "<table" in reopened.result_edit.toHtml()
+    assert "Legacy parameter" in reopened.result_edit.toPlainText()
+    assert "| Legacy parameter |" not in reopened.result_edit.toPlainText()
+    assert reopened.log_edit.toPlainText() == "legacy log line"
+    assert "\\begin{tabular}" in reopened.latex_edit.toPlainText()
+    assert reopened._csv_headers == ["name", "value"]
+    assert reopened._csv_rows == [{"name": "legacy", "value": "1.23(4)"}]
+    assert reopened.result_plot_bytes == PNG_1X1
+    assert reopened._workspace_snapshot_only is True
 
 
 def test_workspace_preserves_root_solving_config(qtbot) -> None:
@@ -649,10 +723,14 @@ def test_workspace_restore_old_fitting_config_without_implicit(qtbot) -> None:
     qtbot.addWidget(target)
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
-    assert target.custom_params_table.rows() == [{"name": "A", "initial": "1.0", "fixed": "", "min": "", "max": ""}]
+    assert target.custom_params_table.rows() == [
+        {"name": "A", "initial": "1.0", "fixed": "", "min": "", "max": ""}
+    ]
     assert target.implicit_variable_edit.text() == "u"
-    assert target.implicit_equation_edit.toPlainText() == "a + b*Cos[u] + c*x"
-    assert target.implicit_output_edit.toPlainText() == "u"
+    assert target.implicit_equation_edit.toPlainText() == ""
+    assert "a + b*Cos[u] + c*x" in target.implicit_equation_edit.placeholderText()
+    assert target.implicit_output_edit.toPlainText() == ""
+    assert "u" in target.implicit_output_edit.placeholderText()
     assert [(row[0].text(), row[1].text()) for row in target.variable_rows] == [("x", "A")]
 
 
@@ -1332,7 +1410,9 @@ def test_fit_latex_report_escapes_implicit_equation_and_output_text() -> None:
     )
 
     text = "\n".join(lines)
-    assert r"Implicit equation: \texttt{a\_b + c\% \& \# \textbackslash{}\textbackslash{} x}\\" in text
+    assert (
+        r"Implicit equation: \texttt{a\_b + c\% \& \# \textbackslash{}\textbackslash{} x}\\" in text
+    )
     assert r"Implicit output: \texttt{u\_out \& y}\\" in text
 
 

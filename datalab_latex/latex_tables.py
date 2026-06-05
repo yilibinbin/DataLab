@@ -30,7 +30,17 @@ import os
 # unused-but-re-exported names; ``__all__`` (built below) is the
 # canonical public-API contract.
 from .latex_tables_error_propagation import *  # noqa: F401, F403
+from .latex_tables_error_propagation import (
+    apply_formula_to_data,
+    generate_error_propagation_table,
+    process_constants_file,
+    process_uncertainty_data_file,
+)
 from .latex_tables_extrapolation import *  # noqa: F401, F403
+from .latex_tables_extrapolation import (
+    generate_latex_table,
+    process_data_file,
+)
 
 # Build ``__all__`` dynamically so adding a name to either submodule's
 # own ``__all__`` automatically exposes it here. No double-binding
