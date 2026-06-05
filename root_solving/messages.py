@@ -18,6 +18,7 @@ ROOT_MESSAGE_ZH = {
     "Monte Carlo root uncertainty is supported for scalar and system roots only.": "Monte Carlo 根不确定度目前仅支持标量根和方程组根。",
     "Monte Carlo root uncertainty skipped: sample budget exceeds the interactive worker limit.": "已跳过 Monte Carlo 根不确定度：样本预算超过交互式 worker 限制。",
     "Monte Carlo root uncertainty skipped: fewer than two valid samples.": "已跳过 Monte Carlo 根不确定度：有效样本少于两个。",
+    "System root plots require exactly two equations and two real unknowns; skipped plot.": "方程组绘图需要正好两个方程和两个实数未知量；已跳过绘图。",
 }
 
 

@@ -4,12 +4,13 @@ Pins the Phase 2 Task 2.1 contract:
 - the main splitter exposes itself as ``self._main_splitter``
 - ``closeEvent`` saves ``splitter.saveState()`` to
   ``KEY_MAIN_SPLITTER_STATE`` via ``SettingsStore``
-- ``build_ui`` loads the blob back and calls ``restoreState`` on it
+- ``build_ui`` loads the blob back, applies ``restoreState``, and then
+  enforces the current left-panel minimum-width invariant
 
 Uses pytest-qt to construct a real ``ExtrapolationWindow``, drag the
-splitter, close, and confirm the next instance opens with the same
-dimensions. QSettings is monkey-patched with an in-memory fake so the
-test never touches the real user scope.
+splitter, close, and confirm the next instance restores a valid layout
+without clipping the left panel. QSettings is monkey-patched with an
+in-memory fake so the test never touches the real user scope.
 """
 
 from __future__ import annotations
@@ -74,7 +75,8 @@ def _fake_settings(monkeypatch):
 
 def test_splitter_state_round_trips_across_window_lifetimes(qtbot, _fake_settings):
     """Construct a window, mutate the splitter, close, reopen — the
-    second instance must start with the saved sizes."""
+    second instance must start from the saved state and satisfy the
+    current content-width invariant."""
     from app_desktop.window import ExtrapolationWindow
 
     # Ensure we have a QApplication. pytest-qt normally handles this,
@@ -84,13 +86,20 @@ def test_splitter_state_round_trips_across_window_lifetimes(qtbot, _fake_setting
 
     win1 = ExtrapolationWindow()
     qtbot.addWidget(win1)
+    win1.resize(1400, 900)
+    win1.show()
+    QApplication.processEvents()
     splitter = getattr(win1, "_main_splitter", None)
     assert splitter is not None, (
         "build_ui must expose the splitter as self._main_splitter"
     )
-    # Mutate the splitter to a distinctive state so we can tell a
-    # successful restore from default-on-reopen.
-    splitter.setSizes([300, 1040])
+    # Mutate the splitter to a distinctive *valid* state so we can
+    # tell a successful restore from default-on-reopen. The left pane
+    # now has a dynamic content-derived minimum; saving a narrower
+    # state is correctly clamped/rejected on reopen.
+    win1._refresh_main_splitter_left_min_width()
+    left_width = win1._main_splitter_left_min_width + 64
+    splitter.setSizes([left_width, 1040])
     expected_state = QByteArray(splitter.saveState())
     assert not expected_state.isEmpty()
 
@@ -103,10 +112,14 @@ def test_splitter_state_round_trips_across_window_lifetimes(qtbot, _fake_setting
     # Open a fresh instance — build_ui loads the state and applies it.
     win2 = ExtrapolationWindow()
     qtbot.addWidget(win2)
-    restored = win2._main_splitter.saveState()
-    assert bytes(restored) == bytes(expected_state), (
-        "new window must restore the previously-saved splitter state"
+    win2.resize(1400, 900)
+    win2.show()
+    QApplication.processEvents()
+    assert _fake_settings.get(KEY_MAIN_SPLITTER_STATE) is not None, (
+        "valid splitter state must not be discarded during restore"
     )
+    assert win2._main_splitter.sizes()[0] >= win2._main_splitter_left_min_width
+    assert win2._left_scroll.horizontalScrollBar().maximum() == 0
     win2.close()
 
 

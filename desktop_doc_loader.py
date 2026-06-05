@@ -104,6 +104,7 @@ def _default_manifest() -> list[DesktopDocManifestEntry]:
         {"slug": "extrapolation", "title_zh": "序列外推", "title_en": "Extrapolation"},
         {"slug": "uncertainty", "title_zh": "误差传递", "title_en": "Error Propagation"},
         {"slug": "fitting", "title_zh": "拟合", "title_en": "Fitting"},
+        {"slug": "root-solving", "title_zh": "求根", "title_en": "Root Solving"},
         {"slug": "statistics", "title_zh": "统计平均", "title_en": "Statistics"},
         {"slug": "export", "title_zh": "导出与排版", "title_en": "Export & Typesetting"},
         {"slug": "deploy", "title_zh": "部署、打包与发布", "title_en": "Deployment & Release"},

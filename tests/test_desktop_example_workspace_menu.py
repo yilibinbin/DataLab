@@ -20,7 +20,7 @@ def test_example_workspace_menu_action_exists(qtbot):
 
 
 def test_open_example_workspace_marks_template_and_save_requires_save_as(qtbot, monkeypatch, tmp_path):
-    from app_desktop.window import EXAMPLE_WORKSPACE_NAMES, ExtrapolationWindow, list_example_workspaces
+    from app_desktop.window import EXAMPLE_WORKSPACE_NAMES, ExtrapolationWindow, list_example_menu_entries, list_example_workspaces
     from shared.workspace_io import read_workspace
     from tests.test_example_workspaces import FORBIDDEN_STRATEGY_KEYS, _walk_keys
 
@@ -30,6 +30,7 @@ def test_open_example_workspace_marks_template_and_save_requires_save_as(qtbot, 
 
     examples = list_example_workspaces()
     assert {path.name for path in examples} == set(EXAMPLE_WORKSPACE_NAMES)
+    assert [entry.filename for entry in list_example_menu_entries()] == list(EXAMPLE_WORKSPACE_NAMES)
     assert examples
     selected = examples[0]
     original_bytes = selected.read_bytes()

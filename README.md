@@ -57,7 +57,7 @@
 
 ### 🏃 快速上手(用内置示例)
 
-`examples/` 目录已附 5 个示例文件,直接加载即可学习每种模式的数据格式:
+`examples/` 目录包含示例输入文件；`examples/workspaces/` 还提供可直接打开的 `.datalab` 工作区模板，用于学习完整配置、结果快照、求根和自洽拟合示例：
 
 ```
 examples/
@@ -65,15 +65,17 @@ examples/
 ├── fitting_powerlaw.txt            # 拟合:y = 2.5x^-0.7 + 0.1 + 高斯噪声
 ├── error_propagation.txt           # 误差传递:V1, V2 + 各自 σ
 ├── statistics_weighted.txt         # 统计:10 次加权测量
-└── constants.txt                   # 物理常数:ALPHA, G, c, h, hbar, kB, NA, e
+├── constants.txt                   # 物理常数:ALPHA, G, c, h, hbar, kB, NA, e
+└── workspaces/                     # 内置只读工作区模板，包括求根与量子亏损示例
 ```
 
 **步骤:**
 1. 启动 GUI → 顶部 mode 下拉框选模式(如 "Extrapolation")
 2. "打开数据文件" → 选 `examples/<对应文件>.txt`
 3. 误差传递模式:在"常数文件"字段加载 `examples/constants.txt`,公式输入 `(V1+V2)/V1`
-4. 点 "开始执行" → 看 "结果" 标签
-5. 切到 "LaTeX" 标签 → 选引擎(默认 Tectonic,首次会自动下载 ~30 MB)→ 点编译 → "PDF 预览" 标签看渲染结果
+4. 或选择“打开示例工作区”直接加载完整模板
+5. 点 "开始执行" → 看 "结果" 标签
+6. 切到 "LaTeX" 标签 → 选引擎(默认 Tectonic,首次会自动下载 ~30 MB)→ 点编译 → "PDF 预览" 标签看渲染结果
 
 ### 🔢 不确定度括号语法
 
@@ -158,8 +160,9 @@ desktop GUI on macOS via Qt's in-process `QWidget.grab()` (1400×900 window).
 
 ### 🏃 Quick start (with bundled examples)
 
-The `examples/` directory ships five working input files so a new user can
-load real data into each mode without inventing test data:
+The `examples/` directory ships working input files, and `examples/workspaces/`
+ships read-only `.datalab` templates for complete configurations, result
+snapshots, root solving, and self-consistent fitting:
 
 ```
 examples/
@@ -167,12 +170,14 @@ examples/
 ├── fitting_powerlaw.txt           # y = 2.5 x^-0.7 + 0.1 + Gaussian noise
 ├── error_propagation.txt          # V1, V2 each with measurement σ
 ├── statistics_weighted.txt        # 10 independent weighted measurements
-└── constants.txt                  # ALPHA, G, c, h, hbar, kB, NA, e (with σ)
+├── constants.txt                  # ALPHA, G, c, h, hbar, kB, NA, e (with σ)
+└── workspaces/                    # bundled read-only workspace templates
 ```
 
-Workflow: start the GUI → pick a mode → load the matching example file →
-"Run" → switch to the "LaTeX" tab → pick an engine (Tectonic is the default
-and auto-downloads on first use) → compile → see PDF in the preview tab.
+Workflow: start the GUI → pick a mode and load the matching example file, or
+open a bundled example workspace → "Run" → switch to the "LaTeX" tab → pick an
+engine (Tectonic is the default and auto-downloads on first use) → compile →
+see PDF in the preview tab.
 
 ### 🔢 Uncertainty notation
 

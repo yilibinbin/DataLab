@@ -511,6 +511,64 @@ def test_execute_root_solving_job_payload_returns_real_png_when_root_plots_enabl
     assert plot_bytes.startswith(b"\x89PNG\r\n\x1a\n")
 
 
+def test_execute_root_solving_job_payload_returns_real_png_for_two_dimensional_system_plot() -> None:
+    job = RootSolvingJob(
+        equations=("x + y - 3", "x - y - 1"),
+        unknown_rows=(
+            {"name": "x", "initial": "2", "lower": "0", "upper": "4"},
+            {"name": "y", "initial": "1", "lower": "0", "upper": "4"},
+        ),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="system",
+        scan_config={},
+        precision=16,
+        display_digits=10,
+        render_plots=True,
+    )
+
+    payload = _execute_root_solving_job_payload(job)
+
+    plot_bytes = payload["plot_bytes"]
+    assert isinstance(plot_bytes, bytes)
+    assert plot_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    warnings = cast(list[str], payload["warnings"])
+    assert not any("System root plots require exactly two equations" in warning for warning in warnings)
+
+
+def test_execute_root_solving_job_payload_warns_for_unsupported_system_plot_in_chinese() -> None:
+    job = RootSolvingJob(
+        equations=("x + y + z - 1", "x - y", "z - 1"),
+        unknown_rows=(
+            {"name": "x", "initial": "0.5", "lower": "0", "upper": "2"},
+            {"name": "y", "initial": "0.5", "lower": "0", "upper": "2"},
+            {"name": "z", "initial": "1", "lower": "0", "upper": "2"},
+        ),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="system",
+        scan_config={},
+        precision=16,
+        display_digits=10,
+        language="zh",
+        render_plots=True,
+    )
+
+    payload = _execute_root_solving_job_payload(job)
+
+    assert "plot_bytes" not in payload
+    warnings = cast(list[str], payload["warnings"])
+    assert any("方程组绘图需要正好两个方程和两个实数未知量" in warning for warning in warnings)
+
+
 def test_execute_root_solving_job_payload_does_not_plot_failed_root_batch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

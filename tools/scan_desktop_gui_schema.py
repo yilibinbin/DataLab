@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 
 
 MODES = ("extrapolation", "error", "fitting", "root_solving", "statistics")
+ROOT_SOLVING_SUBMODES = ("scalar", "scan_multiple", "polynomial", "system")
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg=="
 )
@@ -45,16 +46,61 @@ def _create_window() -> Any:
 
 
 def _has_no_horizontal_scrollbar(window: Any) -> bool:
-    for mode in MODES:
-        window.mode_combo.setCurrentIndex(_combo_index_for_data(window.mode_combo, mode))
+    for scenario in _left_panel_scrollbar_scenarios(window):
+        scenario()
         QApplication.processEvents()
-        window._refresh_main_splitter_left_min_width()
-        window._main_splitter.setSizes([1, max(1, window.width() - 1)])
-        QApplication.processEvents()
+        _force_smallest_left_splitter(window)
         bar = window._left_scroll.horizontalScrollBar()
         if bar.maximum() != 0 or bar.isVisible():
             return False
     return True
+
+
+def _left_panel_scrollbar_scenarios(window: Any) -> list[Any]:
+    scenarios: list[Any] = []
+
+    def main_mode(mode: str) -> Any:
+        def apply() -> None:
+            window.mode_combo.setCurrentIndex(_combo_index_for_data(window.mode_combo, mode))
+
+        return apply
+
+    scenarios.extend(main_mode(mode) for mode in MODES if mode != "root_solving")
+
+    for root_mode in ROOT_SOLVING_SUBMODES:
+        scenarios.append(lambda root_mode=root_mode: _configure_root_scrollbar_scenario(window, root_mode))
+    return scenarios
+
+
+def _configure_root_scrollbar_scenario(window: Any, root_mode: str) -> None:
+    window.mode_combo.setCurrentIndex(_combo_index_for_data(window.mode_combo, "root_solving"))
+    window.root_mode_combo.setCurrentIndex(_combo_index_for_data(window.root_mode_combo, root_mode))
+    if root_mode == "system":
+        window.root_equations_edit.setPlainText("x + y - 3\nx - y - 1")
+        window.root_unknowns_table.set_rows(
+            [
+                {"name": "x", "initial": "2", "lower": "0", "upper": "4"},
+                {"name": "y", "initial": "1", "lower": "0", "upper": "4"},
+            ]
+        )
+    elif root_mode == "scan_multiple":
+        window.root_equations_edit.setPlainText("x^2-A")
+        window.root_unknowns_table.set_rows([{"name": "x", "initial": "1", "lower": "-2", "upper": "2"}])
+        window.generate_plots_checkbox.setChecked(True)
+        window._update_result_plot(PNG_1X1)
+        window.tabs.setCurrentIndex(window.result_tab_index)
+        window.result_tabs.setCurrentIndex(window.result_tabs.indexOf(window.result_plot_scroll.parentWidget()))
+    else:
+        window.root_equations_edit.setPlainText("x^2-A")
+        window.root_unknowns_table.set_rows([{"name": "x", "initial": "1", "lower": "", "upper": ""}])
+
+
+def _force_smallest_left_splitter(window: Any) -> None:
+    window._refresh_main_splitter_left_min_width()
+    window._main_splitter.setSizes([1, max(1, window.width() - 1)])
+    QApplication.processEvents()
+    window._refresh_main_splitter_left_min_width()
+    QApplication.processEvents()
 
 
 def _workspace_result_round_trip_ok(window: Any) -> bool:

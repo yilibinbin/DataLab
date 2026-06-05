@@ -30,6 +30,7 @@ class WindowExtrapolationMixin:
             (self._calc_worker and self._calc_worker.isRunning())
             or (self._fit_worker and self._fit_worker.isRunning())
             or (getattr(self, "_root_worker", None) and self._root_worker.isRunning())
+            or (getattr(self, "_latex_compile_worker", None) and self._latex_compile_worker.isRunning())
         )
 
     def _set_button_to_stop_mode(self):
@@ -55,6 +56,10 @@ class WindowExtrapolationMixin:
             stopped = True
         if getattr(self, "_root_worker", None) and self._root_worker.isRunning():
             self._root_worker.request_stop()
+            stopped = True
+        latex_worker = getattr(self, "_latex_compile_worker", None)
+        if latex_worker is not None and latex_worker.isRunning():
+            latex_worker.request_cancel()
             stopped = True
         if stopped:
             self._append_log(self._tr("正在停止任务...", "Stopping task..."))

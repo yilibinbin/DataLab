@@ -55,6 +55,8 @@ def build_root_latex_document(
         "\\documentclass{article}",
         "\\usepackage[UTF8]{ctex}" if language == "zh" else "",
         "\\usepackage{booktabs}",
+        "\\usepackage{dcolumn}" if include_dcolumn else "",
+        "\\newcolumntype{d}[1]{D{.}{.}{#1}}" if include_dcolumn else "",
         "\\usepackage{siunitx}",
         build_sisetup_block(group_size=group_size, include_dcolumn=include_dcolumn).rstrip(),
         "\\begin{document}",
@@ -67,6 +69,7 @@ def build_root_latex_document(
             rows,
             digits=max(1, int(digits)),
             uncertainty_digits=max(1, int(uncertainty_digits)),
+            group_size=max(0, int(group_size)),
             language=language,
             include_dcolumn=include_dcolumn,
         )
@@ -80,6 +83,7 @@ def _root_table(
     *,
     digits: int,
     uncertainty_digits: int,
+    group_size: int,
     language: str,
     include_dcolumn: bool,
 ) -> list[str]:
@@ -90,6 +94,7 @@ def _root_table(
             row.get("uncertainty", ""),
             digits=digits,
             uncertainty_digits=uncertainty_digits,
+            group_size=group_size,
             include_dcolumn=False,
         )
         for row in rows
@@ -117,6 +122,7 @@ def _root_table(
                         row.get("uncertainty", ""),
                         digits=digits,
                         uncertainty_digits=uncertainty_digits,
+                        group_size=group_size,
                         include_dcolumn=include_dcolumn,
                     ),
                     _escape_latex(_text(row.get("backend", ""))),
@@ -141,6 +147,7 @@ def _number_with_uncertainty(
     *,
     digits: int,
     uncertainty_digits: int,
+    group_size: int,
     include_dcolumn: bool,
 ) -> str:
     text = _text(value)
@@ -157,6 +164,7 @@ def _number_with_uncertainty(
             is_input=False,
             uncertainty_digits=uncertainty_digits,
             zero_uncertainty_mantissa_decimals=max(1, digits - 1),
+            latex_group_size=group_size,
         )
     except Exception:
         return _escape_latex(text)

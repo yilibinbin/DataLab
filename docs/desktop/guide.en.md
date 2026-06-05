@@ -30,7 +30,7 @@ Common uncertainty formats:
 
 ## Basic Workflow
 
-1. Select a mode: Extrapolation / Error propagation / Fitting / Statistics
+1. Select a mode: Extrapolation / Error propagation / Fitting / Root solving / Statistics
 2. Provide input data (file or paste)
 3. Configure required parameters for the selected mode
 4. Click Run/Start
@@ -51,4 +51,3 @@ In fitting mode you can enable `log-x` / `log-y`:
 
 - If the data contains non-positive values, the corresponding log axis is automatically disabled with a log message
 - Check data ranges before enabling log axes
-

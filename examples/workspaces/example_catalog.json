@@ -1,0 +1,108 @@
+{
+  "examples": [
+    {
+      "category": "extrapolation",
+      "filename": "extrapolation.datalab",
+      "source_files": [
+        "examples/extrapolation_richardson.txt"
+      ],
+      "title_en": "Extrapolation: Richardson limit",
+      "title_zh": "序列外推：Richardson 极限",
+      "variants": [
+        "richardson"
+      ]
+    },
+    {
+      "category": "error-propagation",
+      "filename": "error-propagation.datalab",
+      "source_files": [
+        "examples/error_propagation.txt",
+        "examples/constants.txt"
+      ],
+      "title_en": "Error propagation: product quantity",
+      "title_zh": "误差传递：乘积量",
+      "variants": [
+        "taylor",
+        "constants"
+      ]
+    },
+    {
+      "category": "statistics",
+      "filename": "statistics.datalab",
+      "source_files": [
+        "examples/statistics_weighted.txt"
+      ],
+      "title_en": "Statistics: weighted mean",
+      "title_zh": "统计平均：加权均值",
+      "variants": [
+        "weighted",
+        "sample"
+      ]
+    },
+    {
+      "category": "fitting",
+      "filename": "fitting.datalab",
+      "source_files": [
+        "examples/fitting_powerlaw.txt"
+      ],
+      "title_en": "Fitting: constrained power law",
+      "title_zh": "拟合：带约束的幂律模型",
+      "variants": [
+        "custom",
+        "implicit",
+        "weighted",
+        "constraints",
+        "high_precision",
+        "scipy_precision_16"
+      ]
+    },
+    {
+      "category": "fitting",
+      "filename": "quantum-defect-implicit.datalab",
+      "source_files": [],
+      "title_en": "Fitting: self-consistent quantum defect",
+      "title_zh": "拟合：自洽量子亏损示例",
+      "variants": [
+        "self_consistent",
+        "implicit",
+        "quantum_defect",
+        "ionization_energy",
+        "weighted"
+      ]
+    },
+    {
+      "category": "root-solving",
+      "filename": "root-scalar-with-uncertainty.datalab",
+      "source_files": [],
+      "title_en": "Root solving: scalar uncertainty",
+      "title_zh": "求根：带不确定度的标量根",
+      "variants": [
+        "scalar",
+        "linear_uncertainty"
+      ]
+    },
+    {
+      "category": "root-solving",
+      "filename": "root-monte-carlo-uncertainty.datalab",
+      "source_files": [],
+      "title_en": "Root solving: Monte Carlo uncertainty",
+      "title_zh": "求根：Monte Carlo 不确定度",
+      "variants": [
+        "scalar",
+        "monte_carlo"
+      ]
+    },
+    {
+      "category": "root-solving",
+      "filename": "root-batch-quadratic.datalab",
+      "source_files": [],
+      "title_en": "Root solving: batch quadratic",
+      "title_zh": "求根：批量二次方程",
+      "variants": [
+        "batch",
+        "linear_uncertainty"
+      ]
+    }
+  ],
+  "schema": "datalab.example_catalog.v1"
+}
