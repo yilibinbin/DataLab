@@ -437,6 +437,7 @@ def build_ui(self):
                     and len(sizes_after) == splitter.count()
                     and all(s >= 0 for s in sizes_after)
                     and sum(sizes_after) > 0
+                    and sizes_after[0] >= getattr(self, "_main_splitter_left_min_width", 0)
                 ):
                     # Good restore — leave it in place.
                     pass
@@ -466,6 +467,15 @@ def _refresh_main_splitter_left_min_width(self) -> None:
     left_min_width = max(320, left_container.minimumSizeHint().width()) + viewport_overhead
     self._main_splitter_left_min_width = left_min_width
     left_scroll.setMinimumWidth(left_min_width)
+    splitter = getattr(self, "_main_splitter", None)
+    if splitter is None or splitter.count() < 2:
+        return
+    sizes = splitter.sizes()
+    if not sizes or sizes[0] >= left_min_width:
+        return
+    total = max(sum(sizes), left_min_width + 1)
+    right_width = max(1, total - left_min_width)
+    splitter.setSizes([left_min_width, right_width])
 
 def build_left_panel(self):
     # Mode selection

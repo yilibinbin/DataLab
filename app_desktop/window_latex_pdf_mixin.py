@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QEventLoop, Qt, QThread, Signal
@@ -103,6 +104,159 @@ class _TectonicInstallWorker(QThread):
             self.error = exc
 
 
+@dataclass(frozen=True)
+class _LatexEngineRun:
+    engine: str
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+@dataclass(frozen=True)
+class _LatexCompileOutcome:
+    runs: tuple[_LatexEngineRun, ...] = ()
+    pdf_path: Path | None = None
+    error: str | None = None
+    timed_out: bool = False
+    cancelled: bool = False
+    used_fallback: str | None = None
+
+    @property
+    def succeeded(self) -> bool:
+        return bool(self.runs) and self.runs[-1].returncode == 0 and not self.error
+
+
+def _looks_like_plain_tex_output(output: str) -> bool:
+    lower = output.lower()
+    return "format=pdftex" in lower or "\\documentclass" in lower and "undefined control sequence" in lower
+
+
+class _LatexCompileWorker(QThread):
+    """Run external LaTeX compilers without blocking the Qt GUI thread."""
+
+    completed = Signal(object)
+
+    def __init__(
+        self,
+        *,
+        target: Path,
+        pdf_dir: Path,
+        engine_name: str,
+        engine_path: Path,
+        pdf_path: Path,
+        fallback_name: str | None = None,
+        fallback_path: Path | None = None,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._target = target
+        self._pdf_dir = pdf_dir
+        self._engine_name = engine_name
+        self._engine_path = engine_path
+        self._pdf_path = pdf_path
+        self._fallback_name = fallback_name
+        self._fallback_path = fallback_path
+        self._process: subprocess.Popen[str] | None = None
+        self._cancel_requested = False
+
+    def request_cancel(self) -> None:
+        self._cancel_requested = True
+        proc = self._process
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+
+    def request_kill(self) -> None:
+        self._cancel_requested = True
+        proc = self._process
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+
+    def run(self) -> None:
+        runs: list[_LatexEngineRun] = []
+        try:
+            first = self._run_engine(self._engine_name, self._engine_path)
+            runs.append(first)
+            output_blob = f"{first.stdout}\n{first.stderr}"
+            if (
+                first.returncode != 0
+                and self._fallback_name
+                and self._fallback_path
+                and self._fallback_path.exists()
+                and _looks_like_plain_tex_output(output_blob)
+                and not self._cancel_requested
+            ):
+                runs.append(self._run_engine(self._fallback_name, self._fallback_path))
+                self.completed.emit(
+                    _LatexCompileOutcome(
+                        runs=tuple(runs),
+                        pdf_path=self._pdf_path,
+                        cancelled=self._cancel_requested,
+                        used_fallback=self._fallback_name,
+                    )
+                )
+                return
+            self.completed.emit(
+                _LatexCompileOutcome(
+                    runs=tuple(runs),
+                    pdf_path=self._pdf_path,
+                    cancelled=self._cancel_requested,
+                )
+            )
+        except FileNotFoundError as exc:
+            self.completed.emit(_LatexCompileOutcome(runs=tuple(runs), pdf_path=self._pdf_path, error=str(exc)))
+        except subprocess.TimeoutExpired:
+            self.completed.emit(_LatexCompileOutcome(runs=tuple(runs), pdf_path=self._pdf_path, timed_out=True))
+        except Exception as exc:  # noqa: BLE001
+            import traceback
+
+            self.completed.emit(
+                _LatexCompileOutcome(
+                    runs=tuple(runs),
+                    pdf_path=self._pdf_path,
+                    error=f"{exc}\n{traceback.format_exc()}",
+                )
+            )
+
+    def _run_engine(self, engine: str, path: Path) -> _LatexEngineRun:
+        if path.stem.lower().endswith("tectonic"):
+            cmd = tectonic_compile_argv(str(path), self._target)
+            timeout = 300
+        else:
+            cmd = [str(path), "-interaction=nonstopmode", "-halt-on-error", self._target.name]
+            timeout = 120
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(self._pdf_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self._process = proc
+        if self._cancel_requested and proc.poll() is None:
+            proc.kill()
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            raise
+        except Exception:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            raise
+        finally:
+            self._process = None
+        if self._cancel_requested:
+            return _LatexEngineRun(engine=engine, returncode=-15, stdout=stdout or "", stderr=stderr or "")
+        return _LatexEngineRun(
+            engine=engine,
+            returncode=proc.returncode if proc is not None and proc.returncode is not None else -1,
+            stdout=stdout or "",
+            stderr=stderr or "",
+        )
+
 class WindowLatexPdfMixin:
     # ----------------------------------------------------------- LaTeX ops --
     def open_latex_file(self):
@@ -137,6 +291,13 @@ class WindowLatexPdfMixin:
         self._load_latex_into_editor(self.current_latex_path, show_message=show_message)
 
     def compile_latex_to_pdf(self):
+        if getattr(self, "_latex_compile_worker", None) is not None:
+            QMessageBox.information(
+                self,
+                self._tr("正在编译", "Compilation Running"),
+                self._tr("LaTeX 正在编译，请等待当前任务完成。", "LaTeX is already compiling; wait for it to finish."),
+            )
+            return
         target = self._persist_latex_editor(silent=True)
         if not target:
             return
@@ -161,71 +322,92 @@ class WindowLatexPdfMixin:
             return
         pdf_dir = target.parent
         pdf_path = pdf_dir / (target.stem + ".pdf")
+        fallback = "xelatex" if engine.lower() == "pdflatex" else "pdflatex"
+        alt_exec = self._resolve_latex_engine_no_prompt(fallback)
+        fallback_path = _safe_resolve_path(alt_exec) if alt_exec else None
+        if fallback_path is not None and not fallback_path.exists():
+            fallback_path = None
 
-        def _run_engine(path: Path):
-            # Tectonic uses a different CLI shape (no -interaction /
-            # -halt-on-error flags). The ``shared.latex_engine`` helper
-            # builds the right argv list based on engine name; we
-            # detect Tectonic by binary basename so the manual file-
-            # picker path also flows through the right branch.
-            if path.stem.lower().endswith("tectonic"):
-                cmd = tectonic_compile_argv(str(path), target)
-                return subprocess.run(
-                    cmd,
-                    cwd=str(pdf_dir),
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=300,  # Tectonic may pull packages over the net
+        progress = QProgressDialog(
+            self._tr("正在编译 LaTeX…", "Compiling LaTeX…"),
+            self._tr("取消", "Cancel"),
+            0,
+            0,
+            self,
+        )
+        progress.setWindowModality(Qt.NonModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+
+        worker = _LatexCompileWorker(
+            target=target,
+            pdf_dir=pdf_dir,
+            engine_name=engine,
+            engine_path=engine_path,
+            pdf_path=pdf_path,
+            fallback_name=fallback if fallback_path is not None else None,
+            fallback_path=fallback_path,
+            parent=self,
+        )
+        self._latex_compile_worker = worker
+        self._latex_compile_progress = progress
+        if hasattr(self, "latex_compile_button"):
+            self.latex_compile_button.setEnabled(False)
+        progress.canceled.connect(worker.request_cancel)
+        worker.completed.connect(self._on_latex_compile_completed)
+        worker.finished.connect(worker.deleteLater)
+        progress.show()
+        worker.start()
+
+    def _on_latex_compile_completed(self, outcome: _LatexCompileOutcome) -> None:
+        progress = getattr(self, "_latex_compile_progress", None)
+        if progress is not None:
+            progress.close()
+            progress.deleteLater()
+        self._latex_compile_progress = None
+        self._latex_compile_worker = None
+        if hasattr(self, "latex_compile_button"):
+            self.latex_compile_button.setEnabled(True)
+
+        for run in outcome.runs:
+            output_blob = f"{run.engine} 输出 (returncode={run.returncode}):\n{run.stdout}\n{run.stderr}"
+            self._append_log(output_blob)
+
+        if outcome.used_fallback:
+            self._append_log(
+                self._tr(
+                    f"检测到 plain TeX 格式问题，已尝试改用 {outcome.used_fallback}。",
+                    f"Detected a plain TeX format issue; retried with {outcome.used_fallback}.",
                 )
-            cmd = [str(path), "-interaction=nonstopmode", "-halt-on-error", target.name]
-            return subprocess.run(cmd, cwd=str(pdf_dir), capture_output=True, text=True, check=False, timeout=120)
+            )
 
-        def _looks_like_plain_tex(output: str) -> bool:
-            lower = output.lower()
-            return "format=pdftex" in lower or "\\documentclass" in lower and "undefined control sequence" in lower
-
-        try:
-            result = _run_engine(engine_path)
-        except FileNotFoundError as exc:
-            QMessageBox.critical(self, self._tr("编译失败", "Compilation Failed"), str(exc))
+        if outcome.cancelled:
+            self._append_log(self._tr("LaTeX 编译已取消。", "LaTeX compilation canceled."))
             return
-        except subprocess.TimeoutExpired:
+
+        if outcome.timed_out:
             QMessageBox.critical(
                 self,
                 self._tr("编译失败", "Compilation Failed"),
                 self._tr("LaTeX 编译超时。", "LaTeX compilation timed out."),
             )
             return
-        except Exception as exc:  # noqa: BLE001
-            import traceback
 
-            self._append_log(traceback.format_exc())
-            QMessageBox.critical(self, self._tr("编译失败", "Compilation Failed"), str(exc))
+        if outcome.error:
+            self._append_log(outcome.error)
+            QMessageBox.critical(self, self._tr("编译失败", "Compilation Failed"), outcome.error)
             return
 
-        output_blob = f"{engine} 输出 (returncode={result.returncode}):\n{result.stdout}\n{result.stderr}"
-        self._append_log(output_blob)
-
-        if result.returncode != 0 and _looks_like_plain_tex(output_blob):
-            fallback = "xelatex" if engine.lower() == "pdflatex" else "pdflatex"
-            alt_exec = self._ensure_latex_engine(fallback)
-            if alt_exec and Path(alt_exec).exists():
-                self._append_log(
-                    self._tr(
-                        f"检测到 {engine} 使用了 plain TeX 格式，尝试改用 {fallback}…",
-                        f"{engine} seems to use plain TeX format; retrying with {fallback}…",
-                    )
+        if outcome.succeeded:
+            pdf_path = outcome.pdf_path
+            if pdf_path is None:
+                QMessageBox.critical(
+                    self,
+                    self._tr("编译失败", "Compilation Failed"),
+                    self._tr("缺少 PDF 输出路径。", "Missing PDF output path."),
                 )
-                try:
-                    result = _run_engine(Path(alt_exec))
-                    output_blob = f"{fallback} 输出 (returncode={result.returncode}):\n{result.stdout}\n{result.stderr}"
-                    self._append_log(output_blob)
-                except Exception as exc:  # noqa: BLE001
-                    QMessageBox.critical(self, self._tr("编译失败", "Compilation Failed"), str(exc))
-                    return
-
-        if result.returncode == 0:
+                return
             self.last_pdf_path = pdf_path
             if self._render_pdf_preview(pdf_path, force_reload=True):
                 QMessageBox.information(
@@ -604,6 +786,18 @@ class WindowLatexPdfMixin:
         QMessageBox.warning(self, self._tr("提示", "Notice"), self._tr(msg_zh, msg_en))
         self._prompt_engine_selection()
         return self._latex_engine_paths.get(engine)
+
+    def _resolve_latex_engine_no_prompt(self, engine: str) -> str | None:
+        """Resolve an optional fallback engine without showing dialogs."""
+        _ensure_default_path_augmented()
+        cached = self._latex_engine_paths.get(engine)
+        if cached and Path(cached).exists():
+            return cached
+        choice = resolve_engine(engine, bundle_root=find_app_root())
+        if choice is None:
+            return None
+        self._latex_engine_paths[engine] = choice.path
+        return choice.path
 
     def _offer_tectonic_install(self) -> "EngineChoice | None":
         """Ask the user before downloading Tectonic.

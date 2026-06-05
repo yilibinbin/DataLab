@@ -2403,6 +2403,9 @@ class ExtrapolationWindow(
                         self._fit_worker.wait(100)
                     if self._root_worker:
                         self._root_worker.wait(100)
+                    latex_worker = getattr(self, "_latex_compile_worker", None)
+                    if latex_worker:
+                        latex_worker.wait(100)
                     max_wait_ms -= 100
 
                 # Force terminate if still running
@@ -2415,6 +2418,13 @@ class ExtrapolationWindow(
                 if self._root_worker and self._root_worker.isRunning():
                     self._root_worker.terminate()
                     self._root_worker.wait()
+                latex_worker = getattr(self, "_latex_compile_worker", None)
+                if latex_worker is not None and latex_worker.isRunning():
+                    latex_worker.request_kill()
+                    latex_worker.wait(500)
+                    if latex_worker.isRunning():
+                        latex_worker.terminate()
+                        latex_worker.wait()
                 event.accept()
             else:
                 event.ignore()

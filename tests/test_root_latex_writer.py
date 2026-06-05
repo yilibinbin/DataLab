@@ -81,3 +81,33 @@ def test_root_latex_uses_numeric_column_spec_controls() -> None:
 
     assert r"\begin{tabular}{lllS" in siunitx_latex
     assert r"\begin{tabular}{llld" in dcolumn_latex
+
+
+def test_root_latex_dcolumn_preamble_declares_column_type() -> None:
+    rows = [{"input_row_index": "0", "root_index": "0", "name": "x", "value": "2", "backend": "mpmath"}]
+
+    latex = build_root_latex_document(rows=rows, include_dcolumn=True, language="en")
+
+    assert r"\usepackage{dcolumn}" in latex
+    assert r"\newcolumntype{d}[1]{D{.}{.}{#1}}" in latex
+
+
+def test_root_latex_dcolumn_respects_group_size_option() -> None:
+    rows = [
+        {
+            "input_row_index": "0",
+            "root_index": "0",
+            "name": "x",
+            "value": "1234567.890123",
+            "uncertainty": "0.00000123",
+            "backend": "mpmath",
+            "mode": "scalar",
+        }
+    ]
+
+    group_two = build_root_latex_document(rows=rows, include_dcolumn=True, group_size=2, language="en")
+    group_three = build_root_latex_document(rows=rows, include_dcolumn=True, group_size=3, language="en")
+
+    assert "1.23\\,45\\,67\\,89" in group_two
+    assert "1.234\\,567\\,890" in group_three
+    assert group_two != group_three
