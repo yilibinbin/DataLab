@@ -63,6 +63,10 @@ from app_desktop.parallel_preferences import (
     save_current_parallel_config,
 )
 from app_desktop.ui_schema_binder import bind_choices, bind_field
+from app_desktop.ui_schema_runtime import (
+    bind_schema_command_button,
+    register_schema_text_refresh,
+)
 from shared.parallel_config import NestedParallelPolicy, ParallelMode
 from shared.ui_schema import ChoiceSpec, FormFieldSpec, LocalizedText
 from shared.ui_specs import (
@@ -2544,21 +2548,21 @@ def _bind_extrapolation_schema_fields(
 
     bind_field(field=method_field, label=method_label, widget=self.method_combo, lang=lang)
     bind_choices(self.method_combo, method_field.choices, lang=lang)
-    _register_schema_text_refresh(self, method_field, widget=self.method_combo)
+    register_schema_text_refresh(self, method_field, widget=self.method_combo)
     bind_field(field=method_help_field, help_button=self.method_help_btn, lang=lang)
-    _register_schema_text_refresh(self, method_help_field, help_button=self.method_help_btn)
+    register_schema_text_refresh(self, method_help_field, help_button=self.method_help_btn)
     bind_field(
         field=custom_formula_field,
         label=lbl_custom,
         widget=self.custom_formula_edit,
         lang=lang,
     )
-    _register_schema_text_refresh(
+    register_schema_text_refresh(
         self,
         custom_formula_field,
         widget=self.custom_formula_edit,
     )
-    _bind_schema_command_button(
+    bind_schema_command_button(
         self,
         self.custom_formula_preview_button,
         field=custom_formula_preview_field,
@@ -2566,34 +2570,34 @@ def _bind_extrapolation_schema_fields(
         lang=lang,
     )
     bind_field(field=custom_functions_field, widget=self.custom_formula_function_button, lang=lang)
-    _register_schema_text_refresh(self, custom_functions_field, widget=self.custom_formula_function_button)
+    register_schema_text_refresh(self, custom_functions_field, widget=self.custom_formula_function_button)
     for field, label, edit in zip(power_x_fields, power_x_labels, self.power_x_edits, strict=True):
         bind_field(field=field, label=label, widget=edit, lang=lang)
-        _register_schema_text_refresh(self, field, widget=edit)
+        register_schema_text_refresh(self, field, widget=edit)
     bind_field(field=power_p_field, label=lbl_p, widget=self.power_p_edit, lang=lang)
-    _register_schema_text_refresh(self, power_p_field, widget=self.power_p_edit)
+    register_schema_text_refresh(self, power_p_field, widget=self.power_p_edit)
     bind_field(field=power_seed_field, label=lbl_seed, widget=self.power_seed_guesses_edit, lang=lang)
-    _register_schema_text_refresh(self, power_seed_field, widget=self.power_seed_guesses_edit)
+    register_schema_text_refresh(self, power_seed_field, widget=self.power_seed_guesses_edit)
     bind_field(field=levin_variant_field, label=lbl_variant, widget=self.levin_variant_combo, lang=lang)
     bind_choices(self.levin_variant_combo, levin_variant_field.choices, lang=lang)
-    _register_schema_text_refresh(self, levin_variant_field, widget=self.levin_variant_combo)
+    register_schema_text_refresh(self, levin_variant_field, widget=self.levin_variant_combo)
     bind_field(field=levin_order_field, label=lbl_order, widget=self.levin_order_spin, lang=lang)
-    _register_schema_text_refresh(self, levin_order_field, widget=self.levin_order_spin)
+    register_schema_text_refresh(self, levin_order_field, widget=self.levin_order_spin)
     bind_field(field=levin_weight_field, label=lbl_weight, widget=self.levin_weight_combo, lang=lang)
     bind_choices(self.levin_weight_combo, levin_weight_field.choices, lang=lang)
-    _register_schema_text_refresh(self, levin_weight_field, widget=self.levin_weight_combo)
+    register_schema_text_refresh(self, levin_weight_field, widget=self.levin_weight_combo)
     bind_field(field=levin_beta_field, label=lbl_beta, widget=self.levin_beta_spin, lang=lang)
-    _register_schema_text_refresh(self, levin_beta_field, widget=self.levin_beta_spin)
+    register_schema_text_refresh(self, levin_beta_field, widget=self.levin_beta_spin)
     bind_field(field=richardson_p_field, label=lbl_richardson_p, widget=self.richardson_p_spin, lang=lang)
-    _register_schema_text_refresh(self, richardson_p_field, widget=self.richardson_p_spin)
+    register_schema_text_refresh(self, richardson_p_field, widget=self.richardson_p_spin)
     bind_field(
         field=uncertainty_field,
         label=lbl_uncert,
         widget=self.uncertainty_combo,
         lang=lang,
     )
-    _register_schema_text_refresh(self, uncertainty_field, widget=self.uncertainty_combo)
-    _bind_schema_command_button(
+    register_schema_text_refresh(self, uncertainty_field, widget=self.uncertainty_combo)
+    bind_schema_command_button(
         self,
         self.uncertainty_refresh_btn,
         field=uncertainty_refresh_field,
@@ -2670,21 +2674,21 @@ def _bind_statistics_schema_fields(
     )
 
     bind_field(field=value_field, label=lbl_stats_value, widget=self.stats_value_column_edit, lang=lang)
-    _register_schema_text_refresh(self, value_field, widget=self.stats_value_column_edit)
+    register_schema_text_refresh(self, value_field, widget=self.stats_value_column_edit)
     bind_field(field=sigma_field, label=lbl_stats_sigma, widget=self.stats_sigma_column_edit, lang=lang)
-    _register_schema_text_refresh(self, sigma_field, widget=self.stats_sigma_column_edit)
+    register_schema_text_refresh(self, sigma_field, widget=self.stats_sigma_column_edit)
     bind_field(field=mode_field, label=lbl_stats_type, widget=self.stats_mode_combo, lang=lang)
     bind_choices(self.stats_mode_combo, mode_field.choices, lang=lang)
-    _register_schema_text_refresh(self, mode_field, widget=self.stats_mode_combo)
+    register_schema_text_refresh(self, mode_field, widget=self.stats_mode_combo)
     bind_field(
         field=weight_variance_field,
         label=lbl_weight_var,
         widget=self.stats_weight_variance_checkbox,
         lang=lang,
     )
-    _register_schema_text_refresh(self, weight_variance_field, widget=self.stats_weight_variance_checkbox)
+    register_schema_text_refresh(self, weight_variance_field, widget=self.stats_weight_variance_checkbox)
     bind_field(field=sample_field, label=lbl_stats_sample, widget=self.stats_sample_checkbox, lang=lang)
-    _register_schema_text_refresh(self, sample_field, widget=self.stats_sample_checkbox)
+    register_schema_text_refresh(self, sample_field, widget=self.stats_sample_checkbox)
 
 
 def _bind_fitting_schema_fields(
@@ -2878,40 +2882,6 @@ def _bind_fitting_schema_fields(
     bind_field(field=implicit_constants_field, widget=self.implicit_constants_editor, lang=lang)
     bind_field(field=implicit_params_field, label=lbl_implicit_params, widget=self.implicit_params_table, lang=lang)
 
-
-def _register_schema_text_refresh(
-    self,
-    field: FormFieldSpec,
-    *,
-    widget: QWidget | None = None,
-    help_button: QWidget | None = None,
-) -> None:
-    if widget is not None:
-        if field.tooltip.zh or field.tooltip.en:
-            self._register_text(widget, field.tooltip.zh, field.tooltip.en, "setToolTip")
-        if field.placeholder.zh or field.placeholder.en:
-            self._register_text(widget, field.placeholder.zh, field.placeholder.en, "setPlaceholderText")
-    if help_button is not None and (field.tooltip.zh or field.tooltip.en):
-        self._register_text(help_button, field.tooltip.zh, field.tooltip.en, "setToolTip")
-
-
-def _bind_schema_command_button(
-    self,
-    button: QWidget,
-    *,
-    field: FormFieldSpec,
-    accessible_name: LocalizedText,
-    lang: str,
-) -> None:
-    bind_field(field=field, widget=button, lang=lang)
-    _register_schema_text_refresh(self, field, widget=button)
-    button.setAccessibleName(accessible_name.for_lang(lang))
-    if field.tooltip.zh or field.tooltip.en:
-        button.setAccessibleDescription(field.tooltip.for_lang(lang))
-        self._register_text(button, field.tooltip.zh, field.tooltip.en, "setAccessibleDescription")
-    self._register_text(button, accessible_name.zh, accessible_name.en, "setAccessibleName")
-
-
 def _mark_schema_choices(combo: QComboBox) -> None:
     combo.setProperty("datalab_schema_choices", True)
 
@@ -3086,7 +3056,7 @@ def _bind_global_options_schema_fields(
     ]
     for field, label, widget in field_bindings:
         bind_field(field=field, label=label, widget=widget, lang=lang)
-        _register_schema_text_refresh(self, field, widget=widget)
+        register_schema_text_refresh(self, field, widget=widget)
 
     for combo in (self.parallel_mode_combo, self.parallel_nested_policy_combo):
         _mark_schema_choices(combo)
@@ -3100,9 +3070,9 @@ def _bind_global_options_schema_fields(
         (verbose_field, self.verbose_checkbox),
     ]:
         bind_field(field=field, widget=widget, lang=lang)
-        _register_schema_text_refresh(self, field, widget=widget)
+        register_schema_text_refresh(self, field, widget=widget)
 
-    _bind_schema_command_button(
+    bind_schema_command_button(
         self,
         self.output_browse_button,
         field=output_browse_field,
@@ -3217,7 +3187,7 @@ def _bind_result_latex_pdf_schema_fields(
         (pdf_zoom_field, lbl_zoom, self.pdf_zoom_spin),
     ]:
         bind_field(field=field, label=label, widget=widget, lang=lang)
-        _register_schema_text_refresh(self, field, widget=widget)
+        register_schema_text_refresh(self, field, widget=widget)
     _mark_schema_choices(self.latex_engine_combo)
 
     for field, widget in [
@@ -3227,7 +3197,7 @@ def _bind_result_latex_pdf_schema_fields(
         (log_y_field, self.log_y_checkbox),
     ]:
         bind_field(field=field, widget=widget, lang=lang)
-        _register_schema_text_refresh(self, field, widget=widget)
+        register_schema_text_refresh(self, field, widget=widget)
 
     for field, button, accessible_name in [
         (latex_compile_field, self.latex_compile_button, LocalizedText("编译 PDF", "Compile PDF")),
@@ -3237,7 +3207,7 @@ def _bind_result_latex_pdf_schema_fields(
         (pdf_zoom_out_field, self.pdf_zoom_out_button, LocalizedText("缩小 PDF", "Zoom PDF out")),
         (pdf_zoom_reset_field, self.pdf_zoom_reset_button, LocalizedText("重置 PDF 缩放", "Reset PDF zoom")),
     ]:
-        _bind_schema_command_button(
+        bind_schema_command_button(
             self,
             button,
             field=field,
@@ -3387,7 +3357,7 @@ def _bind_result_area_schema_fields(self) -> None:
         (image_page_field, self.image_page_spin),
     ]:
         bind_field(field=field, widget=widget, lang=lang)
-        _register_schema_text_refresh(self, field, widget=widget)
+        register_schema_text_refresh(self, field, widget=widget)
 
     for field, button, accessible_name in [
         (csv_export_field, self.export_csv_btn, LocalizedText("导出 CSV", "Export CSV")),
@@ -3401,7 +3371,7 @@ def _bind_result_area_schema_fields(self) -> None:
         (latex_save_field, self.latex_save_button, LocalizedText("保存 LaTeX 文件", "Save LaTeX file")),
         (latex_reload_field, self.latex_reload_button, LocalizedText("重新载入 LaTeX 文件", "Reload LaTeX file")),
     ]:
-        _bind_schema_command_button(
+        bind_schema_command_button(
             self,
             button,
             field=field,
@@ -3526,18 +3496,18 @@ def _bind_error_schema_fields(
         help_button=self.error_formula_preview_button,
         lang=lang,
     )
-    _register_schema_text_refresh(self, formula_field, widget=self.formula_edit, help_button=self.error_formula_preview_button)
+    register_schema_text_refresh(self, formula_field, widget=self.formula_edit, help_button=self.error_formula_preview_button)
     bind_field(field=function_help_field, widget=self.func_help_btn, lang=lang)
-    _register_schema_text_refresh(self, function_help_field, widget=self.func_help_btn)
+    register_schema_text_refresh(self, function_help_field, widget=self.func_help_btn)
     bind_field(field=constants_use_file_field, widget=self.use_constants_file_checkbox, lang=lang)
-    _register_schema_text_refresh(self, constants_use_file_field, widget=self.use_constants_file_checkbox)
+    register_schema_text_refresh(self, constants_use_file_field, widget=self.use_constants_file_checkbox)
     bind_field(
         field=constants_file_field,
         widget=self.constants_file_edit,
         help_button=self.constants_hint_btn,
         lang=lang,
     )
-    _register_schema_text_refresh(self, constants_file_field, widget=self.constants_file_edit)
+    register_schema_text_refresh(self, constants_file_field, widget=self.constants_file_edit)
     bind_field(
         field=constants_field,
         widget=self.error_constants_editor,
@@ -3545,7 +3515,7 @@ def _bind_error_schema_fields(
         lang=lang,
     )
     self.error_constants_editor.checkbox.setToolTip(constants_field.tooltip.for_lang(lang))
-    _register_schema_text_refresh(self, constants_field, widget=self.error_constants_editor, help_button=self.error_constants_editor.help_button)
+    register_schema_text_refresh(self, constants_field, widget=self.error_constants_editor, help_button=self.error_constants_editor.help_button)
     self._register_text(
         self.error_constants_editor.checkbox,
         constants_field.tooltip.zh,
@@ -3554,13 +3524,13 @@ def _bind_error_schema_fields(
     )
     bind_field(field=method_field, label=lbl_error_method, widget=self.error_method_combo, lang=lang)
     bind_choices(self.error_method_combo, method_field.choices, lang=lang)
-    _register_schema_text_refresh(self, method_field, widget=self.error_method_combo)
+    register_schema_text_refresh(self, method_field, widget=self.error_method_combo)
     bind_field(field=order_field, label=lbl_error_order, widget=self.error_order_spin, lang=lang)
-    _register_schema_text_refresh(self, order_field, widget=self.error_order_spin)
+    register_schema_text_refresh(self, order_field, widget=self.error_order_spin)
     bind_field(field=mc_samples_field, label=lbl_mc_samples, widget=self.error_mc_samples_spin, lang=lang)
-    _register_schema_text_refresh(self, mc_samples_field, widget=self.error_mc_samples_spin)
+    register_schema_text_refresh(self, mc_samples_field, widget=self.error_mc_samples_spin)
     bind_field(field=mc_seed_field, label=lbl_mc_seed, widget=self.error_mc_seed_edit, lang=lang)
-    _register_schema_text_refresh(self, mc_seed_field, widget=self.error_mc_seed_edit)
+    register_schema_text_refresh(self, mc_seed_field, widget=self.error_mc_seed_edit)
 
 
 def _bind_root_schema_fields(
