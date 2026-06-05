@@ -429,18 +429,19 @@ def build_ui(self):
             else:
                 restored_ok = splitter.restoreState(blob)
                 sizes_after = splitter.sizes()
-                # Accept the restore only if the pane count, minimum,
-                # and total-width invariants still hold. Any failure
-                # means the blob was from an incompatible layout.
+                # Accept the restore if the pane count and total-width
+                # invariants still hold. The left-pane minimum is
+                # dynamic and can change with language/mode/content or
+                # before the window reaches its final shown size, so a
+                # syntactically valid state may need to be clamped
+                # rather than discarded.
                 if (
                     restored_ok
                     and len(sizes_after) == splitter.count()
                     and all(s >= 0 for s in sizes_after)
                     and sum(sizes_after) > 0
-                    and sizes_after[0] >= getattr(self, "_main_splitter_left_min_width", 0)
                 ):
-                    # Good restore — leave it in place.
-                    pass
+                    self._refresh_main_splitter_left_min_width()
                 else:
                     # Bad restore — revert to pre-restore sizes and
                     # drop the stale blob.
@@ -460,11 +461,18 @@ def _refresh_main_splitter_left_min_width(self) -> None:
     left_scroll = getattr(self, "_left_scroll", None)
     if left_container is None or left_scroll is None:
         return
+    _activate_widget_layouts(left_container)
+    _refresh_visible_table_min_widths(left_container)
+    _activate_widget_layouts(left_container)
     viewport_overhead = (
         left_scroll.frameWidth() * 2
         + left_scroll.verticalScrollBar().sizeHint().width()
     )
-    left_min_width = max(320, left_container.minimumSizeHint().width()) + viewport_overhead
+    content_min_width = max(
+        left_container.minimumSizeHint().width(),
+        _visible_left_content_min_width(left_container),
+    )
+    left_min_width = max(320, content_min_width) + viewport_overhead
     self._main_splitter_left_min_width = left_min_width
     left_scroll.setMinimumWidth(left_min_width)
     splitter = getattr(self, "_main_splitter", None)
@@ -476,6 +484,51 @@ def _refresh_main_splitter_left_min_width(self) -> None:
     total = max(sum(sizes), left_min_width + 1)
     right_width = max(1, total - left_min_width)
     splitter.setSizes([left_min_width, right_width])
+
+
+def _activate_widget_layouts(widget: QWidget) -> None:
+    layout = widget.layout()
+    if layout is not None:
+        layout.activate()
+    for child in widget.findChildren(QWidget):
+        child_layout = child.layout()
+        if child_layout is not None:
+            child_layout.activate()
+
+
+def _visible_left_content_min_width(left_container: QWidget) -> int:
+    layout = left_container.layout()
+    if layout is None:
+        return left_container.minimumSizeHint().width()
+    margins = layout.contentsMargins()
+    max_child_width = 0
+    for index in range(layout.count()):
+        item = layout.itemAt(index)
+        widget = item.widget()
+        if widget is not None and widget.isVisibleTo(left_container):
+            max_child_width = max(max_child_width, widget.minimumSizeHint().width())
+            continue
+        nested = item.layout()
+        if nested is not None:
+            max_child_width = max(max_child_width, nested.minimumSize().width(), nested.sizeHint().width())
+    return margins.left() + max_child_width + margins.right()
+
+
+def _refresh_visible_table_min_widths(left_container: QWidget) -> None:
+    for table in left_container.findChildren(QTableWidget):
+        if not table.isVisibleTo(left_container):
+            continue
+        table.setMinimumWidth(max(table.minimumWidth(), _table_required_min_width(table)))
+
+
+def _table_required_min_width(table: QTableWidget) -> int:
+    header = table.horizontalHeader()
+    column_width = sum(max(header.sectionSizeHint(index), 72) for index in range(table.columnCount()))
+    vertical_header = table.verticalHeader().sizeHint().width() if table.verticalHeader().isVisible() else 0
+    scrollbar = table.verticalScrollBar().sizeHint().width()
+    frame = table.frameWidth() * 2
+    return column_width + vertical_header + scrollbar + frame + 8
+
 
 def build_left_panel(self):
     # Mode selection

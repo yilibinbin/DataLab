@@ -1,19 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 
-EXAMPLE_NAMES = {
-    "extrapolation.datalab",
-    "error-propagation.datalab",
-    "statistics.datalab",
-    "fitting.datalab",
-    "quantum-defect-implicit.datalab",
-    "root-scalar-with-uncertainty.datalab",
-    "root-monte-carlo-uncertainty.datalab",
-    "root-batch-quadratic.datalab",
-}
+from examples.catalog import EXAMPLE_NAMES
+from examples.catalog import example_index_payload
+
+
+EXAMPLE_NAME_SET = set(EXAMPLE_NAMES)
 FORBIDDEN_STRATEGY_KEYS = {
     "implicit_strategy",
     "implicit_backend_strategy",
@@ -49,7 +45,7 @@ def test_canonical_example_workspaces_exist_and_open():
 
     root = Path("examples/workspaces")
     found = {path.name for path in root.glob("*.datalab")}
-    assert found == EXAMPLE_NAMES
+    assert found == EXAMPLE_NAME_SET
 
     for name in EXAMPLE_NAMES:
         loaded = read_workspace(root / name)
@@ -62,7 +58,7 @@ def test_build_examples_is_deterministic():
     from tools.generate_example_workspaces import build_examples
 
     assert build_examples() == build_examples()
-    assert set(build_examples()) == EXAMPLE_NAMES
+    assert set(build_examples()) == EXAMPLE_NAME_SET
 
 
 def test_generated_example_archives_are_byte_deterministic(tmp_path):
@@ -97,6 +93,13 @@ def test_checked_in_example_archives_match_generator(tmp_path):
         generated = tmp_path / name
         write_workspace(generated, manifest, {})
         assert generated.read_bytes() == (Path("examples/workspaces") / name).read_bytes(), name
+
+
+def test_checked_in_example_catalog_matches_generator() -> None:
+    checked_in = json.loads(Path("examples/workspaces/example_catalog.json").read_text(encoding="utf-8"))
+
+    assert checked_in == example_index_payload()
+    assert [item["filename"] for item in checked_in["examples"]] == list(EXAMPLE_NAMES)
 
 
 def test_example_generator_records_checked_in_source_files():

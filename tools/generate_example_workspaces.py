@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal, localcontext
+import json
 from pathlib import Path
 import sys
 from typing import Any
@@ -9,6 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from examples.catalog import EXAMPLE_NAMES, example_index_payload  # noqa: E402
 from shared.workspace_io import write_workspace  # noqa: E402
 from shared.workspace_schema import compute_workspace_hash, sha256_bytes  # noqa: E402
 from app_desktop.workers_core import RootSolvingJob, _execute_root_solving_job_payload  # noqa: E402
@@ -17,16 +19,6 @@ EXAMPLE_ROOT = PROJECT_ROOT / "examples" / "workspaces"
 DATASET_ROOT = PROJECT_ROOT / "examples"
 APP_VERSION = "2.0.2"
 GENERATED_TIMESTAMP = "2026-05-29T00:00:00Z"
-EXAMPLE_NAMES = {
-    "extrapolation.datalab",
-    "error-propagation.datalab",
-    "statistics.datalab",
-    "fitting.datalab",
-    "quantum-defect-implicit.datalab",
-    "root-scalar-with-uncertainty.datalab",
-    "root-monte-carlo-uncertainty.datalab",
-    "root-batch-quadratic.datalab",
-}
 
 
 def _project_relative(path: Path) -> str:
@@ -569,12 +561,18 @@ def main() -> None:
     examples = build_examples()
     EXAMPLE_ROOT.mkdir(parents=True, exist_ok=True)
     for stale in EXAMPLE_ROOT.glob("*.datalab"):
-        if stale.name not in EXAMPLE_NAMES:
+        if stale.name not in set(EXAMPLE_NAMES):
             raise RuntimeError(f"Refusing to overwrite unexpected example workspace: {stale}")
     for name, manifest in examples.items():
         target = EXAMPLE_ROOT / name
         write_workspace(target, manifest, {})
         target.chmod(0o644)
+    catalog_target = EXAMPLE_ROOT / "example_catalog.json"
+    catalog_target.write_text(
+        json.dumps(example_index_payload(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    catalog_target.chmod(0o644)
 
 
 if __name__ == "__main__":

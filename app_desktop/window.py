@@ -27,6 +27,8 @@ import re
 
 import mpmath as mp
 from desktop_doc_loader import load_desktop_doc, load_desktop_manifest
+from examples.catalog import EXAMPLE_NAMES as CATALOG_EXAMPLE_NAMES
+from examples.catalog import example_index_payload
 from app_desktop.fitting_input_normalization import normalize_fitting_input_from_widgets
 from app_desktop.update_controller import UpdateController
 from shared.computation_inputs import extract_expression_symbols
@@ -190,13 +192,19 @@ from .window_data_mixin import WindowDataMixin
 from .window_fitting_mixin import WindowFittingMixin
 from .window_extrapolation_mixin import WindowExtrapolationMixin
 
-EXAMPLE_WORKSPACE_NAMES = (
-    "extrapolation.datalab",
-    "error-propagation.datalab",
-    "statistics.datalab",
-    "fitting.datalab",
-    "quantum-defect-implicit.datalab",
-)
+EXAMPLE_WORKSPACE_NAMES = CATALOG_EXAMPLE_NAMES
+
+
+@dataclass(frozen=True)
+class ExampleMenuEntry:
+    filename: str
+    category: str
+    title_zh: str
+    title_en: str
+
+    def label(self, *, lang: str) -> str:
+        title = self.title_en if lang == _LANG_EN else self.title_zh
+        return f"{title} ({self.filename})"
 
 
 # Per-mode example placeholder text. Maps the mode key from
@@ -277,6 +285,66 @@ def _example_workspace_candidates(name: str) -> list[Path]:
         seen.add(candidate)
         unique.append(candidate)
     return unique
+
+
+def _example_catalog_candidates() -> list[Path]:
+    rel = Path("examples") / "workspaces" / "example_catalog.json"
+    candidates: list[Path] = []
+    resolved = resolve_resource_path(rel)
+    if resolved is not None:
+        candidates.append(resolved)
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / rel)
+        candidates.append(Path(meipass) / "_internal" / rel)
+    module_root = Path(__file__).resolve().parent
+    candidates.extend([module_root.parent / rel, Path.cwd() / rel])
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        try:
+            candidate = candidate.resolve()
+        except Exception:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        unique.append(candidate)
+    return unique
+
+
+def _load_example_catalog_payload() -> dict[str, object]:
+    for candidate in _example_catalog_candidates():
+        try:
+            if candidate.is_file():
+                loaded = json.loads(candidate.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict) and isinstance(loaded.get("examples"), list):
+                    return loaded
+        except Exception:
+            continue
+    return example_index_payload()
+
+
+def list_example_menu_entries() -> list[ExampleMenuEntry]:
+    entries: list[ExampleMenuEntry] = []
+    for item in _load_example_catalog_payload().get("examples", []):
+        if not isinstance(item, dict):
+            continue
+        filename = Path(str(item.get("filename") or "")).name
+        if filename not in EXAMPLE_WORKSPACE_NAMES:
+            continue
+        entries.append(
+            ExampleMenuEntry(
+                filename=filename,
+                category=str(item.get("category") or ""),
+                title_zh=str(item.get("title_zh") or filename),
+                title_en=str(item.get("title_en") or filename),
+            )
+        )
+    if entries:
+        ordered = {entry.filename: entry for entry in entries}
+        return [ordered[name] for name in EXAMPLE_WORKSPACE_NAMES if name in ordered]
+    return []
 
 
 def list_example_workspaces() -> list[Path]:
@@ -771,7 +839,17 @@ class ExtrapolationWindow(
                 self._tr("未找到示例工作区。", "No example workspaces were found."),
             )
             return False
-        labels = [path.name for path in examples]
+        entries = {entry.filename: entry for entry in list_example_menu_entries()}
+        path_by_name = {path.name: path for path in examples}
+        label_to_name: dict[str, str] = {}
+        labels: list[str] = []
+        lang = getattr(self, "_language", _LANG_ZH)
+        for path in examples:
+            entry = entries.get(path.name)
+            label = entry.label(lang=lang) if entry is not None else path.name
+            label_to_name[label] = path.name
+            label_to_name[path.name] = path.name
+            labels.append(label)
         selected, ok = QInputDialog.getItem(
             self,
             self._tr("打开示例工作区", "Open Example Workspace"),
@@ -783,7 +861,8 @@ class ExtrapolationWindow(
         if not ok or not selected:
             return False
         try:
-            source = next((path for path in examples if path.name == str(selected)), None)
+            selected_name = label_to_name.get(str(selected), Path(str(selected)).name)
+            source = path_by_name.get(selected_name)
             if source is None:
                 raise FileNotFoundError(str(selected))
         except Exception as exc:  # noqa: BLE001

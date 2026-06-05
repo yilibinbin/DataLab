@@ -12,9 +12,13 @@ from root_solving.expression import RootExpressionSystem, build_root_expression_
 from root_solving.models import RootBatchResult, RootBatchRowResult, RootProblem, RootUnknown, RootValue, immutable_mapping
 from shared.uncertainty import UncertainValue, parse_numeric_value, parse_uncertainty_format
 
-SUPPORTED_ROOT_PLOT_MODES = frozenset({"scalar", "scan_multiple"})
-SYSTEM_ROOT_PLOT_WARNING = "System root plots are not supported."
+SUPPORTED_ROOT_PLOT_MODES = frozenset({"scalar", "scan_multiple", "system"})
+SYSTEM_ROOT_PLOT_WARNING = "System root plots require exactly two equations and two real unknowns; skipped plot."
 ROOT_PLOT_FAILED_WARNING = "Root plot could not be rendered."
+_SYSTEM_CONTOUR_MAX_GRID_POINTS = 81
+_ROOT_INSET_MAX_COUNT = 2
+_ROOT_INSET_MIN_RELATIVE_WIDTH = 1.0e-6
+_ROOT_INSET_SIGMA_MULTIPLIER = 8.0
 _T = TypeVar("_T")
 
 
@@ -79,7 +83,7 @@ def select_root_plot_requests(
         if row.failure is not None or row.result is None or not row.result.roots:
             continue
         mode = str(row.result.mode or "").strip()
-        if mode == "system":
+        if mode == "system" and not _supports_system_contour_plot(row):
             _append_unique(warnings, SYSTEM_ROOT_PLOT_WARNING)
             continue
         if mode not in SUPPORTED_ROOT_PLOT_MODES:
@@ -147,7 +151,7 @@ def _render_nominal_root_plot_with_warnings(
     if request is None or request.row.result is None:
         return None, ()
     if request.row.result.mode == "system":
-        return None, (SYSTEM_ROOT_PLOT_WARNING,)
+        return _render_system_root_contour_plot_with_warnings(request, problem)
     if len(problem.equations) != 1 or len(problem.unknowns) != 1:
         return None, ()
 
@@ -190,6 +194,14 @@ def _render_nominal_root_plot_with_warnings(
     )
     if uncertainty_visualization:
         metadata["uncertainty_visualization"] = uncertainty_visualization
+    root_insets = _root_inset_metadata(
+        request.row.result.roots,
+        unknown_name=unknown.name,
+        x_values=x_values,
+        system=system,
+    )
+    metadata["main_plot_true_scale"] = True
+    metadata["root_insets"] = root_insets
 
     try:
         from shared.plotting import plt
@@ -213,7 +225,11 @@ def _render_nominal_root_plot_with_warnings(
         ax.set_title(title)
         ax.grid(True, alpha=0.3)
         _deduplicate_legend(ax)
-        fig.tight_layout()
+        if root_insets:
+            fig.tight_layout(rect=(0.0, 0.0, 0.56, 1.0))
+            _draw_root_insets(fig, root_insets)
+        else:
+            fig.tight_layout()
 
         buf = io.BytesIO()
         fig.savefig(buf, format="png")
@@ -452,6 +468,90 @@ def _draw_uncertainty_visualization(ax: Any, x_values: Sequence[float], visualiz
                 ax.axvspan(float(lower), float(upper), color="#d62728", alpha=0.12, linewidth=0)
 
 
+def _supports_system_contour_plot(row: RootBatchRowResult) -> bool:
+    result = row.result
+    if result is None or result.mode != "system":
+        return False
+    root_names = tuple(root.name for root in result.roots)
+    return len(root_names) == 2 and len(set(root_names)) == 2
+
+
+def _render_system_root_contour_plot_with_warnings(
+    request: RootPlotRequest,
+    problem: RootProblem,
+) -> tuple[RootPlotImage | None, tuple[str, ...]]:
+    if request.row.result is None or len(problem.equations) != 2 or len(problem.unknowns) != 2:
+        return None, (SYSTEM_ROOT_PLOT_WARNING,)
+    row_problem = replace(problem, row_values=request.row.source_values, mode="system")
+    try:
+        system = build_root_expression_system(row_problem)
+    except Exception as exc:  # noqa: BLE001
+        return None, (_plot_failed_warning(exc),)
+    roots_by_name = {root.name: root for root in request.row.result.roots}
+    x_unknown, y_unknown = row_problem.unknowns
+    x_root = roots_by_name.get(x_unknown.name)
+    y_root = roots_by_name.get(y_unknown.name)
+    if x_root is None or y_root is None:
+        return None, (SYSTEM_ROOT_PLOT_WARNING,)
+    x_values = _system_axis_grid(x_unknown, x_root, request.budget.max_grid_points)
+    y_values = _system_axis_grid(y_unknown, y_root, request.budget.max_grid_points)
+    if x_values is None or y_values is None:
+        return None, (SYSTEM_ROOT_PLOT_WARNING,)
+    try:
+        residual_a, residual_b = _evaluate_system_contours(system, x_unknown.name, y_unknown.name, x_values, y_values)
+    except Exception as exc:  # noqa: BLE001
+        return None, (_plot_failed_warning(exc),)
+    if not _grid_has_zero_contour(residual_a) or not _grid_has_zero_contour(residual_b):
+        return None, (_plot_failed_warning("no zero contour in plot range"),)
+
+    try:
+        from shared.plotting import plt
+    except Exception as exc:  # noqa: BLE001
+        return None, (_plot_failed_warning(exc),)
+    fig = None
+    title = _root_plot_title(request.row.row_index, "system")
+    try:
+        fig, ax = plt.subplots(figsize=(6.0, 4.8), dpi=180)
+        ax.contour(x_values, y_values, residual_a, levels=[0.0], colors=["#1f77b4"], linewidths=1.5)
+        ax.contour(x_values, y_values, residual_b, levels=[0.0], colors=["#d62728"], linewidths=1.5)
+        root_x = _real_float(x_root.value)
+        root_y = _real_float(y_root.value)
+        if root_x is not None and root_y is not None:
+            ax.scatter([root_x], [root_y], color="#111111", s=36, zorder=3)
+        ax.set_xlabel(x_unknown.name)
+        ax.set_ylabel(y_unknown.name)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_title(title)
+        ax.grid(True, alpha=0.25)
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png")
+        plt.close(fig)
+        buf.seek(0)
+    except Exception as exc:  # noqa: BLE001
+        if fig is not None:
+            plt.close(fig)
+        return None, (_plot_failed_warning(exc),)
+    return (
+        RootPlotImage(
+            image_bytes=buf.getvalue(),
+            row_index=request.row.row_index,
+            title=title,
+            warnings=tuple(request.row.warnings),
+            metadata={
+                "curve": "system_contour",
+                "equations": tuple(row_problem.equations),
+                "unknowns": (x_unknown.name, y_unknown.name),
+                "grid_points": len(x_values),
+                "aspect": "equal",
+                "x_range": (_round_float(x_values[0]), _round_float(x_values[-1])),
+                "y_range": (_round_float(y_values[0]), _round_float(y_values[-1])),
+            },
+        ),
+        (),
+    )
+
+
 def _no_band_metadata(method: str, note: str) -> Mapping[str, object]:
     return {
         "method": method,
@@ -648,6 +748,13 @@ def _plot_values(values: Sequence[float | None]) -> list[float]:
     return [float("nan") if value is None else value for value in values]
 
 
+def _linspace(lower: float, upper: float, count: int) -> tuple[float, ...]:
+    if count <= 1:
+        return (float(lower),)
+    step = (float(upper) - float(lower)) / float(count - 1)
+    return tuple(float(lower) + step * index for index in range(count))
+
+
 def _positive_int(value: SupportsInt | str, *, default: int) -> int:
     try:
         parsed = int(value)
@@ -683,6 +790,119 @@ def _nominal_grid(unknown: RootUnknown, roots: Sequence[RootValue], max_grid_poi
         return (_round_float((lower + upper) / 2.0),)
     step = (upper - lower) / (count - 1)
     return tuple(_round_float(lower + step * index) for index in range(count))
+
+
+def _root_inset_metadata(
+    roots: Sequence[RootValue],
+    *,
+    unknown_name: str,
+    x_values: Sequence[float],
+    system: RootExpressionSystem,
+) -> tuple[Mapping[str, object], ...]:
+    if not x_values:
+        return ()
+    x_span = max(abs(float(x_values[-1] - x_values[0])), 1.0)
+    pixel_threshold = x_span / 600.0
+    insets: list[Mapping[str, object]] = []
+    for root in roots:
+        if root.name != unknown_name:
+            continue
+        center = _real_float(root.value)
+        sigma = _real_float(root.uncertainty)
+        if center is None or sigma is None or sigma <= 0.0 or sigma >= pixel_threshold:
+            continue
+        half_width = max(
+            _ROOT_INSET_SIGMA_MULTIPLIER * sigma,
+            _ROOT_INSET_MIN_RELATIVE_WIDTH * x_span,
+        )
+        local_x = _linspace(center - half_width, center + half_width, 81)
+        local_y = _evaluate_nominal_curve(system, unknown_name, local_x)
+        finite_y = [value for value in local_y if value is not None and isfinite(value)]
+        if not finite_y:
+            continue
+        insets.append(
+            {
+                "root_name": root.name,
+                "root_value": _round_float(center),
+                "reason": "uncertainty_below_pixel_threshold",
+                "true_interval": {
+                    "name": root.name,
+                    "lower": _round_float(center - sigma),
+                    "upper": _round_float(center + sigma),
+                },
+                "x_range": (_round_float(local_x[0]), _round_float(local_x[-1])),
+                "y_range": (_round_float(min(finite_y)), _round_float(max(finite_y))),
+                "x_values": tuple(_round_float(value) for value in local_x),
+                "y_values": tuple(None if value is None else _round_float(value) for value in local_y),
+            }
+        )
+        if len(insets) >= _ROOT_INSET_MAX_COUNT:
+            break
+    return tuple(insets)
+
+
+def _draw_root_insets(fig: Any, root_insets: Sequence[Mapping[str, object]]) -> None:
+    for index, inset in enumerate(root_insets[:_ROOT_INSET_MAX_COUNT]):
+        x_values_raw = _optional_value_sequence(inset.get("x_values"))
+        y_values = _optional_value_sequence(inset.get("y_values"))
+        if x_values_raw is None or y_values is None or any(value is None for value in x_values_raw):
+            continue
+        x_values = tuple(float(value) for value in x_values_raw if value is not None)
+        inset_ax = fig.add_axes([0.62, 0.55 - index * 0.25, 0.32, 0.20])
+        inset_ax.plot(x_values, _plot_values(y_values), color="#1f77b4", linewidth=1.2)
+        inset_ax.axhline(0.0, color="#444444", linewidth=0.8, linestyle="--", alpha=0.8)
+        root_value = inset.get("root_value")
+        if isinstance(root_value, (int, float)):
+            inset_ax.axvline(float(root_value), color="#d62728", linewidth=0.9, alpha=0.8)
+        inset_ax.set_title("root zoom", fontsize=7)
+        inset_ax.tick_params(labelsize=7)
+        inset_ax.grid(True, alpha=0.25)
+
+
+def _system_axis_grid(unknown: RootUnknown, root: RootValue, max_grid_points: int) -> tuple[float, ...] | None:
+    center = _real_float(root.value)
+    if center is None:
+        return None
+    lower = _optional_real(getattr(unknown, "lower", ""))
+    upper = _optional_real(getattr(unknown, "upper", ""))
+    if lower is None or upper is None or lower >= upper:
+        span = max(abs(center), 1.0)
+        lower = center - span
+        upper = center + span
+    count = min(_positive_int(max_grid_points, default=81), _SYSTEM_CONTOUR_MAX_GRID_POINTS)
+    return _linspace(lower, upper, count)
+
+
+def _evaluate_system_contours(
+    system: RootExpressionSystem,
+    x_name: str,
+    y_name: str,
+    x_values: Sequence[float],
+    y_values: Sequence[float],
+) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    residual_a: list[tuple[float, ...]] = []
+    residual_b: list[tuple[float, ...]] = []
+    for y_value in y_values:
+        row_a: list[float] = []
+        row_b: list[float] = []
+        for x_value in x_values:
+            try:
+                values = system.residuals({x_name: mp.mpf(str(x_value)), y_name: mp.mpf(str(y_value))})
+                first = _real_float(values[0])
+                second = _real_float(values[1])
+            except Exception:
+                first = None
+                second = None
+            row_a.append(float("nan") if first is None else first)
+            row_b.append(float("nan") if second is None else second)
+        residual_a.append(tuple(row_a))
+        residual_b.append(tuple(row_b))
+    return tuple(residual_a), tuple(residual_b)
+
+
+def _grid_has_zero_contour(values: Sequence[Sequence[float]]) -> bool:
+    finite_values = [value for row in values for value in row if isfinite(value)]
+    return bool(finite_values) and min(finite_values) <= 0.0 <= max(finite_values)
 
 
 def _evaluate_nominal_curve(

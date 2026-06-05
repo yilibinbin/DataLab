@@ -62,23 +62,53 @@ def test_select_root_plot_requests_preserves_input_row_order_and_budget() -> Non
 
 
 def test_select_root_plot_requests_warns_and_skips_system_roots() -> None:
-    batch = RootBatchResult(rows=(_row(0, mode="system"), _row(1, mode="scalar")))
+    batch = RootBatchResult(
+        rows=(
+            RootBatchRowResult(
+                row_index=0,
+                source_values={},
+                result=RootResult(
+                    roots=(RootValue(name="x", value=mp.mpf("0")), RootValue(name="y", value=mp.mpf("0"))),
+                    backend="mpmath",
+                    mode="system",
+                ),
+            ),
+            _row(1, mode="scalar"),
+        )
+    )
 
     selected = select_root_plot_requests(batch)
 
-    assert [request.row.row_index for request in selected.requests] == [1]
+    assert [request.row.row_index for request in selected.requests] == [0, 1]
     assert selected.images == ()
-    assert selected.warnings == ("System root plots are not supported.",)
+    assert selected.warnings == ()
 
 
 def test_select_root_plot_requests_returns_no_images_for_unsupported_only() -> None:
-    batch = RootBatchResult(rows=(_row(0, mode="system"), _row(1, failure="failed")))
+    batch = RootBatchResult(
+        rows=(
+            RootBatchRowResult(
+                row_index=0,
+                source_values={},
+                result=RootResult(
+                    roots=(
+                        RootValue(name="x", value=mp.mpf("0")),
+                        RootValue(name="y", value=mp.mpf("0")),
+                        RootValue(name="z", value=mp.mpf("0")),
+                    ),
+                    backend="mpmath",
+                    mode="system",
+                ),
+            ),
+            _row(1, failure="failed"),
+        )
+    )
 
     selected = select_root_plot_requests(batch)
 
     assert selected.requests == ()
     assert selected.images == ()
-    assert selected.warnings == ("System root plots are not supported.",)
+    assert selected.warnings == ("System root plots require exactly two equations and two real unknowns; skipped plot.",)
 
 
 def test_stable_select_mc_samples_downsamples_without_randomness() -> None:
@@ -349,6 +379,188 @@ def test_render_uncertainty_plot_uses_batch_payload_when_source_values_are_nomin
     assert visualization["notes"] == ()
 
 
+def test_tiny_root_uncertainty_adds_inset_without_scaling_main_interval() -> None:
+    problem = RootProblem(
+        equations=("x^2 - A",),
+        unknowns=(RootUnknown("x", initial="2", lower="1.999999", upper="2.000001"),),
+        row_values={"A": "4.000000000000(1)"},
+        mode="scalar",
+        precision=60,
+    )
+    batch = RootBatchResult(
+        rows=(
+            RootBatchRowResult(
+                row_index=0,
+                source_values={"A": "4.000000000000(1)"},
+                result=RootResult(
+                    roots=(RootValue(name="x", value=mp.mpf("2"), uncertainty=mp.mpf("2.5e-13")),),
+                    backend="mpmath",
+                    mode="scalar",
+                    details={"uncertainty_method": "taylor", "taylor_order": 1},
+                ),
+            ),
+        )
+    )
+    selection = select_root_plot_requests(batch, budget=RootPlotBudget(max_grid_points=101))
+
+    image = render_nominal_root_plot(selection.requests[0], problem)
+
+    assert image is not None
+    assert image.metadata["main_plot_true_scale"] is True
+    visualization = cast(Mapping[str, object], image.metadata["uncertainty_visualization"])
+    intervals = cast(tuple[Mapping[str, object], ...], visualization["root_intervals"])
+    assert intervals == ({"name": "x", "lower": 2.0, "upper": 2.0},)
+    insets = cast(tuple[Mapping[str, object], ...], image.metadata["root_insets"])
+    assert len(insets) == 1
+    inset = insets[0]
+    assert inset["root_name"] == "x"
+    assert inset["reason"] == "uncertainty_below_pixel_threshold"
+    assert inset["true_interval"] == intervals[0]
+    x_range = cast(tuple[float, float], inset["x_range"])
+    assert float(x_range[1]) > float(x_range[0])
+
+
+def test_two_dimensional_system_root_renders_contour_plot() -> None:
+    problem = RootProblem(
+        equations=("x + y - 3", "x - y - 1"),
+        unknowns=(
+            RootUnknown("x", initial="2", lower="0", upper="4"),
+            RootUnknown("y", initial="1", lower="-1", upper="3"),
+        ),
+        mode="system",
+        precision=40,
+    )
+    batch = RootBatchResult(
+        rows=(
+            RootBatchRowResult(
+                row_index=0,
+                source_values={},
+                result=RootResult(
+                    roots=(
+                        RootValue(name="x", value=mp.mpf("2")),
+                        RootValue(name="y", value=mp.mpf("1")),
+                    ),
+                    backend="mpmath",
+                    mode="system",
+                ),
+            ),
+        )
+    )
+
+    selection = render_nominal_root_plots(batch, problem, budget=RootPlotBudget(max_grid_points=81))
+
+    assert selection.warnings == ()
+    assert len(selection.images) == 1
+    image = selection.images[0]
+    assert image.metadata["curve"] == "system_contour"
+    assert image.metadata["unknowns"] == ("x", "y")
+    assert image.metadata["equations"] == ("x + y - 3", "x - y - 1")
+    assert image.metadata["grid_points"] == 81
+    assert image.metadata["aspect"] == "equal"
+
+
+def test_high_dimensional_system_root_plot_stays_unsupported_with_warning() -> None:
+    problem = RootProblem(
+        equations=("x + y + z - 1", "x - y", "z - 1"),
+        unknowns=(
+            RootUnknown("x", initial="0"),
+            RootUnknown("y", initial="0"),
+            RootUnknown("z", initial="1"),
+        ),
+        mode="system",
+        precision=40,
+    )
+    batch = RootBatchResult(
+        rows=(
+            RootBatchRowResult(
+                row_index=0,
+                source_values={},
+                result=RootResult(
+                    roots=(
+                        RootValue(name="x", value=mp.mpf("0")),
+                        RootValue(name="y", value=mp.mpf("0")),
+                        RootValue(name="z", value=mp.mpf("1")),
+                    ),
+                    backend="mpmath",
+                    mode="system",
+                ),
+            ),
+        )
+    )
+
+    selection = render_nominal_root_plots(batch, problem)
+
+    assert selection.images == ()
+    assert selection.warnings == ("System root plots require exactly two equations and two real unknowns; skipped plot.",)
+
+
+def test_two_dimensional_system_plot_with_invalid_bounds_uses_auto_range() -> None:
+    problem = RootProblem(
+        equations=("x + y - 3", "x - y - 1"),
+        unknowns=(
+            RootUnknown("x", initial="2", lower="bad", upper=""),
+            RootUnknown("y", initial="1", lower="4", upper="3"),
+        ),
+        mode="system",
+        precision=40,
+    )
+    batch = RootBatchResult(
+        rows=(
+            RootBatchRowResult(
+                row_index=0,
+                source_values={},
+                result=RootResult(
+                    roots=(
+                        RootValue(name="x", value=mp.mpf("2")),
+                        RootValue(name="y", value=mp.mpf("1")),
+                    ),
+                    backend="mpmath",
+                    mode="system",
+                ),
+            ),
+        )
+    )
+
+    selection = render_nominal_root_plots(batch, problem, budget=RootPlotBudget(max_grid_points=31))
+
+    assert selection.warnings == ()
+    assert len(selection.images) == 1
+    assert selection.images[0].metadata["curve"] == "system_contour"
+
+
+def test_two_dimensional_system_plot_without_zero_contour_returns_warning() -> None:
+    problem = RootProblem(
+        equations=("x^2 + y^2 + 10", "x + y + 10"),
+        unknowns=(
+            RootUnknown("x", initial="0", lower="-1", upper="1"),
+            RootUnknown("y", initial="0", lower="-1", upper="1"),
+        ),
+        mode="system",
+        precision=40,
+    )
+    batch = RootBatchResult(
+        rows=(
+            RootBatchRowResult(
+                row_index=0,
+                source_values={},
+                result=RootResult(
+                    roots=(
+                        RootValue(name="x", value=mp.mpf("0")),
+                        RootValue(name="y", value=mp.mpf("0")),
+                    ),
+                    backend="mpmath",
+                    mode="system",
+                ),
+            ),
+        )
+    )
+
+    selection = render_nominal_root_plots(batch, problem, budget=RootPlotBudget(max_grid_points=31))
+
+    assert selection.images == ()
+    assert any(warning.startswith(ROOT_PLOT_FAILED_WARNING) for warning in selection.warnings)
+
+
 def test_render_nominal_root_plots_returns_images_and_failure_warnings() -> None:
     problem = RootProblem(
         equations=("bad_func(x)",),
@@ -379,15 +591,27 @@ def test_render_nominal_root_plots_returns_images_and_failure_warnings() -> None
     assert selection.warnings[0].startswith(ROOT_PLOT_FAILED_WARNING)
 
 
-def test_render_nominal_root_plot_keeps_system_roots_as_no_image() -> None:
+def test_render_nominal_root_plot_rejects_system_shape_without_two_unknowns() -> None:
     problem = RootProblem(
         equations=("x + y - 1", "x - y"),
-        unknowns=(RootUnknown("x", initial="1"), RootUnknown("y", initial="1")),
+        unknowns=(RootUnknown("x", initial="1"),),
         mode="system",
     )
-    batch = RootBatchResult(rows=(_row(0, mode="system"),))
+    batch = RootBatchResult(
+        rows=(
+            RootBatchRowResult(
+                row_index=0,
+                source_values={},
+                result=RootResult(
+                    roots=(RootValue(name="x", value=mp.mpf("0")), RootValue(name="y", value=mp.mpf("0"))),
+                    backend="mpmath",
+                    mode="system",
+                ),
+            ),
+        )
+    )
     selection = select_root_plot_requests(batch)
 
-    assert selection.requests == ()
-    assert selection.warnings == ("System root plots are not supported.",)
-    assert render_nominal_root_plot(None, problem) is None
+    assert len(selection.requests) == 1
+    image = render_nominal_root_plot(selection.requests[0], problem)
+    assert image is None

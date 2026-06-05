@@ -74,3 +74,16 @@ Implementation note (current code):
 
 - Desktop: “statistical weighting” builds `w=1/σ²` for weighted χ²/covariance, and does not add a separate systematic term (to avoid double counting).
 - Web: the current `fit_weighted` flag feeds σ into ±σ refits (systematic estimate) and does not apply weighted χ².
+
+---
+
+## 6. Root Solving
+
+Root solving represents equations as residuals `F(...)=0`. Scalar and system solves route through the precision policy: at 16 digits or below DataLab first attempts a SciPy fast path and validates the residual; otherwise it falls back to the multiprecision route.
+
+Uncertainty propagation reuses the same input parser and derivative idea as error propagation:
+
+- Taylor: estimate root uncertainty from implicit derivatives
+- Monte Carlo: sample uncertain inputs, resolve roots, and summarize the root distribution
+
+Machine-readable `value` and `uncertainty` fields are preserved, while the visible result and LaTeX output use compact value-with-uncertainty notation.

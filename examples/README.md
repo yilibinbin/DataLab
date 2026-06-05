@@ -1,11 +1,9 @@
 # DataLab 示例数据 / Example datasets
 
-本目录包含 DataLab 四种主要分析模式的示例输入文件,用户可直接在 GUI 中
-"打开数据文件"加载学习,或复制其中内容粘贴到手动输入表格。
+本目录包含 DataLab 主要分析模式的示例输入文件；`workspaces/` 子目录包含可直接打开的 `.datalab` 工作区模板。用户可在 GUI 中加载输入文件，也可打开工作区模板学习完整配置。
 
-This directory ships sample input files for the four main DataLab
-analysis modes. Open them via "Load data file" in the desktop GUI or
-paste the content into the manual-input table.
+This directory ships sample input files for DataLab modules. The `workspaces/`
+subdirectory contains `.datalab` templates with full configuration snapshots.
 
 ## 文件清单 / File list
 
@@ -16,6 +14,7 @@ paste the content into the manual-input table.
 | `error_propagation.txt` | Error Propagation | 双变量公式 (x1+x2)/x1 的误差传递 |
 | `statistics_weighted.txt` | Statistics | 加权平均:多次测量同一物理量,带各自的统计 σ |
 | `constants.txt` | (Common) | 常数文件:供误差传递公式引用,如 ALPHA、G |
+| `workspaces/*.datalab` | Workspace templates | 只读模板，覆盖外推、误差传递、拟合、统计、求根与量子亏损示例 |
 
 ## 输入格式速查 / Format crib sheet
 
@@ -35,7 +34,8 @@ paste the content into the manual-input table.
 2. 在主界面顶部 mode 下拉框选择对应模式(如 "Extrapolation")。
 3. 点 "打开数据文件",选择 ``examples/<对应文件>.txt``。
 4. 误差传递模式还需在 "常数文件" 字段加载 ``examples/constants.txt``。
-5. 点 "运行" 即可看到结果 + LaTeX + PDF 预览。
+5. 也可通过 "打开示例工作区" 加载 ``examples/workspaces/*.datalab``。
+6. 点 "运行" 即可看到结果 + LaTeX + PDF 预览。
 
 ## Usage tips
 

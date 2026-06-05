@@ -15,6 +15,8 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
 from tools.scan_desktop_gui_schema import scan_window
+from tools.scan_desktop_gui_schema import _combo_index_for_data
+from tools.scan_desktop_gui_schema import _force_smallest_left_splitter
 
 
 @pytest.fixture
@@ -70,3 +72,25 @@ def test_gui_schema_scan_reports_broken_root_plot_display(window: Any, monkeypat
 
     assert report["checks"]["root_plot_display"] is False
     assert any("root plot display failed" in issue for issue in report["issues"])
+
+
+def test_root_scan_plot_layout_keeps_left_panel_without_horizontal_scrollbar(window: Any) -> None:
+    png_1x1 = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg=="
+    )
+    window.mode_combo.setCurrentIndex(_combo_index_for_data(window.mode_combo, "root_solving"))
+    window.root_mode_combo.setCurrentIndex(_combo_index_for_data(window.root_mode_combo, "scan_multiple"))
+    window.root_equations_edit.setPlainText("x^2-A")
+    window.root_unknowns_table.set_rows([{"name": "x", "initial": "1", "lower": "-2", "upper": "2"}])
+    window.generate_plots_checkbox.setChecked(True)
+    window._update_result_plot(png_1x1)
+    window.tabs.setCurrentIndex(window.result_tab_index)
+    window.result_tabs.setCurrentIndex(window.result_tabs.indexOf(window.result_plot_scroll.parentWidget()))
+    QApplication.processEvents()
+
+    _force_smallest_left_splitter(window)
+
+    horizontal_bar = window._left_scroll.horizontalScrollBar()
+    assert window._main_splitter.sizes()[0] >= window._main_splitter_left_min_width
+    assert horizontal_bar.maximum() == 0
+    assert not horizontal_bar.isVisible()
