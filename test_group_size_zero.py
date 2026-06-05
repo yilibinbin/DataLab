@@ -15,10 +15,7 @@ from pathlib import Path
 import mpmath as mp
 from data_extrapolation_latex_latest import (
     generate_latex_table,
-    generate_error_propagation_table,
-    parse_uncertainty_format,
 )
-from statistics_utils import generate_statistics_latex
 from app_web.server import _generate_fitting_latex
 
 

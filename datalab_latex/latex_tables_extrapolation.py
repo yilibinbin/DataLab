@@ -3,17 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, TypeAlias
 
-from mpmath import mp
-
-# Anything ``_mp()`` (defined in datalab_latex.expression_engine) is documented
-# to accept: a real ``mp.mpf`` (returned as-is), Python int / float, or any
-# value whose ``str()`` produces a number string. We name the union so the
-# public surface stops looking like a typing escape hatch (``object``) and
-# instead matches what the body actually requires.
-_MpInput: TypeAlias = "mp.mpf | int | float | str"
-
-from shared.precision import precision_guard as _precision_guard
-
 from extrapolation_methods import (
     PowerLawComputationError,
     PowerLawConfig,
@@ -22,8 +11,9 @@ from extrapolation_methods import (
     apply_sequence_accelerator,
     extrapolate_power_law,
 )
-
 from shared.bilingual import _dual_msg, _split_dual
+from shared.precision import precision_guard as _precision_guard
+from mpmath import mp
 
 from .expression_engine import _mp, _normalize_expression, safe_eval
 from .latex_formatting import (
@@ -31,7 +21,6 @@ from .latex_formatting import (
     _siunitx_column_spec,
     calculate_dcolumn_format_for_column,
     format_result_with_uncertainty_latex,
-    format_scientific_latex_decimal,
 )
 from .latex_tables_common import (
     _apply_aliases,
@@ -44,6 +33,13 @@ from .latex_tables_common import (
     _normalize_table_segments,
     _string_length_hint,
 )
+
+# Anything ``_mp()`` (defined in datalab_latex.expression_engine) is documented
+# to accept: a real ``mp.mpf`` (returned as-is), Python int / float, or any
+# value whose ``str()`` produces a number string. We name the union so the
+# public surface stops looking like a typing escape hatch (``object``) and
+# instead matches what the body actually requires.
+_MpInput: TypeAlias = "mp.mpf | int | float | str"
 
 
 @dataclass
@@ -766,4 +762,3 @@ __all__ = [
     "process_data_file",
     "process_data_string",
 ]
-

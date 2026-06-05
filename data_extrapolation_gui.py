@@ -11,7 +11,7 @@ import multiprocessing
 # Frozen multiprocessing workers must be diverted before GUI imports.
 multiprocessing.freeze_support()
 
-from app_desktop import main as _main
+from app_desktop import main as _main  # noqa: E402
 
 _globals = globals()
 _export_names = getattr(_main, "__all__", None)
@@ -27,6 +27,10 @@ for _name in _names:
     if hasattr(_main, _name):
         _globals[_name] = getattr(_main, _name)
         __all__.append(_name)
+
+main = _main.main
+if "main" not in __all__:
+    __all__.append("main")
 
 del _globals, _export_names, _names, _name, _main
 

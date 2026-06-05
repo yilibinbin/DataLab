@@ -35,11 +35,11 @@ def test_x_squared_mean_and_variance():
         theoretical_mean = mp.mpf("1")  # E[x²] = σ² = 1
         theoretical_std = mp.sqrt(2)     # sqrt(Var[x²]) = sqrt(2σ⁴) = sqrt(2)
 
-        print(f"\nf(x) = x², x ~ N(0, 1)")
+        print("\nf(x) = x², x ~ N(0, 1)")
         print(f"理论均值: {theoretical_mean}")
         print(f"二阶泰勒均值: {mean_taylor}")
         print(f"蒙特卡洛均值: {mean_mc}")
-        print(f"")
+        print("")
         print(f"理论标准差: {theoretical_std}")
         print(f"二阶泰勒标准差: {std_taylor}")
         print(f"蒙特卡洛标准差: {std_mc}")
@@ -97,7 +97,7 @@ def test_nonlinear_function():
         value2, std2 = error_propagation(formula, variables, values, sigmas,
                                          method="taylor", order=2)
 
-        print(f"\nf(x, y) = x*y + x², x=1±0.1, y=2±0.2")
+        print("\nf(x, y) = x*y + x², x=1±0.1, y=2±0.2")
         print(f"一阶泰勒均值: {value1}")
         print(f"二阶泰勒均值: {value2} (期望: {expected_mean})")
         print(f"一阶泰勒标准差: {std1} (期望: {mp.sqrt(var_order1)})")

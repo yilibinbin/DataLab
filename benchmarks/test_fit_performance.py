@@ -19,7 +19,6 @@ pytest.importorskip("pytest_benchmark")
 
 @pytest.fixture
 def _linear_data():
-    import numpy as np  # numpy is optional; skip the benchmark when absent
     np = pytest.importorskip("numpy")
     xs = list(np.linspace(1.0, 10.0, 50))
     ys = [2.0 * x + 1.0 + 0.05 * (i - 25) for i, x in enumerate(xs)]
