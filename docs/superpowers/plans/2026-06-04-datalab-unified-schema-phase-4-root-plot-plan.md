@@ -16,10 +16,10 @@
 - Create: `root_solving/plotting.py`
 - Test: `tests/test_root_solving_plotting.py`
 
-- [ ] Write failing tests for plot budget defaults, stable input-row-order selection, unsupported system warning, and no image for unsupported cases.
-- [ ] Run `PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m pytest -q tests/test_root_solving_plotting.py` and verify missing module failure.
-- [ ] Implement `RootPlotBudget`, `RootPlotRequest`, `RootPlotImage`, and deterministic row/sample selection helpers.
-- [ ] Run tests and commit:
+- [x] Write failing tests for plot budget defaults, stable input-row-order selection, unsupported system warning, and no image for unsupported cases.
+- [x] Run `PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m pytest -q tests/test_root_solving_plotting.py` and verify missing module failure.
+- [x] Implement `RootPlotBudget`, `RootPlotRequest`, `RootPlotImage`, and deterministic row/sample selection helpers.
+- [x] Run tests and commit:
 
 ```bash
 git add root_solving/plotting.py tests/test_root_solving_plotting.py
@@ -32,9 +32,9 @@ git commit -m "feat: add root plot budget model"
 - Modify: `root_solving/plotting.py`
 - Test: `tests/test_root_solving_plotting.py`
 
-- [ ] Add tests for scalar `x^2 - A` plot containing nominal curve metadata, zero line, root marker, and deterministic grid length <= 300.
-- [ ] Implement nominal scalar/scan plot generation using safe expression evaluation and Agg PNG rendering.
-- [ ] Run tests and commit:
+- [x] Add tests for scalar `x^2 - A` plot containing nominal curve metadata, zero line, root marker, and deterministic grid length <= 300.
+- [x] Implement nominal scalar/scan plot generation using safe expression evaluation and Agg PNG rendering.
+- [x] Run tests and commit:
 
 ```bash
 PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m pytest -q tests/test_root_solving_plotting.py
@@ -48,10 +48,10 @@ git commit -m "feat: render nominal root plots"
 - Modify: `root_solving/plotting.py`
 - Test: `tests/test_root_solving_plotting.py`
 
-- [ ] Add tests for Taylor first-order function-value band, horizontal root-x interval, skipped/fallback no-band note, deterministic MC sample downsampling to <= 100 curves, and result detail budget notes.
-- [ ] Implement first-order function-value band over the x-grid using active uncertain inputs.
-- [ ] Implement MC envelope from deterministic downsampled input samples and root-marker distribution.
-- [ ] Run tests and commit:
+- [x] Add tests for Taylor first-order function-value band, horizontal root-x interval, skipped/fallback no-band note, deterministic MC sample downsampling to <= 100 curves, and result detail budget notes.
+- [x] Implement first-order function-value band over the x-grid using active uncertain inputs.
+- [x] Implement MC envelope from deterministic downsampled input samples and root-marker distribution.
+- [x] Run tests and commit:
 
 ```bash
 PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m pytest -q tests/test_root_solving_plotting.py tests/test_root_solving_uncertainty.py
@@ -69,12 +69,12 @@ git commit -m "feat: add root plot uncertainty visualization"
 - Test: `tests/test_desktop_root_solving_ui.py`
 - Test: `tests/test_workspace_controller.py`
 
-- [ ] Add tests proving root mode honors `generate_plots_checkbox`, returns PNG bytes when enabled, displays the image in the existing result image tab, and saves/restores the plot attachment in workspace snapshots.
-- [ ] Run tests and verify failure because root workers ignore plot generation today.
-- [ ] Thread plot settings through `RootSolvingJob` with backward-compatible defaults.
-- [ ] Call root plotting only after successful root batch results and only within budget.
-- [ ] Display resulting bytes via existing result image APIs.
-- [ ] Run focused tests and commit:
+- [x] Add tests proving root mode honors `generate_plots_checkbox`, returns PNG bytes when enabled, displays the image in the existing result image tab, and saves/restores the plot attachment in workspace snapshots.
+- [x] Run tests and verify failure because root workers ignore plot generation today.
+- [x] Thread plot settings through `RootSolvingJob` with backward-compatible defaults.
+- [x] Call root plotting only after successful root batch results and only within budget.
+- [x] Display resulting bytes via existing result image APIs.
+- [x] Run focused tests and commit:
 
 ```bash
 QT_QPA_PLATFORM=offscreen PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m pytest -q tests/test_app_desktop_workers_core.py tests/test_desktop_root_solving_ui.py tests/test_workspace_controller.py tests/test_root_solving_plotting.py

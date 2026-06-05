@@ -29,7 +29,7 @@
 - Create: `shared/ui_schema.py`
 - Test: `tests/test_ui_schema.py`
 
-- [ ] **Step 1: Write failing schema tests**
+- [x] **Step 1: Write failing schema tests**
 
 Add tests:
 
@@ -74,7 +74,7 @@ def test_choice_spec_keeps_backend_value_stable():
     assert choice.label.for_lang("en") == "Scalar"
 ```
 
-- [ ] **Step 2: Run failing test**
+- [x] **Step 2: Run failing test**
 
 Run:
 
@@ -84,17 +84,17 @@ PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m pytest -q tests/test_ui_sch
 
 Expected: fail with `ModuleNotFoundError: No module named 'shared.ui_schema'`.
 
-- [ ] **Step 3: Implement schema primitives**
+- [x] **Step 3: Implement schema primitives**
 
 Create `shared/ui_schema.py` with frozen dataclasses and pure-Python visibility evaluation. Keep it independent of PySide6.
 
-- [ ] **Step 4: Run schema tests**
+- [x] **Step 4: Run schema tests**
 
 Run the same pytest command.
 
 Expected: `4 passed`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add shared/ui_schema.py tests/test_ui_schema.py
@@ -107,7 +107,7 @@ git commit -m "feat: add shared ui schema primitives"
 - Create: `app_desktop/ui_schema_binder.py`
 - Test: `tests/test_desktop_ui_schema_binder.py`
 
-- [ ] **Step 1: Write failing binder tests**
+- [x] **Step 1: Write failing binder tests**
 
 Add tests that instantiate `QLabel`, `QPlainTextEdit`, `QPushButton`, and `QComboBox`, bind a `FormFieldSpec`, then assert:
 
@@ -119,7 +119,7 @@ Add tests that instantiate `QLabel`, `QPlainTextEdit`, `QPushButton`, and `QComb
 - bound widgets have property `datalab_schema_key`;
 - in-scope scan only flags widgets with property `datalab_schema_required=True`.
 
-- [ ] **Step 2: Run failing binder tests**
+- [x] **Step 2: Run failing binder tests**
 
 ```bash
 QT_QPA_PLATFORM=offscreen PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m pytest -q tests/test_desktop_ui_schema_binder.py
@@ -127,7 +127,7 @@ QT_QPA_PLATFORM=offscreen PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m p
 
 Expected: fail with `ModuleNotFoundError: No module named 'app_desktop.ui_schema_binder'`.
 
-- [ ] **Step 3: Implement binder**
+- [x] **Step 3: Implement binder**
 
 Implement these public functions:
 
@@ -142,13 +142,13 @@ Use Qt dynamic properties:
 - `datalab_schema_key`: schema key applied by binder.
 - `datalab_schema_required`: opt-in marker for migrated-section scan.
 
-- [ ] **Step 4: Run binder tests**
+- [x] **Step 4: Run binder tests**
 
 Run the same pytest command.
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app_desktop/ui_schema_binder.py tests/test_desktop_ui_schema_binder.py
@@ -161,7 +161,7 @@ git commit -m "feat: bind schema metadata to qt widgets"
 - Modify: `shared/ui_specs.py`
 - Test: `tests/test_ui_schema.py`
 
-- [ ] **Step 1: Add failing import test**
+- [x] **Step 1: Add failing import test**
 
 Add:
 
@@ -174,7 +174,7 @@ def test_ui_specs_reexports_new_schema_types():
     assert VisibilityRule.equals("mode", "root").evaluate({"mode": "root"}) is True
 ```
 
-- [ ] **Step 2: Run test and verify failure**
+- [x] **Step 2: Run test and verify failure**
 
 ```bash
 PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m pytest -q tests/test_ui_schema.py::test_ui_specs_reexports_new_schema_types
@@ -182,11 +182,11 @@ PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m pytest -q tests/test_ui_sch
 
 Expected: import failure.
 
-- [ ] **Step 3: Re-export schema primitives**
+- [x] **Step 3: Re-export schema primitives**
 
 Modify `shared/ui_specs.py` to import and expose the new types without changing existing names.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 ```bash
 PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m pytest -q tests/test_ui_schema.py
@@ -195,7 +195,7 @@ ruff check shared/ui_schema.py shared/ui_specs.py app_desktop/ui_schema_binder.p
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add shared/ui_specs.py tests/test_ui_schema.py
@@ -209,11 +209,11 @@ git commit -m "refactor: expose unified schema primitives"
 - Modify: `app_desktop/window_i18n_mixin.py`
 - Test: `tests/test_desktop_root_solving_ui.py`
 
-- [ ] **Step 1: Write failing root binder test**
+- [x] **Step 1: Write failing root binder test**
 
 Add a test that opens root mode and asserts `root_equations_edit`, `root_mode_combo`, `root_unknowns_table`, and `root_constants_editor` have schema key metadata or are explicitly excluded reusable editors.
 
-- [ ] **Step 2: Run failing test**
+- [x] **Step 2: Run failing test**
 
 ```bash
 QT_QPA_PLATFORM=offscreen PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m pytest -q tests/test_desktop_root_solving_ui.py::test_root_controls_have_schema_bindings
@@ -221,11 +221,11 @@ QT_QPA_PLATFORM=offscreen PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m p
 
 Expected: fail because no schema keys are applied yet.
 
-- [ ] **Step 3: Bind root fields non-destructively**
+- [x] **Step 3: Bind root fields non-destructively**
 
 Add a small root-specific binding call after root widgets are created. Do not change root behavior, just move text metadata into schema objects and binder calls.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 ```bash
 QT_QPA_PLATFORM=offscreen PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m pytest -q tests/test_desktop_root_solving_ui.py tests/test_desktop_ui_schema_binder.py tests/test_ui_schema.py
@@ -233,7 +233,7 @@ QT_QPA_PLATFORM=offscreen PYTHONPATH=. /Users/fanghao/miniconda3/bin/python -m p
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app_desktop/panels.py app_desktop/window_i18n_mixin.py tests/test_desktop_root_solving_ui.py
