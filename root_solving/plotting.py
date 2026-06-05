@@ -10,7 +10,7 @@ from mpmath import mp
 
 from root_solving.expression import RootExpressionSystem, build_root_expression_system
 from root_solving.models import RootBatchResult, RootBatchRowResult, RootProblem, RootUnknown, RootValue, immutable_mapping
-from shared.uncertainty import parse_numeric_value
+from shared.uncertainty import UncertainValue, parse_numeric_value, parse_uncertainty_format
 
 SUPPORTED_ROOT_PLOT_MODES = frozenset({"scalar", "scan_multiple"})
 SYSTEM_ROOT_PLOT_WARNING = "System root plots are not supported."
@@ -180,6 +180,16 @@ def _render_nominal_root_plot_with_warnings(
         "zero_line": True,
         "root_markers": roots,
     }
+    uncertainty_visualization = _uncertainty_visualization_metadata(
+        request,
+        row_problem,
+        system,
+        unknown.name,
+        x_values,
+        y_values,
+    )
+    if uncertainty_visualization:
+        metadata["uncertainty_visualization"] = uncertainty_visualization
 
     try:
         from shared.plotting import plt
@@ -191,6 +201,7 @@ def _render_nominal_root_plot_with_warnings(
         fig, ax = plt.subplots(figsize=(6.0, 4.0), dpi=180)
         plot_y = [float("nan") if value is None else value for value in y_values]
         ax.plot(x_values, plot_y, color="#1f77b4", linewidth=1.8, label="Nominal residual")
+        _draw_uncertainty_visualization(ax, x_values, uncertainty_visualization)
         ax.axhline(0.0, color="#444444", linewidth=0.9, linestyle="--", alpha=0.8, label="Zero")
         for root in roots:
             root_x = root["value"]
@@ -224,6 +235,417 @@ def _render_nominal_root_plot_with_warnings(
         ),
         (),
     )
+
+
+def _uncertainty_visualization_metadata(
+    request: RootPlotRequest,
+    problem: RootProblem,
+    system: RootExpressionSystem,
+    unknown_name: str,
+    x_values: Sequence[float],
+    y_values: Sequence[float | None],
+) -> Mapping[str, object]:
+    result = request.row.result
+    if result is None:
+        return {}
+    method = str(result.details.get("uncertainty_method", "") or "").strip()
+    if not method:
+        return {}
+    if method == "taylor":
+        return _taylor_uncertainty_metadata(result.roots, problem, system, unknown_name, x_values, y_values, result.details)
+    if method == "monte_carlo":
+        return _monte_carlo_uncertainty_metadata(
+            result.roots,
+            problem,
+            system,
+            unknown_name,
+            request.budget,
+            x_values,
+            result.details,
+        )
+    if method == "skipped":
+        requested = str(result.details.get("uncertainty_requested_method", "") or "").strip()
+        note = "uncertainty band unavailable: skipped"
+        if requested:
+            note = f"uncertainty band unavailable: {method}"
+        return {
+            "method": "skipped",
+            "function_band": None,
+            "root_intervals": (),
+            "mc_curve_count": 0,
+            "notes": (note,),
+            "budget_notes": (),
+            "detail_notes": _uncertainty_detail_notes(result.details),
+        }
+    return {}
+
+
+def _taylor_uncertainty_metadata(
+    roots: Sequence[RootValue],
+    problem: RootProblem,
+    system: RootExpressionSystem,
+    unknown_name: str,
+    x_values: Sequence[float],
+    y_values: Sequence[float | None],
+    details: Mapping[str, object],
+) -> Mapping[str, object]:
+    uncertain_inputs = _active_uncertain_inputs_from_problem(problem, system, details)
+    if not uncertain_inputs:
+        return _no_band_metadata("taylor", "uncertainty band unavailable: no active uncertain inputs")
+
+    lower_values: list[float | None] = []
+    upper_values: list[float | None] = []
+    finite_band = False
+    active_inputs = tuple(uncertain_inputs)
+    for x_value, y_value in zip(x_values, y_values, strict=True):
+        if y_value is None:
+            lower_values.append(None)
+            upper_values.append(None)
+            continue
+        try:
+            unknown_values = {unknown_name: mp.mpf(str(x_value))}
+            band_sigma = mp.sqrt(
+                mp.fsum(
+                    (
+                        system.derivative_input(input_name, unknown_values, 0)
+                        * mp.mpf(uncertain_inputs[input_name].uncertainty)
+                    )
+                    ** 2
+                    for input_name in active_inputs
+                )
+            )
+            band = _real_float(band_sigma)
+        except Exception:
+            band = None
+        if band is None:
+            lower_values.append(None)
+            upper_values.append(None)
+            continue
+        finite_band = True
+        lower_values.append(_round_float(y_value - band))
+        upper_values.append(_round_float(y_value + band))
+    if not finite_band:
+        return _no_band_metadata("taylor", "uncertainty band unavailable: derivative evaluation failed")
+
+    return {
+        "method": "taylor",
+        "function_band": {
+            "kind": "first_order",
+            "active_inputs": active_inputs,
+            "lower_y_values": tuple(lower_values),
+            "upper_y_values": tuple(upper_values),
+        },
+        "root_intervals": _root_intervals(roots, unknown_name),
+        "mc_curve_count": 0,
+        "notes": (),
+        "budget_notes": (),
+        "detail_notes": (),
+    }
+
+
+def _monte_carlo_uncertainty_metadata(
+    roots: Sequence[RootValue],
+    problem: RootProblem,
+    system: RootExpressionSystem,
+    unknown_name: str,
+    budget: RootPlotBudget,
+    x_values: Sequence[float],
+    details: Mapping[str, object],
+) -> Mapping[str, object]:
+    valid_samples = _detail_int(details, "monte_carlo_valid_samples")
+    if valid_samples <= 0:
+        valid_samples = _detail_int(details, "monte_carlo_samples")
+    uncertain_inputs = _active_uncertain_inputs_from_problem(problem, system, details)
+    primary_root = _primary_uncertain_root(roots, unknown_name)
+    if primary_root is None or valid_samples <= 0 or not uncertain_inputs:
+        return {
+            "method": "monte_carlo",
+            "function_band": None,
+            "root_intervals": _root_intervals(roots, unknown_name),
+            "mc_curve_count": 0,
+            "mc_root_markers": (),
+            "notes": ("Monte Carlo envelope unavailable: missing valid input uncertainty.",),
+            "budget_notes": (),
+            "detail_notes": _uncertainty_detail_notes(details),
+        }
+
+    sample_indexes = stable_select_mc_samples(tuple(range(valid_samples)), max_samples=budget.max_mc_curves)
+    root_value = _real_float(primary_root.value)
+    root_uncertainty = _real_float(primary_root.uncertainty)
+    if root_value is None or root_uncertainty is None:
+        return {
+            "method": "monte_carlo",
+            "function_band": None,
+            "root_intervals": _root_intervals(roots, primary_root.name),
+            "mc_curve_count": 0,
+            "mc_root_markers": (),
+            "notes": ("Monte Carlo envelope unavailable: missing valid root uncertainty.",),
+            "budget_notes": (),
+            "detail_notes": _uncertainty_detail_notes(details),
+        }
+
+    offsets = tuple(_mc_root_offset(index, valid_samples, root_uncertainty) for index in sample_indexes)
+    markers = tuple(
+        {"name": primary_root.name, "value": _round_float(root_value + offset)}
+        for offset in offsets
+    )
+    input_samples = _mc_input_samples(system, uncertain_inputs, sample_indexes, valid_samples)
+    envelope = _mc_input_sample_curve_envelope(system, unknown_name, x_values, input_samples)
+    budget_notes: tuple[str, ...] = ()
+    if valid_samples > len(sample_indexes):
+        budget_notes = (f"Monte Carlo visualization downsampled {valid_samples} valid samples to {len(sample_indexes)} curves.",)
+
+    return {
+        "method": "monte_carlo",
+        "function_band": None,
+        "root_intervals": _root_intervals(roots, primary_root.name),
+        "mc_curve_count": len(sample_indexes),
+        "mc_input_sample_count": len(input_samples),
+        "mc_sampled_inputs": tuple(sorted(uncertain_inputs)),
+        "mc_root_markers": markers,
+        "mc_envelope": envelope,
+        "notes": (),
+        "budget_notes": budget_notes,
+        "detail_notes": _uncertainty_detail_notes(details),
+    }
+
+
+def _draw_uncertainty_visualization(ax: Any, x_values: Sequence[float], visualization: Mapping[str, object]) -> None:
+    function_band = visualization.get("function_band")
+    if isinstance(function_band, Mapping):
+        lower_values = _optional_value_sequence(function_band.get("lower_y_values"))
+        upper_values = _optional_value_sequence(function_band.get("upper_y_values"))
+        if lower_values is not None and upper_values is not None:
+            ax.fill_between(
+                x_values,
+                _plot_values(lower_values),
+                _plot_values(upper_values),
+                color="#ffbf00",
+                alpha=0.22,
+                linewidth=0,
+                label="Taylor band",
+            )
+
+    mc_envelope = visualization.get("mc_envelope")
+    if isinstance(mc_envelope, Mapping):
+        lower_values = _optional_value_sequence(mc_envelope.get("lower_y_values"))
+        upper_values = _optional_value_sequence(mc_envelope.get("upper_y_values"))
+        if lower_values is not None and upper_values is not None:
+            ax.fill_between(
+                x_values,
+                _plot_values(lower_values),
+                _plot_values(upper_values),
+                color="#2ca02c",
+                alpha=0.16,
+                linewidth=0,
+                label="MC envelope",
+            )
+
+    root_intervals = visualization.get("root_intervals", ())
+    if not isinstance(root_intervals, Sequence) or isinstance(root_intervals, (str, bytes)):
+        return
+    for interval in root_intervals:
+        if isinstance(interval, Mapping):
+            lower = interval.get("lower")
+            upper = interval.get("upper")
+            if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
+                ax.axvspan(float(lower), float(upper), color="#d62728", alpha=0.12, linewidth=0)
+
+
+def _no_band_metadata(method: str, note: str) -> Mapping[str, object]:
+    return {
+        "method": method,
+        "function_band": None,
+        "root_intervals": (),
+        "mc_curve_count": 0,
+        "notes": (note,),
+        "budget_notes": (),
+        "detail_notes": (),
+    }
+
+
+def _primary_uncertain_root(roots: Sequence[RootValue], unknown_name: str) -> RootValue | None:
+    for root in roots:
+        if root.name == unknown_name and root.uncertainty is not None and _real_float(root.uncertainty) is not None:
+            return root
+    return None
+
+
+def _root_intervals(roots: Sequence[RootValue], unknown_name: str) -> tuple[Mapping[str, object], ...]:
+    intervals: list[Mapping[str, object]] = []
+    for root in roots:
+        if root.name != unknown_name:
+            continue
+        root_value = _real_float(root.value)
+        root_uncertainty = _real_float(root.uncertainty)
+        if root_value is None or root_uncertainty is None:
+            continue
+        intervals.append(
+            {
+                "name": root.name,
+                "lower": _round_float(root_value - root_uncertainty),
+                "upper": _round_float(root_value + root_uncertainty),
+            }
+        )
+    return tuple(intervals)
+
+
+def _mc_root_offset(index: int, sample_count: int, sigma: float) -> float:
+    if sample_count <= 1:
+        return 0.0
+    centered_fraction = (2.0 * index / (sample_count - 1)) - 1.0
+    return centered_fraction * sigma
+
+
+def _active_uncertain_inputs_from_problem(
+    problem: RootProblem,
+    system: RootExpressionSystem,
+    details: Mapping[str, object],
+) -> Mapping[str, UncertainValue]:
+    from_details = _uncertain_inputs_from_details(details)
+    if from_details:
+        active_symbols = set().union(*(expression.free_symbols for expression in system.symbolic_expressions))
+        return {
+            name: value
+            for name, value in from_details.items()
+            if name in system.symbol_map and system.symbol_map[name] in active_symbols
+        }
+
+    raw_inputs: dict[str, str] = dict(problem.row_values)
+    if not raw_inputs:
+        raw_inputs.update({known.name: known.value for known in problem.known_values})
+    raw_inputs.update(dict(problem.constants))
+    active_symbols = set().union(*(expression.free_symbols for expression in system.symbolic_expressions))
+    uncertain: dict[str, UncertainValue] = {}
+    for name, raw_value in raw_inputs.items():
+        if name not in system.symbol_map or system.symbol_map[name] not in active_symbols:
+            continue
+        try:
+            value = parse_uncertainty_format(str(raw_value))
+        except Exception:
+            continue
+        if value.uncertainty > 0 and mp.isfinite(value.uncertainty):
+            uncertain[name] = value
+    return uncertain
+
+
+def _uncertain_inputs_from_details(details: Mapping[str, object]) -> Mapping[str, UncertainValue]:
+    payload = details.get("plot_uncertain_inputs", {})
+    if not isinstance(payload, Mapping):
+        return {}
+    uncertain: dict[str, UncertainValue] = {}
+    for raw_name, raw_value in payload.items():
+        if not isinstance(raw_value, Mapping):
+            continue
+        name = str(raw_name)
+        try:
+            value = UncertainValue(
+                raw_value.get("value", "0"),
+                raw_value.get("uncertainty", "0"),
+            )
+        except Exception:
+            continue
+        if value.uncertainty > 0 and mp.isfinite(value.uncertainty):
+            uncertain[name] = value
+    return uncertain
+
+
+def _mc_input_samples(
+    system: RootExpressionSystem,
+    uncertain_inputs: Mapping[str, UncertainValue],
+    sample_indexes: Sequence[int],
+    sample_count: int,
+) -> tuple[Mapping[str, mp.mpf], ...]:
+    samples: list[Mapping[str, mp.mpf]] = []
+    names = tuple(uncertain_inputs)
+    for sample_position, sample_index in enumerate(sample_indexes):
+        nominal_inputs = dict(system.nominal_inputs)
+        for input_position, name in enumerate(names):
+            unit = _mc_input_unit_offset(sample_index, sample_count, input_position, sample_position)
+            uncertain = uncertain_inputs[name]
+            nominal_inputs[name] = mp.mpf(uncertain.value) + mp.mpf(uncertain.uncertainty) * unit
+        samples.append(immutable_mapping(nominal_inputs))
+    return tuple(samples)
+
+
+def _mc_input_unit_offset(sample_index: int, sample_count: int, input_position: int, sample_position: int) -> mp.mpf:
+    if sample_count <= 1:
+        return mp.mpf("0")
+    shifted_index = (sample_index + input_position * max(1, sample_position + 1)) % sample_count
+    return mp.mpf("2") * mp.mpf(shifted_index) / mp.mpf(sample_count - 1) - 1
+
+
+def _mc_input_sample_curve_envelope(
+    system: RootExpressionSystem,
+    unknown_name: str,
+    x_values: Sequence[float],
+    input_samples: Sequence[Mapping[str, mp.mpf]],
+) -> Mapping[str, object]:
+    lower_values: list[float | None] = []
+    upper_values: list[float | None] = []
+    for x_value in x_values:
+        values: list[float] = []
+        for nominal_inputs in input_samples:
+            try:
+                sampled_system = replace(system, nominal_inputs=nominal_inputs)
+                y_value = _real_float(sampled_system.evaluate({unknown_name: mp.mpf(str(x_value))}))
+            except Exception:
+                y_value = None
+            if y_value is not None:
+                values.append(y_value)
+        if not values:
+            lower_values.append(None)
+            upper_values.append(None)
+            continue
+        lower_values.append(_round_float(min(values)))
+        upper_values.append(_round_float(max(values)))
+    return {
+        "kind": "deterministic_input_samples",
+        "lower_y_values": tuple(lower_values),
+        "upper_y_values": tuple(upper_values),
+    }
+
+
+def _uncertainty_detail_notes(details: Mapping[str, object]) -> tuple[str, ...]:
+    notes: list[str] = []
+    samples = _detail_int(details, "monte_carlo_samples")
+    valid_samples = _detail_int(details, "monte_carlo_valid_samples")
+    failures = _detail_int(details, "monte_carlo_failures")
+    if samples > 0:
+        notes.append(f"Monte Carlo requested samples: {samples}.")
+    if valid_samples > 0:
+        notes.append(f"Monte Carlo valid samples: {valid_samples}.")
+    if failures > 0:
+        notes.append(f"Monte Carlo failed samples: {failures}.")
+    return tuple(notes)
+
+
+def _detail_int(details: Mapping[str, object], key: str) -> int:
+    value = details.get(key, 0) or 0
+    if not isinstance(value, (int, float, str)):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _optional_value_sequence(value: object) -> tuple[float | None, ...] | None:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return None
+    values: list[float | None] = []
+    for item in value:
+        if item is None:
+            values.append(None)
+            continue
+        if not isinstance(item, (int, float)):
+            return None
+        values.append(float(item))
+    return tuple(values)
+
+
+def _plot_values(values: Sequence[float | None]) -> list[float]:
+    return [float("nan") if value is None else value for value in values]
 
 
 def _positive_int(value: SupportsInt | str, *, default: int) -> int:
