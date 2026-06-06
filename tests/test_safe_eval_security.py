@@ -44,6 +44,15 @@ def test_safe_eval_preserves_high_precision_numeric_literals():
     assert mp.almosteq(actual, expected, rel_eps=mp.mpf("1e-45"), abs_eps=mp.mpf("1e-45"))
 
 
+def test_safe_eval_accepts_exact_integer_literal_forms():
+    assert safe_eval("0x10 + 0o10 + 0b10", {}) == mp.mpf(26)
+
+
+def test_safe_eval_rejects_boolean_constants():
+    with pytest.raises(ValueError, match="Unsupported constant|不支持"):
+        safe_eval("True", {})
+
+
 def test_safe_eval_refuses_float_literal_when_source_segment_is_missing(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(expression_engine.ast, "get_source_segment", lambda *_args, **_kwargs: None)
 

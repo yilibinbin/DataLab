@@ -256,7 +256,7 @@ def _solve_scan_multiple(problem: RootProblem, system: RootExpressionSystem) -> 
             x_value = lower + (upper - lower) * index / sample_count
             y_value = _evaluate_scan_point(system, unknown.name, x_value)
             samples.append((x_value, y_value))
-            if _scan_sample_is_exact_root(y_value, problem.precision):
+            if _scan_sample_is_exact_root(y_value):
                 roots.append(x_value)
 
         for (left_x, left_y), (right_x, right_y) in zip(samples, samples[1:], strict=False):
@@ -278,7 +278,7 @@ def _solve_scan_multiple(problem: RootProblem, system: RootExpressionSystem) -> 
 
         unique_roots = _deduplicate_roots(
             tuple(roots),
-            tolerance=_scan_cluster_tolerance(system, problem.precision, scan_config),
+            tolerance=_scan_cluster_tolerance(problem.precision, scan_config),
         )
         if not unique_roots:
             raise ValueError("scan_multiple found no roots in the scan range.")
@@ -389,8 +389,7 @@ def _scan_candidate_is_valid(
     return bool(mp.isfinite(residual) and residual <= _scan_residual_tolerance(system, precision, scan_config))
 
 
-def _scan_sample_is_exact_root(residual: mp.mpf, precision: int) -> bool:
-    del precision
+def _scan_sample_is_exact_root(residual: mp.mpf) -> bool:
     if not mp.isfinite(residual):
         return False
     return bool(residual == 0)
@@ -485,7 +484,6 @@ def _scan_residual_tolerance(
 
 
 def _scan_cluster_tolerance(
-    system: RootExpressionSystem,
     precision: int,
     scan_config: RootScanConfig,
 ) -> mp.mpf:

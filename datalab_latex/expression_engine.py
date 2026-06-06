@@ -203,6 +203,8 @@ def _evaluate_ast(node: ast.AST, variables: dict[str, object], source: str) -> A
     if isinstance(node, ast.Attribute):
         raise ValueError(_dual_msg("不支持的属性访问。", "Attribute access is not supported."))
     if isinstance(node, ast.Constant):
+        if isinstance(node.value, bool):
+            raise ValueError(_dual_msg("不支持的常量类型。", "Unsupported constant type."))
         if isinstance(node.value, (int, float)):
             return _mp_numeric_literal(node, source)
         raise ValueError(_dual_msg("不支持的常量类型。", "Unsupported constant type."))
@@ -235,11 +237,11 @@ def _evaluate_ast(node: ast.AST, variables: dict[str, object], source: str) -> A
 
 def _mp_numeric_literal(node: ast.Constant, source: str) -> mp.mpf:
     """Convert numeric literals from source text, not Python's rounded AST value."""
+    if isinstance(node.value, int):
+        return _mp(node.value)
     text = ast.get_source_segment(source, node)
     if text:
         return mp.mpf(text.replace("_", ""))
-    if isinstance(node.value, int):
-        return _mp(node.value)
     raise ValueError(
         _dual_msg(
             "无法恢复数值字面量的原始文本，已拒绝避免精度损失。",
