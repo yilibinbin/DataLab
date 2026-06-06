@@ -19,6 +19,28 @@ def test_example_workspace_menu_action_exists(qtbot):
     assert "example" in menu_text or "示例" in menu_text
 
 
+def test_open_example_workspace_uses_current_language_for_menu_labels(qtbot, monkeypatch):
+    from app_desktop.window import ExtrapolationWindow, list_example_menu_entries, list_example_workspaces
+
+    QApplication.instance() or QApplication([])
+    win = ExtrapolationWindow()
+    qtbot.addWidget(win)
+    win._apply_language("en")
+    examples = list_example_workspaces()
+    entries = {entry.filename: entry for entry in list_example_menu_entries()}
+    expected_label = entries[examples[0].name].label(lang="en")
+    captured: dict[str, list[str]] = {}
+
+    def fake_get_item(*args, **kwargs):
+        captured["labels"] = list(args[3])
+        return "", False
+
+    monkeypatch.setattr(QInputDialog, "getItem", staticmethod(fake_get_item))
+
+    assert not win.open_example_workspace()
+    assert expected_label in captured["labels"]
+
+
 def test_open_example_workspace_marks_template_and_save_requires_save_as(qtbot, monkeypatch, tmp_path):
     from app_desktop.window import EXAMPLE_WORKSPACE_NAMES, ExtrapolationWindow, list_example_menu_entries, list_example_workspaces
     from shared.workspace_io import read_workspace

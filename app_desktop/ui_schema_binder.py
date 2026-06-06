@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, Qt
 
 from shared.ui_schema import ChoiceSpec, FormFieldSpec
 
@@ -62,7 +62,7 @@ def find_unbound_required_widgets(root: Any) -> list[object]:
     objects = [root]
     find_children = getattr(root, "findChildren", None)
     if callable(find_children):
-        objects.extend(find_children(object))
+        objects.extend(find_children(QObject))
 
     return [
         obj

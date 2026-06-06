@@ -1389,7 +1389,7 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         plot_problem = normalize_root_problem_from_context(
             equations=job.equations,
             unknown_rows=tuple(dict(row) for row in job.unknown_rows),
-            row_values={header: "0" for header in job.data_headers},
+            row_values=_first_successful_root_row_values(batch),
             constants_state=constants_state,
             mode=job.mode,
             precision=job.precision,
@@ -1451,6 +1451,16 @@ def _root_batch_has_successful_roots(batch: Any) -> bool:
         row.result is not None and row.failure is None and bool(row.result.roots)
         for row in getattr(batch, "rows", ())
     )
+
+
+def _first_successful_root_row_values(batch: Any) -> dict[str, str]:
+    for row in getattr(batch, "rows", ()):
+        if row.result is not None and row.failure is None and bool(row.result.roots):
+            source_values = getattr(row, "source_values", {})
+            if isinstance(source_values, Mapping):
+                return {str(key): str(value) for key, value in source_values.items()}
+            return {}
+    return {}
 
 
 def _root_log_text(

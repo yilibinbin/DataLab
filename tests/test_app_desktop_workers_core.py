@@ -555,6 +555,41 @@ def test_execute_root_solving_job_payload_returns_first_root_plot_png(
     assert captured["budget"] is not None
 
 
+def test_execute_root_solving_job_payload_uses_successful_row_values_for_plot_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_render(batch: object, problem: object, *, budget: object = None) -> object:
+        captured["batch"] = batch
+        captured["problem"] = problem
+        captured["budget"] = budget
+        return SimpleNamespace(images=(), warnings=())
+
+    monkeypatch.setattr(workers_core, "render_nominal_root_plots", fake_render)
+    job = RootSolvingJob(
+        equations=("x - A",),
+        unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        data_headers=("A",),
+        data_rows=(("2.5",),),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=32,
+        display_digits=10,
+        render_plots=True,
+    )
+
+    _execute_root_solving_job_payload(job)
+
+    problem = cast(Any, captured["problem"])
+    assert problem.row_values == {"A": "2.5"}
+    assert captured["budget"] is not None
+
+
 def test_execute_root_solving_job_payload_returns_real_png_when_root_plots_enabled() -> None:
     job = RootSolvingJob(
         equations=("x**2 - 2",),

@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLineEdit, QWidget
 
 from app_desktop.ui_schema_binder import find_unbound_required_widgets
 
@@ -76,6 +76,15 @@ def test_error_panel_has_no_unbound_required_schema_widgets(window: Any) -> None
     assert find_unbound_required_widgets(window.error_box) == []
 
 
+def test_unbound_required_schema_scan_discovers_qobject_children() -> None:
+    QApplication.instance() or QApplication([])
+    root = QWidget()
+    child = QLineEdit(root)
+    child.setProperty("datalab_schema_required", True)
+
+    assert find_unbound_required_widgets(root) == [child]
+
+
 def test_error_schema_tooltips_and_choices_refresh_with_language(window: Any) -> None:
     window.error_method_combo.setCurrentIndex(window.error_method_combo.findData("monte_carlo"))
 
@@ -107,7 +116,8 @@ def test_error_schema_bound_controls_keep_mode_and_constants_toggle_behavior(win
 
     window.error_method_combo.setCurrentIndex(window.error_method_combo.findData("taylor"))
     QApplication.processEvents()
-    assert window.error_taylor_widget.isVisible() or not window.error_mc_widget.isVisible()
+    assert window.error_taylor_widget.isVisible() is True
+    assert window.error_mc_widget.isVisible() is False
     assert window.error_mc_samples_spin.isEnabled() is False
     assert window.error_mc_seed_edit.isEnabled() is False
 
