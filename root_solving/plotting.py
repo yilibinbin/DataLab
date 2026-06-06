@@ -10,6 +10,7 @@ from mpmath import mp
 
 from root_solving.expression import RootExpressionSystem, build_root_expression_system
 from root_solving.models import RootBatchResult, RootBatchRowResult, RootProblem, RootUnknown, RootValue, immutable_mapping
+from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 from shared.uncertainty import UncertainValue, parse_numeric_value, parse_uncertainty_format
 
 SUPPORTED_ROOT_PLOT_MODES = frozenset({"scalar", "scan_multiple", "system"})
@@ -283,7 +284,7 @@ def _uncertainty_visualization_metadata(
         requested = str(result.details.get("uncertainty_requested_method", "") or "").strip()
         note = "uncertainty band unavailable: skipped"
         if requested:
-            note = f"uncertainty band unavailable: {method}"
+            note = f"uncertainty band unavailable: {requested}"
         return {
             "method": "skipped",
             "function_band": None,
@@ -602,7 +603,7 @@ def _active_uncertain_inputs_from_problem(
     system: RootExpressionSystem,
     details: Mapping[str, object],
 ) -> Mapping[str, UncertainValue]:
-    from_details = _uncertain_inputs_from_details(details)
+    from_details = _uncertain_inputs_from_details(details, precision=system.precision)
     if from_details:
         active_symbols = set().union(*(expression.free_symbols for expression in system.symbolic_expressions))
         return {
@@ -621,7 +622,7 @@ def _active_uncertain_inputs_from_problem(
         if name not in system.symbol_map or system.symbol_map[name] not in active_symbols:
             continue
         try:
-            value = parse_uncertainty_format(str(raw_value))
+            value = parse_uncertainty_format(str(raw_value), precision=system.precision)
         except Exception:
             continue
         if value.uncertainty > 0 and mp.isfinite(value.uncertainty):
@@ -629,7 +630,7 @@ def _active_uncertain_inputs_from_problem(
     return uncertain
 
 
-def _uncertain_inputs_from_details(details: Mapping[str, object]) -> Mapping[str, UncertainValue]:
+def _uncertain_inputs_from_details(details: Mapping[str, object], *, precision: int) -> Mapping[str, UncertainValue]:
     payload = details.get("plot_uncertain_inputs", {})
     if not isinstance(payload, Mapping):
         return {}
@@ -639,10 +640,11 @@ def _uncertain_inputs_from_details(details: Mapping[str, object]) -> Mapping[str
             continue
         name = str(raw_name)
         try:
-            value = UncertainValue(
-                raw_value.get("value", "0"),
-                raw_value.get("uncertainty", "0"),
-            )
+            with precision_guard(precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+                value = UncertainValue(
+                    raw_value.get("value", "0"),
+                    raw_value.get("uncertainty", "0"),
+                )
         except Exception:
             continue
         if value.uncertainty > 0 and mp.isfinite(value.uncertainty):

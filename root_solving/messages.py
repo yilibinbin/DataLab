@@ -5,6 +5,7 @@ ROOT_MESSAGE_ZH = {
     "SciPy is unavailable; used mpmath fallback.": "SciPy 不可用，已使用 mpmath 回退。",
     "SciPy solve or validation failed; used mpmath fallback.": "SciPy 求解或验证失败，已使用 mpmath 回退。",
     "SciPy validation failed; used mpmath fallback.": "SciPy 验证失败，已使用 mpmath 回退。",
+    "SciPy bypassed because literals or coefficients are not binary64-exact; used mpmath fallback.": "由于字面量或系数不能被 binary64 精确表示，已跳过 SciPy 并使用 mpmath 回退。",
     "missing result": "缺少结果",
     "no roots": "未找到根",
     "Jacobian is ill-conditioned.": "Jacobian 条件数较差。",

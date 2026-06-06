@@ -5,7 +5,11 @@ import pytest
 from typing import Any, cast
 
 from root_solving.models import RootInputValue, RootProblem, RootScanConfig, RootUnknown
-from root_solving.solver import _scipy_scalar_secant_second_guess, solve_root_problem
+from root_solving.solver import (
+    _SCIPY_FLOAT_UNSAFE_WARNING,
+    _scipy_scalar_secant_second_guess,
+    solve_root_problem,
+)
 
 
 def _real_float(value: object) -> float:
@@ -307,7 +311,7 @@ def test_precision_16_polynomial_falls_back_when_coefficients_exceed_float_fidel
         assert abs(result.roots[0].value - mp.mpf("100000000000000000001")) <= mp.mpf("1e5")
         assert result.residual_norm is not None
         assert mp.isfinite(result.residual_norm)
-    assert "SciPy validation failed; used mpmath fallback." in result.warnings
+    assert _SCIPY_FLOAT_UNSAFE_WARNING in result.warnings
 
 
 def test_precision_16_polynomial_rejects_decimal_coefficients_not_exact_in_float() -> None:
@@ -321,7 +325,7 @@ def test_precision_16_polynomial_rejects_decimal_coefficients_not_exact_in_float
     )
 
     assert result.backend == "mpmath"
-    assert "SciPy validation failed; used mpmath fallback." in result.warnings
+    assert _SCIPY_FLOAT_UNSAFE_WARNING in result.warnings
     with mp.workdps(30):
         assert abs(result.roots[0].value - mp.mpf("0.1")) < mp.mpf("1e-16")
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from mpmath import mp
 
+import datalab_latex.expression_engine as expression_engine
 from data_extrapolation_latex_latest import safe_eval
 
 
@@ -41,6 +42,13 @@ def test_safe_eval_preserves_high_precision_numeric_literals():
         )
 
     assert mp.almosteq(actual, expected, rel_eps=mp.mpf("1e-45"), abs_eps=mp.mpf("1e-45"))
+
+
+def test_safe_eval_refuses_float_literal_when_source_segment_is_missing(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(expression_engine.ast, "get_source_segment", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(ValueError, match="source text|原始文本"):
+        safe_eval("0.123456789012345678901234567890", {})
 
 
 def test_safe_eval_limits_ast_depth():

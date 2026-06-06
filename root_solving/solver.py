@@ -25,6 +25,11 @@ from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 from shared.uncertainty import UncertainValue
 
 _SCIPY_FALLBACK_WARNING = "SciPy validation failed; used mpmath fallback."
+_SCIPY_FLOAT_UNSAFE_WARNING = "SciPy bypassed because literals or coefficients are not binary64-exact; used mpmath fallback."
+
+
+class _UnsafeFloatRouteError(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -161,6 +166,9 @@ def _solve_polynomial_scipy_or_fallback(problem: RootProblem, system: RootExpres
     try:
         candidate = _solve_polynomial_scipy(problem, system)
         _validate_candidate(system, candidate.values, "polynomial", problem.precision)
+    except _UnsafeFloatRouteError:
+        fallback = _solve_mpmath(problem, system, "polynomial")
+        return _Candidate(fallback.values, fallback.backend, (*fallback.warnings, _SCIPY_FLOAT_UNSAFE_WARNING))
     except Exception:  # noqa: BLE001
         fallback = _solve_mpmath(problem, system, "polynomial")
         return _Candidate(fallback.values, fallback.backend, (*fallback.warnings, _SCIPY_FALLBACK_WARNING))
@@ -220,10 +228,10 @@ def _solve_polynomial_scipy(problem: RootProblem, system: RootExpressionSystem) 
     import numpy as np
 
     if not _problem_literals_are_float_safe(problem):
-        raise ValueError("Polynomial literals exceed the safe float route.")
+        raise _UnsafeFloatRouteError("Polynomial literals exceed the safe float route.")
     coefficients = _polynomial_coefficients(system)
     if not _coefficients_are_float_safe(coefficients):
-        raise ValueError("Polynomial coefficients exceed the safe float route.")
+        raise _UnsafeFloatRouteError("Polynomial coefficients exceed the safe float route.")
     roots = np.roots([float(coefficient) for coefficient in coefficients])
     values = tuple(_mp_or_complex_from_number(root) for root in roots)
     return _Candidate(values, "scipy")

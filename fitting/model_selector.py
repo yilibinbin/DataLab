@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
-from typing import Callable, Iterable, List, Optional, cast
+from typing import Callable, Iterable, List, Optional
 
 from mpmath import mp
 
@@ -28,46 +27,6 @@ class AutoFitCancelled(Exception):
     catches this and surfaces it as a ``cancelled`` signal so the UI
     can revert the Run button without showing an error dialog."""
 
-
-def _run_with_timeout(
-    func: Callable[[], object],
-    timeout_seconds: float,
-    label: str,
-    target_dps: int,
-) -> object:
-    """Run ``func`` synchronously.
-
-    Python threads cannot safely kill mpmath work because ``mp.dps`` is
-    process-global. This compatibility wrapper intentionally does not create
-    a timeout thread; GUI paths that need hard cancellation use process
-    isolation in the desktop worker layer.
-
-    **mpmath precision-isolation** (CRITICAL): ``mp.dps`` is process-
-    global. If the runaway daemon thread is inside a ``with
-    precision_guard(dps): ...`` block when the parent abandons it,
-    its eventual exit from that block will reset ``mp.dps`` to the
-    pre-entry value — silently corrupting the next model that the
-    parent has since started. We defend by snapshotting ``mp.dps``
-    AFTER the join and restoring it before returning, so the parent's
-    precision state is invariant across the timeout boundary.
-
-    ``timeout_seconds`` is retained only to avoid breaking older callers'
-    signatures. If the call exceeds it, the result is still returned because
-    discarding a completed in-process result after blocking would be worse
-    than having no per-model timeout.
-    """
-    del label, target_dps
-    started = time.monotonic()
-    parent_dps_before = mp.dps
-    try:
-        return func()
-    finally:
-        mp.dps = parent_dps_before
-        elapsed = time.monotonic() - started
-        if timeout_seconds > 0 and elapsed > timeout_seconds:
-            # The model completed after the advisory boundary. Keep the result
-            # and rely on process-level cancellation for hard stops.
-            pass
 
 SEQUENCE_MODEL_ID = "SEQ"
 CUSTOM_MODEL_ID = "CUSTOM"
@@ -192,9 +151,7 @@ def auto_fit_dataset(
     """Fit every built-in model + extras + customs to (x, y), pick the
     best by AIC, return a summary.
 
-    Two responsiveness controls (added because real-world ill-conditioned
-    datasets can drive a single non-linear LM fit into the tens of
-    seconds, which makes the GUI look frozen):
+    Responsiveness control:
 
     - ``should_cancel``: optional callable that the loop polls
       between models. When it returns True, the loop raises
@@ -203,18 +160,19 @@ def auto_fit_dataset(
       between models, not inside a single fit, because ``mp.findroot``
       holds the GIL and there's no safe way to interrupt it mid-Newton.
 
-    - ``per_model_timeout_seconds``: optional advisory cap. When set,
-      each model fit runs on a daemon thread and is abandoned if it
-      exceeds the cap; that model is recorded as a failure ("model
-      timed out") and the loop continues. The runaway thread keeps
-      running but is daemon=True, so it doesn't block process exit.
-      Without this, an ill-conditioned PowerLimit fit on σ ≈ 1e-19
-      data can take 50+ seconds while the user can't tell whether
-      the GUI is alive.
-
-    Both are off by default to preserve the historical behaviour of
-    the function for non-GUI callers (CLI, tests).
+    ``per_model_timeout_seconds`` is retained only as a compatibility
+    parameter. Positive in-process timeouts are rejected because Python
+    threads cannot safely kill mpmath work while preserving process-global
+    ``mp.dps``. GUI paths that need hard cancellation must use process
+    isolation.
     """
+    if per_model_timeout_seconds is not None and per_model_timeout_seconds > 0:
+        raise ValueError(
+            _dual_msg(
+                "进程内自动拟合不支持 per-model 超时；请使用进程隔离的取消路径。",
+                "In-process auto fit does not support per-model timeouts; use process-isolated cancellation.",
+            )
+        )
     x_series = [mp.mpf(val) for val in x_data]
     y_series = [mp.mpf(val) for val in y_data]
     results: List[AutoModelResult] = []
@@ -224,23 +182,6 @@ def auto_fit_dataset(
             raise AutoFitCancelled(
                 _dual_msg("自动拟合已取消。", "Auto fit cancelled.")
             )
-
-    def _run_one(label: str, fn: Callable[[], FitResult]) -> FitResult:
-        """Wrap a single model fit with the optional timeout. Returns
-        the fit result, or raises TimeoutError on cap breach. Errors
-        from the fit itself propagate so the caller can record them.
-
-        ``target_dps=precision`` is forwarded so ``_run_with_timeout``
-        can re-assert the right ``mp.dps`` after a timeout, defending
-        against the daemon thread corrupting the parent's precision
-        state via ``precision_guard.__exit__``.
-        """
-        if per_model_timeout_seconds is None or per_model_timeout_seconds <= 0:
-            return fn()
-        result = _run_with_timeout(
-            fn, per_model_timeout_seconds, label, target_dps=precision,
-        )
-        return cast(FitResult, result)
 
     definitions = list(AUTO_MODELS)
     if extra_models:
@@ -268,7 +209,7 @@ def auto_fit_dataset(
                     weights=weights,
                     data_sigmas=data_sigmas,
                 )
-            fit = _run_one(definition.label, _linear_fit)
+            fit = _linear_fit()
             results.append(AutoModelResult(definition.identifier, definition.label, True, fit))
         except Exception as exc:
             results.append(
@@ -299,7 +240,7 @@ def auto_fit_dataset(
                     weights=weights,
                     data_sigmas=data_sigmas,
                 )
-            fit = _run_one(display_label, _custom_fit)
+            fit = _custom_fit()
             results.append(AutoModelResult(identifier, display_label, True, fit))
         except Exception as exc:
             results.append(AutoModelResult(identifier, display_label, False, None, str(exc)))

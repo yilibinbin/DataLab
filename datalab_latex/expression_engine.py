@@ -237,11 +237,15 @@ def _mp_numeric_literal(node: ast.Constant, source: str) -> mp.mpf:
     """Convert numeric literals from source text, not Python's rounded AST value."""
     text = ast.get_source_segment(source, node)
     if text:
-        try:
-            return mp.mpf(text.replace("_", ""))
-        except Exception:
-            pass
-    return _mp(node.value)
+        return mp.mpf(text.replace("_", ""))
+    if isinstance(node.value, int):
+        return _mp(node.value)
+    raise ValueError(
+        _dual_msg(
+            "无法恢复数值字面量的原始文本，已拒绝避免精度损失。",
+            "Numeric literal source text is unavailable; refusing to avoid precision loss.",
+        )
+    )
 
 
 def _resolve_callable(
