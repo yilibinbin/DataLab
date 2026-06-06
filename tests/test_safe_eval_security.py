@@ -27,6 +27,22 @@ def test_safe_eval_rejects_import():
     assert ("不支持的函数调用" in text) or ("Unsupported function call" in text)
 
 
+def test_safe_eval_preserves_high_precision_numeric_literals():
+    expr = (
+        "-0.125002080319379889989055335841397 + "
+        "0.125002079389684968484888259436634"
+    )
+
+    with mp.workdps(50):
+        actual = mp.mpf(safe_eval(expr, {}))
+        expected = (
+            mp.mpf("-0.125002080319379889989055335841397")
+            + mp.mpf("0.125002079389684968484888259436634")
+        )
+
+    assert mp.almosteq(actual, expected, rel_eps=mp.mpf("1e-45"), abs_eps=mp.mpf("1e-45"))
+
+
 def test_safe_eval_limits_ast_depth():
     expr = "+".join(["1"] * 1000)
     with pytest.raises(ValueError) as excinfo:

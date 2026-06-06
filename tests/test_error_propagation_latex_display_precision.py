@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from mpmath import mp
 
-from data_extrapolation_latex_latest import format_uncertainty_display_latex
+from data_extrapolation_latex_latest import (
+    UncertainValue,
+    apply_formula_to_data,
+    format_uncertainty_display_latex,
+)
 
 
 def test_format_uncertainty_display_latex_respects_mp_precision_for_almosteq():
@@ -31,3 +35,24 @@ def test_format_uncertainty_display_latex_respects_mp_precision_for_almosteq():
         assert is_latex_high is True
         assert "(" in text_high
 
+
+def test_error_propagation_preserves_high_precision_literal_cancellation():
+    formula = (
+        "-0.125002080319379889989055335841397 + \\\n"
+        "0.125002079389684968484888259436634 + A"
+    )
+
+    with mp.workdps(50):
+        result = apply_formula_to_data(
+            ["A"],
+            [[UncertainValue("0", "0")]],
+            {},
+            formula,
+        )[0]
+        expected = (
+            mp.mpf("-0.125002080319379889989055335841397")
+            + mp.mpf("0.125002079389684968484888259436634")
+        )
+
+    assert result.uncertainty == 0
+    assert mp.almosteq(result.value, expected, rel_eps=mp.mpf("1e-45"), abs_eps=mp.mpf("1e-45"))

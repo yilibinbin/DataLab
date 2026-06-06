@@ -194,17 +194,17 @@ def safe_eval(expression: str, var_dict: dict[str, object]) -> Any:
         )
 
     variables = {name: _mp(value) for name, value in (var_dict or {}).items()}
-    return _evaluate_ast(tree.body, variables)
+    return _evaluate_ast(tree.body, variables, expr)
 
 
-def _evaluate_ast(node: ast.AST, variables: dict[str, object]) -> Any:
+def _evaluate_ast(node: ast.AST, variables: dict[str, object], source: str) -> Any:
     if isinstance(node, ast.Expression):
-        return _evaluate_ast(node.body, variables)
+        return _evaluate_ast(node.body, variables, source)
     if isinstance(node, ast.Attribute):
         raise ValueError(_dual_msg("不支持的属性访问。", "Attribute access is not supported."))
     if isinstance(node, ast.Constant):
         if isinstance(node.value, (int, float)):
-            return _mp(node.value)
+            return _mp_numeric_literal(node, source)
         raise ValueError(_dual_msg("不支持的常量类型。", "Unsupported constant type."))
     if isinstance(node, ast.Name):
         resolved = _resolve_name(node.id, variables)
@@ -212,14 +212,14 @@ def _evaluate_ast(node: ast.AST, variables: dict[str, object]) -> Any:
             return resolved
         raise ValueError(_dual_msg(f"未知变量或函数: {node.id}", f"Unknown variable or function: {node.id}"))
     if isinstance(node, ast.BinOp):
-        left = _evaluate_ast(node.left, variables)
-        right = _evaluate_ast(node.right, variables)
+        left = _evaluate_ast(node.left, variables, source)
+        right = _evaluate_ast(node.right, variables, source)
         bin_op_type = type(node.op)
         if bin_op_type in _BINARY_OPERATORS:
             return _BINARY_OPERATORS[bin_op_type](left, right)
         raise ValueError(_dual_msg(f"不支持的二元操作: {bin_op_type}", f"Unsupported binary operator: {bin_op_type}"))
     if isinstance(node, ast.UnaryOp):
-        operand = _evaluate_ast(node.operand, variables)
+        operand = _evaluate_ast(node.operand, variables, source)
         un_op_type = type(node.op)
         if un_op_type in _UNARY_OPERATORS:
             return _UNARY_OPERATORS[un_op_type](operand)
@@ -228,9 +228,20 @@ def _evaluate_ast(node: ast.AST, variables: dict[str, object]) -> Any:
         func = _resolve_callable(node.func, variables)
         if node.keywords:
             raise ValueError(_dual_msg("不支持带关键字参数的函数。", "Keyword arguments are not supported."))
-        args = [_evaluate_ast(arg, variables) for arg in node.args]
+        args = [_evaluate_ast(arg, variables, source) for arg in node.args]
         return func(*args)
     raise ValueError(_dual_msg(f"不支持的语法节点: {type(node)}", f"Unsupported syntax node: {type(node)}"))
+
+
+def _mp_numeric_literal(node: ast.Constant, source: str) -> mp.mpf:
+    """Convert numeric literals from source text, not Python's rounded AST value."""
+    text = ast.get_source_segment(source, node)
+    if text:
+        try:
+            return mp.mpf(text.replace("_", ""))
+        except Exception:
+            pass
+    return _mp(node.value)
 
 
 def _resolve_callable(
