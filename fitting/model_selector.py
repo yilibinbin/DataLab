@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import threading
 from dataclasses import dataclass
-from typing import Callable, Iterable, List, Optional, cast
+from typing import Callable, Iterable, List, Optional
 
 from mpmath import mp
 
@@ -28,79 +27,6 @@ class AutoFitCancelled(Exception):
     catches this and surfaces it as a ``cancelled`` signal so the UI
     can revert the Run button without showing an error dialog."""
 
-
-def _run_with_timeout(
-    func: Callable[[], object],
-    timeout_seconds: float,
-    label: str,
-    target_dps: int,
-) -> object:
-    """Run ``func`` on a daemon thread and raise ``TimeoutError`` if it
-    exceeds ``timeout_seconds``.
-
-    mpmath holds the GIL through long arithmetic, so a Python-level
-    ``signal.alarm`` cannot interrupt it; the daemon-thread approach is
-    deliberately advisory — the runaway thread is left to finish on its
-    own. The caller treats the timed-out model as a failure and moves
-    on, which is exactly what the UI needs to recover responsiveness.
-
-    **mpmath precision-isolation** (CRITICAL): ``mp.dps`` is process-
-    global. If the runaway daemon thread is inside a ``with
-    precision_guard(dps): ...`` block when the parent abandons it,
-    its eventual exit from that block will reset ``mp.dps`` to the
-    pre-entry value — silently corrupting the next model that the
-    parent has since started. We defend by snapshotting ``mp.dps``
-    AFTER the join and restoring it before returning, so the parent's
-    precision state is invariant across the timeout boundary.
-
-    The runaway thread can still mutate ``mp.dps`` later when it
-    finally exits its inner guard, but by then the parent has moved
-    onto another model whose own ``precision_guard`` re-asserts the
-    correct dps before any computation. The window of corruption is
-    therefore confined to between models, not within a model — which
-    matches the cancellation semantics already documented for
-    ``should_cancel``.
-    """
-    holder: list[object] = [None]
-    err: list[BaseException] = []
-    parent_dps_before = mp.dps
-    timed_out = [False]
-
-    def _target() -> None:
-        try:
-            holder[0] = func()
-        except BaseException as exc:  # noqa: BLE001
-            err.append(exc)
-        finally:
-            if timed_out[0]:
-                mp.dps = max(parent_dps_before, target_dps)
-
-    t = threading.Thread(target=_target, name=f"datalab-fit-{label}", daemon=True)
-    t.start()
-    t.join(timeout_seconds)
-    if t.is_alive():
-        timed_out[0] = True
-        # Re-assert the parent's dps in case the runaway thread already
-        # mutated it (e.g. its precision_guard's __enter__ ran but
-        # __exit__ hasn't yet, so the global is at ``target_dps`` —
-        # which happens to be what we want for the next model anyway).
-        # Either way, set it explicitly so subsequent code is
-        # deterministic regardless of the daemon thread's race.
-        mp.dps = max(parent_dps_before, target_dps)
-        raise TimeoutError(
-            _dual_msg(
-                f"模型 {label!r} 超过 {timeout_seconds:.0f}s 仍未完成，已跳过。",
-                f"Model {label!r} exceeded {timeout_seconds:.0f}s and was skipped.",
-            )
-        )
-    # Thread completed cleanly. Its precision_guard already restored
-    # ``mp.dps`` on exit; we re-assert anyway as a belt-and-suspenders
-    # invariant against any future code path that might forget the
-    # guard.
-    mp.dps = parent_dps_before
-    if err:
-        raise err[0]
-    return holder[0]
 
 SEQUENCE_MODEL_ID = "SEQ"
 CUSTOM_MODEL_ID = "CUSTOM"
@@ -225,9 +151,7 @@ def auto_fit_dataset(
     """Fit every built-in model + extras + customs to (x, y), pick the
     best by AIC, return a summary.
 
-    Two responsiveness controls (added because real-world ill-conditioned
-    datasets can drive a single non-linear LM fit into the tens of
-    seconds, which makes the GUI look frozen):
+    Responsiveness control:
 
     - ``should_cancel``: optional callable that the loop polls
       between models. When it returns True, the loop raises
@@ -236,18 +160,19 @@ def auto_fit_dataset(
       between models, not inside a single fit, because ``mp.findroot``
       holds the GIL and there's no safe way to interrupt it mid-Newton.
 
-    - ``per_model_timeout_seconds``: optional advisory cap. When set,
-      each model fit runs on a daemon thread and is abandoned if it
-      exceeds the cap; that model is recorded as a failure ("model
-      timed out") and the loop continues. The runaway thread keeps
-      running but is daemon=True, so it doesn't block process exit.
-      Without this, an ill-conditioned PowerLimit fit on σ ≈ 1e-19
-      data can take 50+ seconds while the user can't tell whether
-      the GUI is alive.
-
-    Both are off by default to preserve the historical behaviour of
-    the function for non-GUI callers (CLI, tests).
+    ``per_model_timeout_seconds`` is retained only as a compatibility
+    parameter. Positive in-process timeouts are rejected because Python
+    threads cannot safely kill mpmath work while preserving process-global
+    ``mp.dps``. GUI paths that need hard cancellation must use process
+    isolation.
     """
+    if per_model_timeout_seconds is not None and per_model_timeout_seconds > 0:
+        raise ValueError(
+            _dual_msg(
+                "进程内自动拟合不支持 per-model 超时；请使用进程隔离的取消路径。",
+                "In-process auto fit does not support per-model timeouts; use process-isolated cancellation.",
+            )
+        )
     x_series = [mp.mpf(val) for val in x_data]
     y_series = [mp.mpf(val) for val in y_data]
     results: List[AutoModelResult] = []
@@ -257,23 +182,6 @@ def auto_fit_dataset(
             raise AutoFitCancelled(
                 _dual_msg("自动拟合已取消。", "Auto fit cancelled.")
             )
-
-    def _run_one(label: str, fn: Callable[[], FitResult]) -> FitResult:
-        """Wrap a single model fit with the optional timeout. Returns
-        the fit result, or raises TimeoutError on cap breach. Errors
-        from the fit itself propagate so the caller can record them.
-
-        ``target_dps=precision`` is forwarded so ``_run_with_timeout``
-        can re-assert the right ``mp.dps`` after a timeout, defending
-        against the daemon thread corrupting the parent's precision
-        state via ``precision_guard.__exit__``.
-        """
-        if per_model_timeout_seconds is None or per_model_timeout_seconds <= 0:
-            return fn()
-        result = _run_with_timeout(
-            fn, per_model_timeout_seconds, label, target_dps=precision,
-        )
-        return cast(FitResult, result)
 
     definitions = list(AUTO_MODELS)
     if extra_models:
@@ -301,7 +209,7 @@ def auto_fit_dataset(
                     weights=weights,
                     data_sigmas=data_sigmas,
                 )
-            fit = _run_one(definition.label, _linear_fit)
+            fit = _linear_fit()
             results.append(AutoModelResult(definition.identifier, definition.label, True, fit))
         except Exception as exc:
             results.append(
@@ -332,7 +240,7 @@ def auto_fit_dataset(
                     weights=weights,
                     data_sigmas=data_sigmas,
                 )
-            fit = _run_one(display_label, _custom_fit)
+            fit = _custom_fit()
             results.append(AutoModelResult(identifier, display_label, True, fit))
         except Exception as exc:
             results.append(AutoModelResult(identifier, display_label, False, None, str(exc)))

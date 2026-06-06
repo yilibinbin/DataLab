@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 import math
+import re
 from typing import Any
 
 from mpmath import mp
@@ -24,6 +25,11 @@ from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 from shared.uncertainty import UncertainValue
 
 _SCIPY_FALLBACK_WARNING = "SciPy validation failed; used mpmath fallback."
+_SCIPY_FLOAT_UNSAFE_WARNING = "SciPy bypassed because literals or coefficients are not binary64-exact; used mpmath fallback."
+
+
+class _UnsafeFloatRouteError(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -158,8 +164,11 @@ def _solve_with_scipy_or_fallback(
 
 def _solve_polynomial_scipy_or_fallback(problem: RootProblem, system: RootExpressionSystem) -> _Candidate:
     try:
-        candidate = _solve_polynomial_scipy(system)
+        candidate = _solve_polynomial_scipy(problem, system)
         _validate_candidate(system, candidate.values, "polynomial", problem.precision)
+    except _UnsafeFloatRouteError:
+        fallback = _solve_mpmath(problem, system, "polynomial")
+        return _Candidate(fallback.values, fallback.backend, (*fallback.warnings, _SCIPY_FLOAT_UNSAFE_WARNING))
     except Exception:  # noqa: BLE001
         fallback = _solve_mpmath(problem, system, "polynomial")
         return _Candidate(fallback.values, fallback.backend, (*fallback.warnings, _SCIPY_FALLBACK_WARNING))
@@ -215,10 +224,14 @@ def _solve_scipy(problem: RootProblem, system: RootExpressionSystem, mode: RootM
     return _Candidate(tuple(_finite_mpf(str(value), "SciPy system root") for value in result.x), "scipy")
 
 
-def _solve_polynomial_scipy(system: RootExpressionSystem) -> _Candidate:
+def _solve_polynomial_scipy(problem: RootProblem, system: RootExpressionSystem) -> _Candidate:
     import numpy as np
 
+    if not _problem_literals_are_float_safe(problem):
+        raise _UnsafeFloatRouteError("Polynomial literals exceed the safe float route.")
     coefficients = _polynomial_coefficients(system)
+    if not _coefficients_are_float_safe(coefficients):
+        raise _UnsafeFloatRouteError("Polynomial coefficients exceed the safe float route.")
     roots = np.roots([float(coefficient) for coefficient in coefficients])
     values = tuple(_mp_or_complex_from_number(root) for root in roots)
     return _Candidate(values, "scipy")
@@ -243,7 +256,7 @@ def _solve_scan_multiple(problem: RootProblem, system: RootExpressionSystem) -> 
             x_value = lower + (upper - lower) * index / sample_count
             y_value = _evaluate_scan_point(system, unknown.name, x_value)
             samples.append((x_value, y_value))
-            if _scan_candidate_is_valid(system, unknown.name, x_value, problem.precision, scan_config):
+            if _scan_sample_is_exact_root(y_value):
                 roots.append(x_value)
 
         for (left_x, left_y), (right_x, right_y) in zip(samples, samples[1:], strict=False):
@@ -258,14 +271,14 @@ def _solve_scan_multiple(problem: RootProblem, system: RootExpressionSystem) -> 
             right_x, right_y = right
             if not (mp.isfinite(left_y) and mp.isfinite(center_y) and mp.isfinite(right_y)):
                 continue
-            if abs(center_y) <= abs(left_y) and abs(center_y) <= abs(right_y):
+            if abs(center_y) < abs(left_y) and abs(center_y) < abs(right_y):
                 candidate = _refine_abs_minimum(system, unknown.name, left_x, right_x, problem.precision)
                 if _scan_candidate_is_valid(system, unknown.name, candidate, problem.precision, scan_config):
                     roots.append(candidate)
 
         unique_roots = _deduplicate_roots(
             tuple(roots),
-            tolerance=_scan_cluster_tolerance(system, problem.precision, scan_config),
+            tolerance=_scan_cluster_tolerance(problem.precision, scan_config),
         )
         if not unique_roots:
             raise ValueError("scan_multiple found no roots in the scan range.")
@@ -376,6 +389,12 @@ def _scan_candidate_is_valid(
     return bool(mp.isfinite(residual) and residual <= _scan_residual_tolerance(system, precision, scan_config))
 
 
+def _scan_sample_is_exact_root(residual: mp.mpf) -> bool:
+    if not mp.isfinite(residual):
+        return False
+    return bool(residual == 0)
+
+
 def _deduplicate_roots(values: Sequence[mp.mpf], *, tolerance: mp.mpf) -> tuple[mp.mpf, ...]:
     ordered = sorted(values)
     roots: list[mp.mpf] = []
@@ -465,14 +484,16 @@ def _scan_residual_tolerance(
 
 
 def _scan_cluster_tolerance(
-    system: RootExpressionSystem,
     precision: int,
     scan_config: RootScanConfig,
 ) -> mp.mpf:
     with precision_guard(precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
         if scan_config.cluster_tolerance:
             return _positive_config_mpf(scan_config.cluster_tolerance, "scan cluster tolerance")
-        return max(mp.sqrt(mp.eps), _scan_residual_tolerance(system, precision, scan_config))
+        if precision <= 16:
+            return mp.mpf("1e-12")
+        digits = max(12, min(precision - 8, precision // 2))
+        return mp.power(10, -digits)
 
 
 def _scan_sample_count(scan_config: RootScanConfig) -> int:
@@ -574,6 +595,51 @@ def _polynomial_coefficients(system: RootExpressionSystem) -> tuple[mp.mpf, ...]
     if coefficients is None:
         raise ValueError("Equation is not a univariate polynomial in the unknown.")
     return tuple(mp.mpf(coefficient) for coefficient in coefficients)
+
+
+def _coefficients_are_float_safe(coefficients: Sequence[mp.mpf]) -> bool:
+    for coefficient in coefficients:
+        if not mp.isfinite(coefficient):
+            return False
+        try:
+            round_trip = mp.mpf(float(coefficient))
+        except (OverflowError, ValueError):
+            return False
+        if round_trip != coefficient:
+            return False
+    return True
+
+
+_NUMERIC_LITERAL_RE = re.compile(r"(?<![A-Za-z_])(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
+
+
+def _problem_literals_are_float_safe(problem: RootProblem) -> bool:
+    literals: list[str] = []
+    for expression in problem.equations:
+        literals.extend(match.group(0) for match in _NUMERIC_LITERAL_RE.finditer(expression))
+    literals.extend(known.value for known in problem.known_values)
+    literals.extend(str(value) for value in problem.row_values.values())
+    literals.extend(str(value) for value in problem.constants.values())
+    return all(_literal_is_binary64_exact(literal) for literal in literals if str(literal).strip())
+
+
+def _literal_is_binary64_exact(literal: str) -> bool:
+    text = str(literal).strip()
+    if "(" in text or "[" in text:
+        from shared.uncertainty import parse_numeric_value
+
+        numeric = parse_numeric_value(text, precision=max(80, len(text) + 10))
+        float_text = text.split("(", 1)[0]
+    else:
+        with precision_guard(max(80, len(text) + 10), clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+            numeric = mp.mpf(text)
+        float_text = text
+    try:
+        as_float = float(float_text)
+    except (OverflowError, ValueError):
+        return False
+    with precision_guard(max(80, len(text) + 10), clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+        return mp.mpf(as_float) == numeric
 
 
 def _parse_mpf(value: str, label: str) -> mp.mpf:

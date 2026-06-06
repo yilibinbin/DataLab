@@ -161,7 +161,10 @@ def _solve_root_batch_task(task: _RootBatchTask) -> _RootBatchTaskOutput:
         with precision_guard(problem.precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
             system = replace(
                 task.system,
-                nominal_inputs={name: parse_numeric_value(value) for name, value in task.nominal_inputs.items()},
+                nominal_inputs={
+                    name: parse_numeric_value(value, precision=problem.precision)
+                    for name, value in task.nominal_inputs.items()
+                },
             )
             result = solve_prepared_root_problem(
                 problem,

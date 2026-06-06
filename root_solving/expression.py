@@ -200,18 +200,18 @@ def _nominal_inputs(problem: RootProblem) -> dict[str, mp.mpf]:
     values: dict[str, mp.mpf] = {}
     if problem.row_values:
         for name, value in problem.row_values.items():
-            values[name] = _parse_nominal(value, f"data column {name}")
+            values[name] = _parse_nominal(value, f"data column {name}", problem.precision)
     else:
         for known in problem.known_values:
-            values[known.name] = _parse_nominal(known.value, f"known value {known.name}")
+            values[known.name] = _parse_nominal(known.value, f"known value {known.name}", problem.precision)
     for name, value in problem.constants.items():
-        values[name] = _parse_nominal(value, f"constant {name}")
+        values[name] = _parse_nominal(value, f"constant {name}", problem.precision)
     return values
 
 
-def _parse_nominal(value: object, label: str) -> mp.mpf:
+def _parse_nominal(value: object, label: str, precision: int) -> mp.mpf:
     try:
-        return _finite_mpf(parse_numeric_value(value), label)
+        return _finite_mpf(parse_numeric_value(value, precision=precision), label)
     except Exception as exc:  # noqa: BLE001
         raise ValueError(f"Invalid numeric value for {label}.") from exc
 
@@ -269,6 +269,11 @@ def _sympy_numeric(value: object, precision: int) -> sp.Float:
 
 
 def _mp_from_sympy(value: Any, precision: int) -> mp.mpf:
+    if isinstance(value, sp.Integer):
+        return _finite_mpf(str(value), "symbolic expression result")
+    if isinstance(value, sp.Rational):
+        with precision_guard(precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+            return _finite_mpf(mp.fraction(int(value.p), int(value.q)), "symbolic expression result")
     evaluated = sp.N(value, precision)
     if not evaluated.is_real:
         raise ValueError(f"Expression did not evaluate to a real number: {value}")

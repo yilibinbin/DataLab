@@ -843,7 +843,7 @@ class ExtrapolationWindow(
         path_by_name = {path.name: path for path in examples}
         label_to_name: dict[str, str] = {}
         labels: list[str] = []
-        lang = getattr(self, "_language", _LANG_ZH)
+        lang = _LANG_EN if self._is_en() else _LANG_ZH
         for path in examples:
             entry = entries.get(path.name)
             label = entry.label(lang=lang) if entry is not None else path.name

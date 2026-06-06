@@ -10,7 +10,7 @@ from shared.computation_inputs import (
     validate_symbol_classification,
 )
 from shared.input_normalization import IDENTIFIER_RE, ConstantsState, normalize_constants_state, string_value
-from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS
+from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 from shared.uncertainty import UncertainValue, parse_uncertainty_format
 
 from root_solving.models import (
@@ -50,8 +50,9 @@ def normalize_root_problem(
     if normalized_mode not in _ROOT_MODES:
         raise ValueError(_dual_msg(f"求根模式无效：{mode}", f"Invalid root mode: {mode}"))
 
+    clean_precision = _clamp_precision(precision)
     unknowns = _normalize_unknown_rows(unknown_rows)
-    known_values, uncertain_inputs = _normalize_known_rows(known_rows)
+    known_values, uncertain_inputs = _normalize_known_rows(known_rows, precision=clean_precision)
 
     constants_state = normalize_constants_state(
         enabled=constants_enabled,
@@ -60,9 +61,10 @@ def normalize_root_problem(
         text=constants_text,
         numeric_mode="uncertainty",
     )
-    constants = constants_state.compute_dict(validate=True)
-    for name, value in constants.items():
-        uncertain_inputs[name] = parse_uncertainty_format(value)
+    with precision_guard(clean_precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+        constants = constants_state.compute_dict(validate=True)
+        for name, value in constants.items():
+            uncertain_inputs[name] = parse_uncertainty_format(value, precision=clean_precision)
 
     _validate_scope(
         equations=clean_equations,
@@ -77,7 +79,7 @@ def normalize_root_problem(
         known_values=tuple(known_values),
         constants=dict(constants),
         mode=cast(RootMode, normalized_mode),
-        precision=_clamp_precision(precision),
+        precision=clean_precision,
         scan_config=_normalize_scan_config(scan_config),
         uncertainty_options=normalize_root_uncertainty_options(uncertainty_options),
     )
@@ -106,7 +108,9 @@ def normalize_root_problem_from_context(
     unknowns = _normalize_unknown_rows(unknown_rows)
     _validate_scope(equations=(), unknowns=unknowns, known_values=(), constants={})
 
-    constants = constants_state.compute_dict(validate=True)
+    clean_precision = _clamp_precision(precision)
+    with precision_guard(clean_precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+        constants = constants_state.compute_dict(validate=True)
     classification = classify_expression_symbols(
         clean_equations,
         SymbolCategories(
@@ -123,7 +127,7 @@ def normalize_root_problem_from_context(
         row_values=dict(row_values),
         constants=dict(constants),
         mode=cast(RootMode, normalized_mode),
-        precision=_clamp_precision(precision),
+        precision=clean_precision,
         scan_config=_normalize_scan_config(scan_config),
         uncertainty_options=normalize_root_uncertainty_options(uncertainty_options),
     )
@@ -146,7 +150,11 @@ def _normalize_unknown_rows(rows: Iterable[dict[str, Any]]) -> list[RootUnknown]
     return unknowns
 
 
-def _normalize_known_rows(rows: Iterable[dict[str, Any]]) -> tuple[list[RootInputValue], dict[str, UncertainValue]]:
+def _normalize_known_rows(
+    rows: Iterable[dict[str, Any]],
+    *,
+    precision: int,
+) -> tuple[list[RootInputValue], dict[str, UncertainValue]]:
     values: list[RootInputValue] = []
     uncertain: dict[str, UncertainValue] = {}
     for index, row in enumerate(_coerce_rows(rows, "Known rows"), 1):
@@ -163,7 +171,7 @@ def _normalize_known_rows(rows: Iterable[dict[str, Any]]) -> tuple[list[RootInpu
                 )
             )
         try:
-            uncertain[name] = parse_uncertainty_format(value)
+            uncertain[name] = parse_uncertainty_format(value, precision=precision)
         except Exception as exc:  # noqa: BLE001
             raise ValueError(
                 _dual_msg(

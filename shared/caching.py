@@ -64,10 +64,9 @@ _MIN_KEY_PRECISION = 200
 # Hard cap on key-stringification precision. Without this, a caller
 # (including a web form) could pass ``precision=10**9`` and trigger
 # ``mp.nstr(x, 10**9)`` which produces a billion-digit string per xs
-# value — an unbounded allocation. 1000 sig-figs is already far beyond
-# any realistic precision need for a cache *key* (evaluation precision
-# can still be arbitrary; only the key is capped, and the cache just
-# collides beyond the cap rather than failing).
+# value — an unbounded allocation. Above this cap we bypass caching
+# instead of truncating the key, because a truncated high-precision key
+# can silently alias distinct inputs.
 _MAX_KEY_PRECISION = 1_000
 
 # Minimum accepted ``precision`` argument. ``mp.nstr(x, 0)`` raises and
@@ -184,7 +183,7 @@ def sample_with_cache(
     # driving mp.nstr with arbitrarily large precision.
     precision_int = max(_MIN_PRECISION, int(precision))
 
-    if len(xs) > _MAX_XS_PER_ENTRY:
+    if len(xs) > _MAX_XS_PER_ENTRY or precision_int > _MAX_KEY_PRECISION:
         return _evaluate_direct(func, xs, precision_int)
 
     key_precision = min(

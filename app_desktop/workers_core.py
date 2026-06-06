@@ -1365,10 +1365,11 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         text=job.constants_text,
         numeric_mode="uncertainty",
     )
-    data_rows = tuple(
-        tuple(parse_uncertainty_format(cell) for cell in row)
-        for row in job.data_rows
-    )
+    with precision_guard(job.precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+        data_rows = tuple(
+            tuple(parse_uncertainty_format(cell, precision=job.precision) for cell in row)
+            for row in job.data_rows
+        )
     unknowns = tuple(RootUnknown(**row) for row in job.unknown_rows if row.get("name", "").strip())
     batch = solve_root_batch(
         equations=job.equations,
@@ -1388,7 +1389,7 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         plot_problem = normalize_root_problem_from_context(
             equations=job.equations,
             unknown_rows=tuple(dict(row) for row in job.unknown_rows),
-            row_values={header: "0" for header in job.data_headers},
+            row_values=_first_successful_root_row_values(batch),
             constants_state=constants_state,
             mode=job.mode,
             precision=job.precision,
@@ -1396,12 +1397,14 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
             uncertainty_options=job.uncertainty_options,
         )
         plot_selection = render_nominal_root_plots(batch, plot_problem, budget=RootPlotBudget())
-    markdown, csv_rows, csv_headers = render_root_batch_result(
-        batch,
-        display_digits=job.display_digits,
-        uncertainty_digits=job.uncertainty_digits,
-        language=job.language,
-    )
+    with precision_guard(job.precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+        markdown, csv_rows, csv_headers = render_root_batch_result(
+            batch,
+            display_digits=job.display_digits,
+            uncertainty_digits=job.uncertainty_digits,
+            language=job.language,
+        )
+        raw_rows = _serialize_root_batch_raw_rows(batch, digits=job.precision)
     headers = csv_headers or list(_ROOT_CSV_HEADERS)
     roots_count = sum(len(row.result.roots) for row in batch.rows if row.result is not None)
     warnings = list(batch.warnings)
@@ -1417,7 +1420,7 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         "markdown": markdown,
         "csv_rows": csv_rows,
         "csv_headers": headers,
-        "raw_rows": _serialize_root_batch_raw_rows(batch, digits=job.precision),
+        "raw_rows": raw_rows,
         "log": (
             _root_log_text(
                 language=job.language,
@@ -1448,6 +1451,16 @@ def _root_batch_has_successful_roots(batch: Any) -> bool:
         row.result is not None and row.failure is None and bool(row.result.roots)
         for row in getattr(batch, "rows", ())
     )
+
+
+def _first_successful_root_row_values(batch: Any) -> dict[str, str]:
+    for row in getattr(batch, "rows", ()):
+        if row.result is not None and row.failure is None and bool(row.result.roots):
+            source_values = getattr(row, "source_values", {})
+            if isinstance(source_values, Mapping):
+                return {str(key): str(value) for key, value in source_values.items()}
+            return {}
+    return {}
 
 
 def _root_log_text(

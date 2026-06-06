@@ -6,10 +6,12 @@ from typing import cast
 from mpmath import mp
 
 from root_solving.batch import solve_root_batch
+from root_solving.expression import build_root_expression_system
 from root_solving.models import RootBatchResult, RootBatchRowResult, RootMode, RootProblem, RootResult, RootUnknown, RootValue
 from root_solving.plotting import (
     RootPlotBudget,
     ROOT_PLOT_FAILED_WARNING,
+    _active_uncertain_inputs_from_problem,
     render_nominal_root_plot,
     render_nominal_root_plots,
     select_root_plot_requests,
@@ -287,6 +289,37 @@ def test_render_taylor_root_plot_records_no_band_note_when_skipped() -> None:
     assert visualization["method"] == "skipped"
     assert visualization["function_band"] is None
     assert visualization["root_intervals"] == ()
+    assert visualization["notes"] == ("uncertainty band unavailable: taylor",)
+
+
+def test_render_skipped_root_plot_records_fallback_note_without_requested_method() -> None:
+    problem = RootProblem(
+        equations=("x^2 - A",),
+        unknowns=(RootUnknown("x", initial="2", lower="1", upper="3"),),
+        row_values={"A": "4.0(2)"},
+        mode="scalar",
+        precision=50,
+    )
+    batch = RootBatchResult(
+        rows=(
+            RootBatchRowResult(
+                row_index=0,
+                source_values={"A": "4.0(2)"},
+                result=RootResult(
+                    roots=(RootValue(name="x", value=mp.mpf("2")),),
+                    backend="mpmath",
+                    mode="scalar",
+                    details={"uncertainty_method": "skipped"},
+                ),
+            ),
+        )
+    )
+    request = select_root_plot_requests(batch, budget=RootPlotBudget(max_grid_points=9)).requests[0]
+
+    image = render_nominal_root_plot(request, problem)
+
+    assert image is not None
+    visualization = cast(Mapping[str, object], image.metadata["uncertainty_visualization"])
     assert visualization["notes"] == ("uncertainty band unavailable: skipped",)
 
 
@@ -377,6 +410,47 @@ def test_render_uncertainty_plot_uses_batch_payload_when_source_values_are_nomin
     function_band = cast(Mapping[str, object], visualization["function_band"])
     assert function_band["active_inputs"] == ("A",)
     assert visualization["notes"] == ()
+
+
+def test_uncertain_input_plot_fallback_parses_at_problem_precision() -> None:
+    problem = RootProblem(
+        equations=("x**2 - A",),
+        unknowns=(RootUnknown("x", initial="2"),),
+        row_values={"A": "4.0000000000000000000000000001(2)"},
+        mode="scalar",
+        precision=80,
+    )
+    system = build_root_expression_system(problem)
+    with mp.workdps(15):
+        uncertain = _active_uncertain_inputs_from_problem(problem, system, {})
+
+    with mp.workdps(80):
+        assert uncertain["A"].value == mp.mpf("4.0000000000000000000000000001")
+
+
+def test_uncertain_input_plot_details_parse_at_problem_precision() -> None:
+    problem = RootProblem(
+        equations=("x**2 - A",),
+        unknowns=(RootUnknown("x", initial="2"),),
+        row_values={"A": "4.0"},
+        mode="scalar",
+        precision=80,
+    )
+    system = build_root_expression_system(problem)
+    details = {
+        "plot_uncertain_inputs": {
+            "A": {
+                "value": "4.0000000000000000000000000001",
+                "uncertainty": "0.0000000000000000000000000002",
+            }
+        }
+    }
+    with mp.workdps(15):
+        uncertain = _active_uncertain_inputs_from_problem(problem, system, details)
+
+    with mp.workdps(80):
+        assert uncertain["A"].value == mp.mpf("4.0000000000000000000000000001")
+        assert uncertain["A"].uncertainty == mp.mpf("0.0000000000000000000000000002")
 
 
 def test_tiny_root_uncertainty_adds_inset_without_scaling_main_interval() -> None:

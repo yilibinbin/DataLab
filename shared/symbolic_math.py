@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import sympy as sp
-from sympy.parsing.sympy_parser import convert_xor, parse_expr, standard_transformations
+from sympy.parsing.sympy_parser import convert_xor, parse_expr, rationalize, standard_transformations
 
 SYMPY_GLOBALS: dict[str, object] = {
     "__builtins__": {},
@@ -22,7 +22,7 @@ SYMPY_GLOBALS: dict[str, object] = {
     "Mod": sp.Mod,
 }
 
-SYMPY_TRANSFORMATIONS = standard_transformations + (convert_xor,)
+SYMPY_TRANSFORMATIONS = standard_transformations + (convert_xor, rationalize)
 
 
 def _log10(x: Any) -> Any:

@@ -354,6 +354,74 @@ def test_execute_root_solving_job_payload_forwards_uncertainty_options(
     assert captured["language"] == "en"
 
 
+def test_execute_root_solving_job_payload_formats_under_job_precision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, int] = {}
+    job = RootSolvingJob(
+        equations=("x^2 - C",),
+        unknown_rows=({"name": "x", "initial": "2", "lower": "", "upper": ""},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=True,
+        constants_rows=({"name": "C", "value": "4.0(2)"},),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=80,
+        display_digits=40,
+        uncertainty_digits=2,
+    )
+
+    with mp.mp.workdps(80):
+        fake_root = SimpleNamespace(
+            name="x",
+            value=mp.mpf("1.23456789012345678901234567890123456789"),
+            uncertainty=mp.mpf("1e-40"),
+        )
+        fake_result = SimpleNamespace(
+            roots=(fake_root,),
+            backend="mpmath",
+            mode="scalar",
+            residual_norm=mp.mpf("0"),
+            warnings=(),
+        )
+    fake_batch = SimpleNamespace(
+        rows=(
+            SimpleNamespace(
+                row_index=None,
+                source_values={},
+                result=fake_result,
+                failure=None,
+                warnings=(),
+            ),
+        ),
+        warnings=(),
+        headers=(),
+    )
+
+    def fake_solve_root_batch(**_kwargs: object) -> object:
+        return fake_batch
+
+    def fake_render_root_batch_result(*_args: object, **_kwargs: object) -> tuple[str, list[dict[str, str]], list[str]]:
+        captured["render_dps"] = mp.mp.dps
+        return "markdown", [], ["name"]
+
+    monkeypatch.setattr(workers_core, "solve_root_batch", fake_solve_root_batch)
+    monkeypatch.setattr(workers_core, "render_root_batch_result", fake_render_root_batch_result)
+    previous = mp.mp.dps
+    try:
+        mp.mp.dps = 15
+        payload = _execute_root_solving_job_payload(job)
+    finally:
+        mp.mp.dps = previous
+
+    assert captured["render_dps"] == 80
+    raw_rows = cast(list[dict[str, str]], payload["raw_rows"])
+    assert raw_rows[0]["value"].startswith("1.23456789012345678901234567890123456789")
+
+
 def test_root_solving_legacy_known_rows_payload_migrates_to_data_rows() -> None:
     payload = {
         "equations": ("x**2 - A",),
@@ -484,6 +552,41 @@ def test_execute_root_solving_job_payload_returns_first_root_plot_png(
     assert payload["plot_bytes"] == png
     assert "plot_images" not in payload
     assert "plot warning" in payload["warnings"]
+    assert captured["budget"] is not None
+
+
+def test_execute_root_solving_job_payload_uses_successful_row_values_for_plot_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_render(batch: object, problem: object, *, budget: object = None) -> object:
+        captured["batch"] = batch
+        captured["problem"] = problem
+        captured["budget"] = budget
+        return SimpleNamespace(images=(), warnings=())
+
+    monkeypatch.setattr(workers_core, "render_nominal_root_plots", fake_render)
+    job = RootSolvingJob(
+        equations=("x - A",),
+        unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        data_headers=("A",),
+        data_rows=(("2.5",),),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=32,
+        display_digits=10,
+        render_plots=True,
+    )
+
+    _execute_root_solving_job_payload(job)
+
+    problem = cast(Any, captured["problem"])
+    assert problem.row_values == {"A": "2.5"}
     assert captured["budget"] is not None
 
 

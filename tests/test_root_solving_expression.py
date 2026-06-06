@@ -106,7 +106,10 @@ def test_expression_evaluation_uses_problem_precision_without_leaking_global_dps
             RootProblem(equations=("x + 1e-40",), unknowns=(RootUnknown("x", initial="0"),), precision=80)
         )
 
-        assert system.evaluate({"x": "0"}) == mp.mpf("1e-40")
+        with mp.workdps(80):
+            expected = mp.mpf("1e-40")
+
+        assert system.evaluate({"x": "0"}) == expected
         assert mp.mp.dps == 15
     finally:
         mp.mp.dps = previous

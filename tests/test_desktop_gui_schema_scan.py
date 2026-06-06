@@ -12,8 +12,9 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
+from app_desktop.panels import _refresh_visible_table_min_widths
 from tools.scan_desktop_gui_schema import scan_window
 from tools.scan_desktop_gui_schema import _combo_index_for_data
 from tools.scan_desktop_gui_schema import _force_smallest_left_splitter
@@ -94,3 +95,25 @@ def test_root_scan_plot_layout_keeps_left_panel_without_horizontal_scrollbar(win
     assert window._main_splitter.sizes()[0] >= window._main_splitter_left_min_width
     assert horizontal_bar.maximum() == 0
     assert not horizontal_bar.isVisible()
+
+
+def test_visible_table_min_widths_recompute_down_when_content_shrinks(qtbot: Any) -> None:
+    QApplication.instance() or QApplication([])
+    container = QWidget()
+    layout = QVBoxLayout(container)
+    table = QTableWidget(1, 2)
+    table.setHorizontalHeaderLabels(["very long header name", "another very long header name"])
+    table.setItem(0, 0, QTableWidgetItem("value"))
+    layout.addWidget(table)
+    qtbot.addWidget(container)
+    container.show()
+    QApplication.processEvents()
+
+    _refresh_visible_table_min_widths(container)
+    wide_width = table.minimumWidth()
+    table.setColumnCount(1)
+    table.setHorizontalHeaderLabels(["x"])
+    QApplication.processEvents()
+    _refresh_visible_table_min_widths(container)
+
+    assert table.minimumWidth() < wide_width
