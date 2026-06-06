@@ -116,3 +116,50 @@ def test_generate_updates_manifest_cli_writes_json_without_install_args(
     )
     assert "windows-x64" not in manifest["assets"]
     assert "install_args" not in json.dumps(manifest)
+
+
+def test_generate_updates_manifest_cli_reads_signing_key_id_from_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.generate_updates_manifest import main
+    from shared.update_signing import verify_manifest_signature
+
+    mac = tmp_path / "DataLab-2.8.0-macOS.pkg"
+    notes = tmp_path / "notes.md"
+    output = tmp_path / "updates.json"
+    mac.write_bytes(b"mac")
+    notes.write_text("Release notes\n", encoding="utf-8")
+
+    monkeypatch.setenv("DATALAB_UPDATE_SIGNING_PRIVATE_KEY_B64", TEST_PRIVATE_KEY_B64)
+    monkeypatch.setenv("DATALAB_UPDATE_SIGNING_KEY_ID", TEST_SIGNING_KEY_ID)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "generate_updates_manifest.py",
+            "--version",
+            "2.8.0",
+            "--release-url",
+            "https://github.com/yilibinbin/DataLab/releases/tag/v2.8.0",
+            "--notes-file",
+            str(notes),
+            "--published-at",
+            "2026-06-06T00:00:00Z",
+            "--min-client-version",
+            "2.7.6",
+            "--macos-pkg",
+            str(mac),
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert main() == 0
+
+    manifest = json.loads(output.read_text(encoding="utf-8"))
+    assert manifest["signature"]["key_id"] == TEST_SIGNING_KEY_ID
+    verify_manifest_signature(
+        manifest,
+        public_keys={TEST_SIGNING_KEY_ID: TEST_PUBLIC_KEY_B64},
+    )
