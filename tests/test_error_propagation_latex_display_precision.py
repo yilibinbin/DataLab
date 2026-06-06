@@ -6,6 +6,7 @@ from data_extrapolation_latex_latest import (
     UncertainValue,
     apply_formula_to_data,
     format_uncertainty_display_latex,
+    process_uncertainty_string,
 )
 
 
@@ -56,3 +57,15 @@ def test_error_propagation_preserves_high_precision_literal_cancellation():
 
     assert result.uncertainty == 0
     assert mp.almosteq(result.value, expected, rel_eps=mp.mpf("1e-45"), abs_eps=mp.mpf("1e-45"))
+
+
+def test_error_propagation_plain_numeric_input_avoids_float_rounding():
+    text = "A\n0.123456789012345678901234567890\n"
+
+    with mp.workdps(80):
+        headers, rows = process_uncertainty_string(text)
+
+    assert headers == ["A"]
+    with mp.workdps(80):
+        assert rows[0][0].value == mp.mpf("0.123456789012345678901234567890")
+    assert rows[0][0].uncertainty == 0

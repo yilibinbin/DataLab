@@ -16,10 +16,9 @@ py:auto_fit_dataset``):
   1. ``should_cancel`` — polled between models. When True, raises
      :class:`AutoFitCancelled` so the GUI worker can surface a clean
      cancellation (no error dialog).
-  2. ``per_model_timeout_seconds`` — wall-clock cap per model. Models
-     that exceed the cap are recorded as failures ("model timed out")
-     so the loop continues and the user sees a meaningful summary
-     instead of an apparent freeze.
+  2. ``per_model_timeout_seconds`` used to spawn per-model timeout
+     threads. That is no longer safe with process-global mpmath
+     precision; hard cancellation belongs at the process-worker layer.
 
 This test file pins both behaviours.
 """
@@ -33,8 +32,10 @@ from mpmath import mp
 from fitting.auto_models import build_polynomial_definition
 from fitting.model_selector import (
     AutoFitCancelled,
+    _run_with_timeout,
     auto_fit_dataset,
 )
+from shared.precision import precision_guard
 
 
 def _fit_kwargs(**overrides: object) -> dict[str, object]:
@@ -143,84 +144,44 @@ def _wait_for_sleeping_timeout_thread() -> None:
     time.sleep(0.6)
 
 
-def test_per_model_timeout_aborts_runaway_model() -> None:
-    """A model whose fit exceeds the cap is recorded as a failure
-    with a bilingual "model timed out" error, and the loop continues
-    so other models still run.
+def test_per_model_timeout_is_not_an_in_process_kill_boundary() -> None:
+    """The in-process auto-fit API no longer creates timeout threads.
 
-    We force the custom-fit slow path with a sleeping model evaluator
-    so the test result is deterministic regardless of host speed (a
-    sub-millisecond cap was previously flaky on fast machines where
-    a real ``a + b*x`` fit can complete inside 1 ms).
+    Passing a positive cap remains signature-compatible, but hard
+    cancellation is owned by process-isolated desktop workers.
     """
-    summary = auto_fit_dataset(
-        **_fit_kwargs(
-            custom_entries=[_make_sleeping_custom("Slow Custom", 0.5)],
-            # 50 ms cap — well below the 0.5 s sleep injected per
-            # evaluation, so the custom fit must time out, but well
-            # above the legitimate built-in fits' real time so they
-            # are not falsely reported as failures.
-            per_model_timeout_seconds=0.05,
-        ),
-    )
-    _wait_for_sleeping_timeout_thread()
-    assert isinstance(summary.results, list)
-    custom_results = [r for r in summary.results if r.label == "Slow Custom"]
-    assert len(custom_results) == 1
-    custom = custom_results[0]
-    assert not custom.success
-    assert custom.error and (
-        "超过" in custom.error or "exceeded" in custom.error
-    )
-
-    # Other models (built-in fast paths) still ran successfully —
-    # proves the loop did not abort on the timeout.
+    summary = auto_fit_dataset(**_fit_kwargs(per_model_timeout_seconds=0.05))
     assert any(r.success for r in summary.results)
 
 
-def test_timeout_message_uses_user_friendly_label_not_internal_id() -> None:
-    """The bilingual timeout message renders the user's chosen model
-    label (``"My Fit"``), NOT the internal allocation ID
-    (``"CUSTOM"``, ``"CUSTOM#2"``, …). The user typed the label;
-    surfacing the ID confuses them."""
-    summary = auto_fit_dataset(
-        **_fit_kwargs(
-            custom_entries=[_make_sleeping_custom("我的拟合 / My Fit", 0.5)],
-            per_model_timeout_seconds=0.05,
-        ),
-    )
-    _wait_for_sleeping_timeout_thread()
-    custom = next(r for r in summary.results if r.label == "我的拟合 / My Fit")
-    assert custom.error
-    assert "我的拟合" in custom.error or "My Fit" in custom.error
-    assert "'CUSTOM'" not in custom.error
-    assert "'CUSTOM#" not in custom.error
+def test_run_with_timeout_returns_completed_result_even_after_advisory_boundary() -> None:
+    def slow_value() -> str:
+        time.sleep(0.1)
+        return "finished"
+
+    assert _run_with_timeout(slow_value, 0.01, "Slow", target_dps=80) == "finished"
 
 
-def test_timeout_does_not_corrupt_parent_mp_dps() -> None:
-    """After a model times out, ``mp.dps`` must equal what the parent
-    set it to — NOT whatever value the runaway daemon thread was
-    using inside its ``precision_guard``.
-
-    Regression guard for the precision-leak HIGH found during code
-    review: a daemon thread inside ``with precision_guard(target):``
-    that gets abandoned will eventually call ``__exit__`` and reset
-    ``mp.dps`` to the value it captured on entry — silently
-    corrupting whatever the parent has done since.
-    ``_run_with_timeout`` defends by re-asserting ``mp.dps`` at the
-    parent's expected value after the join.
-    """
+def test_timeout_wrapper_does_not_corrupt_parent_mp_dps() -> None:
+    """The compatibility wrapper must not leak precision changes."""
     parent_dps_target = 50
     mp.dps = parent_dps_target
-    auto_fit_dataset(
-        **_fit_kwargs(
-            custom_entries=[_make_sleeping_custom("Slow", 0.5)],
-            per_model_timeout_seconds=0.05,
-        ),
-    )
-    _wait_for_sleeping_timeout_thread()
-    # After the auto_fit completes, the parent's dps must NOT have
-    # been reset by the runaway thread.
+    _run_with_timeout(lambda: None, 0.01, "noop", target_dps=80)
     assert mp.dps == parent_dps_target, (
         f"mp.dps was corrupted: expected {parent_dps_target}, got {mp.dps}"
     )
+
+
+def test_timeout_wrapper_does_not_spawn_thread_that_corrupts_later_precision_guard() -> None:
+    mp.dps = 15
+
+    def slow_guarded() -> None:
+        with precision_guard(80):
+            time.sleep(0.2)
+
+    _run_with_timeout(slow_guarded, 0.05, "guarded", target_dps=80)
+
+    with precision_guard(30):
+        assert mp.dps == 30
+        time.sleep(0.3)
+        assert mp.dps == 30

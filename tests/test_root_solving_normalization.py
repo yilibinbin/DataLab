@@ -54,7 +54,7 @@ def test_normalize_root_problem_reuses_uncertainty_constants() -> None:
     assert problem.constants == {"C": "4.0(2)"}
     assert isinstance(uncertain["C"], UncertainValue)
     assert uncertain["C"].value == mp.mpf("4.0")
-    assert uncertain["C"].uncertainty == mp.mpf("0.2")
+    assert uncertain["C"].uncertainty == parse_uncertainty_format("4.0(2)", precision=problem.precision).uncertainty
 
 
 def test_normalize_root_problem_freezes_constants_mapping() -> None:
@@ -78,7 +78,7 @@ def test_normalize_root_problem_accepts_constants_rows_mapping() -> None:
     )
 
     assert problem.constants == {"C": "4.0(2)"}
-    assert uncertain["C"].uncertainty == mp.mpf("0.2")
+    assert uncertain["C"].uncertainty == parse_uncertainty_format("4.0(2)", precision=problem.precision).uncertainty
 
 
 def test_normalize_root_problem_accepts_compact_exponent_notation() -> None:

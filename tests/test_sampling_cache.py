@@ -226,6 +226,20 @@ def test_sample_with_cache_caps_key_precision_to_prevent_dos():
     assert result[0] == mp.mpf("2")
 
 
+def test_sample_with_cache_bypasses_cache_above_key_precision_cap():
+    with _mp_obj.workdps(_MAX_KEY_PRECISION + 200):
+        x1 = mp.mpf("1") + mp.power(10, -(_MAX_KEY_PRECISION + 100))
+        x2 = mp.mpf("1") + 2 * mp.power(10, -(_MAX_KEY_PRECISION + 100))
+
+        first = sample_with_cache(lambda x: x, [x1], precision=_MAX_KEY_PRECISION + 100)
+        second = sample_with_cache(lambda x: x, [x2], precision=_MAX_KEY_PRECISION + 100)
+
+    assert first[0] != second[0]
+    info = sampling_cache_info()
+    assert info.hits == 0
+    assert info.currsize == 0
+
+
 def test_sample_mp_function_forwards_cache_token():
     """The public sample_mp_function entry point must expose cache_token
     so callers with mutable closures can invalidate — otherwise the

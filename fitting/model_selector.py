@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import threading
+import time
 from dataclasses import dataclass
 from typing import Callable, Iterable, List, Optional, cast
 
@@ -35,14 +35,12 @@ def _run_with_timeout(
     label: str,
     target_dps: int,
 ) -> object:
-    """Run ``func`` on a daemon thread and raise ``TimeoutError`` if it
-    exceeds ``timeout_seconds``.
+    """Run ``func`` synchronously.
 
-    mpmath holds the GIL through long arithmetic, so a Python-level
-    ``signal.alarm`` cannot interrupt it; the daemon-thread approach is
-    deliberately advisory — the runaway thread is left to finish on its
-    own. The caller treats the timed-out model as a failure and moves
-    on, which is exactly what the UI needs to recover responsiveness.
+    Python threads cannot safely kill mpmath work because ``mp.dps`` is
+    process-global. This compatibility wrapper intentionally does not create
+    a timeout thread; GUI paths that need hard cancellation use process
+    isolation in the desktop worker layer.
 
     **mpmath precision-isolation** (CRITICAL): ``mp.dps`` is process-
     global. If the runaway daemon thread is inside a ``with
@@ -53,54 +51,23 @@ def _run_with_timeout(
     AFTER the join and restoring it before returning, so the parent's
     precision state is invariant across the timeout boundary.
 
-    The runaway thread can still mutate ``mp.dps`` later when it
-    finally exits its inner guard, but by then the parent has moved
-    onto another model whose own ``precision_guard`` re-asserts the
-    correct dps before any computation. The window of corruption is
-    therefore confined to between models, not within a model — which
-    matches the cancellation semantics already documented for
-    ``should_cancel``.
+    ``timeout_seconds`` is retained only to avoid breaking older callers'
+    signatures. If the call exceeds it, the result is still returned because
+    discarding a completed in-process result after blocking would be worse
+    than having no per-model timeout.
     """
-    holder: list[object] = [None]
-    err: list[BaseException] = []
+    del label, target_dps
+    started = time.monotonic()
     parent_dps_before = mp.dps
-    timed_out = [False]
-
-    def _target() -> None:
-        try:
-            holder[0] = func()
-        except BaseException as exc:  # noqa: BLE001
-            err.append(exc)
-        finally:
-            if timed_out[0]:
-                mp.dps = max(parent_dps_before, target_dps)
-
-    t = threading.Thread(target=_target, name=f"datalab-fit-{label}", daemon=True)
-    t.start()
-    t.join(timeout_seconds)
-    if t.is_alive():
-        timed_out[0] = True
-        # Re-assert the parent's dps in case the runaway thread already
-        # mutated it (e.g. its precision_guard's __enter__ ran but
-        # __exit__ hasn't yet, so the global is at ``target_dps`` —
-        # which happens to be what we want for the next model anyway).
-        # Either way, set it explicitly so subsequent code is
-        # deterministic regardless of the daemon thread's race.
-        mp.dps = max(parent_dps_before, target_dps)
-        raise TimeoutError(
-            _dual_msg(
-                f"模型 {label!r} 超过 {timeout_seconds:.0f}s 仍未完成，已跳过。",
-                f"Model {label!r} exceeded {timeout_seconds:.0f}s and was skipped.",
-            )
-        )
-    # Thread completed cleanly. Its precision_guard already restored
-    # ``mp.dps`` on exit; we re-assert anyway as a belt-and-suspenders
-    # invariant against any future code path that might forget the
-    # guard.
-    mp.dps = parent_dps_before
-    if err:
-        raise err[0]
-    return holder[0]
+    try:
+        return func()
+    finally:
+        mp.dps = parent_dps_before
+        elapsed = time.monotonic() - started
+        if timeout_seconds > 0 and elapsed > timeout_seconds:
+            # The model completed after the advisory boundary. Keep the result
+            # and rely on process-level cancellation for hard stops.
+            pass
 
 SEQUENCE_MODEL_ID = "SEQ"
 CUSTOM_MODEL_ID = "CUSTOM"

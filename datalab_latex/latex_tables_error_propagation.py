@@ -59,7 +59,7 @@ def _process_uncertainty_lines(
                 if "(" in value_str or "[" in value_str:
                     uncertain_value = parse_uncertainty_format(value_str)
                 else:
-                    uncertain_value = UncertainValue(float(value_str), 0.0)
+                    uncertain_value = UncertainValue(value_str, "0")
                 row_data.append(uncertain_value)
             except Exception as e:
                 message = f"Cannot parse value '{value_str}' on line {line_num}: {e}"

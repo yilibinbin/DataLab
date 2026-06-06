@@ -4,6 +4,8 @@ import re
 
 from mpmath import mp
 
+from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
+
 
 def _mp(value: object) -> mp.mpf:
     if isinstance(value, mp.mpf):
@@ -28,6 +30,8 @@ class UncertainValue:
     ) -> None:
         self.value: mp.mpf = _mp(value)
         self.uncertainty: mp.mpf = _mp(uncertainty)
+        if self.uncertainty < 0:
+            raise ValueError("Uncertainty must be non-negative.")
         self.uncertainty_digits: int | None = uncertainty_digits
         self.contributions: dict[str, mp.mpf] | None = contributions or None
 
@@ -38,14 +42,23 @@ class UncertainValue:
         return f"UncertainValue({self.value}, {self.uncertainty}, digits={self.uncertainty_digits})"
 
 
-def parse_uncertainty_format(number_str: str, lang: str = "en") -> UncertainValue:
+def parse_uncertainty_format(
+    number_str: str,
+    lang: str = "en",
+    *,
+    precision: int | None = None,
+) -> UncertainValue:
     """Parse a number in format 1.23(1)[-2] to value and uncertainty."""
+    if precision is not None:
+        with precision_guard(precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+            return parse_uncertainty_format(number_str, lang=lang)
+
     number_str = number_str.strip()
     number_str = number_str.replace("−", "-")
 
     pattern = (
         r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
-        r"(?:\([+-]?(?:\d+(?:\.\d*)?|\.\d+)\))?"
+        r"(?:\((?:\d+(?:\.\d*)?|\.\d+)\))?"
         r"(?:[eE][+-]?\d+)?"
         r"(?:\[[+-]?\d+\])?$"
     )
@@ -99,7 +112,7 @@ def parse_uncertainty_format(number_str: str, lang: str = "en") -> UncertainValu
     uncertainty = mp.mpf("0")
     uncertainty_includes_outer_exponent = False
     if "(" in number_str and ")" in number_str:
-        paren_match = re.search(r"\(([+-]?(?:\d+(?:\.\d*)?|\.\d+))\)", number_str)
+        paren_match = re.search(r"\(((?:\d+(?:\.\d*)?|\.\d+))\)", number_str)
         if paren_match:
             paren_text = paren_match.group(1)
             uncertainty_digits = _sig_digits_from_text(paren_text)
@@ -133,7 +146,7 @@ def parse_uncertainty_format(number_str: str, lang: str = "en") -> UncertainValu
     return UncertainValue(value, uncertainty, uncertainty_digits=uncertainty_digits)
 
 
-def parse_numeric_value(value: object, lang: str = "en") -> mp.mpf:
+def parse_numeric_value(value: object, lang: str = "en", *, precision: int | None = None) -> mp.mpf:
     """Return the nominal numeric value from a plain or uncertain literal.
 
     Constants used by fitting expressions are deterministic inputs, so their
@@ -141,6 +154,10 @@ def parse_numeric_value(value: object, lang: str = "en") -> mp.mpf:
     compact notation used by data and error-propagation inputs, including
     ``3.2898419602500(36)[+9]`` and ``1.23(4)e-2``.
     """
+
+    if precision is not None:
+        with precision_guard(precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+            return parse_numeric_value(value, lang=lang)
 
     if isinstance(value, mp.mpf):
         return value

@@ -4,7 +4,7 @@ import mpmath as mp
 import pytest
 from typing import Any, cast
 
-from root_solving.models import RootProblem, RootUnknown
+from root_solving.models import RootInputValue, RootProblem, RootScanConfig, RootUnknown
 from root_solving.solver import _scipy_scalar_secant_second_guess, solve_root_problem
 
 
@@ -209,6 +209,23 @@ def test_scan_multiple_does_not_accept_near_zero_false_roots() -> None:
         assert abs(values[1] - mp.mpf("1e-12")) < mp.mpf("1e-50")
 
 
+def test_scan_multiple_refines_small_scale_candidates_before_accepting() -> None:
+    problem = RootProblem(
+        equations=("x*(x - 1e-11)",),
+        unknowns=(RootUnknown("x", lower="-1e-10", upper="1e-10"),),
+        mode="scan_multiple",
+        precision=16,
+        scan_config=RootScanConfig(sample_count=200, max_roots=20),
+    )
+
+    result = solve_root_problem(problem)
+
+    values = sorted(mp.mpf(root.value) for root in result.roots)
+    assert len(values) == 2
+    assert abs(values[0]) <= mp.mpf("1e-12")
+    assert abs(values[1] - mp.mpf("1e-11")) <= mp.mpf("1e-12")
+
+
 def test_scan_multiple_finds_off_grid_even_multiplicity_root() -> None:
     result = solve_root_problem(
         RootProblem(
@@ -272,6 +289,41 @@ def test_high_precision_polynomial_roots_preserve_mpmath_precision() -> None:
         assert abs(positive - mp.sqrt(mp.mpf("2"))) < mp.mpf("1e-70")
     assert result.residual_norm is not None
     assert result.residual_norm < mp.mpf("1e-70")
+
+
+def test_precision_16_polynomial_falls_back_when_coefficients_exceed_float_fidelity() -> None:
+    result = solve_root_problem(
+        RootProblem(
+            equations=("x-c",),
+            unknowns=(RootUnknown("x"),),
+            known_values=(RootInputValue("c", "100000000000000000001"),),
+            mode="polynomial",
+            precision=16,
+        )
+    )
+
+    with mp.workdps(80):
+        assert result.backend == "mpmath"
+        assert abs(result.roots[0].value - mp.mpf("100000000000000000001")) <= mp.mpf("1e5")
+        assert result.residual_norm is not None
+        assert mp.isfinite(result.residual_norm)
+    assert "SciPy validation failed; used mpmath fallback." in result.warnings
+
+
+def test_precision_16_polynomial_rejects_decimal_coefficients_not_exact_in_float() -> None:
+    result = solve_root_problem(
+        RootProblem(
+            equations=("x - 0.1",),
+            unknowns=(RootUnknown("x"),),
+            mode="polynomial",
+            precision=16,
+        )
+    )
+
+    assert result.backend == "mpmath"
+    assert "SciPy validation failed; used mpmath fallback." in result.warnings
+    with mp.workdps(30):
+        assert abs(result.roots[0].value - mp.mpf("0.1")) < mp.mpf("1e-16")
 
 
 def test_high_precision_polynomial_complex_roots_remain_finite() -> None:
