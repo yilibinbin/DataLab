@@ -27,6 +27,12 @@ _TABLE_VIEW = 0
 _TEXT_VIEW = 1
 
 
+class _HelpButton(QPushButton):
+    def setToolTip(self, text: str) -> None:  # noqa: N802 - Qt API override
+        super().setToolTip(text)
+        self.setVisible(bool(text.strip()))
+
+
 class ConstantsEditor(QWidget):
     """Reusable constants editor with draft-preserving table/text views."""
 
@@ -61,10 +67,11 @@ class ConstantsEditor(QWidget):
         self.checkbox.setChecked(bool(checked))
         self.checkbox.toggled.connect(self._on_checked_changed)
         header_layout.addWidget(self.checkbox)
-        self.help_button = QPushButton("?")
+        self.help_button = _HelpButton("?")
         self.help_button.setFlat(True)
         self.help_button.setFocusPolicy(Qt.NoFocus)
         self.help_button.setFixedWidth(24)
+        self.help_button.hide()
         header_layout.addWidget(self.help_button)
         header_layout.addStretch()
         layout.addLayout(header_layout)

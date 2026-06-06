@@ -36,6 +36,20 @@ def test_constants_editor_round_trips_table_rows(qtbot):
     assert editor.constants_dict(validate=True) == {"K": "1.23", "R": "3.0"}
 
 
+def test_constants_editor_help_button_only_shows_when_tooltip_is_present(qtbot):
+    editor = ConstantsEditor()
+    qtbot.addWidget(editor)
+    editor.show()
+    QApplication.processEvents()
+
+    assert editor.help_button.isVisible() is False
+
+    editor.help_button.setToolTip("Constants help")
+    QApplication.processEvents()
+
+    assert editor.help_button.isVisible() is True
+
+
 def test_constants_editor_text_view_round_trip(qtbot):
     editor = ConstantsEditor()
     qtbot.addWidget(editor)

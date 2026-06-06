@@ -518,7 +518,7 @@ def _refresh_visible_table_min_widths(left_container: QWidget) -> None:
     for table in left_container.findChildren(QTableWidget):
         if not table.isVisibleTo(left_container):
             continue
-        table.setMinimumWidth(max(table.minimumWidth(), _table_required_min_width(table)))
+        table.setMinimumWidth(_table_required_min_width(table))
 
 
 def _table_required_min_width(table: QTableWidget) -> int:
