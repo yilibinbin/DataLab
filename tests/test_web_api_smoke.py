@@ -74,6 +74,23 @@ def test_api_help_specs_substitutes_default_formula_placeholder():
     assert DEFAULT_THREE_POINT_FORMULA in dumped
 
 
+def test_api_method_help_smoke_bilingual():
+    app = create_app()
+    client = app.test_client()
+
+    zh = client.get("/api/method-help/power_law?lang=zh")
+    assert zh.status_code == 200
+    zh_payload = json.loads(zh.data.decode("utf-8"))
+    assert zh_payload.get("title")
+    assert "幂律" in zh_payload.get("content", "")
+
+    en = client.get("/api/method-help/power_law?lang=en")
+    assert en.status_code == 200
+    en_payload = json.loads(en.data.decode("utf-8"))
+    assert en_payload.get("title")
+    assert "power" in en_payload.get("content", "").lower()
+
+
 def test_api_method_help_not_found_returns_404():
     app = create_app()
     client = app.test_client()
