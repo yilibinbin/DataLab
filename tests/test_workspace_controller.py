@@ -234,6 +234,100 @@ def test_workspace_controller_restores_snapshot_without_live_payloads(qtbot) -> 
     assert not target.display_digits_spin.isEnabled()
 
 
+def test_workspace_round_trip_preserves_redesigned_shell_ui_state(qtbot, tmp_path) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from shared.workspace_io import read_workspace, write_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    source.fit_expr_edit.setPlainText("A*x + B")
+    source.fit_target_edit.setText("y")
+    source.custom_constants_editor.setChecked(True)
+    source.custom_constants_editor.set_rows([{"name": "K", "value": "1.0(2)"}])
+    source.custom_params_table.set_rows(
+        [
+            {"name": "A", "initial": "1", "fixed": "", "min": "0", "max": "2"},
+            {"name": "B", "initial": "0", "fixed": "", "min": "", "max": ""},
+        ]
+    )
+    source.root_equations_edit.setPlainText("x^2 - A")
+    source.root_unknowns_table.set_rows([{"name": "x", "initial": "1", "lower": "0", "upper": "2"}])
+    source.result_edit.setPlainText("Fit complete")
+    source.log_edit.setPlainText("done")
+    source.latex_edit.setPlainText("\\begin{tabular}{cc}A & B\\end{tabular}")
+    source._set_csv_data([{"name": "A", "value": "1.0(2)"}], ["name", "value"], "fit.csv")
+    source.result_plot_bytes = PNG_1X1
+    source.result_tabs.setCurrentIndex(source.result_tabs_indices["image"])
+    source.result_plot_zoom = 1.5
+
+    bundle = capture_workspace(source, title="redesigned shell")
+    workspace = bundle.manifest["workspace"]
+    assert workspace["ui"]["result_subtab"] == source.result_tabs_indices["image"]
+    assert workspace["ui"]["selected_plot_index"] == 0
+    assert workspace["ui"]["plot_zoom"] == 1.5
+
+    path = tmp_path / "redesigned-shell.datalab"
+    write_workspace(path, bundle.manifest, bundle.attachments)
+    loaded = read_workspace(path)
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, loaded.manifest, loaded.attachments)
+
+    assert target.mode_combo.currentData() == "fitting"
+    assert target.fit_expr_edit.toPlainText() == "A*x + B"
+    assert target.fit_target_edit.text() == "y"
+    assert target.custom_constants_editor.isChecked() is True
+    assert target.custom_constants_editor.rows() == [{"name": "K", "value": "1.0(2)"}]
+    assert target.custom_params_table.rows() == [
+        {"name": "A", "initial": "1", "fixed": "", "min": "0", "max": "2"},
+        {"name": "B", "initial": "0", "fixed": "", "min": "", "max": ""},
+    ]
+    assert target.root_equations_edit.toPlainText() == "x^2 - A"
+    assert target.root_unknowns_table.rows() == [{"name": "x", "initial": "1", "lower": "0", "upper": "2"}]
+    assert target.result_edit.toPlainText() == "Fit complete"
+    assert target.log_edit.toPlainText() == "done"
+    assert target.latex_edit.toPlainText() == "\\begin{tabular}{cc}A & B\\end{tabular}"
+    assert target._csv_headers == ["name", "value"]
+    assert target._csv_rows == [{"name": "A", "value": "1.0(2)"}]
+    assert target.result_plot_bytes == PNG_1X1
+    assert target.result_tabs.currentIndex() == target.result_tabs_indices["image"]
+    assert target.image_page_spin.value() == 1
+    assert target.zoom_percent_spin.value() == 150
+    assert getattr(target, "_workspace_snapshot_only", False) is True
+    assert getattr(target, "_workspace_dirty", True) is False
+
+
+def test_workspace_restore_clamps_invalid_ui_indices(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.result_tabs.setCurrentIndex(source.result_tabs_indices["latex"])
+    source.result_edit.setPlainText("Result")
+    bundle = capture_workspace(source, title="invalid ui")
+    bundle.manifest["workspace"]["ui"].update(
+        {
+            "main_tab": 999,
+            "result_subtab": 999,
+            "selected_plot_index": 999,
+            "plot_zoom": "bad",
+        }
+    )
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    target.result_tabs.setCurrentIndex(target.result_tabs_indices["numeric"])
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.result_tabs.currentIndex() == target.result_tabs_indices["numeric"]
+    assert target.image_page_spin.value() == 1
+    assert target.zoom_percent_spin.value() == 100
+
+
 def test_workspace_preserves_root_result_plot_attachment(qtbot, monkeypatch) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace
