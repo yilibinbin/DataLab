@@ -7,7 +7,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton
 
-from app_desktop.ui_schema_runtime import bind_schema_command_button, register_schema_text_refresh
+from app_desktop.ui_schema_runtime import (
+    bind_schema_command_button,
+    bind_schema_help_button,
+    register_schema_text_refresh,
+)
 from shared.ui_schema import FormFieldSpec, LocalizedText
 
 
@@ -71,3 +75,24 @@ def test_bind_schema_command_button_sets_accessibility_and_schema_key() -> None:
     assert (button, "导出当前结果", "Export current results", "setToolTip") in win.calls
     assert (button, "导出当前结果", "Export current results", "setAccessibleDescription") in win.calls
     assert (button, "导出 CSV", "Export CSV", "setAccessibleName") in win.calls
+
+
+def test_bind_schema_help_button_binds_tooltip_and_refresh_registration() -> None:
+    _app()
+    win = DummyWindow()
+    button = QPushButton()
+    field = FormFieldSpec(
+        key="error.formula",
+        widget_kind="textarea",
+        label=LocalizedText("公式：", "Formula:"),
+        tooltip=LocalizedText("查看公式帮助", "View formula help"),
+    )
+
+    bind_schema_help_button(win, button, field=field, lang="en")
+
+    assert button.property("datalab_schema_key") == "error.formula"
+    assert button.text() == "?"
+    assert button.toolTip() == "View formula help"
+    assert button.accessibleName() == "Formula: help"
+    assert button.accessibleDescription() == "View formula help"
+    assert (button, "查看公式帮助", "View formula help", "setToolTip") in win.calls

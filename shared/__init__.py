@@ -21,12 +21,6 @@ from .ui_specs import (
     FunctionHelpSpec,
     MethodHelpButtonSpec,
     MethodSpec,
-    NumberWidgetSpec,
-    ParameterGroupSpec,
-    SelectWidgetSpec,
-    TextAreaWidgetSpec,
-    TextWidgetSpec,
-    WidgetSpec,
     get_method_options,
     get_parameter_visibility_rules,
     validate_method_parameters,
@@ -39,13 +33,6 @@ from formula_help import (
 )
 
 __all__ = [
-    # Re-export everything from ui_specs
-    "WidgetSpec",
-    "TextWidgetSpec",
-    "NumberWidgetSpec",
-    "SelectWidgetSpec",
-    "TextAreaWidgetSpec",
-    "ParameterGroupSpec",
     "MethodSpec",
     "EXTRAPOLATION_METHOD_SPECS",
     "METHOD_DISPLAY_ORDER",

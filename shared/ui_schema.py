@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Literal
 
 __all__ = [
@@ -82,9 +83,47 @@ class FormFieldSpec:
     default_value: Any = None
     choices: Sequence[ChoiceSpec] = ()
     visible_when: VisibilityRule | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "choices", tuple(self.choices))
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+
+    @property
+    def name(self) -> str:
+        return self.key
+
+    @property
+    def widget_type(self) -> str:
+        return self.widget_kind
+
+    @property
+    def optional(self) -> bool:
+        return not self.required
+
+    @property
+    def label_zh(self) -> str:
+        return self.label.zh
+
+    @property
+    def label_en(self) -> str:
+        return self.label.en
+
+    @property
+    def tooltip_zh(self) -> str:
+        return self.tooltip.zh
+
+    @property
+    def tooltip_en(self) -> str:
+        return self.tooltip.en
+
+    @property
+    def placeholder_zh(self) -> str:
+        return self.placeholder.zh
+
+    @property
+    def placeholder_en(self) -> str:
+        return self.placeholder.en
 
 
 @dataclass(frozen=True)
@@ -96,6 +135,10 @@ class FormSectionSpec:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fields", tuple(self.fields))
+
+    @property
+    def parameters(self) -> tuple[FormFieldSpec, ...]:
+        return tuple(self.fields)
 
 
 @dataclass(frozen=True)

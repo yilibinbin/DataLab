@@ -24,6 +24,17 @@ def register_schema_text_refresh(
         owner._register_text(help_button, field.tooltip.zh, field.tooltip.en, "setToolTip")
 
 
+def bind_schema_help_button(
+    owner: Any,
+    button: QWidget,
+    *,
+    field: FormFieldSpec,
+    lang: str,
+) -> None:
+    bind_field(field=field, help_button=button, lang=lang)
+    register_schema_text_refresh(owner, field, help_button=button)
+
+
 def bind_schema_command_button(
     owner: Any,
     button: QWidget,
