@@ -74,6 +74,7 @@ from shared.parallel_config import NestedParallelPolicy, ParallelMode
 from shared.ui_schema import ChoiceSpec, FormFieldSpec, LocalizedText
 from shared.ui_specs import (
     CUSTOM_FORMULA_PARAMS,
+    DESKTOP_RESULT_VIEWS,
     EXTRAPOLATION_METHOD_SPECS,
     LEVIN_U_PARAMS,
     METHOD_HELP_BUTTON,
@@ -87,6 +88,28 @@ from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS
 _LANG_ZH = "zh"
 _LANG_EN = "en"
 _LANG_AUTO = "auto"
+_RESULT_VIEW_ORDER = (
+    "result.numeric",
+    "result.image",
+    "result.log",
+    "result.latex",
+    "result.pdf",
+)
+
+
+def _result_view_schema_key(view_key: str) -> str:
+    return view_key.replace("result.", "results.", 1)
+
+
+def _result_view_alias(view_key: str) -> str:
+    return view_key.split(".", 1)[1]
+
+
+def _result_control_field(view_key: str, control_key: str) -> FormFieldSpec:
+    for field in DESKTOP_RESULT_VIEWS[view_key].controls:
+        if field.key == control_key:
+            return field
+    raise KeyError(f"Missing result control spec {control_key!r} for {view_key!r}")
 
 _REFCOL_AUTO_MAX_DIFF_KEY = "auto_max_diff"
 _REFCOL_AUTO_MAX_DIFF_ZH = "最大差异列"
@@ -1985,14 +2008,29 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.result_tabs = QTabWidget()
     result_layout.addWidget(self.result_tabs)
     self.result_tabs.setProperty("datalab_schema_key", "results.tabs")
+    result_view_specs = {
+        _result_view_alias(view_key): {
+            "schema_key": _result_view_schema_key(spec.key),
+            "attachment_key": spec.attachment_key,
+            "raw_columns": tuple(spec.raw_columns),
+            "display_columns": tuple(spec.display_columns),
+            "controls": tuple(field.key for field in spec.controls),
+        }
+        for view_key, spec in DESKTOP_RESULT_VIEWS.items()
+        if view_key in _RESULT_VIEW_ORDER
+    }
     self.result_tabs.setProperty(
         "datalab_schema_tabs",
         {
-            "numeric": "results.numeric",
-            "image": "results.image",
+            _result_view_alias(view_key): _result_view_schema_key(DESKTOP_RESULT_VIEWS[view_key].key)
+            for view_key in _RESULT_VIEW_ORDER
         },
     )
-    self.result_tab_titles = {"numeric": "数值结果", "image": "图片"}
+    self.result_tabs.setProperty("datalab_result_view_specs", result_view_specs)
+    self.result_tab_titles = {
+        _result_view_alias(view_key): DESKTOP_RESULT_VIEWS[view_key].title.zh
+        for view_key in _RESULT_VIEW_ORDER
+    }
 
     numeric_tab = QWidget()
     numeric_layout = QVBoxLayout(numeric_tab)
@@ -2032,7 +2070,9 @@ def build_right_panel(self, layout: QVBoxLayout):
     export_row.addStretch()
     numeric_layout.addLayout(export_row)
     numeric_layout.addWidget(self.result_edit)
-    self.result_tabs.addTab(numeric_tab, "数值结果")
+    numeric_spec = DESKTOP_RESULT_VIEWS["result.numeric"]
+    numeric_index = self.result_tabs.addTab(numeric_tab, numeric_spec.title.zh)
+    self.result_tabs.setTabToolTip(numeric_index, numeric_spec.title.zh)
     self._reset_csv_data()
 
     image_tab = QWidget()
@@ -2072,6 +2112,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     self._register_text(self.zoom_percent_spin, "", "", "setToolTip")
     self.zoom_percent_spin.setSuffix("%")
     self.zoom_percent_spin.valueChanged.connect(self._on_zoom_percent_changed)
+    self.result_plot_zoom_spin = self.zoom_percent_spin
     controls_layout.addWidget(self.result_zoom_in_btn)
     controls_layout.addWidget(self.result_zoom_out_btn)
     controls_layout.addWidget(self.zoom_percent_spin)
@@ -2093,6 +2134,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.image_page_spin.setFixedWidth(70)
     self._register_text(self.image_page_spin, "", "", "setToolTip")
     self.image_page_spin.valueChanged.connect(self._on_image_page_changed)
+    self.result_plot_page_spin = self.image_page_spin
     self.image_next_btn = QPushButton()
     self.image_next_btn.setIcon(self.style().standardIcon(QStyle.SP_ArrowRight))
     self._register_text(self.image_next_btn, "", "", "setText")
@@ -2118,19 +2160,18 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.result_plot_label.setMinimumHeight(320)
     self.result_plot_scroll.setWidget(self.result_plot_label)
     image_layout.addWidget(self.result_plot_scroll)
-    self.result_tabs.addTab(image_tab, "图片")
+    image_spec = DESKTOP_RESULT_VIEWS["result.image"]
+    image_index = self.result_tabs.addTab(image_tab, image_spec.title.zh)
+    self.result_tabs.setTabToolTip(image_index, image_spec.title.zh)
 
     self.result_tab_index = self.tabs.addTab(result_widget, "结果")
     self.main_tab_titles = {
         "result": "结果",
-        "log": "日志",
-        "latex": "LaTeX",
-        "pdf": "PDF 预览",
     }
     # Tab texts handled via QTabWidget defaults
     self._update_log_scale_visibility()
 
-    # Log tab
+    # Log result view
     log_widget = QWidget()
     log_layout = QVBoxLayout(log_widget)
     self.log_edit = QPlainTextEdit()
@@ -2138,9 +2179,11 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.log_edit.setReadOnly(True)
     self._add_font_control_row(log_layout, self.log_edit, "字体大小：")
     log_layout.addWidget(self.log_edit)
-    self.log_tab_index = self.tabs.addTab(log_widget, "日志")
+    log_spec = DESKTOP_RESULT_VIEWS["result.log"]
+    self.log_tab_index = self.result_tabs.addTab(log_widget, log_spec.title.zh)
+    self.result_tabs.setTabToolTip(self.log_tab_index, log_spec.title.zh)
 
-    # LaTeX tab
+    # LaTeX result view
     latex_widget = QWidget()
     latex_layout = QVBoxLayout(latex_widget)
     toolbar = QHBoxLayout()
@@ -2233,9 +2276,11 @@ def build_right_panel(self, layout: QVBoxLayout):
     latex_layout.addLayout(latex_controls_row)
 
     latex_layout.addWidget(self.latex_edit)
-    self.tabs.addTab(latex_widget, "LaTeX")
+    latex_spec = DESKTOP_RESULT_VIEWS["result.latex"]
+    latex_index = self.result_tabs.addTab(latex_widget, latex_spec.title.zh)
+    self.result_tabs.setTabToolTip(latex_index, latex_spec.title.zh)
 
-    # PDF tab
+    # PDF result view
     pdf_widget = QWidget()
     pdf_layout = QVBoxLayout(pdf_widget)
     pdf_toolbar = QHBoxLayout()
@@ -2282,7 +2327,9 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.pdf_container_layout.setAlignment(Qt.AlignTop)
     self.pdf_scroll.setWidget(self.pdf_container)
     pdf_layout.addWidget(self.pdf_scroll)
-    self.tabs.addTab(pdf_widget, "PDF 预览")
+    pdf_spec = DESKTOP_RESULT_VIEWS["result.pdf"]
+    pdf_index = self.result_tabs.addTab(pdf_widget, pdf_spec.title.zh)
+    self.result_tabs.setTabToolTip(pdf_index, pdf_spec.title.zh)
     _bind_result_latex_pdf_schema_fields(
         self,
         lbl_digits=lbl_digits,
@@ -2291,23 +2338,17 @@ def build_right_panel(self, layout: QVBoxLayout):
     )
     # record tab indexes for translation
     self.result_tabs_indices = {
-        "numeric": 0,
-        "image": 1,
+        _result_view_alias(view_key): index
+        for index, view_key in enumerate(_RESULT_VIEW_ORDER)
     }
     _bind_result_area_schema_fields(self)
     self.main_tabs_indices = {
         "result": self.tabs.indexOf(result_widget),
-        "log": self.tabs.indexOf(log_widget),
-        "latex": self.tabs.indexOf(latex_widget),
-        "pdf": self.tabs.indexOf(pdf_widget),
     }
     self.tabs.setProperty(
         "datalab_schema_tabs",
         {
             "result": "results.overview",
-            "log": "results.log",
-            "latex": "results.latex",
-            "pdf": "results.pdf",
         },
     )
     self._update_image_status()
@@ -3339,97 +3380,19 @@ def _bind_result_latex_pdf_schema_fields(
     lbl_zoom: QLabel,
 ) -> None:
     lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
-    display_scientific_field = FormFieldSpec(
-        key="results.display.scientific",
-        widget_kind="checkbox",
-        label=LocalizedText("使用科学计数法显示结果", "Display results in scientific notation"),
-        tooltip=LocalizedText("切换数值结果是否使用科学计数法显示。", "Toggle scientific notation for numeric result display."),
-        required=False,
-    )
-    display_digits_field = FormFieldSpec(
-        key="results.display.decimal_places",
-        widget_kind="number",
-        label=LocalizedText("小数位数：", "Decimal places:"),
-        tooltip=LocalizedText("控制数值结果显示的小数位数。", "Controls decimal places shown in numeric results."),
-        required=False,
-    )
-    image_zoom_field = FormFieldSpec(
-        key="results.image.zoom_percent",
-        widget_kind="number",
-        label=LocalizedText("图片缩放", "Image zoom"),
-        tooltip=LocalizedText("结果图片缩放百分比。", "Result image zoom percentage."),
-        required=False,
-    )
-    log_x_field = FormFieldSpec(
-        key="results.image.log_x",
-        widget_kind="checkbox",
-        label=LocalizedText("x 轴", "log x"),
-        tooltip=LocalizedText("使用 x 轴对数坐标。", "Use logarithmic x axis."),
-        required=False,
-    )
-    log_y_field = FormFieldSpec(
-        key="results.image.log_y",
-        widget_kind="checkbox",
-        label=LocalizedText("y 轴", "log y"),
-        tooltip=LocalizedText("使用 y 轴对数坐标。", "Use logarithmic y axis."),
-        required=False,
-    )
-    latex_compile_field = FormFieldSpec(
-        key="latex.compile",
-        widget_kind="button",
-        label=LocalizedText("编译 PDF", "Compile PDF"),
-        tooltip=LocalizedText("将当前 LaTeX 内容编译为 PDF。", "Compile the current LaTeX content into a PDF."),
-        required=False,
-    )
-    latex_view_field = FormFieldSpec(
-        key="latex.view_pdf",
-        widget_kind="button",
-        label=LocalizedText("查看 PDF", "View PDF"),
-        tooltip=LocalizedText("打开已编译的 PDF 文件。", "Open the compiled PDF file."),
-        required=False,
-    )
-    latex_engine_field = FormFieldSpec(
-        key="latex.engine",
-        widget_kind="select",
-        label=LocalizedText("LaTeX 引擎：", "LaTeX engine:"),
-        tooltip=LocalizedText("选择用于编译 PDF 的 LaTeX 引擎。", "Choose the LaTeX engine used to compile PDF output."),
-        required=False,
-    )
-    latex_engine_path_field = FormFieldSpec(
-        key="latex.engine_path",
-        widget_kind="button",
-        label=LocalizedText("选择引擎路径", "Select engine path"),
-        tooltip=LocalizedText("手动选择 LaTeX 引擎可执行文件路径。", "Manually select the LaTeX engine executable path."),
-        required=False,
-    )
-    pdf_zoom_field = FormFieldSpec(
-        key="pdf.zoom_percent",
-        widget_kind="number",
-        label=LocalizedText("缩放%：", "Zoom %:"),
-        tooltip=LocalizedText("PDF 预览缩放百分比。", "PDF preview zoom percentage."),
-        required=False,
-    )
-    pdf_zoom_in_field = FormFieldSpec(
-        key="pdf.zoom_in",
-        widget_kind="button",
-        label=LocalizedText("放大 PDF", "Zoom PDF in"),
-        tooltip=LocalizedText("放大 PDF 预览。", "Zoom PDF preview in."),
-        required=False,
-    )
-    pdf_zoom_out_field = FormFieldSpec(
-        key="pdf.zoom_out",
-        widget_kind="button",
-        label=LocalizedText("缩小 PDF", "Zoom PDF out"),
-        tooltip=LocalizedText("缩小 PDF 预览。", "Zoom PDF preview out."),
-        required=False,
-    )
-    pdf_zoom_reset_field = FormFieldSpec(
-        key="pdf.zoom_reset",
-        widget_kind="button",
-        label=LocalizedText("重置 PDF 缩放", "Reset PDF zoom"),
-        tooltip=LocalizedText("重置 PDF 预览缩放。", "Reset PDF preview zoom."),
-        required=False,
-    )
+    display_scientific_field = _result_control_field("result.numeric", "results.display.scientific")
+    display_digits_field = _result_control_field("result.numeric", "results.display.decimal_places")
+    image_zoom_field = _result_control_field("result.image", "results.image.zoom_percent")
+    log_x_field = _result_control_field("result.image", "results.image.log_x")
+    log_y_field = _result_control_field("result.image", "results.image.log_y")
+    latex_compile_field = _result_control_field("result.latex", "latex.compile")
+    latex_view_field = _result_control_field("result.latex", "latex.view_pdf")
+    latex_engine_field = _result_control_field("result.latex", "latex.engine")
+    latex_engine_path_field = _result_control_field("result.latex", "latex.engine_path")
+    pdf_zoom_field = _result_control_field("result.pdf", "pdf.zoom_percent")
+    pdf_zoom_in_field = _result_control_field("result.pdf", "pdf.zoom_in")
+    pdf_zoom_out_field = _result_control_field("result.pdf", "pdf.zoom_out")
+    pdf_zoom_reset_field = _result_control_field("result.pdf", "pdf.zoom_reset")
 
     for field, label, widget in [
         (display_digits_field, lbl_digits, self.display_digits_spin),
@@ -3450,12 +3413,12 @@ def _bind_result_latex_pdf_schema_fields(
         register_schema_text_refresh(self, field, widget=widget)
 
     for field, button, accessible_name in [
-        (latex_compile_field, self.latex_compile_button, LocalizedText("编译 PDF", "Compile PDF")),
-        (latex_view_field, self.latex_view_pdf_button, LocalizedText("查看 PDF", "View PDF")),
-        (latex_engine_path_field, self.latex_engine_path_button, LocalizedText("选择引擎路径", "Select engine path")),
-        (pdf_zoom_in_field, self.pdf_zoom_in_button, LocalizedText("放大 PDF", "Zoom PDF in")),
-        (pdf_zoom_out_field, self.pdf_zoom_out_button, LocalizedText("缩小 PDF", "Zoom PDF out")),
-        (pdf_zoom_reset_field, self.pdf_zoom_reset_button, LocalizedText("重置 PDF 缩放", "Reset PDF zoom")),
+        (latex_compile_field, self.latex_compile_button, latex_compile_field.label),
+        (latex_view_field, self.latex_view_pdf_button, latex_view_field.label),
+        (latex_engine_path_field, self.latex_engine_path_button, latex_engine_path_field.label),
+        (pdf_zoom_in_field, self.pdf_zoom_in_button, pdf_zoom_in_field.label),
+        (pdf_zoom_out_field, self.pdf_zoom_out_button, pdf_zoom_out_field.label),
+        (pdf_zoom_reset_field, self.pdf_zoom_reset_button, pdf_zoom_reset_field.label),
     ]:
         bind_schema_command_button(
             self,
@@ -3475,13 +3438,14 @@ def _bind_result_area_schema_fields(self) -> None:
         tooltip=LocalizedText("显示当前计算的数值结果和摘要。", "Shows numeric results and summaries for the current calculation."),
         required=False,
     )
-    csv_export_field = FormFieldSpec(
-        key="results.export.csv",
-        widget_kind="button",
-        label=LocalizedText("导出 CSV", "Export CSV"),
-        tooltip=LocalizedText("导出当前结果表格为 CSV 文件。", "Export the current result table as a CSV file."),
-        required=False,
-    )
+    csv_export_field = _result_control_field("result.numeric", "results.export.csv")
+    image_zoom_in_field = _result_control_field("result.image", "results.image.zoom_in")
+    image_zoom_out_field = _result_control_field("result.image", "results.image.zoom_out")
+    image_zoom_reset_field = _result_control_field("result.image", "results.image.zoom_reset")
+    image_export_field = _result_control_field("result.image", "results.image.export")
+    image_page_field = _result_control_field("result.image", "results.image.page")
+    image_prev_field = _result_control_field("result.image", "results.image.previous")
+    image_next_field = _result_control_field("result.image", "results.image.next")
     image_preview_field = FormFieldSpec(
         key="results.image.preview",
         widget_kind="image",
@@ -3494,55 +3458,6 @@ def _bind_result_area_schema_fields(self) -> None:
         widget_kind="text",
         label=LocalizedText("图片状态", "Image status"),
         tooltip=LocalizedText("当前图片页和加载状态。", "Current image page and loading status."),
-        required=False,
-    )
-    image_zoom_in_field = FormFieldSpec(
-        key="results.image.zoom_in",
-        widget_kind="button",
-        label=LocalizedText("放大图片", "Zoom image in"),
-        tooltip=LocalizedText("放大结果图片。", "Zoom result image in."),
-        required=False,
-    )
-    image_zoom_out_field = FormFieldSpec(
-        key="results.image.zoom_out",
-        widget_kind="button",
-        label=LocalizedText("缩小图片", "Zoom image out"),
-        tooltip=LocalizedText("缩小结果图片。", "Zoom result image out."),
-        required=False,
-    )
-    image_zoom_reset_field = FormFieldSpec(
-        key="results.image.zoom_reset",
-        widget_kind="button",
-        label=LocalizedText("重置图片缩放", "Reset image zoom"),
-        tooltip=LocalizedText("重置结果图片缩放。", "Reset result image zoom."),
-        required=False,
-    )
-    image_export_field = FormFieldSpec(
-        key="results.image.export",
-        widget_kind="button",
-        label=LocalizedText("导出图片", "Export image"),
-        tooltip=LocalizedText("导出当前结果图片。", "Export the current result image."),
-        required=False,
-    )
-    image_page_field = FormFieldSpec(
-        key="results.image.page",
-        widget_kind="number",
-        label=LocalizedText("图片页", "Image page"),
-        tooltip=LocalizedText("选择要查看的结果图片页。", "Image page to view."),
-        required=False,
-    )
-    image_prev_field = FormFieldSpec(
-        key="results.image.previous",
-        widget_kind="button",
-        label=LocalizedText("上一张图片", "Previous image"),
-        tooltip=LocalizedText("查看上一张结果图片。", "View the previous result image."),
-        required=False,
-    )
-    image_next_field = FormFieldSpec(
-        key="results.image.next",
-        widget_kind="button",
-        label=LocalizedText("下一张图片", "Next image"),
-        tooltip=LocalizedText("查看下一张结果图片。", "View the next result image."),
         required=False,
     )
     log_field = FormFieldSpec(
@@ -3566,27 +3481,9 @@ def _bind_result_area_schema_fields(self) -> None:
         tooltip=LocalizedText("当前 LaTeX 文件加载和保存状态。", "Current LaTeX file load/save status."),
         required=False,
     )
-    latex_open_field = FormFieldSpec(
-        key="results.latex.open",
-        widget_kind="button",
-        label=LocalizedText("打开 LaTeX 文件", "Open LaTeX file"),
-        tooltip=LocalizedText("打开已有 LaTeX 文件到编辑器。", "Open an existing LaTeX file in the editor."),
-        required=False,
-    )
-    latex_save_field = FormFieldSpec(
-        key="results.latex.save",
-        widget_kind="button",
-        label=LocalizedText("保存 LaTeX 文件", "Save LaTeX file"),
-        tooltip=LocalizedText("保存当前 LaTeX 编辑器内容。", "Save the current LaTeX editor content."),
-        required=False,
-    )
-    latex_reload_field = FormFieldSpec(
-        key="results.latex.reload",
-        widget_kind="button",
-        label=LocalizedText("重新载入 LaTeX 文件", "Reload LaTeX file"),
-        tooltip=LocalizedText("从磁盘重新载入当前 LaTeX 文件。", "Reload the current LaTeX file from disk."),
-        required=False,
-    )
+    latex_open_field = _result_control_field("result.latex", "results.latex.open")
+    latex_save_field = _result_control_field("result.latex", "results.latex.save")
+    latex_reload_field = _result_control_field("result.latex", "results.latex.reload")
     pdf_status_field = FormFieldSpec(
         key="results.pdf.status",
         widget_kind="text",

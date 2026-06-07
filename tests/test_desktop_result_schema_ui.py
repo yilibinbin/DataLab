@@ -11,6 +11,24 @@ pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication
+from shared.ui_specs import DESKTOP_RESULT_VIEWS
+
+
+RESULT_VIEW_ORDER = (
+    "result.numeric",
+    "result.image",
+    "result.log",
+    "result.latex",
+    "result.pdf",
+)
+
+
+def _result_alias(view_key: str) -> str:
+    return view_key.split(".", 1)[1]
+
+
+def _result_schema_key(view_key: str) -> str:
+    return view_key.replace("result.", "results.", 1)
 
 
 @pytest.fixture  # type: ignore[untyped-decorator]
@@ -27,22 +45,22 @@ def test_result_tabs_and_status_widgets_have_schema_metadata(window: Any) -> Non
     assert window.tabs.property("datalab_schema_key") == "main.result_tabs"
     assert window.tabs.property("datalab_schema_tabs") == {
         "result": "results.overview",
-        "log": "results.log",
-        "latex": "results.latex",
-        "pdf": "results.pdf",
     }
     assert window.tabs.tabText(window.main_tabs_indices["result"]) == "结果"
-    assert window.tabs.tabText(window.main_tabs_indices["log"]) == "日志"
-    assert window.tabs.tabText(window.main_tabs_indices["latex"]) == "LaTeX"
-    assert window.tabs.tabText(window.main_tabs_indices["pdf"]) == "PDF 预览"
 
     assert window.result_tabs.property("datalab_schema_key") == "results.tabs"
     assert window.result_tabs.property("datalab_schema_tabs") == {
-        "numeric": "results.numeric",
-        "image": "results.image",
+        _result_alias(view_key): _result_schema_key(view_key)
+        for view_key in RESULT_VIEW_ORDER
     }
-    assert window.result_tabs.tabText(0) == "数值结果"
-    assert window.result_tabs.tabText(1) == "图片"
+    assert window.result_tabs.property("datalab_result_view_specs")["pdf"]["attachment_key"] == "pdf"
+    assert "latex.compile" in window.result_tabs.property("datalab_result_view_specs")["latex"]["controls"]
+    assert "results.image.zoom_percent" in window.result_tabs.property("datalab_result_view_specs")["image"]["controls"]
+    assert window.result_tabs.count() == len(RESULT_VIEW_ORDER)
+    for index, view_key in enumerate(RESULT_VIEW_ORDER):
+        spec = DESKTOP_RESULT_VIEWS[view_key]
+        assert window.result_tabs.tabText(index) == spec.title.zh
+        assert window.result_tabs.tabToolTip(index) == spec.title.zh
 
     assert window.result_edit.property("datalab_schema_key") == "results.numeric.markdown"
     assert window.log_edit.property("datalab_schema_key") == "results.log"
@@ -63,6 +81,8 @@ def test_result_export_and_image_controls_have_schema_metadata(window: Any) -> N
     assert window.result_zoom_reset_btn.property("datalab_schema_key") == "results.image.zoom_reset"
     assert window.result_export_btn.property("datalab_schema_key") == "results.image.export"
     assert window.image_page_spin.property("datalab_schema_key") == "results.image.page"
+    assert window.result_plot_zoom_spin is window.zoom_percent_spin
+    assert window.result_plot_page_spin is window.image_page_spin
     assert window.image_prev_btn.property("datalab_schema_key") == "results.image.previous"
     assert window.image_next_btn.property("datalab_schema_key") == "results.image.next"
 
@@ -79,11 +99,10 @@ def test_result_schema_metadata_refreshes_with_language(window: Any) -> None:
     window._apply_language("en")
 
     assert window.tabs.tabText(window.main_tabs_indices["result"]) == "Result"
-    assert window.tabs.tabText(window.main_tabs_indices["log"]) == "Log"
-    assert window.tabs.tabText(window.main_tabs_indices["latex"]) == "LaTeX"
-    assert window.tabs.tabText(window.main_tabs_indices["pdf"]) == "PDF Preview"
-    assert window.result_tabs.tabText(0) == "Values"
-    assert window.result_tabs.tabText(1) == "Image"
+    for index, view_key in enumerate(RESULT_VIEW_ORDER):
+        spec = DESKTOP_RESULT_VIEWS[view_key]
+        assert window.result_tabs.tabText(index) == spec.title.en
+        assert window.result_tabs.tabToolTip(index) == spec.title.en
     assert window.export_csv_btn.accessibleName() == "Export CSV"
     assert window.result_export_btn.accessibleName() == "Export image"
     assert window.latex_open_button.accessibleName() == "Open LaTeX file"
@@ -93,10 +112,9 @@ def test_result_schema_metadata_refreshes_with_language(window: Any) -> None:
     window._apply_language("zh")
 
     assert window.tabs.tabText(window.main_tabs_indices["result"]) == "结果"
-    assert window.tabs.tabText(window.main_tabs_indices["log"]) == "日志"
-    assert window.tabs.tabText(window.main_tabs_indices["latex"]) == "LaTeX"
-    assert window.tabs.tabText(window.main_tabs_indices["pdf"]) == "PDF 预览"
-    assert window.result_tabs.tabText(0) == "数值结果"
-    assert window.result_tabs.tabText(1) == "图片"
+    for index, view_key in enumerate(RESULT_VIEW_ORDER):
+        spec = DESKTOP_RESULT_VIEWS[view_key]
+        assert window.result_tabs.tabText(index) == spec.title.zh
+        assert window.result_tabs.tabToolTip(index) == spec.title.zh
     assert window.export_csv_btn.accessibleName() == "导出 CSV"
     assert window.latex_open_button.accessibleName() == "打开 LaTeX 文件"

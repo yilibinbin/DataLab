@@ -9,6 +9,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QComboBox, QPushButton, QStyle
 
 from formula_help import get_function_tooltip
+from shared.ui_specs import DESKTOP_RESULT_VIEWS
 
 from .resources import (
     _apply_system_theme,
@@ -20,6 +21,13 @@ from .resources import (
 _LANG_ZH = "zh"
 _LANG_EN = "en"
 _LANG_AUTO = "auto"
+_RESULT_VIEW_ORDER = (
+    "result.numeric",
+    "result.image",
+    "result.log",
+    "result.latex",
+    "result.pdf",
+)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -330,16 +338,18 @@ class WindowI18nMixin:
         self._update_placeholders_language()
         # 更新标签页文字
         try:
-            if self.result_tabs and self.result_tabs.count() >= 2:
-                self.result_tabs.setTabText(0, "数值结果" if effective_lang == _LANG_ZH else "Values")
-                self.result_tabs.setTabText(1, "图片" if effective_lang == _LANG_ZH else "Image")
+            if self.result_tabs:
+                result_indices = getattr(self, "result_tabs_indices", {})
+                for view_key in _RESULT_VIEW_ORDER:
+                    alias = view_key.split(".", 1)[1]
+                    index = result_indices.get(alias)
+                    if index is None or index >= self.result_tabs.count():
+                        continue
+                    title = DESKTOP_RESULT_VIEWS[view_key].title.for_lang(effective_lang)
+                    self.result_tabs.setTabText(index, title)
+                    self.result_tabs.setTabToolTip(index, title)
             if hasattr(self, "main_tabs_indices"):
                 self.tabs.setTabText(self.main_tabs_indices["result"], "结果" if effective_lang == _LANG_ZH else "Result")
-                self.tabs.setTabText(self.main_tabs_indices["log"], "日志" if effective_lang == _LANG_ZH else "Log")
-                self.tabs.setTabText(self.main_tabs_indices["latex"], "LaTeX" if effective_lang == _LANG_ZH else "LaTeX")
-                self.tabs.setTabText(
-                    self.main_tabs_indices["pdf"], "PDF 预览" if effective_lang == _LANG_ZH else "PDF Preview"
-                )
             if hasattr(self, "latex_edit"):
                 self.latex_edit.setPlaceholderText(
                     "% LaTeX 内容将在此显示…" if effective_lang == _LANG_ZH else "% LaTeX content will appear here…"

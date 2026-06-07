@@ -169,6 +169,23 @@ def checkbox_field(
     )
 
 
+def button_field(
+    *,
+    key: str,
+    label_zh: str,
+    label_en: str,
+    tooltip_zh: str = "",
+    tooltip_en: str = "",
+) -> FormFieldSpec:
+    return FormFieldSpec(
+        key=key,
+        widget_kind="button",
+        label=_text(label_zh, label_en),
+        tooltip=_text(tooltip_zh, tooltip_en),
+        required=False,
+    )
+
+
 def textarea_field(
     *,
     key: str,
@@ -583,6 +600,210 @@ GENERATE_PDF_FIELD = checkbox_field(
     tooltip_en="Try to generate a LaTeX PDF after running.",
 )
 
+RESULT_DISPLAY_SCIENTIFIC_FIELD = checkbox_field(
+    key="results.display.scientific",
+    label_zh="使用科学计数法显示结果",
+    label_en="Display results in scientific notation",
+    tooltip_zh="切换数值结果是否使用科学计数法显示。",
+    tooltip_en="Toggle scientific notation for numeric result display.",
+)
+RESULT_DISPLAY_DIGITS_FIELD = number_field(
+    key="results.display.decimal_places",
+    label_zh="小数位数：",
+    label_en="Decimal places:",
+    default_value=10,
+    number_type="int",
+    min_value=0,
+    max_value=50,
+    step=1,
+    decimals=0,
+    tooltip_zh="控制数值结果显示的小数位数。",
+    tooltip_en="Controls decimal places shown in numeric results.",
+    required=False,
+)
+RESULT_EXPORT_CSV_FIELD = button_field(
+    key="results.export.csv",
+    label_zh="导出 CSV",
+    label_en="Export CSV",
+    tooltip_zh="导出当前结果表格为 CSV 文件。",
+    tooltip_en="Export the current result table as a CSV file.",
+)
+RESULT_IMAGE_ZOOM_FIELD = number_field(
+    key="results.image.zoom_percent",
+    label_zh="图片缩放",
+    label_en="Image zoom",
+    default_value=100,
+    number_type="int",
+    min_value=25,
+    max_value=400,
+    step=5,
+    decimals=0,
+    tooltip_zh="结果图片缩放百分比。",
+    tooltip_en="Result image zoom percentage.",
+    required=False,
+)
+RESULT_IMAGE_LOG_X_FIELD = checkbox_field(
+    key="results.image.log_x",
+    label_zh="x 轴",
+    label_en="log x",
+    tooltip_zh="使用 x 轴对数坐标。",
+    tooltip_en="Use logarithmic x axis.",
+)
+RESULT_IMAGE_LOG_Y_FIELD = checkbox_field(
+    key="results.image.log_y",
+    label_zh="y 轴",
+    label_en="log y",
+    tooltip_zh="使用 y 轴对数坐标。",
+    tooltip_en="Use logarithmic y axis.",
+)
+RESULT_IMAGE_ZOOM_IN_FIELD = button_field(
+    key="results.image.zoom_in",
+    label_zh="放大图片",
+    label_en="Zoom image in",
+    tooltip_zh="放大结果图片。",
+    tooltip_en="Zoom result image in.",
+)
+RESULT_IMAGE_ZOOM_OUT_FIELD = button_field(
+    key="results.image.zoom_out",
+    label_zh="缩小图片",
+    label_en="Zoom image out",
+    tooltip_zh="缩小结果图片。",
+    tooltip_en="Zoom result image out.",
+)
+RESULT_IMAGE_ZOOM_RESET_FIELD = button_field(
+    key="results.image.zoom_reset",
+    label_zh="重置图片缩放",
+    label_en="Reset image zoom",
+    tooltip_zh="重置结果图片缩放。",
+    tooltip_en="Reset result image zoom.",
+)
+RESULT_IMAGE_EXPORT_FIELD = button_field(
+    key="results.image.export",
+    label_zh="导出图片",
+    label_en="Export image",
+    tooltip_zh="导出当前结果图片。",
+    tooltip_en="Export the current result image.",
+)
+RESULT_IMAGE_PAGE_FIELD = number_field(
+    key="results.image.page",
+    label_zh="图片页",
+    label_en="Image page",
+    default_value=1,
+    number_type="int",
+    min_value=1,
+    max_value=None,
+    step=1,
+    decimals=0,
+    tooltip_zh="选择要查看的结果图片页。",
+    tooltip_en="Image page to view.",
+    required=False,
+)
+RESULT_IMAGE_PREVIOUS_FIELD = button_field(
+    key="results.image.previous",
+    label_zh="上一张图片",
+    label_en="Previous image",
+    tooltip_zh="查看上一张结果图片。",
+    tooltip_en="View the previous result image.",
+)
+RESULT_IMAGE_NEXT_FIELD = button_field(
+    key="results.image.next",
+    label_zh="下一张图片",
+    label_en="Next image",
+    tooltip_zh="查看下一张结果图片。",
+    tooltip_en="View the next result image.",
+)
+RESULT_LATEX_OPEN_FIELD = button_field(
+    key="results.latex.open",
+    label_zh="打开 LaTeX 文件",
+    label_en="Open LaTeX file",
+    tooltip_zh="打开已有 LaTeX 文件到编辑器。",
+    tooltip_en="Open an existing LaTeX file in the editor.",
+)
+RESULT_LATEX_SAVE_FIELD = button_field(
+    key="results.latex.save",
+    label_zh="保存 LaTeX 文件",
+    label_en="Save LaTeX file",
+    tooltip_zh="保存当前 LaTeX 编辑器内容。",
+    tooltip_en="Save the current LaTeX editor content.",
+)
+RESULT_LATEX_RELOAD_FIELD = button_field(
+    key="results.latex.reload",
+    label_zh="重新载入 LaTeX 文件",
+    label_en="Reload LaTeX file",
+    tooltip_zh="从磁盘重新载入当前 LaTeX 文件。",
+    tooltip_en="Reload the current LaTeX file from disk.",
+)
+RESULT_LATEX_COMPILE_FIELD = button_field(
+    key="latex.compile",
+    label_zh="编译 PDF",
+    label_en="Compile PDF",
+    tooltip_zh="将当前 LaTeX 内容编译为 PDF。",
+    tooltip_en="Compile the current LaTeX content into a PDF.",
+)
+RESULT_LATEX_VIEW_PDF_FIELD = button_field(
+    key="latex.view_pdf",
+    label_zh="查看 PDF",
+    label_en="View PDF",
+    tooltip_zh="打开已编译的 PDF 文件。",
+    tooltip_en="Open the compiled PDF file.",
+)
+RESULT_LATEX_ENGINE_FIELD = select_field(
+    key="latex.engine",
+    label_zh="LaTeX 引擎：",
+    label_en="LaTeX engine:",
+    default_value="tectonic",
+    choices=(
+        _choice("pdflatex", "pdflatex", "pdflatex"),
+        _choice("xelatex", "xelatex", "xelatex"),
+        _choice("tectonic", "tectonic", "tectonic"),
+    ),
+    tooltip_zh="选择用于编译 PDF 的 LaTeX 引擎。",
+    tooltip_en="Choose the LaTeX engine used to compile PDF output.",
+    required=False,
+)
+RESULT_LATEX_ENGINE_PATH_FIELD = button_field(
+    key="latex.engine_path",
+    label_zh="选择引擎路径",
+    label_en="Select engine path",
+    tooltip_zh="手动选择 LaTeX 引擎可执行文件路径。",
+    tooltip_en="Manually select the LaTeX engine executable path.",
+)
+RESULT_PDF_ZOOM_FIELD = number_field(
+    key="pdf.zoom_percent",
+    label_zh="缩放%：",
+    label_en="Zoom %:",
+    default_value=100,
+    number_type="float",
+    min_value=35,
+    max_value=400,
+    step=5,
+    decimals=0,
+    tooltip_zh="PDF 预览缩放百分比。",
+    tooltip_en="PDF preview zoom percentage.",
+    required=False,
+)
+RESULT_PDF_ZOOM_IN_FIELD = button_field(
+    key="pdf.zoom_in",
+    label_zh="放大 PDF",
+    label_en="Zoom PDF in",
+    tooltip_zh="放大 PDF 预览。",
+    tooltip_en="Zoom PDF preview in.",
+)
+RESULT_PDF_ZOOM_OUT_FIELD = button_field(
+    key="pdf.zoom_out",
+    label_zh="缩小 PDF",
+    label_en="Zoom PDF out",
+    tooltip_zh="缩小 PDF 预览。",
+    tooltip_en="Zoom PDF preview out.",
+)
+RESULT_PDF_ZOOM_RESET_FIELD = button_field(
+    key="pdf.zoom_reset",
+    label_zh="重置 PDF 缩放",
+    label_en="Reset PDF zoom",
+    tooltip_zh="重置 PDF 预览缩放。",
+    tooltip_en="Reset PDF preview zoom.",
+)
+
 DESKTOP_FORM_SECTIONS: dict[str, FormSectionSpec] = {
     "input": form_section(
         key="input",
@@ -640,11 +861,24 @@ DESKTOP_RESULT_VIEWS: dict[str, ResultViewSpec] = {
         title=_text("数值结果", "Numeric results"),
         attachment_key="numeric",
         raw_columns=("value", "uncertainty"),
+        controls=(RESULT_DISPLAY_SCIENTIFIC_FIELD, RESULT_DISPLAY_DIGITS_FIELD, RESULT_EXPORT_CSV_FIELD),
     ),
     "result.image": ResultViewSpec(
         key="result.image",
         title=_text("图像结果", "Image results"),
         attachment_key="image",
+        controls=(
+            RESULT_IMAGE_ZOOM_FIELD,
+            RESULT_IMAGE_LOG_X_FIELD,
+            RESULT_IMAGE_LOG_Y_FIELD,
+            RESULT_IMAGE_ZOOM_IN_FIELD,
+            RESULT_IMAGE_ZOOM_OUT_FIELD,
+            RESULT_IMAGE_ZOOM_RESET_FIELD,
+            RESULT_IMAGE_EXPORT_FIELD,
+            RESULT_IMAGE_PAGE_FIELD,
+            RESULT_IMAGE_PREVIOUS_FIELD,
+            RESULT_IMAGE_NEXT_FIELD,
+        ),
     ),
     "result.log": ResultViewSpec(
         key="result.log",
@@ -653,13 +887,28 @@ DESKTOP_RESULT_VIEWS: dict[str, ResultViewSpec] = {
     ),
     "result.latex": ResultViewSpec(
         key="result.latex",
-        title=_text("LaTeX", "LaTeX"),
+        title=_text("LaTeX 源码", "LaTeX source"),
         attachment_key="latex",
+        controls=(
+            RESULT_LATEX_OPEN_FIELD,
+            RESULT_LATEX_SAVE_FIELD,
+            RESULT_LATEX_RELOAD_FIELD,
+            RESULT_LATEX_COMPILE_FIELD,
+            RESULT_LATEX_VIEW_PDF_FIELD,
+            RESULT_LATEX_ENGINE_FIELD,
+            RESULT_LATEX_ENGINE_PATH_FIELD,
+        ),
     ),
     "result.pdf": ResultViewSpec(
         key="result.pdf",
-        title=_text("PDF", "PDF"),
+        title=_text("PDF 预览", "PDF preview"),
         attachment_key="pdf",
+        controls=(
+            RESULT_PDF_ZOOM_FIELD,
+            RESULT_PDF_ZOOM_IN_FIELD,
+            RESULT_PDF_ZOOM_OUT_FIELD,
+            RESULT_PDF_ZOOM_RESET_FIELD,
+        ),
     ),
 }
 

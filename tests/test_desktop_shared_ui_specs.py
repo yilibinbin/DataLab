@@ -40,6 +40,20 @@ def test_desktop_result_views_contains_core_result_types() -> None:
     assert expected <= set(DESKTOP_RESULT_VIEWS)
     assert "result.log" in DESKTOP_RESULT_VIEWS
     assert all(isinstance(DESKTOP_RESULT_VIEWS[key], ResultViewSpec) for key in expected)
+    assert [field.key for field in DESKTOP_RESULT_VIEWS["result.numeric"].controls] == [
+        "results.display.scientific",
+        "results.display.decimal_places",
+        "results.export.csv",
+    ]
+    assert {
+        field.key for field in DESKTOP_RESULT_VIEWS["result.image"].controls
+    } >= {"results.image.zoom_percent", "results.image.export", "results.image.page"}
+    assert {
+        field.key for field in DESKTOP_RESULT_VIEWS["result.latex"].controls
+    } >= {"results.latex.open", "results.latex.save", "latex.compile", "latex.engine"}
+    assert {
+        field.key for field in DESKTOP_RESULT_VIEWS["result.pdf"].controls
+    } >= {"pdf.zoom_percent", "pdf.zoom_in", "pdf.zoom_out", "pdf.zoom_reset"}
 
 
 def test_desktop_plot_specs_contains_shared_registry_keys() -> None:

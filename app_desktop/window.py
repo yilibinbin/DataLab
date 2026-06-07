@@ -1040,7 +1040,7 @@ class ExtrapolationWindow(
                 "2. Select extrapolation, error propagation, fitting, or statistics on the left; set power/constant options as needed.\n"
                 "3. In fitting mode, choose polynomial, Padé, 1/x^p, power-limit, custom, or self-consistent; related controls appear below for expression/model settings.\n"
                 "4. In fitting, the Stat./System row controls statistical weighting: when enabled, data sigmas are used as weights (stat only); when disabled but sigmas exist, they are treated as systematic only (no double counting). Uncertainties are auto-parsed (1.23(4)[-5] or sigma-like headers), no extra sigma field needed.\n"
-                "5. Enable “Generate LaTeX” to export tables/images; you can edit/compile in the LaTeX tab; right tabs show results, logs, LaTeX, and PDF preview."
+                "5. Enable “Generate LaTeX” to export tables/images; the Result tab contains numeric results, plots, logs, LaTeX source editing/compilation, and PDF preview views."
             )
         else:
             title = "帮助"
@@ -1049,7 +1049,7 @@ class ExtrapolationWindow(
                 "2. 在左侧选择外推、误差传递、拟合或统计模式，并根据需要设置幂律/常数等参数。\n"
                 "3. 拟合模式使用下拉框选择多项式、Padé、1/x^p、power-limit、自定义或自洽隐式模型，相关参数控件会在下方即时显示，可写入表达式或模型设置。\n"
                 "4. 拟合模块的“统计/系统”一行控制统计加权：勾选“统计误差加权”则数据 σ 作为统计权重；不勾选时若检测到 σ，则只作为系统误差来源（避免双计）。不再需要单独输入 σ 列，程序会自动解析 1.23(4)[-5] 或包含 sigma/err 的列，日志会提示 χ²、边界警告等。\n"
-                "5. 勾选“生成 LaTeX 文件”即可导出表格/图像，并可在 LaTeX 标签页编辑或编译；右侧标签页展示数值结果、日志、LaTeX 内容和 PDF 预览。"
+                "5. 勾选“生成 LaTeX 文件”即可导出表格/图像；右侧“结果”标签页内包含数值结果、图片、日志、LaTeX 源码编辑/编译和 PDF 预览视图。"
             )
         QMessageBox.information(self, title, message)
 

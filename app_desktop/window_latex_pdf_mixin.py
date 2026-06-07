@@ -691,7 +691,15 @@ class WindowLatexPdfMixin:
                 f"{len(self.pdf_base_images)} page(s) ({name}) @ {int(zoom * 100)}%",
             )
         )
-        self.tabs.setCurrentWidget(self.tabs.widget(3))
+        result_tabs = getattr(self, "result_tabs", None)
+        result_indices = getattr(self, "result_tabs_indices", {})
+        pdf_index = result_indices.get("pdf")
+        if result_tabs is not None and pdf_index is not None:
+            result_tabs.setCurrentIndex(pdf_index)
+            if hasattr(self, "main_tabs_indices") and "result" in self.main_tabs_indices:
+                self.tabs.setCurrentIndex(self.main_tabs_indices["result"])
+        elif self.tabs.count() > 3:
+            self.tabs.setCurrentWidget(self.tabs.widget(3))
         return True
 
     def _invert_image_for_dark_mode(self, image: Image.Image) -> Image.Image:
