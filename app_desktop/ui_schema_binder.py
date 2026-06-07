@@ -10,6 +10,8 @@ from shared.ui_schema import ChoiceSpec, FormFieldSpec
 SCHEMA_KEY_PROPERTY = "datalab_schema_key"
 SCHEMA_REQUIRED_PROPERTY = "datalab_schema_required"
 SCHEMA_CHOICES_PROPERTY = "datalab_schema_choices"
+TOOLTIP_ZH_PROPERTY = "datalab_tooltip_zh"
+TOOLTIP_EN_PROPERTY = "datalab_tooltip_en"
 
 
 def bind_field(
@@ -29,12 +31,14 @@ def bind_field(
         _call_if_supported(label, "setText", label_text)
         if tooltip:
             _call_if_supported(label, "setToolTip", tooltip)
+            _set_localized_tooltip(label, field.tooltip.zh, field.tooltip.en)
 
     if widget is not None:
         _set_property(widget, SCHEMA_KEY_PROPERTY, field.key)
         _set_property(widget, SCHEMA_REQUIRED_PROPERTY, field.required)
         if tooltip:
             _call_if_supported(widget, "setToolTip", tooltip)
+            _set_localized_tooltip(widget, field.tooltip.zh, field.tooltip.en)
         if placeholder:
             _call_if_supported(widget, "setPlaceholderText", placeholder)
 
@@ -43,6 +47,7 @@ def bind_field(
         _call_if_supported(help_button, "setText", "?")
         if tooltip:
             _call_if_supported(help_button, "setToolTip", tooltip)
+            _set_localized_tooltip(help_button, field.tooltip.zh, field.tooltip.en)
         _call_if_supported(help_button, "setAccessibleName", f"{label_text} help")
         if tooltip:
             _call_if_supported(help_button, "setAccessibleDescription", tooltip)
@@ -82,6 +87,12 @@ def _set_property(obj: Any, name: str, value: object) -> None:
     method = getattr(obj, "setProperty", None)
     if callable(method):
         method(name, value)
+
+
+def _set_localized_tooltip(obj: Any, zh: str, en: str) -> None:
+    if zh or en:
+        _set_property(obj, TOOLTIP_ZH_PROPERTY, zh)
+        _set_property(obj, TOOLTIP_EN_PROPERTY, en)
 
 
 def _property(obj: Any, name: str) -> object:

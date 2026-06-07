@@ -10,9 +10,12 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
+from tools.scan_desktop_gui_schema import MODES, RESULT_TABS, ROOT_SOLVING_SUBMODES, SCAN_WIDTHS
 
-EXPECTED_SCENARIO_COUNT = 96
-EXPECTED_CURRENT_HELP_GAP_COUNT = 420
+EXPECTED_SCENARIO_COUNT = len(SCAN_WIDTHS) * 2 * len(RESULT_TABS) * (
+    (len(MODES) - 1) + len(ROOT_SOLVING_SUBMODES)
+)
+EXPECTED_CURRENT_HELP_GAP_COUNT = 0
 
 
 def _issue_summary(issues: list[dict[str, Any]]) -> str:
@@ -58,6 +61,7 @@ def test_redesign_scan_returns_structured_strict_report(qapp: Any) -> None:
             {"kind", "scenario", "language", "widget", "details"}.issubset(issue)
             for issue in report["issues"]
         )
-        assert any(issue["details"].get("class_name") == "QTableWidget" for issue in report["issues"])
+        assert report["checks"]["missing_help_affordance_count"] == EXPECTED_CURRENT_HELP_GAP_COUNT
+        assert report["issues"] == []
     finally:
         window.deleteLater()

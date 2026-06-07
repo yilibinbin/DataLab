@@ -610,6 +610,12 @@ def build_left_panel(self):
     for zh, en, data in mode_items:
         self.mode_combo.addItem(zh, data)
     self._register_combo(self.mode_combo, mode_items)
+    self._register_text(
+        self.mode_combo,
+        "选择当前要执行的计算模块。",
+        "Choose the computation module to use.",
+        "setToolTip",
+    )
     self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
     mode_layout.addWidget(self.mode_combo)
     self.mode_section_layout.addWidget(self.mode_box)
@@ -636,6 +642,12 @@ def build_left_panel(self):
     self.use_file_checkbox = QCheckBox("使用数据文件")
     self.use_file_checkbox.setChecked(False)
     self._register_text(self.use_file_checkbox, "使用数据文件", "Use data file")
+    self._register_text(
+        self.use_file_checkbox,
+        "启用后从文件读取数据；关闭后使用下方手动输入数据。",
+        "Read data from a file when enabled; otherwise use the manual data input below.",
+        "setToolTip",
+    )
     self.use_file_checkbox.toggled.connect(self._on_data_source_toggle)
     source_row = QHBoxLayout()
     source_row.setSpacing(6)
@@ -661,6 +673,12 @@ def build_left_panel(self):
     remove_col_btn.setToolTip(
         self._tr("删除最后一列（含数据）", "Remove the last column (and its data)")
     )
+    self._register_text(
+        remove_col_btn,
+        "删除最后一列（含数据）",
+        "Remove the last column (and its data)",
+        "setToolTip",
+    )
     remove_col_btn.clicked.connect(lambda: _remove_table_column(self))
     add_row_btn = QPushButton("+ 行")
     self._register_text(add_row_btn, "+ 行", "+ Row")
@@ -669,6 +687,12 @@ def build_left_panel(self):
     self._register_text(remove_row_btn, "- 行", "- Row")
     remove_row_btn.setToolTip(
         self._tr("删除最后一行（含数据）", "Remove the last row (and its data)")
+    )
+    self._register_text(
+        remove_row_btn,
+        "删除最后一行（含数据）",
+        "Remove the last row (and its data)",
+        "setToolTip",
     )
     remove_row_btn.clicked.connect(lambda: _remove_table_row(self))
     clear_btn = QPushButton("清除")
@@ -1233,6 +1257,12 @@ def build_left_panel(self):
             "MCMC refinement unavailable — fitting.mcmc_fitter "
             "is not importable. pip install emcee numpy corner",
         ))
+        self._register_text(
+            self.fit_mcmc_refine,
+            "MCMC 精炼不可用（fitting.mcmc_fitter 未安装）。pip install emcee numpy corner",
+            "MCMC refinement unavailable — fitting.mcmc_fitter is not importable. pip install emcee numpy corner",
+            "setToolTip",
+        )
     else:
         if not _mcmc_has_emcee:
             self.fit_mcmc_refine.setEnabled(False)
@@ -1242,6 +1272,12 @@ def build_left_panel(self):
                 "Install the 'emcee' package to enable MCMC "
                 "refinement. pip install emcee numpy corner",
             ))
+            self._register_text(
+                self.fit_mcmc_refine,
+                "需要安装 emcee 包才能启用 MCMC 精炼。pip install emcee numpy corner",
+                "Install the 'emcee' package to enable MCMC refinement. pip install emcee numpy corner",
+                "setToolTip",
+            )
         else:
             self.fit_mcmc_refine.setToolTip(self._tr(
                 "对最佳 AIC 模型的参数后验分布做 MCMC 采样，"
@@ -1249,6 +1285,12 @@ def build_left_panel(self):
                 "Run emcee MCMC on the best-AIC model to produce "
                 "robust credible intervals (may take 10–60 s).",
             ))
+            self._register_text(
+                self.fit_mcmc_refine,
+                "对最佳 AIC 模型的参数后验分布做 MCMC 采样，给出更可靠的置信区间（可能耗时 10–60 秒）。",
+                "Run emcee MCMC on the best-AIC model to produce robust credible intervals (may take 10–60 s).",
+                "setToolTip",
+            )
     fit_layout.addWidget(self.fit_mcmc_refine)
 
     self.fit_model_hint = QLabel("")
@@ -1351,6 +1393,12 @@ def build_left_panel(self):
     fit_layout.addLayout(fit_expr_hint_row)
     self.custom_constants_editor = ConstantsEditor(min_rows=3, checked=False, numeric_mode="mpmath")
     self._register_text(self.custom_constants_editor.checkbox, "启用常数设置", "Enable constants")
+    self._register_text(
+        self.custom_constants_editor.checkbox,
+        "启用后在自定义拟合表达式中代入常数，并从参数识别中排除这些名称。",
+        "Enable constants for the custom fit expression and exclude those names from parameter detection.",
+        "setToolTip",
+    )
     _register_constant_headers(self, self.custom_constants_editor.set_table_headers)
     _apply_equal_column_stretch(self.custom_constants_editor.table_view)
     self.custom_constants_editor.table_view.setStyleSheet(_get_table_style())
@@ -1379,6 +1427,12 @@ def build_left_panel(self):
     self.custom_constraints_checkbox = QCheckBox("启用参数约束")
     self.custom_constraints_checkbox.setChecked(False)
     self._register_text(self.custom_constraints_checkbox, "启用参数约束", "Enable parameter constraints")
+    self._register_text(
+        self.custom_constraints_checkbox,
+        "启用后参数表显示固定、下界和上界列。",
+        "Show fixed, lower-bound, and upper-bound columns in the parameter table.",
+        "setToolTip",
+    )
     fit_layout.addWidget(self.custom_constraints_checkbox)
     self.custom_params_table = ParameterTable()
     _register_table_headers(
@@ -1492,11 +1546,23 @@ def build_left_panel(self):
     self.implicit_constraints_checkbox = QCheckBox("启用参数约束")
     self.implicit_constraints_checkbox.setChecked(False)
     self._register_text(self.implicit_constraints_checkbox, "启用参数约束", "Enable parameter constraints")
+    self._register_text(
+        self.implicit_constraints_checkbox,
+        "启用后参数表显示固定、下界和上界列。",
+        "Show fixed, lower-bound, and upper-bound columns in the parameter table.",
+        "setToolTip",
+    )
     self.implicit_constraints_checkbox.toggled.connect(self.implicit_params_table.set_constraints_enabled)
     implicit_layout.addWidget(self.implicit_constraints_checkbox)
 
     self.implicit_constants_editor = ConstantsEditor(min_rows=3, checked=True, numeric_mode="mpmath")
     self._register_text(self.implicit_constants_editor.checkbox, "启用常数设置", "Enable constants")
+    self._register_text(
+        self.implicit_constants_editor.checkbox,
+        "启用后在自洽隐式模型中代入常数，并从参数识别中排除这些名称。",
+        "Enable constants for the implicit model and exclude those names from parameter detection.",
+        "setToolTip",
+    )
     _register_constant_headers(self, self.implicit_constants_editor.set_table_headers)
     _apply_equal_column_stretch(self.implicit_constants_editor.table_view)
     self.implicit_constants_editor.table_view.setStyleSheet(_get_table_style())
@@ -1572,11 +1638,18 @@ def build_left_panel(self):
     self.add_variable_btn = QPushButton("+")
     self.add_variable_btn.setFixedWidth(28)
     self.add_variable_btn.setToolTip(self._tr("添加变量映射", "Add variable mapping"))
+    self._register_text(self.add_variable_btn, "添加变量映射", "Add variable mapping", "setToolTip")
     self.add_variable_btn.clicked.connect(self._add_variable_row)
     var_header.addWidget(self.add_variable_btn)
     self.remove_variable_btn = QPushButton("-")
     self.remove_variable_btn.setFixedWidth(28)
     self.remove_variable_btn.setToolTip(self._tr("删除最后一个变量映射", "Remove last variable mapping"))
+    self._register_text(
+        self.remove_variable_btn,
+        "删除最后一个变量映射",
+        "Remove last variable mapping",
+        "setToolTip",
+    )
     self.remove_variable_btn.clicked.connect(self._remove_variable_row)
     var_header.addWidget(self.remove_variable_btn)
     fit_layout.addLayout(var_header)
@@ -1592,6 +1665,12 @@ def build_left_panel(self):
     self._register_text(lbl_target, "目标列：", "Target column:")
     target_row.addWidget(lbl_target)
     self.fit_target_edit = QLineEdit("B")
+    self._register_text(
+        self.fit_target_edit,
+        "目标列是拟合时要匹配的观测数据列。",
+        "Target column is the observed data column matched by the fit.",
+        "setToolTip",
+    )
     target_row.addWidget(self.fit_target_edit)
     fit_layout.addLayout(target_row)
 
@@ -1601,6 +1680,12 @@ def build_left_panel(self):
     weight_row.addWidget(lbl_weight_mode)
     self.fit_weighted_checkbox = QCheckBox("统计误差加权")
     self._register_text(self.fit_weighted_checkbox, "统计误差加权", "Statistical weighting (sigma)")
+    self._register_text(
+        self.fit_weighted_checkbox,
+        "启用后使用目标列中的统计不确定度作为拟合权重。",
+        "Use statistical uncertainties in the target column as fit weights when enabled.",
+        "setToolTip",
+    )
     weight_row.addWidget(self.fit_weighted_checkbox)
     fit_layout.addLayout(weight_row)
 
@@ -1734,6 +1819,12 @@ def build_left_panel(self):
     for zh, _en, data in root_uncertainty_method_items:
         self.root_uncertainty_method_combo.addItem(zh, data)
     self._register_combo(self.root_uncertainty_method_combo, root_uncertainty_method_items)
+    self._register_text(
+        self.root_uncertainty_method_combo,
+        "选择根的不确定度传播方式；关闭时只求数值根。",
+        "Choose how root uncertainties are propagated; Off solves numeric roots only.",
+        "setToolTip",
+    )
     lbl_root_uncertainty_method = QLabel("方法：")
     self._register_text(lbl_root_uncertainty_method, "方法：", "Method:")
     root_uncertainty_layout.addRow(lbl_root_uncertainty_method, self.root_uncertainty_method_combo)
@@ -1753,6 +1844,12 @@ def build_left_panel(self):
             "Order 1: linear implicit propagation; order 2: scalar second-order finite-difference propagation.",
         )
     )
+    self._register_text(
+        self.root_uncertainty_order_spin,
+        "1 阶：隐函数线性传播；2 阶：对标量实根使用二阶有限差分传播。",
+        "Order 1: linear implicit propagation; order 2: scalar second-order finite-difference propagation.",
+        "setToolTip",
+    )
     root_taylor_layout.addWidget(self.root_uncertainty_order_label)
     root_taylor_layout.addWidget(self.root_uncertainty_order_spin)
     root_taylor_layout.addStretch()
@@ -1763,6 +1860,12 @@ def build_left_panel(self):
     self.root_monte_carlo_samples_spin = QSpinBox()
     self.root_monte_carlo_samples_spin.setRange(100, 50000)
     self.root_monte_carlo_samples_spin.setValue(2000)
+    self._register_text(
+        self.root_monte_carlo_samples_spin,
+        "Monte Carlo 抽样次数；数值越大越稳定但越慢。",
+        "Monte Carlo sample count; larger values are more stable but slower.",
+        "setToolTip",
+    )
     root_uncertainty_layout.addRow(self.root_monte_carlo_samples_label, self.root_monte_carlo_samples_spin)
 
     self.root_monte_carlo_seed_label = QLabel("随机种子：")
@@ -2239,11 +2342,29 @@ def build_right_panel(self, layout: QVBoxLayout):
     latex_controls_row = QHBoxLayout()
     lbl_font = QLabel("字体大小：")
     self._register_text(lbl_font, "字体大小：", "Font size:")
+    self._register_text(
+        lbl_font,
+        "调整 LaTeX 源码视图的显示字体大小。",
+        "Adjust the display font size for the LaTeX source view.",
+        "setToolTip",
+    )
     latex_controls_row.addWidget(lbl_font)
     latex_font_spin = QSpinBox()
     latex_font_spin.setRange(8, 32)
     _default_size = self.latex_edit.font().pointSize()
     latex_font_spin.setValue(max(8, _default_size if _default_size > 0 else 12))
+    latex_font_spin.setToolTip(
+        self._tr(
+            "调整 LaTeX 源码视图的显示字体大小。",
+            "Adjust the display font size for the LaTeX source view.",
+        )
+    )
+    self._register_text(
+        latex_font_spin,
+        "调整 LaTeX 源码视图的显示字体大小。",
+        "Adjust the display font size for the LaTeX source view.",
+        "setToolTip",
+    )
     latex_font_spin.valueChanged.connect(
         lambda value, target=self.latex_edit: self._apply_editor_font_size(target, value)
     )

@@ -11,7 +11,6 @@ from typing import Any, cast
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
@@ -43,7 +42,7 @@ class ScreenScenario:
 MODES = ("extrapolation", "error", "fitting", "root_solving", "statistics")
 ROOT_SOLVING_SUBMODES = ("scalar", "scan_multiple", "polynomial", "system")
 SCAN_WIDTHS = (1280, 1440, 1680)
-RESULT_TABS = ("numeric", "image")
+RESULT_TABS = ("numeric", "image", "log", "latex", "pdf")
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg=="
 )
@@ -301,15 +300,21 @@ def _has_help_affordance(widget: Any) -> bool:
         return True
     if getattr(widget, "accessibleDescription", lambda: "")():
         return True
-    parent = widget.parentWidget() if hasattr(widget, "parentWidget") else None
-    if parent is None:
+    schema_key = str(widget.property("datalab_schema_key") or "") if hasattr(widget, "property") else ""
+    if not schema_key:
         return False
-    for button in parent.findChildren(QAbstractButton, options=Qt.FindDirectChildrenOnly):
-        if button is widget or not button.isVisible():
-            continue
-        name = f"{button.objectName()} {button.text()} {button.toolTip()}".lower()
-        if "help" in name or "?" in name or "帮助" in name:
-            return True
+    parent = widget.parentWidget() if hasattr(widget, "parentWidget") else None
+    depth = 0
+    while parent is not None and depth < 5:
+        for button in parent.findChildren(QAbstractButton):
+            if button is widget or not button.isVisible():
+                continue
+            if str(button.property("datalab_schema_key") or "") != schema_key:
+                continue
+            if getattr(button, "toolTip", lambda: "")() or getattr(button, "accessibleDescription", lambda: "")():
+                return True
+        parent = parent.parentWidget() if hasattr(parent, "parentWidget") else None
+        depth += 1
     return False
 
 

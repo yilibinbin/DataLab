@@ -209,6 +209,10 @@ class DetectedRowsTable(QWidget):
     def set_headers(self, headers: Sequence[str]) -> None:
         self.table_view.setHorizontalHeaderLabels(list(headers))
 
+    def setToolTip(self, text: str) -> None:  # noqa: N802 - Qt API override
+        super().setToolTip(text)
+        self.table_view.setToolTip(text)
+
     def set_rows(self, rows: Iterable[dict[str, Any]] | None) -> None:
         self._syncing = True
         try:

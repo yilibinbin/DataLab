@@ -124,6 +124,13 @@ class ConstantsEditor(QWidget):
     def set_table_headers(self, name: str, value: str) -> None:
         self.table_view.setHorizontalHeaderLabels([name, value])
 
+    def setToolTip(self, text: str) -> None:  # noqa: N802 - Qt API override
+        super().setToolTip(text)
+        self.checkbox.setToolTip(text)
+        self.help_button.setToolTip(text)
+        self.table_view.setToolTip(text)
+        self.text_view.setToolTip(text)
+
     def isChecked(self) -> bool:  # noqa: N802 - Qt-style API
         return bool(self.checkbox.isChecked())
 

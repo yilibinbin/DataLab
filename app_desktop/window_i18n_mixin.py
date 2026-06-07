@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 
-from PySide6.QtCore import QLocale, QSize
+from PySide6.QtCore import QObject, QLocale, QSize
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QComboBox, QPushButton, QStyle
 
@@ -319,6 +319,14 @@ class WindowI18nMixin:
         for widget, attr, zh, en in self._translations:
             try:
                 getattr(widget, attr)(zh if effective_lang == _LANG_ZH else en)
+            except Exception:
+                continue
+        for widget in [self, *self.findChildren(QObject)]:
+            try:
+                zh_tooltip = widget.property("datalab_tooltip_zh")
+                en_tooltip = widget.property("datalab_tooltip_en")
+                if zh_tooltip or en_tooltip:
+                    widget.setToolTip(zh_tooltip if effective_lang == _LANG_ZH else en_tooltip)
             except Exception:
                 continue
         for combo, items in self._combo_translations:

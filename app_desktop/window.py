@@ -958,6 +958,16 @@ class ExtrapolationWindow(
         col_edit = QLineEdit(default_column)
         lbl_var = QLabel(self._tr("变量", "Var"))
         lbl_col = QLabel(self._tr("列名", "Column"))
+        variable_tooltip_zh = "表达式中的自变量名称，例如 x。"
+        variable_tooltip_en = "Independent variable name used in the expression, for example x."
+        column_tooltip_zh = "数据表中映射到该变量的列名，例如 A。"
+        column_tooltip_en = "Data-table column mapped to this variable, for example A."
+        self._register_text(lbl_var, "变量", "Var")
+        self._register_text(lbl_var, variable_tooltip_zh, variable_tooltip_en, "setToolTip")
+        self._register_text(var_edit, variable_tooltip_zh, variable_tooltip_en, "setToolTip")
+        self._register_text(lbl_col, "列名", "Column")
+        self._register_text(lbl_col, column_tooltip_zh, column_tooltip_en, "setToolTip")
+        self._register_text(col_edit, column_tooltip_zh, column_tooltip_en, "setToolTip")
         row_layout.addWidget(lbl_var)
         row_layout.addWidget(var_edit)
         row_layout.addWidget(lbl_col)
@@ -2008,11 +2018,29 @@ class ExtrapolationWindow(
         control_layout = QHBoxLayout()
         lbl = QLabel(label)
         self._register_text(lbl, "字体大小：", "Font size:")
+        self._register_text(
+            lbl,
+            "调整当前结果视图的显示字体大小。",
+            "Adjust the display font size for the current result view.",
+            "setToolTip",
+        )
         control_layout.addWidget(lbl)
         spin = QSpinBox()
         spin.setRange(8, 32)
         default_size = editor.font().pointSize()
         spin.setValue(max(8, default_size if default_size > 0 else 12))
+        spin.setToolTip(
+            self._tr(
+                "调整当前结果视图的显示字体大小。",
+                "Adjust the display font size for the current result view.",
+            )
+        )
+        self._register_text(
+            spin,
+            "调整当前结果视图的显示字体大小。",
+            "Adjust the display font size for the current result view.",
+            "setToolTip",
+        )
         spin.valueChanged.connect(lambda value, target=editor: self._apply_editor_font_size(target, value))
         control_layout.addWidget(spin)
         control_layout.addStretch()

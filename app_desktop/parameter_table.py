@@ -52,6 +52,10 @@ class ParameterTable(QWidget):
     def set_headers(self, headers: Sequence[str]) -> None:
         self.table_view.setHorizontalHeaderLabels(list(headers))
 
+    def setToolTip(self, text: str) -> None:  # noqa: N802 - Qt API override
+        super().setToolTip(text)
+        self.table_view.setToolTip(text)
+
     def rows(self) -> list[dict[str, str]]:
         rows: list[dict[str, str]] = []
         for row_index in range(self.table_view.rowCount()):
