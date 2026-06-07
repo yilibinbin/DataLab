@@ -17,6 +17,9 @@ from datalab_latex import (
     latex_tables_error_propagation as _tables_error,
     latex_tables_extrapolation as _tables_extrapolation,
 )
+from datalab_latex.latex_tables_extrapolation import (
+    DEFAULT_THREE_POINT_FORMULA as DEFAULT_THREE_POINT_FORMULA,
+)
 
 # Re-export everything (including historically-imported private helpers).
 #

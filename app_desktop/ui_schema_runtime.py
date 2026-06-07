@@ -4,7 +4,7 @@ from typing import Any
 
 from PySide6.QtWidgets import QWidget
 
-from app_desktop.ui_schema_binder import bind_field
+from app_desktop.ui_schema_binder import PRESERVE_TOOLTIP_PROPERTY, bind_field
 from shared.ui_schema import FormFieldSpec, LocalizedText
 
 
@@ -20,7 +20,11 @@ def register_schema_text_refresh(
             owner._register_text(widget, field.tooltip.zh, field.tooltip.en, "setToolTip")
         if field.placeholder.zh or field.placeholder.en:
             owner._register_text(widget, field.placeholder.zh, field.placeholder.en, "setPlaceholderText")
-    if help_button is not None and (field.tooltip.zh or field.tooltip.en):
+    if (
+        help_button is not None
+        and (field.tooltip.zh or field.tooltip.en)
+        and not bool(help_button.property(PRESERVE_TOOLTIP_PROPERTY))
+    ):
         owner._register_text(help_button, field.tooltip.zh, field.tooltip.en, "setToolTip")
 
 

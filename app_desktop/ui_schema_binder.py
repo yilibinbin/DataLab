@@ -12,6 +12,7 @@ SCHEMA_REQUIRED_PROPERTY = "datalab_schema_required"
 SCHEMA_CHOICES_PROPERTY = "datalab_schema_choices"
 TOOLTIP_ZH_PROPERTY = "datalab_tooltip_zh"
 TOOLTIP_EN_PROPERTY = "datalab_tooltip_en"
+PRESERVE_TOOLTIP_PROPERTY = "datalab_preserve_tooltip"
 
 
 def bind_field(
@@ -45,11 +46,12 @@ def bind_field(
     if help_button is not None:
         _set_property(help_button, SCHEMA_KEY_PROPERTY, field.key)
         _call_if_supported(help_button, "setText", "?")
-        if tooltip:
+        preserve_tooltip = bool(_property(help_button, PRESERVE_TOOLTIP_PROPERTY))
+        if tooltip and not preserve_tooltip:
             _call_if_supported(help_button, "setToolTip", tooltip)
             _set_localized_tooltip(help_button, field.tooltip.zh, field.tooltip.en)
         _call_if_supported(help_button, "setAccessibleName", f"{label_text} help")
-        if tooltip:
+        if tooltip and not preserve_tooltip:
             _call_if_supported(help_button, "setAccessibleDescription", tooltip)
 
 

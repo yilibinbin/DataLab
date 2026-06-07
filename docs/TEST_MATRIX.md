@@ -7,6 +7,20 @@ Run from `data_extrapolation_gui/DataLab`:
 - Syntax compile: `python -m compileall -q .`
 - Unit/integration tests: `pytest -q`
 
+## Release Gate
+
+A release cannot proceed while the GUI scan reports issues, screenshot capture fails, or any packaging resource check fails.
+
+Run the full local gate before packaging:
+
+```bash
+python -m compileall -q .
+QT_QPA_PLATFORM=offscreen pytest -q
+python tools/scan_desktop_gui_schema.py
+QT_QPA_PLATFORM=offscreen python tools/capture_desktop_gui_screens.py --out build/gui-screenshots --width 1440 --height 900
+pytest -q tests/test_packaging_resources.py tests/test_desktop_docs_resources.py
+```
+
 ### Installer Update Release Gate
 
 - macOS `.pkg` is signed and notarized before auto-installable release

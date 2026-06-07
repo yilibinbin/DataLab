@@ -2577,6 +2577,7 @@ def _make_formula_preview_button(
     if object_name:
         button.setObjectName(object_name)
     button.setFocusPolicy(Qt.NoFocus)
+    button.setProperty("datalab_preserve_tooltip", True)
     button.setToolTip(title)
     button.setAccessibleName(button.text())
     button.setAccessibleDescription(title)
