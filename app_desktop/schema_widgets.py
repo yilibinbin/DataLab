@@ -9,6 +9,7 @@ from app_desktop.ui_schema_runtime import (
     bind_schema_command_button,
     bind_schema_help_button,
 )
+from app_desktop.theme import CONTROL_SPACING
 from shared.ui_schema import FormFieldSpec, LocalizedText
 
 
@@ -30,7 +31,7 @@ def make_editor_header(
     header = QWidget()
     layout = QHBoxLayout(header)
     layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(6)
+    layout.setSpacing(CONTROL_SPACING)
 
     label = QLabel(field.label.for_lang(lang))
     header.schema_label = label  # type: ignore[attr-defined]

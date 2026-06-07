@@ -65,6 +65,14 @@ from app_desktop.parallel_preferences import (
 )
 from app_desktop.schema_widgets import make_editor_header
 from app_desktop.shell_layout import build_workbench_bar
+from app_desktop.theme import (
+    CONTROL_SPACING,
+    MIN_LEFT_PANEL_WIDTH,
+    SECTION_SPACING,
+    is_dark_theme,
+    result_style,
+    table_style,
+)
 from app_desktop.ui_schema_binder import bind_choices, bind_field
 from app_desktop.ui_schema_runtime import (
     bind_schema_command_button,
@@ -143,139 +151,17 @@ def _apply_equal_column_stretch(table: QTableWidget) -> None:
     # otherwise interact oddly with Stretch mode.
     header.setStretchLastSection(False)
 
-# --- Theme-aware stylesheets ---
-
-# Thin overlay scrollbar — fades to near-invisible when idle
-_SCROLLBAR_DARK = """
-QScrollBar:vertical, QScrollBar:horizontal {
-    background: transparent;
-    border: none;
-}
-QScrollBar:vertical { width: 6px; }
-QScrollBar:horizontal { height: 6px; }
-QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-    background: rgba(255, 255, 255, 0.12);
-    border-radius: 3px;
-    min-height: 24px; min-width: 24px;
-}
-QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-    background: rgba(255, 255, 255, 0.25);
-}
-QScrollBar::add-line, QScrollBar::sub-line,
-QScrollBar::add-page, QScrollBar::sub-page {
-    background: transparent;
-    height: 0px; width: 0px;
-}
-"""
-
-_SCROLLBAR_LIGHT = """
-QScrollBar:vertical, QScrollBar:horizontal {
-    background: transparent;
-    border: none;
-}
-QScrollBar:vertical { width: 6px; }
-QScrollBar:horizontal { height: 6px; }
-QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-    background: rgba(0, 0, 0, 0.12);
-    border-radius: 3px;
-    min-height: 24px; min-width: 24px;
-}
-QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-    background: rgba(0, 0, 0, 0.28);
-}
-QScrollBar::add-line, QScrollBar::sub-line,
-QScrollBar::add-page, QScrollBar::sub-page {
-    background: transparent;
-    height: 0px; width: 0px;
-}
-"""
-
-_TABLE_STYLE_DARK = """
-QTableWidget {
-    background-color: #2b2d30;
-    alternate-background-color: #313335;
-    gridline-color: #43454a;
-    color: #dfe1e5;
-    font-family: Menlo, Consolas, monospace;
-    font-size: 13px;
-    selection-background-color: #2d5a88;
-    selection-color: #ffffff;
-    border: none;
-}
-QTableWidget::item { padding: 4px 8px; border-bottom: 1px solid #3c3e42; }
-QTableWidget::item:focus { background-color: #37506b; }
-QHeaderView::section {
-    background-color: #3c3e42; color: #bfc1c5; font-weight: 600;
-    padding: 6px 8px; border: none;
-    border-right: 1px solid #4e5157; border-bottom: 2px solid #4e5157;
-}
-QHeaderView::section:hover { background-color: #454749; }
-QTableCornerButton::section {
-    background-color: #3c3e42; border: none;
-    border-right: 1px solid #4e5157; border-bottom: 2px solid #4e5157;
-}
-"""
-
-_TABLE_STYLE_LIGHT = """
-QTableWidget {
-    background-color: #ffffff;
-    alternate-background-color: #f5f6f8;
-    gridline-color: #e2e4e8;
-    color: #1f2328;
-    font-family: Menlo, Consolas, monospace;
-    font-size: 13px;
-    selection-background-color: #dbeafe;
-    selection-color: #1f2328;
-    border: none;
-}
-QTableWidget::item { padding: 4px 8px; border-bottom: 1px solid #e8eaed; }
-QTableWidget::item:focus { background-color: #e0ecff; }
-QHeaderView::section {
-    background-color: #f0f1f3; color: #57606a; font-weight: 600;
-    padding: 6px 8px; border: none;
-    border-right: 1px solid #e2e4e8; border-bottom: 2px solid #d1d5db;
-}
-QHeaderView::section:hover { background-color: #e8eaed; }
-QTableCornerButton::section {
-    background-color: #f0f1f3; border: none;
-    border-right: 1px solid #e2e4e8; border-bottom: 2px solid #d1d5db;
-}
-"""
-
-_RESULT_STYLE_DARK = """
-QTextBrowser {
-    background-color: #2b2d30; color: #dfe1e5;
-    font-size: 14px; border: none; padding: 10px 12px;
-    selection-background-color: #2d5a88; selection-color: #ffffff;
-}
-"""
-
-_RESULT_STYLE_LIGHT = """
-QTextBrowser {
-    background-color: #ffffff; color: #1f2328;
-    font-size: 14px; border: none; padding: 10px 12px;
-    selection-background-color: #dbeafe; selection-color: #1f2328;
-}
-"""
-
-
 def _is_dark_theme() -> bool:
     """Detect whether the current system appearance is dark."""
-    app = QApplication.instance()
-    if app is None:
-        return True
-    palette = app.palette()
-    return palette.window().color().lightness() < 128
+    return is_dark_theme()
 
 
 def _get_table_style() -> str:
-    dark = _is_dark_theme()
-    return (_TABLE_STYLE_DARK if dark else _TABLE_STYLE_LIGHT) + (_SCROLLBAR_DARK if dark else _SCROLLBAR_LIGHT)
+    return table_style()
 
 
 def _get_result_style() -> str:
-    dark = _is_dark_theme()
-    return (_RESULT_STYLE_DARK if dark else _RESULT_STYLE_LIGHT) + (_SCROLLBAR_DARK if dark else _SCROLLBAR_LIGHT)
+    return result_style()
 
 def build_menu(self):
     menubar = self.menuBar()
@@ -500,7 +386,7 @@ def _refresh_main_splitter_left_min_width(self) -> None:
         left_container.minimumSizeHint().width(),
         _visible_left_content_min_width(left_container),
     )
-    left_min_width = max(320, content_min_width) + viewport_overhead
+    left_min_width = max(MIN_LEFT_PANEL_WIDTH, content_min_width) + viewport_overhead
     self._main_splitter_left_min_width = left_min_width
     left_scroll.setMinimumWidth(left_min_width)
     splitter = getattr(self, "_main_splitter", None)
@@ -563,31 +449,31 @@ def build_left_panel(self):
     self.input_section.setObjectName("input_section")
     self.input_section_layout = QVBoxLayout(self.input_section)
     self.input_section_layout.setContentsMargins(0, 0, 0, 0)
-    self.input_section_layout.setSpacing(6)
+    self.input_section_layout.setSpacing(CONTROL_SPACING)
 
     self.mode_section = QWidget()
     self.mode_section.setObjectName("mode_section")
     self.mode_section_layout = QVBoxLayout(self.mode_section)
     self.mode_section_layout.setContentsMargins(0, 0, 0, 0)
-    self.mode_section_layout.setSpacing(6)
+    self.mode_section_layout.setSpacing(SECTION_SPACING)
 
     self.parameters_section = QWidget()
     self.parameters_section.setObjectName("parameters_section")
     self.parameters_section_layout = QVBoxLayout(self.parameters_section)
     self.parameters_section_layout.setContentsMargins(0, 0, 0, 0)
-    self.parameters_section_layout.setSpacing(6)
+    self.parameters_section_layout.setSpacing(SECTION_SPACING)
 
     self.output_setup_section = QWidget()
     self.output_setup_section.setObjectName("output_setup_section")
     self.output_setup_section_layout = QVBoxLayout(self.output_setup_section)
     self.output_setup_section_layout.setContentsMargins(0, 0, 0, 0)
-    self.output_setup_section_layout.setSpacing(6)
+    self.output_setup_section_layout.setSpacing(SECTION_SPACING)
 
     self.run_section = QWidget()
     self.run_section.setObjectName("run_section")
     self.run_section_layout = QVBoxLayout(self.run_section)
     self.run_section_layout.setContentsMargins(0, 0, 0, 0)
-    self.run_section_layout.setSpacing(6)
+    self.run_section_layout.setSpacing(CONTROL_SPACING)
 
     self.left_layout.addWidget(self.input_section)
     self.left_layout.addWidget(self.mode_section)

@@ -34,7 +34,7 @@ from app_desktop.update_controller import UpdateController
 from shared.computation_inputs import extract_expression_symbols
 from shared.update_checker import REPOSITORY_URL
 
-from PySide6.QtCore import Qt, QSize, QTimer, QLocale, Signal, QObject, QThread, QUrl
+from PySide6.QtCore import Qt, QSize, QTimer, QLocale, Signal, QObject, QThread, QUrl, QEvent
 from PySide6.QtGui import (
     QPixmap,
     QImage,
@@ -73,6 +73,7 @@ from PySide6.QtWidgets import (
     QTextBrowser,
     QListWidget,
     QListWidgetItem,
+    QTableWidget,
     QTableWidgetItem,
 )
 
@@ -1765,17 +1766,28 @@ class ExtrapolationWindow(
             entries.append((f"Padé({m}|{n})", spec, state))
         return entries
 
-    def _update_theme_from_palette(self, *args):
-        from app_desktop.panels import _is_dark_theme, _get_table_style, _get_result_style
-        new_dark = _is_dark_theme()
+    def changeEvent(self, event):  # noqa: N802 - Qt API
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.PaletteChange:
+            self._apply_desktop_theme()
+
+    def _apply_desktop_theme(self) -> None:
+        from app_desktop.theme import is_dark_theme, result_style, table_style
+
+        new_dark = is_dark_theme()
         if new_dark != self.pdf_dark_mode:
             self.pdf_dark_mode = new_dark
             self._display_pdf_images()
-        # Update table and result browser styles to match new theme
-        if hasattr(self, "manual_table"):
-            self.manual_table.setStyleSheet(_get_table_style())
+        table_qss = table_style(dark=new_dark)
+        for table in self.findChildren(QTableWidget):
+            table.setStyleSheet(table_qss)
         if hasattr(self, "result_edit"):
-            self.result_edit.setStyleSheet(_get_result_style())
+            self.result_edit.setStyleSheet(result_style(dark=new_dark))
+        if hasattr(self, "_latex_highlighter"):
+            self._latex_highlighter.refresh_theme()
+
+    def _update_theme_from_palette(self, *args):
+        self._apply_desktop_theme()
 
     def _on_mode_change(self):
         mode = self.mode_combo.currentData()

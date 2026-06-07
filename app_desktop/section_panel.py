@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app_desktop.theme import CONTROL_SPACING, PANEL_MARGIN
+
 
 class SectionPanel(QWidget):
     def __init__(
@@ -46,7 +48,7 @@ class SectionPanel(QWidget):
 
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(6)
+        header_layout.setSpacing(CONTROL_SPACING)
         header_layout.addWidget(self._title_label, 1)
         header_layout.addWidget(self._help_button, 0)
         if self._collapse_toggle is not None:
@@ -57,11 +59,11 @@ class SectionPanel(QWidget):
         self._body_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self._body_layout = QVBoxLayout(self._body_widget)
         self._body_layout.setContentsMargins(0, 0, 0, 0)
-        self._body_layout.setSpacing(6)
+        self._body_layout.setSpacing(CONTROL_SPACING)
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(8, 6, 8, 8)
-        main_layout.setSpacing(6)
+        main_layout.setContentsMargins(PANEL_MARGIN, CONTROL_SPACING, PANEL_MARGIN, PANEL_MARGIN)
+        main_layout.setSpacing(CONTROL_SPACING)
         main_layout.addLayout(header_layout)
         main_layout.addWidget(self._body_widget)
 

@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app_desktop.theme import SUPPORTED_MIN_WINDOW_WIDTH
+
 
 @dataclass(frozen=True)
 class ScreenScenario:
@@ -41,7 +43,7 @@ class ScreenScenario:
 
 MODES = ("extrapolation", "error", "fitting", "root_solving", "statistics")
 ROOT_SOLVING_SUBMODES = ("scalar", "scan_multiple", "polynomial", "system")
-SCAN_WIDTHS = (1280, 1440, 1680)
+SCAN_WIDTHS = (SUPPORTED_MIN_WINDOW_WIDTH, 1440, 1680)
 RESULT_TABS = ("numeric", "image", "log", "latex", "pdf")
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg=="
