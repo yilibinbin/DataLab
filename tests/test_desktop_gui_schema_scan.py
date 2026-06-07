@@ -20,6 +20,12 @@ from tools.scan_desktop_gui_schema import _combo_index_for_data
 from tools.scan_desktop_gui_schema import _force_smallest_left_splitter
 
 
+def _issue_message(issue: object) -> str:
+    if isinstance(issue, dict):
+        return str(issue.get("message", ""))
+    return str(issue)
+
+
 @pytest.fixture
 def window(qtbot: Any) -> Any:
     QApplication.instance() or QApplication([])
@@ -36,6 +42,7 @@ def test_gui_schema_scan_reports_no_issues(window: Any) -> None:
     report = scan_window(window)
 
     assert report["issues"] == []
+    assert report["structured_issues"] == []
     assert report["checks"]["languages"] == ["zh", "en"]
     assert report["checks"]["root_plot_display"] is True
     assert report["checks"]["left_panel_no_horizontal_scrollbar"] is True
@@ -59,7 +66,9 @@ def test_gui_schema_scan_reports_missing_help_as_issue(window: Any) -> None:
 
     report = scan_window(window, refresh_language=False)
 
-    assert any("root equations help tooltip missing" in issue for issue in report["issues"])
+    assert all(isinstance(issue, str) for issue in report["issues"])
+    assert any("root equations help tooltip missing" in _issue_message(issue) for issue in report["issues"])
+    assert any(issue["kind"] == "missing_tooltip" for issue in report["structured_issues"])
 
 
 def test_gui_schema_scan_reports_broken_root_plot_display(window: Any, monkeypatch: Any) -> None:
@@ -72,7 +81,9 @@ def test_gui_schema_scan_reports_broken_root_plot_display(window: Any, monkeypat
     report = scan_window(window)
 
     assert report["checks"]["root_plot_display"] is False
-    assert any("root plot display failed" in issue for issue in report["issues"])
+    assert all(isinstance(issue, str) for issue in report["issues"])
+    assert any("root plot display failed" in _issue_message(issue) for issue in report["issues"])
+    assert any(issue["kind"] == "root_plot_display" for issue in report["structured_issues"])
 
 
 def test_root_scan_plot_layout_keeps_left_panel_without_horizontal_scrollbar(window: Any) -> None:
