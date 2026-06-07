@@ -62,6 +62,7 @@ from app_desktop.parallel_preferences import (
     apply_parallel_config_to_widgets,
     save_current_parallel_config,
 )
+from app_desktop.shell_layout import build_workbench_bar
 from app_desktop.ui_schema_binder import bind_choices, bind_field
 from app_desktop.ui_schema_runtime import (
     bind_schema_command_button,
@@ -355,6 +356,8 @@ def build_ui(self):
     central = QWidget(self)
     self.setCentralWidget(central)
     layout = QVBoxLayout(central)
+    self.workbench_bar = build_workbench_bar(self)
+    layout.addWidget(self.workbench_bar)
     splitter = QSplitter(Qt.Horizontal, self)
     splitter.setHandleWidth(8)
     splitter.setChildrenCollapsible(False)
@@ -531,6 +534,42 @@ def _table_required_min_width(table: QTableWidget) -> int:
 
 
 def build_left_panel(self):
+    self.input_section = QWidget()
+    self.input_section.setObjectName("input_section")
+    self.input_section_layout = QVBoxLayout(self.input_section)
+    self.input_section_layout.setContentsMargins(0, 0, 0, 0)
+    self.input_section_layout.setSpacing(6)
+
+    self.mode_section = QWidget()
+    self.mode_section.setObjectName("mode_section")
+    self.mode_section_layout = QVBoxLayout(self.mode_section)
+    self.mode_section_layout.setContentsMargins(0, 0, 0, 0)
+    self.mode_section_layout.setSpacing(6)
+
+    self.parameters_section = QWidget()
+    self.parameters_section.setObjectName("parameters_section")
+    self.parameters_section_layout = QVBoxLayout(self.parameters_section)
+    self.parameters_section_layout.setContentsMargins(0, 0, 0, 0)
+    self.parameters_section_layout.setSpacing(6)
+
+    self.output_setup_section = QWidget()
+    self.output_setup_section.setObjectName("output_setup_section")
+    self.output_setup_section_layout = QVBoxLayout(self.output_setup_section)
+    self.output_setup_section_layout.setContentsMargins(0, 0, 0, 0)
+    self.output_setup_section_layout.setSpacing(6)
+
+    self.run_section = QWidget()
+    self.run_section.setObjectName("run_section")
+    self.run_section_layout = QVBoxLayout(self.run_section)
+    self.run_section_layout.setContentsMargins(0, 0, 0, 0)
+    self.run_section_layout.setSpacing(6)
+
+    self.left_layout.addWidget(self.input_section)
+    self.left_layout.addWidget(self.mode_section)
+    self.left_layout.addWidget(self.parameters_section)
+    self.left_layout.addWidget(self.output_setup_section)
+    self.left_layout.addWidget(self.run_section)
+
     # Mode selection
     self.mode_box = QGroupBox("计算模式")
     self._register_title(self.mode_box, "计算模式", "Mode")
@@ -548,7 +587,7 @@ def build_left_panel(self):
     self._register_combo(self.mode_combo, mode_items)
     self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
     mode_layout.addWidget(self.mode_combo)
-    self.left_layout.addWidget(self.mode_box)
+    self.mode_section_layout.addWidget(self.mode_box)
 
     # Data file
     self.file_box = QGroupBox("")
@@ -577,8 +616,8 @@ def build_left_panel(self):
     source_row.setSpacing(6)
     source_row.addWidget(self.use_file_checkbox)
     source_row.addStretch()
-    self.left_layout.addLayout(source_row)
-    self.left_layout.addWidget(self.file_box)
+    self.input_section_layout.addLayout(source_row)
+    self.input_section_layout.addWidget(self.file_box)
     self.file_box.hide()
 
     # Manual data — table editor + text fallback
@@ -640,7 +679,7 @@ def build_left_panel(self):
 
     self._data_stack.setCurrentIndex(_STACK_PAGE_TABLE)  # table view by default
     manual_layout.addWidget(self._data_stack)
-    self.left_layout.addWidget(self.manual_box)
+    self.input_section_layout.addWidget(self.manual_box)
 
     # Extrapolation settings
     self.extrap_box = QGroupBox("外推设置")
@@ -874,7 +913,7 @@ def build_left_panel(self):
         lbl_uncert=lbl_uncert,
         combo_items=combo_items,
     )
-    self.left_layout.addWidget(self.extrap_box)
+    self.parameters_section_layout.addWidget(self.extrap_box)
 
     # Error propagation settings
     self.error_box = QGroupBox("误差传递设置")
@@ -1032,7 +1071,7 @@ def build_left_panel(self):
         lbl_mc_seed=lbl_mc_seed,
     )
 
-    self.left_layout.addWidget(self.error_box)
+    self.parameters_section_layout.addWidget(self.error_box)
     self._on_constants_source_toggle(self.use_constants_file_checkbox.isChecked())
     self._update_error_propagation_controls()
 
@@ -1082,7 +1121,7 @@ def build_left_panel(self):
         lbl_stats_sample=lbl_stats_sample,
         stats_items=stats_items,
     )
-    self.left_layout.addWidget(self.stats_box)
+    self.parameters_section_layout.addWidget(self.stats_box)
     self.stats_box.hide()
     self.stats_mode_combo.currentIndexChanged.connect(self._on_stats_mode_change)
     self._on_stats_mode_change()
@@ -1470,7 +1509,7 @@ def build_left_panel(self):
     weight_row.addWidget(self.fit_weighted_checkbox)
     fit_layout.addLayout(weight_row)
 
-    self.left_layout.addWidget(self.fit_box)
+    self.parameters_section_layout.addWidget(self.fit_box)
     self.fit_box.hide()
     self.inverse_min_spin.valueChanged.connect(self._on_model_settings_changed)
     self.inverse_max_spin.valueChanged.connect(self._on_model_settings_changed)
@@ -1629,7 +1668,7 @@ def build_left_panel(self):
     root_layout.addWidget(self.root_uncertainty_group)
     _on_root_uncertainty_method_changed(self)
 
-    self.left_layout.addWidget(self.root_box)
+    self.parameters_section_layout.addWidget(self.root_box)
     self.root_box.hide()
 
     # Options
@@ -1839,12 +1878,12 @@ def build_left_panel(self):
     # (window_latex_pdf_mixin.compile_latex_to_pdf) keep working
     # unchanged — they reference ``self.latex_engine_combo``.
 
-    self.left_layout.addWidget(options_box)
+    self.output_setup_section_layout.addWidget(options_box)
 
     self.run_button = QPushButton("开始执行")
     self._register_text(self.run_button, "开始执行", "Run")
-    self.run_button.clicked.connect(self.run_calculation)
-    self.left_layout.addWidget(self.run_button)
+    self.run_button.clicked.connect(lambda _checked=False: self.run_calculation())
+    self.run_section_layout.addWidget(self.run_button)
     self._update_model_controls()
 
 def build_right_panel(self, layout: QVBoxLayout):

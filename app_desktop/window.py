@@ -545,6 +545,32 @@ class ExtrapolationWindow(
         from . import panels as _panels
         _panels._refresh_main_splitter_left_min_width(self)
 
+    def _refresh_workbench_status(self) -> None:
+        from .shell_layout import update_workbench_status
+
+        update_workbench_status(self)
+
+    def _apply_language(self, lang: str):
+        WindowI18nMixin._apply_language(self, lang)
+        try:
+            self._refresh_workbench_status()
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "Failed to refresh workbench status i18n"
+            )
+
+    def _set_button_to_stop_mode(self):
+        WindowExtrapolationMixin._set_button_to_stop_mode(self)
+        from .shell_layout import set_workbench_job_status
+
+        set_workbench_job_status(self, running=True)
+
+    def _set_button_to_run_mode(self):
+        WindowExtrapolationMixin._set_button_to_run_mode(self)
+        self._refresh_workbench_status()
+
     def _workspace_title(self) -> str:
         if self._workspace_path is None:
             if self._workspace_template_source is not None:
@@ -555,6 +581,14 @@ class ExtrapolationWindow(
     def _update_workspace_window_title(self) -> None:
         suffix = " *" if self._workspace_dirty else ""
         self.setWindowTitle(f"DataLab - {self._workspace_title()}{suffix}")
+        try:
+            self._refresh_workbench_status()
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "Workbench status refresh skipped", exc_info=True
+            )
 
     def _mark_workspace_dirty(self, *_args) -> None:
         if getattr(self, "_workspace_restoring", False):
