@@ -63,6 +63,7 @@ from app_desktop.parallel_preferences import (
     apply_parallel_config_to_widgets,
     save_current_parallel_config,
 )
+from app_desktop.schema_widgets import make_editor_header
 from app_desktop.shell_layout import build_workbench_bar
 from app_desktop.ui_schema_binder import bind_choices, bind_field
 from app_desktop.ui_schema_runtime import (
@@ -727,18 +728,28 @@ def build_left_panel(self):
 
     self.custom_formula_widget = QWidget()
     custom_layout = QVBoxLayout(self.custom_formula_widget)
-    lbl_custom = QLabel("自定义公式：")
-    self._register_text(lbl_custom, "自定义公式：", "Custom formula:")
-    custom_title_row = QHBoxLayout()
-    custom_title_row.addWidget(lbl_custom)
-    custom_title_row.addStretch()
     self.custom_formula_preview_button = _make_formula_preview_button(
         self,
         self.custom_formula_edit if hasattr(self, "custom_formula_edit") else None,
         title="Preview formula",
     )
-    custom_title_row.addWidget(self.custom_formula_preview_button)
-    custom_layout.addLayout(custom_title_row)
+    custom_header_field = FormFieldSpec(
+        key="extrapolation.custom.formula",
+        widget_kind="textarea",
+        label=LocalizedText("自定义公式：", "Custom formula:"),
+        tooltip=LocalizedText(
+            "输入自定义三点外推公式。可使用 A/B/C、列名或 x1/x2/x3，并支持数学函数。",
+            "Enter a custom three-point extrapolation formula. Use A/B/C, column names, or x1/x2/x3; math functions are supported.",
+        ),
+        required=True,
+    )
+    custom_title_header = make_editor_header(
+        self,
+        custom_header_field,
+        preview_button=self.custom_formula_preview_button,
+    )
+    lbl_custom = custom_title_header.schema_label
+    custom_layout.addWidget(custom_title_header)
     self.custom_formula_edit = QPlainTextEdit("(C - B)^2/(B - A) + C")
     self.custom_formula_edit.setPlaceholderText(
         self._tr(
@@ -927,18 +938,28 @@ def build_left_panel(self):
     self.error_box = QGroupBox("误差传递设置")
     self._register_title(self.error_box, "误差传递设置", "Error propagation")
     error_layout = QVBoxLayout(self.error_box)
-    error_formula_row = QHBoxLayout()
-    lbl_error_formula = QLabel("公式：")
-    self._register_text(lbl_error_formula, "公式：", "Formula:")
-    error_formula_row.addWidget(lbl_error_formula)
-    error_formula_row.addStretch()
     self.error_formula_preview_button = _make_formula_preview_button(
         self,
         None,
         title="Preview formula",
     )
-    error_formula_row.addWidget(self.error_formula_preview_button)
-    error_layout.addLayout(error_formula_row)
+    error_header_field = FormFieldSpec(
+        key="error.formula",
+        widget_kind="textarea",
+        label=LocalizedText("公式：", "Formula:"),
+        tooltip=LocalizedText(
+            "输入误差传递公式。留空不会使用占位示例。",
+            "Enter the error propagation formula. Leaving it blank does not use placeholder examples.",
+        ),
+        required=True,
+    )
+    error_formula_header = make_editor_header(
+        self,
+        error_header_field,
+        preview_button=self.error_formula_preview_button,
+    )
+    lbl_error_formula = error_formula_header.schema_label
+    error_layout.addWidget(error_formula_header)
     self.formula_edit = QPlainTextEdit()
     self.formula_edit.setPlaceholderText(
         self._tr("公式（使用列名或 x1, x2 …）", "Formula (use column names or x1, x2 …)")
@@ -994,6 +1015,7 @@ def build_left_panel(self):
 
     self.error_constants_editor = ConstantsEditor(min_rows=4, checked=False)
     self._register_text(self.error_constants_editor.checkbox, "启用常数设置", "Enable constants")
+    _register_constant_headers(self, self.error_constants_editor.set_table_headers)
     _apply_equal_column_stretch(self.error_constants_editor.table_view)
     self.error_constants_editor.table_view.setStyleSheet(_get_table_style())
     self.error_constants_editor.table_view.setMinimumHeight(160)
@@ -1268,14 +1290,24 @@ def build_left_panel(self):
     fit_layout.addWidget(self.poly_degree_widget)
     self.poly_degree_widget.hide()
 
-    fit_expr_title_row = QHBoxLayout()
-    lbl_fit_expr = QLabel("模型表达式：")
-    self._register_text(lbl_fit_expr, "模型表达式：", "Model expression:")
-    fit_expr_title_row.addWidget(lbl_fit_expr)
-    fit_expr_title_row.addStretch()
     self.fit_formula_preview_button = _make_formula_preview_button(self, None, lhs="y", title="Preview formula")
-    fit_expr_title_row.addWidget(self.fit_formula_preview_button)
-    fit_layout.addLayout(fit_expr_title_row)
+    fit_expr_header_field = FormFieldSpec(
+        key="fitting.custom.expression",
+        widget_kind="textarea",
+        label=LocalizedText("模型表达式：", "Model expression:"),
+        tooltip=LocalizedText(
+            "输入自定义拟合表达式。留空不会使用示例。",
+            "Enter the custom fitting expression. Leaving it blank does not use the example.",
+        ),
+        required=True,
+    )
+    fit_expr_header = make_editor_header(
+        self,
+        fit_expr_header_field,
+        preview_button=self.fit_formula_preview_button,
+    )
+    lbl_fit_expr = fit_expr_header.schema_label
+    fit_layout.addWidget(fit_expr_header)
     self.fit_expr_edit = QPlainTextEdit("")
     self.fit_expr_edit.setPlaceholderText("自定义模型表达式，例如 A*x**(-p) + C / Custom model expression")
     fit_layout.addWidget(self.fit_expr_edit)
@@ -1296,6 +1328,7 @@ def build_left_panel(self):
     fit_layout.addLayout(fit_expr_hint_row)
     self.custom_constants_editor = ConstantsEditor(min_rows=3, checked=False, numeric_mode="mpmath")
     self._register_text(self.custom_constants_editor.checkbox, "启用常数设置", "Enable constants")
+    _register_constant_headers(self, self.custom_constants_editor.set_table_headers)
     _apply_equal_column_stretch(self.custom_constants_editor.table_view)
     self.custom_constants_editor.table_view.setStyleSheet(_get_table_style())
     self.custom_constants_editor.table_view.setMinimumHeight(120)
@@ -1325,6 +1358,12 @@ def build_left_panel(self):
     self._register_text(self.custom_constraints_checkbox, "启用参数约束", "Enable parameter constraints")
     fit_layout.addWidget(self.custom_constraints_checkbox)
     self.custom_params_table = ParameterTable()
+    _register_table_headers(
+        self,
+        self.custom_params_table.set_headers,
+        ("名称", "初值", "固定", "下界", "上界"),
+        ("Name", "Init", "Fixed", "Min", "Max"),
+    )
     self.custom_params_table.table_view.setMinimumHeight(150)
     self.custom_params_table.table_view.setStyleSheet(_get_table_style())
     _apply_equal_column_stretch(self.custom_params_table.table_view)
@@ -1339,11 +1378,6 @@ def build_left_panel(self):
     self.implicit_equation_edit = QPlainTextEdit("")
     self.implicit_equation_edit.setMinimumHeight(84)
     self.implicit_equation_edit.setPlaceholderText("示例：a + b*Cos[u] + c*x / Example: a + b*Cos[u] + c*x")
-    lbl_implicit_eq = QLabel("自洽方程：")
-    self._register_text(lbl_implicit_eq, "自洽方程：", "Self-consistent equation:")
-    implicit_equation_title_row = QHBoxLayout()
-    implicit_equation_title_row.addWidget(lbl_implicit_eq)
-    implicit_equation_title_row.addStretch()
     self.implicit_equation_preview_button = _make_formula_preview_button(
         self,
         self.implicit_equation_edit,
@@ -1352,18 +1386,28 @@ def build_left_panel(self):
         object_name="implicit_equation_preview_button",
         tooltip_zh="预览方程",
     )
-    implicit_equation_title_row.addWidget(self.implicit_equation_preview_button)
-    implicit_layout.addLayout(implicit_equation_title_row)
+    implicit_equation_header_field = FormFieldSpec(
+        key="fitting.implicit.equation",
+        widget_kind="textarea",
+        label=LocalizedText("自洽方程：", "Self-consistent equation:"),
+        tooltip=LocalizedText(
+            "输入自洽方程。留空不会使用示例。",
+            "Enter the self-consistent equation. Leaving it blank does not use the example.",
+        ),
+        required=True,
+    )
+    implicit_equation_header = make_editor_header(
+        self,
+        implicit_equation_header_field,
+        preview_button=self.implicit_equation_preview_button,
+    )
+    lbl_implicit_eq = implicit_equation_header.schema_label
+    implicit_layout.addWidget(implicit_equation_header)
     implicit_layout.addWidget(self.implicit_equation_edit)
 
     self.implicit_output_edit = QPlainTextEdit("")
     self.implicit_output_edit.setMinimumHeight(84)
     self.implicit_output_edit.setPlaceholderText("示例：u / Example: u")
-    lbl_implicit_output = QLabel("输出表达式：")
-    self._register_text(lbl_implicit_output, "输出表达式：", "Output expression:")
-    implicit_output_title_row = QHBoxLayout()
-    implicit_output_title_row.addWidget(lbl_implicit_output)
-    implicit_output_title_row.addStretch()
     self.implicit_output_preview_button = _make_formula_preview_button(
         self,
         self.implicit_output_edit,
@@ -1372,8 +1416,23 @@ def build_left_panel(self):
         object_name="implicit_output_preview_button",
         tooltip_zh="预览输出",
     )
-    implicit_output_title_row.addWidget(self.implicit_output_preview_button)
-    implicit_layout.addLayout(implicit_output_title_row)
+    implicit_output_header_field = FormFieldSpec(
+        key="fitting.implicit.output_expression",
+        widget_kind="textarea",
+        label=LocalizedText("输出表达式：", "Output expression:"),
+        tooltip=LocalizedText(
+            "输入由隐式变量和输入变量计算目标列的输出表达式。",
+            "Enter the output expression that maps the implicit and input variables to the target column.",
+        ),
+        required=True,
+    )
+    implicit_output_header = make_editor_header(
+        self,
+        implicit_output_header_field,
+        preview_button=self.implicit_output_preview_button,
+    )
+    lbl_implicit_output = implicit_output_header.schema_label
+    implicit_layout.addWidget(implicit_output_header)
     implicit_layout.addWidget(self.implicit_output_edit)
 
     implicit_param_header = QHBoxLayout()
@@ -1396,6 +1455,12 @@ def build_left_panel(self):
     implicit_layout.addLayout(implicit_param_header)
 
     self.implicit_params_table = ParameterTable()
+    _register_table_headers(
+        self,
+        self.implicit_params_table.set_headers,
+        ("名称", "初值", "固定", "下界", "上界"),
+        ("Name", "Init", "Fixed", "Min", "Max"),
+    )
     self.implicit_params_table.table_view.setMinimumHeight(150)
     self.implicit_params_table.table_view.setStyleSheet(_get_table_style())
     _apply_equal_column_stretch(self.implicit_params_table.table_view)
@@ -1409,6 +1474,7 @@ def build_left_panel(self):
 
     self.implicit_constants_editor = ConstantsEditor(min_rows=3, checked=True, numeric_mode="mpmath")
     self._register_text(self.implicit_constants_editor.checkbox, "启用常数设置", "Enable constants")
+    _register_constant_headers(self, self.implicit_constants_editor.set_table_headers)
     _apply_equal_column_stretch(self.implicit_constants_editor.table_view)
     self.implicit_constants_editor.table_view.setStyleSheet(_get_table_style())
     self.implicit_constants_editor.table_view.setMinimumHeight(120)
@@ -1527,13 +1593,7 @@ def build_left_panel(self):
     self._register_title(self.root_box, "求根", "Root solving")
     root_layout = QVBoxLayout(self.root_box)
 
-    root_equation_title_row = QHBoxLayout()
-    lbl_root_equations = QLabel("方程：")
-    self._register_text(lbl_root_equations, "方程：", "Equations:")
-    root_equation_title_row.addWidget(lbl_root_equations)
     self.root_equations_help_button = _make_small_help_button()
-    root_equation_title_row.addWidget(self.root_equations_help_button)
-    root_equation_title_row.addStretch()
     self.root_formula_preview_button = _make_formula_preview_button(
         self,
         None,
@@ -1542,8 +1602,24 @@ def build_left_panel(self):
         tooltip_zh="预览方程",
     )
     self.root_formula_preview_button.clicked.connect(lambda: _open_root_formula_preview(self))
-    root_equation_title_row.addWidget(self.root_formula_preview_button)
-    root_layout.addLayout(root_equation_title_row)
+    root_equation_header_field = FormFieldSpec(
+        key="root.equations",
+        widget_kind="textarea",
+        label=LocalizedText("方程：", "Equations:"),
+        tooltip=LocalizedText(
+            "输入要求解的方程。留空不会使用示例；示例只显示在背景提示中。",
+            "Enter equations to solve. Leaving it blank does not use the example; the example is only placeholder text.",
+        ),
+        required=True,
+    )
+    root_equation_header = make_editor_header(
+        self,
+        root_equation_header_field,
+        preview_button=self.root_formula_preview_button,
+        help_button=self.root_equations_help_button,
+    )
+    lbl_root_equations = root_equation_header.schema_label
+    root_layout.addWidget(root_equation_header)
 
     self.root_equations_edit = QPlainTextEdit()
     self.root_equations_edit.setMinimumHeight(96)
@@ -1602,6 +1678,12 @@ def build_left_panel(self):
         headers=("名称", "初始值", "下界", "上界"),
         min_rows=2,
     )
+    _register_table_headers(
+        self,
+        self.root_unknowns_table.set_headers,
+        ("名称", "初始值", "下界", "上界"),
+        ("Name", "Initial", "Lower", "Upper"),
+    )
     self.root_unknowns_table.table_view.setMinimumHeight(140)
     self.root_unknowns_table.table_view.setStyleSheet(_get_table_style())
     _apply_equal_column_stretch(self.root_unknowns_table.table_view)
@@ -1609,6 +1691,7 @@ def build_left_panel(self):
 
     self.root_constants_editor = ConstantsEditor(min_rows=3, checked=False, numeric_mode="uncertainty")
     self._register_text(self.root_constants_editor.checkbox, "启用常数设置", "Enable constants")
+    _register_constant_headers(self, self.root_constants_editor.set_table_headers)
     _apply_equal_column_stretch(self.root_constants_editor.table_view)
     self.root_constants_editor.table_view.setStyleSheet(_get_table_style())
     self.root_constants_editor.table_view.setMinimumHeight(120)
@@ -2447,11 +2530,43 @@ def _make_formula_preview_button(
         button.setObjectName(object_name)
     button.setFocusPolicy(Qt.NoFocus)
     button.setToolTip(title)
+    button.setAccessibleName(button.text())
+    button.setAccessibleDescription(title)
     self._register_text(button, "预览", "Preview")
     self._register_text(button, tooltip_zh, title, "setToolTip")
+    self._register_text(button, "预览", "Preview", "setAccessibleName")
+    self._register_text(button, tooltip_zh, title, "setAccessibleDescription")
     if edit_widget is not None:
         button.clicked.connect(lambda: _open_formula_preview(self, edit_widget, lhs=lhs))
     return button
+
+
+class _HeaderRegistration:
+    def __init__(self, setter):
+        self._setter = setter
+
+    def set_headers(self, headers) -> None:
+        self._setter(headers)
+
+    def set_table_headers(self, headers) -> None:
+        self._setter(*headers)
+
+
+def _register_table_headers(self, setter, zh_headers: tuple[str, ...], en_headers: tuple[str, ...]) -> None:
+    registration = _HeaderRegistration(setter)
+    registration.set_headers(zh_headers if not bool(getattr(self, "_is_en", lambda: False)()) else en_headers)
+    self._register_text(registration, zh_headers, en_headers, "set_headers")
+
+
+def _register_constant_headers(
+    self,
+    setter,
+    zh_headers: tuple[str, str] = ("名称", "值"),
+    en_headers: tuple[str, str] = ("Name", "Value"),
+) -> None:
+    registration = _HeaderRegistration(setter)
+    registration.set_table_headers(zh_headers if not bool(getattr(self, "_is_en", lambda: False)()) else en_headers)
+    self._register_text(registration, zh_headers, en_headers, "set_table_headers")
 
 
 def _make_small_help_button() -> QPushButton:
@@ -2460,6 +2575,12 @@ def _make_small_help_button() -> QPushButton:
     button.setFocusPolicy(Qt.NoFocus)
     button.setFixedWidth(24)
     return button
+
+
+def _register_schema_label_refresh(self, label: QLabel, field: FormFieldSpec) -> None:
+    self._register_text(label, field.label.zh, field.label.en, "setText")
+    if field.tooltip.zh or field.tooltip.en:
+        self._register_text(label, field.tooltip.zh, field.tooltip.en, "setToolTip")
 
 
 def _bind_extrapolation_schema_fields(
@@ -2669,6 +2790,7 @@ def _bind_extrapolation_schema_fields(
         custom_formula_field,
         widget=self.custom_formula_edit,
     )
+    _register_schema_label_refresh(self, lbl_custom, custom_formula_field)
     bind_schema_command_button(
         self,
         self.custom_formula_preview_button,
@@ -2963,6 +3085,13 @@ def _bind_fitting_schema_fields(
         help_button=self.fit_formula_preview_button,
         lang=lang,
     )
+    register_schema_text_refresh(
+        self,
+        custom_expression_field,
+        widget=self.fit_expr_edit,
+        help_button=self.fit_formula_preview_button,
+    )
+    _register_schema_label_refresh(self, lbl_fit_expr, custom_expression_field)
     bind_field(field=custom_constants_field, widget=self.custom_constants_editor, lang=lang)
     bind_field(field=custom_params_field, label=lbl_custom_params, widget=self.custom_params_table, lang=lang)
     bind_field(
@@ -2972,6 +3101,13 @@ def _bind_fitting_schema_fields(
         help_button=self.implicit_equation_preview_button,
         lang=lang,
     )
+    register_schema_text_refresh(
+        self,
+        implicit_equation_field,
+        widget=self.implicit_equation_edit,
+        help_button=self.implicit_equation_preview_button,
+    )
+    _register_schema_label_refresh(self, lbl_implicit_eq, implicit_equation_field)
     bind_field(
         field=implicit_output_field,
         label=lbl_implicit_output,
@@ -2979,6 +3115,13 @@ def _bind_fitting_schema_fields(
         help_button=self.implicit_output_preview_button,
         lang=lang,
     )
+    register_schema_text_refresh(
+        self,
+        implicit_output_field,
+        widget=self.implicit_output_edit,
+        help_button=self.implicit_output_preview_button,
+    )
+    _register_schema_label_refresh(self, lbl_implicit_output, implicit_output_field)
     bind_field(field=implicit_variable_field, label=lbl_implicit_var, widget=self.implicit_variable_edit, lang=lang)
     bind_field(field=implicit_initial_field, label=lbl_implicit_initial, widget=self.implicit_initial_edit, lang=lang)
     bind_field(field=implicit_tolerance_field, label=lbl_implicit_tol, widget=self.implicit_tolerance_edit, lang=lang)
@@ -3603,7 +3746,13 @@ def _bind_error_schema_fields(
         help_button=self.error_formula_preview_button,
         lang=lang,
     )
-    register_schema_text_refresh(self, formula_field, widget=self.formula_edit, help_button=self.error_formula_preview_button)
+    register_schema_text_refresh(
+        self,
+        formula_field,
+        widget=self.formula_edit,
+        help_button=self.error_formula_preview_button,
+    )
+    _register_schema_label_refresh(self, lbl_error_formula, formula_field)
     bind_field(field=function_help_field, widget=self.func_help_btn, lang=lang)
     register_schema_text_refresh(self, function_help_field, widget=self.func_help_btn)
     bind_field(field=constants_use_file_field, widget=self.use_constants_file_checkbox, lang=lang)
@@ -3698,6 +3847,13 @@ def _bind_root_schema_fields(
         help_button=self.root_equations_help_button,
         lang=lang,
     )
+    register_schema_text_refresh(
+        self,
+        root_equations_field,
+        widget=self.root_equations_edit,
+        help_button=self.root_equations_help_button,
+    )
+    _register_schema_label_refresh(self, lbl_root_equations, root_equations_field)
     bind_field(
         field=root_mode_field,
         label=lbl_root_mode,

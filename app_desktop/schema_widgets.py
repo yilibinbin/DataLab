@@ -2,13 +2,56 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from app_desktop.ui_schema_runtime import (
     bind_schema_command_button,
     bind_schema_help_button,
 )
 from shared.ui_schema import FormFieldSpec, LocalizedText
+
+
+def make_editor_header(
+    owner: Any,
+    field: FormFieldSpec,
+    *,
+    preview_button: QPushButton | None = None,
+    function_button: QPushButton | None = None,
+    help_button: QPushButton | None = None,
+) -> QWidget:
+    """Build a compact schema-labelled editor header row.
+
+    The returned widget exposes its label as ``schema_label`` so callers can
+    pass it to existing schema binders without changing public widget APIs.
+    """
+
+    lang = "en" if bool(getattr(owner, "_is_en", lambda: False)()) else "zh"
+    header = QWidget()
+    layout = QHBoxLayout(header)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(6)
+
+    label = QLabel(field.label.for_lang(lang))
+    header.schema_label = label  # type: ignore[attr-defined]
+    layout.addWidget(label)
+
+    for button in (help_button,):
+        if button is not None:
+            layout.addWidget(button)
+
+    layout.addStretch()
+    for button in (preview_button, function_button):
+        if button is None:
+            continue
+        if not button.accessibleName():
+            button.setAccessibleName(button.text())
+        if button.toolTip() and not button.accessibleDescription():
+            button.setAccessibleDescription(button.toolTip())
+        button.setFocusPolicy(Qt.NoFocus)
+        layout.addWidget(button)
+
+    return header
 
 
 def make_schema_help_button(

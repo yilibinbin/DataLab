@@ -49,6 +49,9 @@ class ParameterTable(QWidget):
     def constraints_enabled(self) -> bool:
         return self._constraints_enabled
 
+    def set_headers(self, headers: Sequence[str]) -> None:
+        self.table_view.setHorizontalHeaderLabels(list(headers))
+
     def rows(self) -> list[dict[str, str]]:
         rows: list[dict[str, str]] = []
         for row_index in range(self.table_view.rowCount()):
