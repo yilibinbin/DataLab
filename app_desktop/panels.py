@@ -53,6 +53,7 @@ from formula_help import (
     get_method_parameters,
 )
 from app_desktop.constants_editor import ConstantsEditor
+from app_desktop.current_page_stack import CurrentPageStack
 from app_desktop.detected_rows_table import DetectedRowsTable
 from app_desktop.formula_preview import open_formula_preview_dialog
 from app_desktop.formula_preview import update_formula_preview as _render_formula_preview
@@ -681,6 +682,10 @@ def build_left_panel(self):
     manual_layout.addWidget(self._data_stack)
     self.input_section_layout.addWidget(self.manual_box)
 
+    self.mode_stack = CurrentPageStack()
+    self.mode_stack.setObjectName("mode_stack")
+    self.parameters_section_layout.addWidget(self.mode_stack)
+
     # Extrapolation settings
     self.extrap_box = QGroupBox("外推设置")
     self._register_title(self.extrap_box, "外推设置", "Extrapolation")
@@ -716,6 +721,9 @@ def build_left_panel(self):
     method_layout.addWidget(method_help_btn)
     method_layout.addStretch()
     extrap_layout.addLayout(method_layout)
+
+    self.extrap_method_stack = CurrentPageStack()
+    self.extrap_method_stack.setObjectName("extrap_method_stack")
 
     self.custom_formula_widget = QWidget()
     custom_layout = QVBoxLayout(self.custom_formula_widget)
@@ -766,7 +774,6 @@ def build_left_panel(self):
     custom_hint_row.addWidget(hint_lbl)
     custom_hint_row.addStretch()
     custom_layout.addLayout(custom_hint_row)
-    extrap_layout.addWidget(self.custom_formula_widget)
 
     # Power law parameters
     self.power_box = QGroupBox("幂律参数")
@@ -793,7 +800,6 @@ def build_left_panel(self):
     lbl_seed = QLabel("p 种子列表（可选）：")
     self._register_text(lbl_seed, "p 种子列表（可选）：", "p seed list (optional):")
     power_layout.addRow(lbl_seed, self.power_seed_guesses_edit)
-    extrap_layout.addWidget(self.power_box)
 
     # Levin u-transform parameters
     self.levin_box = QGroupBox("Levin u 变换参数")
@@ -860,8 +866,6 @@ def build_left_panel(self):
     # Store label reference for show/hide
     self.levin_beta_label = lbl_beta
 
-    extrap_layout.addWidget(self.levin_box)
-
     # Richardson sequence acceleration parameters
     self.richardson_box = QGroupBox("Richardson 序列加速参数")
     self._register_title(self.richardson_box, "Richardson 序列加速参数", "Richardson acceleration parameters")
@@ -881,7 +885,11 @@ def build_left_panel(self):
     ))
     richardson_layout.addRow(lbl_richardson_p, self.richardson_p_spin)
 
-    extrap_layout.addWidget(self.richardson_box)
+    self.extrap_method_stack.addWidget(self.power_box)
+    self.extrap_method_stack.addWidget(self.levin_box)
+    self.extrap_method_stack.addWidget(self.richardson_box)
+    self.extrap_method_stack.addWidget(self.custom_formula_widget)
+    extrap_layout.addWidget(self.extrap_method_stack)
 
     # Uncertainty selector
     uncert_layout = QHBoxLayout()
@@ -913,7 +921,7 @@ def build_left_panel(self):
         lbl_uncert=lbl_uncert,
         combo_items=combo_items,
     )
-    self.parameters_section_layout.addWidget(self.extrap_box)
+    self.mode_stack.addWidget(self.extrap_box)
 
     # Error propagation settings
     self.error_box = QGroupBox("误差传递设置")
@@ -1071,7 +1079,7 @@ def build_left_panel(self):
         lbl_mc_seed=lbl_mc_seed,
     )
 
-    self.parameters_section_layout.addWidget(self.error_box)
+    self.mode_stack.addWidget(self.error_box)
     self._on_constants_source_toggle(self.use_constants_file_checkbox.isChecked())
     self._update_error_propagation_controls()
 
@@ -1121,8 +1129,6 @@ def build_left_panel(self):
         lbl_stats_sample=lbl_stats_sample,
         stats_items=stats_items,
     )
-    self.parameters_section_layout.addWidget(self.stats_box)
-    self.stats_box.hide()
     self.stats_mode_combo.currentIndexChanged.connect(self._on_stats_mode_change)
     self._on_stats_mode_change()
 
@@ -1509,8 +1515,7 @@ def build_left_panel(self):
     weight_row.addWidget(self.fit_weighted_checkbox)
     fit_layout.addLayout(weight_row)
 
-    self.parameters_section_layout.addWidget(self.fit_box)
-    self.fit_box.hide()
+    self.mode_stack.addWidget(self.fit_box)
     self.inverse_min_spin.valueChanged.connect(self._on_model_settings_changed)
     self.inverse_max_spin.valueChanged.connect(self._on_model_settings_changed)
     self.pade_m_spin.valueChanged.connect(self._on_model_settings_changed)
@@ -1668,8 +1673,8 @@ def build_left_panel(self):
     root_layout.addWidget(self.root_uncertainty_group)
     _on_root_uncertainty_method_changed(self)
 
-    self.parameters_section_layout.addWidget(self.root_box)
-    self.root_box.hide()
+    self.mode_stack.addWidget(self.root_box)
+    self.mode_stack.addWidget(self.stats_box)
 
     # Options
     options_box = QGroupBox("选项")

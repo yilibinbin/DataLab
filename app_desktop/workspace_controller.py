@@ -79,6 +79,18 @@ def _set_text(obj: Any, value: str) -> None:
         obj.setText(value)
 
 
+def _set_value(obj: Any, value: Any) -> None:
+    if obj is None or value is None or not hasattr(obj, "setValue"):
+        return
+    try:
+        obj.setValue(value)
+    except (TypeError, ValueError):
+        try:
+            obj.setValue(type(obj.value())(value))
+        except (AttributeError, TypeError, ValueError):
+            pass
+
+
 def _checked(obj: Any, default: bool = False) -> bool:
     return bool(obj.isChecked()) if obj is not None and hasattr(obj, "isChecked") else default
 
@@ -621,6 +633,58 @@ def _restore_root_config(window: Any, config: Any) -> None:
     _restore_root_uncertainty_options(window, config.get("uncertainty_options"))
 
 
+def _restore_extrapolation_config(window: Any, config: Any) -> None:
+    if not isinstance(config, dict):
+        return
+    method = str(config.get("method") or "")
+    if method:
+        _set_combo_data(getattr(window, "method_combo", None), method)
+    _set_text(getattr(window, "custom_formula_edit", None), str(config.get("custom_formula") or ""))
+    power_law = config.get("power_law") or {}
+    if isinstance(power_law, dict):
+        x_values = str(power_law.get("x_values") or "").split(",")
+        for edit, value in zip(getattr(window, "power_x_edits", []) or [], x_values):
+            _set_text(edit, value.strip())
+        _set_text(getattr(window, "power_p_edit", None), str(power_law.get("custom_p") or ""))
+        _set_text(getattr(window, "power_seed_guesses_edit", None), str(power_law.get("seed_guesses") or ""))
+    levin = config.get("levin") or {}
+    if isinstance(levin, dict):
+        _set_combo_data(getattr(window, "levin_variant_combo", None), str(levin.get("variant") or "u"))
+        _set_value(getattr(window, "levin_order_spin", None), levin.get("order"))
+        _set_combo_data(getattr(window, "levin_weight_combo", None), str(levin.get("weight") or "default"))
+        _set_value(getattr(window, "levin_beta_spin", None), levin.get("beta"))
+    richardson = config.get("richardson") or {}
+    if isinstance(richardson, dict):
+        _set_value(getattr(window, "richardson_p_spin", None), richardson.get("p"))
+    uncertainty_column = str(config.get("uncertainty_column") or "")
+    if uncertainty_column:
+        _set_combo_data(getattr(window, "uncertainty_combo", None), uncertainty_column)
+
+
+def _restore_error_config(window: Any, config: Any) -> None:
+    if not isinstance(config, dict):
+        return
+    _set_text(getattr(window, "formula_edit", None), str(config.get("formula") or ""))
+    _set_combo_data(getattr(window, "error_method_combo", None), str(config.get("method") or "taylor"))
+    _set_value(getattr(window, "error_order_spin", None), config.get("order"))
+    _set_value(getattr(window, "error_mc_samples_spin", None), config.get("mc_samples"))
+    _set_text(getattr(window, "error_mc_seed_edit", None), str(config.get("mc_seed") or ""))
+
+
+def _restore_statistics_config(window: Any, config: Any) -> None:
+    if not isinstance(config, dict):
+        return
+    _set_text(getattr(window, "stats_value_column_edit", None), str(config.get("value_column") or "A"))
+    _set_text(getattr(window, "stats_sigma_column_edit", None), str(config.get("sigma_column") or ""))
+    _set_combo_data(getattr(window, "stats_mode_combo", None), str(config.get("mode") or "mean"))
+    checkbox = getattr(window, "stats_sample_checkbox", None)
+    if checkbox is not None and hasattr(checkbox, "setChecked"):
+        checkbox.setChecked(bool(config.get("sample")))
+    checkbox = getattr(window, "stats_weight_variance_checkbox", None)
+    if checkbox is not None and hasattr(checkbox, "setChecked"):
+        checkbox.setChecked(bool(config.get("weighted_variance")))
+
+
 def _restore_root_uncertainty_options(window: Any, options: Any) -> None:
     if not isinstance(options, dict):
         options = {}
@@ -937,6 +1001,9 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
     _restore_data_section(window, workspace.get("constants") or {}, constants=True)
 
     config = workspace.get("config") or {}
+    _restore_extrapolation_config(window, config.get("extrapolation"))
+    _restore_error_config(window, config.get("error"))
+    _restore_statistics_config(window, config.get("statistics"))
     fitting = config.get("fitting") or {}
     degraded = _degrade_obsolete_auto_fit_config(window, fitting)
     fitting["model"] = _normalize_fitting_model(fitting.get("model") or "custom")

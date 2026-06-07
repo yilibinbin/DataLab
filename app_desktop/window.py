@@ -1770,42 +1770,18 @@ class ExtrapolationWindow(
     def _on_mode_change(self):
         mode = self.mode_combo.currentData()
         self._sync_manual_table_columns_for_mode(mode)
-        if mode == "extrapolation":
-            self.extrap_box.show()
-            self.error_box.hide()
-            self.fit_box.hide()
-            self.stats_box.hide()
-            if hasattr(self, "root_box"):
-                self.root_box.hide()
-        elif mode == "error":
-            self.extrap_box.hide()
-            self.error_box.show()
-            self.fit_box.hide()
-            self.stats_box.hide()
-            if hasattr(self, "root_box"):
-                self.root_box.hide()
-        elif mode == "statistics":
-            self.extrap_box.hide()
-            self.error_box.hide()
-            self.fit_box.hide()
-            self.stats_box.show()
-            if hasattr(self, "root_box"):
-                self.root_box.hide()
+        mode_indices = {
+            "extrapolation": 0,
+            "error": 1,
+            "fitting": 2,
+            "root_solving": 3,
+            "statistics": 4,
+        }
+        mode_stack = getattr(self, "mode_stack", None)
+        if mode_stack is not None:
+            mode_stack.setCurrentIndex(mode_indices.get(str(mode), mode_indices["fitting"]))
+        if mode == "statistics":
             self._on_stats_mode_change()
-        elif mode == "root_solving":
-            self.extrap_box.hide()
-            self.error_box.hide()
-            self.fit_box.hide()
-            self.stats_box.hide()
-            if hasattr(self, "root_box"):
-                self.root_box.show()
-        else:
-            self.extrap_box.hide()
-            self.error_box.hide()
-            self.fit_box.show()
-            self.stats_box.hide()
-            if hasattr(self, "root_box"):
-                self.root_box.hide()
         self._update_manual_placeholder(mode)
         self._update_log_scale_visibility()
         if hasattr(self, "_refresh_main_splitter_left_min_width"):
@@ -1837,17 +1813,16 @@ class ExtrapolationWindow(
 
     def _update_method_state(self):
         method = self.method_combo.currentData()
-        show_power = method == "power_law"
-        show_levin = method == "levin_u"
-        show_richardson = method == "richardson"
-        show_custom = method == "custom"
-
-        self.power_box.setVisible(show_power)
-        if hasattr(self, "levin_box"):
-            self.levin_box.setVisible(show_levin)
-        if hasattr(self, "richardson_box"):
-            self.richardson_box.setVisible(show_richardson)
-        self.custom_formula_widget.setVisible(show_custom)
+        method_indices = {
+            "power_law": 0,
+            "levin_u": 1,
+            "richardson": 2,
+            "custom": 3,
+        }
+        method_stack = getattr(self, "extrap_method_stack", None)
+        if method_stack is not None:
+            method_stack.setCurrentIndex(method_indices.get(str(method), 0))
+            method_stack.setVisible(method in method_indices)
 
         if hasattr(self, "mpmath_precision_spin"):
             self.mpmath_precision_spin.setEnabled(True)
