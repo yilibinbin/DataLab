@@ -872,6 +872,47 @@ def _capture_ui(window: Any) -> dict[str, Any]:
     }
 
 
+def _restore_ui_state(window: Any, ui: dict[str, Any]) -> None:
+    if not isinstance(ui, dict):
+        return
+
+    def _bounded_index(value: object, count: int) -> int | None:
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return None
+        if 0 <= index < count:
+            return index
+        return None
+
+    result_tabs = getattr(window, "result_tabs", None)
+    if result_tabs is not None:
+        result_index = _bounded_index(ui.get("result_subtab"), result_tabs.count())
+        if result_index is not None:
+            result_tabs.setCurrentIndex(result_index)
+
+    image_page_spin = getattr(window, "image_page_spin", None)
+    if image_page_spin is not None:
+        plot_index = _bounded_index(ui.get("selected_plot_index"), image_page_spin.maximum())
+        if plot_index is not None:
+            image_page_spin.setValue(plot_index + 1)
+
+    try:
+        plot_zoom = float(ui.get("plot_zoom"))
+    except (TypeError, ValueError):
+        plot_zoom = 0.0
+    if plot_zoom > 0 and hasattr(window, "_on_zoom_percent_changed") and hasattr(window, "zoom_percent_spin"):
+        percent = int(round(plot_zoom * 100))
+        percent = max(window.zoom_percent_spin.minimum(), min(window.zoom_percent_spin.maximum(), percent))
+        window.zoom_percent_spin.setValue(percent)
+
+    tabs = getattr(window, "tabs", None)
+    if tabs is not None:
+        main_index = _bounded_index(ui.get("main_tab"), tabs.count())
+        if main_index is not None:
+            tabs.setCurrentIndex(main_index)
+
+
 def _capture_result_snapshot(window: Any, workspace_hash: str, attachments: dict[str, bytes]) -> dict[str, Any]:
     rendered_text = _text(getattr(window, "result_edit", None))
     markdown = getattr(window, "_last_result_text", None)
@@ -1058,6 +1099,7 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
         window._last_result_rendered_text = ""
     window._last_result_kind = None
     window._last_result_payloads = {}
+    _restore_ui_state(window, workspace.get("ui") or {})
     window._workspace_snapshot_only = bool(snapshot.get("present"))
     window._workspace_dirty = False
     window._workspace_degraded = degraded
