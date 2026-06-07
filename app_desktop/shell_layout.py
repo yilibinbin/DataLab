@@ -43,15 +43,29 @@ def _call_owner(owner: object, *method_names: str) -> Callable[[bool], None]:
     return _slot
 
 
-def _button(owner: object, text_zh: str, text_en: str, object_name: str, *methods: str) -> QPushButton:
+def _button(
+    owner: object,
+    text_zh: str,
+    text_en: str,
+    object_name: str,
+    *methods: str,
+    tooltip_zh: str = "",
+    tooltip_en: str = "",
+) -> QPushButton:
     button = QPushButton(text_zh)
     button.setObjectName(object_name)
     button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     button.clicked.connect(_call_owner(owner, *methods))
+    if tooltip_zh or tooltip_en:
+        button.setToolTip(_translate(owner, tooltip_zh, tooltip_en))
+        button.setAccessibleDescription(_translate(owner, tooltip_zh, tooltip_en))
     register = getattr(owner, "_register_text", None)
     if callable(register):
         typed_owner = cast(_OwnerProtocol, owner)
         typed_owner._register_text(button, text_zh, text_en)
+        if tooltip_zh or tooltip_en:
+            typed_owner._register_text(button, tooltip_zh, tooltip_en, "setToolTip")
+            typed_owner._register_text(button, tooltip_zh, tooltip_en, "setAccessibleDescription")
     return button
 
 
@@ -66,16 +80,40 @@ def build_workbench_bar(owner: object) -> QWidget:
     layout.setSpacing(6)
 
     dynamic_owner.new_workspace_button = _button(
-        owner, "新建", "New", "new_workspace_button", "new_workspace"
+        owner,
+        "新建",
+        "New",
+        "new_workspace_button",
+        "new_workspace",
+        tooltip_zh="新建空白工作区。",
+        tooltip_en="Create a blank workspace.",
     )
     dynamic_owner.open_workspace_button = _button(
-        owner, "打开", "Open", "open_workspace_button", "open_workspace"
+        owner,
+        "打开",
+        "Open",
+        "open_workspace_button",
+        "open_workspace",
+        tooltip_zh="打开已有 .datalab 工作区。",
+        tooltip_en="Open an existing .datalab workspace.",
     )
     dynamic_owner.save_workspace_button = _button(
-        owner, "保存", "Save", "save_workspace_button", "save_workspace"
+        owner,
+        "保存",
+        "Save",
+        "save_workspace_button",
+        "save_workspace",
+        tooltip_zh="保存当前工作区；示例模板会要求另存为。",
+        tooltip_en="Save the current workspace; example templates require Save As.",
     )
     dynamic_owner.open_examples_button = _button(
-        owner, "示例", "Examples", "open_examples_button", "open_example_workspace"
+        owner,
+        "示例",
+        "Examples",
+        "open_examples_button",
+        "open_example_workspace",
+        tooltip_zh="打开内置示例工作区作为只读模板。",
+        tooltip_en="Open a bundled example workspace as a read-only template.",
     )
 
     for widget in (
@@ -95,6 +133,8 @@ def build_workbench_bar(owner: object) -> QWidget:
         "workbench_run_button",
         "run_extrapolation",
         "run_calculation",
+        tooltip_zh="运行当前配置的计算。",
+        tooltip_en="Run the calculation with the current configuration.",
     )
     dynamic_owner.workbench_stop_button = _button(
         owner,
@@ -103,6 +143,8 @@ def build_workbench_bar(owner: object) -> QWidget:
         "workbench_stop_button",
         "stop_calculation",
         "_stop_current_worker",
+        tooltip_zh="停止正在运行的计算。",
+        tooltip_en="Stop the running calculation.",
     )
     layout.addWidget(dynamic_owner.workbench_run_button)
     layout.addWidget(dynamic_owner.workbench_stop_button)
@@ -121,7 +163,14 @@ def build_workbench_bar(owner: object) -> QWidget:
     layout.addSpacing(10)
 
     dynamic_owner.docs_button = _button(
-        owner, "文档", "Docs", "docs_button", "_open_docs", "_show_docs"
+        owner,
+        "文档",
+        "Docs",
+        "docs_button",
+        "_open_docs",
+        "_show_docs",
+        tooltip_zh="打开离线桌面帮助文档。",
+        tooltip_en="Open the offline desktop documentation.",
     )
     dynamic_owner.check_updates_button = _button(
         owner,
@@ -130,6 +179,8 @@ def build_workbench_bar(owner: object) -> QWidget:
         "check_updates_button",
         "check_for_updates",
         "_check_for_updates",
+        tooltip_zh="检查 GitHub 发布页上的新版本。",
+        tooltip_en="Check GitHub releases for a newer version.",
     )
     layout.addWidget(dynamic_owner.docs_button)
     layout.addWidget(dynamic_owner.check_updates_button)

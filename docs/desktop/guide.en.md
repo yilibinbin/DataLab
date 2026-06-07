@@ -6,12 +6,19 @@ This page describes the desktop GUI workflow, organized by the desktop window la
 
 The main window is typically split into:
 
+- Top workbench bar: New/Open/Save, Examples, Run/Stop, workspace status, Docs, and Updates
 - Left: inputs and parameters (mode selection, data input, options)
 - Right: result area (tabs to view outputs)
 
+The left side is organized as a sequence of sections: data source, mode-specific
+configuration, output options, and run controls. Hidden modes keep their drafts,
+so switching between modules does not erase partially prepared formulas,
+parameters, constants, or root-solving settings.
+
 The result area includes:
 
-- Values: human-readable summary
+- Numeric results: human-readable summary and tables
+- Images: generated plots with zoom/export controls
 - Log: detailed steps and warnings (check this first when something fails)
 - LaTeX: generated LaTeX text (editable before compiling)
 - PDF Preview: preview images after successful PDF compilation
@@ -35,6 +42,29 @@ Common uncertainty formats:
 3. Configure required parameters for the selected mode
 4. Click Run/Start
 5. Review results and export CSV or generate LaTeX/PDF if needed
+
+## Formula Editors and Tables
+
+Formula editors use placeholder examples only as hints; an empty formula field is
+not silently replaced by the example. Use the preview button beside formula
+fields to inspect the rendered expression, and use the Functions button for the
+supported expression syntax.
+
+Parameter and constants tables share the same interaction model across fitting,
+self-consistent/implicit models, error propagation, and root solving:
+
+- Detect buttons refresh automatically inferred names from the current formula
+- `+ Row` and `- Row` allow manual edits when automatic detection is not enough
+- Constants can be entered in table view or text view, including uncertainty
+  notation such as `1.23(4)[-5]`
+- Disabled constants are not substituted into the calculation
+
+## Example Workspaces
+
+Use the Examples button in the workbench bar or the Examples menu to open a
+bundled `.datalab` workspace. Examples are opened as templates: editing them does
+not modify the bundled copy, and saving requires choosing a user path. This makes
+examples safe to use as starting points for your own calculations.
 
 ## Display Formatting (Decimal Places / Significant Digits)
 

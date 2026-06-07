@@ -7,11 +7,17 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
 
+def _allow_discard(win):
+    win._confirm_workspace_discard_or_save = lambda: True
+    return win
+
+
 def test_example_workspace_menu_action_exists(qtbot):
     from app_desktop.window import ExtrapolationWindow
 
     QApplication.instance() or QApplication([])
     win = ExtrapolationWindow()
+    _allow_discard(win)
     qtbot.addWidget(win)
 
     actions = [action.text() for action in win.menuBar().actions()]
@@ -24,6 +30,7 @@ def test_open_example_workspace_uses_current_language_for_menu_labels(qtbot, mon
 
     QApplication.instance() or QApplication([])
     win = ExtrapolationWindow()
+    _allow_discard(win)
     qtbot.addWidget(win)
     win._apply_language("en")
     examples = list_example_workspaces()
@@ -48,6 +55,7 @@ def test_open_example_workspace_marks_template_and_save_requires_save_as(qtbot, 
 
     QApplication.instance() or QApplication([])
     win = ExtrapolationWindow()
+    _allow_discard(win)
     qtbot.addWidget(win)
 
     examples = list_example_workspaces()
@@ -92,6 +100,7 @@ def test_direct_template_open_save_as_does_not_write_temp_or_bundle(qtbot, monke
 
     QApplication.instance() or QApplication([])
     win = ExtrapolationWindow()
+    _allow_discard(win)
     qtbot.addWidget(win)
 
     source = list_example_workspaces()[0]
@@ -120,6 +129,7 @@ def test_template_save_as_refuses_bundled_example_path(qtbot, monkeypatch):
 
     QApplication.instance() or QApplication([])
     win = ExtrapolationWindow()
+    _allow_discard(win)
     qtbot.addWidget(win)
 
     source = list_example_workspaces()[0]
@@ -146,6 +156,7 @@ def test_regular_open_of_bundled_example_is_treated_as_template(qtbot, monkeypat
 
     QApplication.instance() or QApplication([])
     win = ExtrapolationWindow()
+    _allow_discard(win)
     qtbot.addWidget(win)
 
     source = list_example_workspaces()[0]
