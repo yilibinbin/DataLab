@@ -69,6 +69,7 @@ Desktop GUI click workflows are a release gate:
 ```bash
 QT_QPA_PLATFORM=offscreen pytest -q tests/test_desktop_gui_workflows.py tests/test_desktop_gui_schema_scan.py tests/test_desktop_gui_redesign_scan.py tests/test_workspace_controller.py
 python tools/scan_desktop_gui_schema.py
+QT_QPA_PLATFORM=offscreen python tools/capture_desktop_gui_screens.py --out build/gui-screenshots --width 1440 --height 900
 ```
 
 Then, for each page (Extrapolation / Error Propagation / Fitting / Statistics):

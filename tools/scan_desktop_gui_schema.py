@@ -11,8 +11,17 @@ from typing import Any, cast
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtGui import QAction
-from PySide6.QtWidgets import (
+
+def _ensure_repo_root_on_path() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+
+_ensure_repo_root_on_path()
+
+from PySide6.QtGui import QAction  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QAbstractButton,
     QAbstractItemView,
@@ -27,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app_desktop.theme import SUPPORTED_MIN_WINDOW_WIDTH
+from app_desktop.theme import SUPPORTED_MIN_WINDOW_WIDTH  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -48,12 +57,6 @@ RESULT_TABS = ("numeric", "image", "log", "latex", "pdf")
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg=="
 )
-
-
-def _ensure_repo_root_on_path() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
 
 
 def _combo_index_for_data(combo: Any, data: object) -> int:
