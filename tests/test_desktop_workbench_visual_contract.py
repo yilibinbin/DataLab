@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, cast
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -29,7 +29,7 @@ def _window(qtbot: Any) -> Any:
     from app_desktop.window import ExtrapolationWindow
 
     QApplication.instance() or QApplication([])
-    window = ExtrapolationWindow()
+    window = cast(Any, ExtrapolationWindow)()
     qtbot.addWidget(window)
     window.resize(SUPPORTED_VISUAL_WIDTH, SUPPORTED_VISUAL_HEIGHT)
     window.show()
