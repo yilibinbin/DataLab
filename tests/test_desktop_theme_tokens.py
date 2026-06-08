@@ -50,3 +50,12 @@ def test_apply_desktop_theme_does_not_reset_user_state(qtbot: Any) -> None:
     assert window.formula_edit.toPlainText() == "A + B"
     assert window.result_edit.toPlainText() == "existing result"
     assert all(table.styleSheet() for table in window.findChildren(QTableWidget))
+    for widget_name in (
+        "workbench_root",
+        "workbench_bar",
+        "workbench_config_rail",
+        "workbench_workspace_canvas",
+        "workbench_result_rail",
+        "workbench_status_strip",
+    ):
+        assert getattr(window, widget_name).styleSheet()

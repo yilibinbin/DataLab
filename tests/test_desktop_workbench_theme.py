@@ -27,3 +27,5 @@ def test_workbench_styles_expose_named_regions() -> None:
     assert "QScrollArea#workbench_config_rail" in region
     assert "QScrollArea#workbench_workspace_canvas" in region
     assert "QFrame#workbench_result_rail" in region
+    assert "QFrame#workbench_workspace_canvas_content QGroupBox" in region
+    assert "QWidget#workbench_result_overview_panel" in region

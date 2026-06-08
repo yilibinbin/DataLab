@@ -181,6 +181,17 @@ QFrame#workbench_result_rail {{
     border: 1px solid {border};
     border-radius: {REGION_RADIUS}px;
 }}
+QFrame#workbench_workspace_canvas_content QGroupBox,
+QFrame#workbench_result_rail QWidget#workbench_result_overview_panel {{
+    border: 1px solid {border};
+    border-radius: {REGION_RADIUS}px;
+    background: {panel_bg};
+}}
+QFrame#workbench_workspace_canvas_content QLabel,
+QFrame#workbench_config_rail_content QLabel,
+QFrame#workbench_result_rail QLabel {{
+    color: {fg};
+}}
 QFrame#workbench_status_strip {{
     background: {app_bg};
     color: {fg};

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import os
 from pathlib import Path
@@ -26,6 +27,10 @@ from tools.scan_desktop_gui_schema import (  # noqa: E402
     ROOT_SOLVING_SUBMODES,
     ScreenScenario,
     _apply_screen_scenario,
+)
+from app_desktop.workbench_visual_contract import (  # noqa: E402
+    visual_contract_issues,
+    workbench_region_metrics,
 )
 
 
@@ -106,6 +111,7 @@ def capture_desktop_gui_screens(
             target = out / filename
             if not image.save(str(target), "PNG"):
                 raise RuntimeError(f"failed to save screenshot: {target}")
+            metrics = workbench_region_metrics(window)
             screenshots.append(
                 {
                     "path": str(target),
@@ -114,7 +120,8 @@ def capture_desktop_gui_screens(
                     "mode": scenario.mode,
                     "root_mode": scenario.root_mode,
                     "language": scenario.language,
-                    "issue_count": _scenario_issue_count(window),
+                    "issue_count": _scenario_issue_count(window) + len(visual_contract_issues(window)),
+                    "regions": {key: asdict(metric) for key, metric in metrics.items()},
                 }
             )
 
