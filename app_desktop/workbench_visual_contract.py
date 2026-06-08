@@ -70,11 +70,21 @@ def visual_contract_issues(root: QWidget) -> list[dict[str, object]]:
     workspace = metrics[WORKSPACE_CANVAS_OBJECT]
     result = metrics[RESULT_RAIL_OBJECT]
     if config.visible and config.width < CONFIG_RAIL_MIN_WIDTH:
-        issues.append({"kind": "config_rail_width", "widget": CONFIG_RAIL_OBJECT, "width": config.width})
+        issues.append(
+            {"kind": "config_rail_width", "widget": CONFIG_RAIL_OBJECT, "width": config.width}
+        )
     if workspace.visible and workspace.width < WORKSPACE_CANVAS_MIN_WIDTH:
-        issues.append({"kind": "workspace_canvas_width", "widget": WORKSPACE_CANVAS_OBJECT, "width": workspace.width})
+        issues.append(
+            {
+                "kind": "workspace_canvas_width",
+                "widget": WORKSPACE_CANVAS_OBJECT,
+                "width": workspace.width,
+            }
+        )
     if result.visible and result.width < RESULT_RAIL_MIN_WIDTH:
-        issues.append({"kind": "result_rail_width", "widget": RESULT_RAIL_OBJECT, "width": result.width})
+        issues.append(
+            {"kind": "result_rail_width", "widget": RESULT_RAIL_OBJECT, "width": result.width}
+        )
     if config.visible and workspace.visible and result.visible:
         if not (config.x < workspace.x < result.x):
             issues.append(
