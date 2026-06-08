@@ -61,6 +61,8 @@ def test_shell_exposes_workbench_bar_controls(qtbot: Any) -> None:
 def test_shell_sections_are_visible_in_expected_order(qtbot: Any) -> None:
     window = _make_window(qtbot)
 
+    assert not hasattr(window, "parameters_section")
+    assert not hasattr(window, "parameters_section_layout")
     assert [
         window.input_section.objectName(),
         window.mode_section.objectName(),

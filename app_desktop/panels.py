@@ -297,9 +297,6 @@ def build_ui(self):
 
     self._build_left_panel()
     reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
-    if hasattr(self, "parameters_section"):
-        self.parameters_section.setParent(None)
-        self.parameters_section.deleteLater()
     reparent_widget(self.workbench_workspace_layout, self.manual_box, stretch=2)
     self._build_right_panel(self.workbench_result_layout)
     # 初始化手动输入占位示例
@@ -511,12 +508,6 @@ def build_left_panel(self):
     self.mode_section_layout.setContentsMargins(0, 0, 0, 0)
     self.mode_section_layout.setSpacing(SECTION_SPACING)
 
-    self.parameters_section = QWidget()
-    self.parameters_section.setObjectName("parameters_section")
-    self.parameters_section_layout = QVBoxLayout(self.parameters_section)
-    self.parameters_section_layout.setContentsMargins(0, 0, 0, 0)
-    self.parameters_section_layout.setSpacing(SECTION_SPACING)
-
     self.output_setup_section = QWidget()
     self.output_setup_section.setObjectName("output_setup_section")
     self.output_setup_section_layout = QVBoxLayout(self.output_setup_section)
@@ -531,7 +522,6 @@ def build_left_panel(self):
 
     self.left_layout.addWidget(self.input_section)
     self.left_layout.addWidget(self.mode_section)
-    self.left_layout.addWidget(self.parameters_section)
     self.left_layout.addWidget(self.output_setup_section)
     self.left_layout.addWidget(self.run_section)
 
@@ -672,7 +662,6 @@ def build_left_panel(self):
 
     self.mode_stack = CurrentPageStack()
     self.mode_stack.setObjectName("mode_stack")
-    self.parameters_section_layout.addWidget(self.mode_stack)
 
     # Extrapolation settings
     self.extrap_box = QGroupBox("外推设置")
