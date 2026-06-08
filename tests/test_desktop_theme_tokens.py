@@ -28,7 +28,7 @@ def test_schema_scan_uses_theme_supported_width_constant() -> None:
     assert SCAN_WIDTHS[0] == SUPPORTED_MIN_WINDOW_WIDTH
 
 
-def test_apply_desktop_theme_does_not_reset_user_state(qtbot: Any) -> None:
+def test_apply_desktop_theme_does_not_reset_user_state(qtbot: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     from app_desktop.window import ExtrapolationWindow
 
     app = QApplication.instance() or QApplication([])
@@ -41,6 +41,15 @@ def test_apply_desktop_theme_does_not_reset_user_state(qtbot: Any) -> None:
     window.formula_edit.setPlainText("A + B")
     window.result_edit.setPlainText("existing result")
     original_mode = window.mode_combo.currentData()
+    refresh_calls = 0
+    original_refresh = window._refresh_main_splitter_left_min_width
+
+    def _count_refresh() -> None:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        original_refresh()
+
+    monkeypatch.setattr(window, "_refresh_main_splitter_left_min_width", _count_refresh)
 
     window._apply_desktop_theme()
     app.sendEvent(window, QEvent(QEvent.Type.PaletteChange))
@@ -54,3 +63,4 @@ def test_apply_desktop_theme_does_not_reset_user_state(qtbot: Any) -> None:
     assert window.workbench_bar.styleSheet()
     assert window.workbench_config_content.styleSheet() == ""
     assert window.workbench_workspace_content.styleSheet() == ""
+    assert refresh_calls >= 2

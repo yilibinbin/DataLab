@@ -135,6 +135,7 @@ def capture_desktop_gui_screens(
                     "mode": scenario.mode,
                     "root_mode": scenario.root_mode,
                     "language": scenario.language,
+                    # Backward-compatible summary for older release gates; ``issues`` is authoritative.
                     "issue_count": len(issues),
                     "issues": issues,
                     "regions": {key: asdict(metric) for key, metric in metrics.items()},

@@ -1797,6 +1797,8 @@ class ExtrapolationWindow(
             self.workbench_root.setStyleSheet(region_qss)
         if hasattr(self, "workbench_bar"):
             self.workbench_bar.setStyleSheet(toolbar_qss)
+        if hasattr(self, "_refresh_main_splitter_left_min_width"):
+            self._refresh_main_splitter_left_min_width()
 
     def _update_theme_from_palette(self, *args):
         self._apply_desktop_theme()
