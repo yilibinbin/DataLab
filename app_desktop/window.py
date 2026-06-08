@@ -1772,7 +1772,7 @@ class ExtrapolationWindow(
             self._apply_desktop_theme()
 
     def _apply_desktop_theme(self) -> None:
-        from app_desktop.theme import is_dark_theme, result_style, table_style
+        from app_desktop.theme import is_dark_theme, result_style, table_style, workbench_toolbar_style
 
         new_dark = is_dark_theme()
         if new_dark != self.pdf_dark_mode:
@@ -1785,6 +1785,8 @@ class ExtrapolationWindow(
             self.result_edit.setStyleSheet(result_style(dark=new_dark))
         if hasattr(self, "_latex_highlighter"):
             self._latex_highlighter.refresh_theme()
+        if hasattr(self, "workbench_bar"):
+            self.workbench_bar.setStyleSheet(workbench_toolbar_style())
 
     def _update_theme_from_palette(self, *args):
         self._apply_desktop_theme()
