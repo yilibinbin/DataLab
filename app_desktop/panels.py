@@ -296,8 +296,8 @@ def build_ui(self):
     self._left_scroll = self.workbench_config_rail
 
     self._build_left_panel()
-    reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
     reparent_widget(self.workbench_workspace_layout, self.manual_box, stretch=2)
+    reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
     self._build_right_panel(self.workbench_result_layout)
     # 初始化手动输入占位示例
     self._update_manual_placeholder(self.mode_combo.currentData())
@@ -574,8 +574,8 @@ def build_left_panel(self):
     self._register_text(self.use_file_checkbox, "使用数据文件", "Use data file")
     self._register_text(
         self.use_file_checkbox,
-        "启用后从文件读取数据；关闭后使用下方手动输入数据。",
-        "Read data from a file when enabled; otherwise use the manual data input below.",
+        "启用后从文件读取数据；关闭后在中间工作区手动输入数据。",
+        "Read data from a file when enabled; otherwise use the manual data input in the center workspace.",
         "setToolTip",
     )
     self.use_file_checkbox.toggled.connect(self._on_data_source_toggle)

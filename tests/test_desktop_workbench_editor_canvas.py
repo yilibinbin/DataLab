@@ -31,6 +31,7 @@ def test_mode_editors_reuse_existing_mode_stack_in_center_canvas(qtbot: Any) -> 
     stack = window.mode_stack
     assert isinstance(stack, QStackedWidget)
     assert stack.parentWidget() is window.workbench_workspace_content
+    assert window.workbench_workspace_layout.indexOf(window.manual_box) < window.workbench_workspace_layout.indexOf(stack)
     assert stack.count() >= 5
     for widget in (window.extrap_box, window.error_box, window.fit_box, window.root_box, window.stats_box):
         assert stack.indexOf(widget) >= 0

@@ -78,6 +78,7 @@ TECHNICAL_TEXT_ALLOWLIST = {
     "adaptive",
     "deterministic",
     "parallel",
+    "DataLab",
     "sequential",
     "fork",
     "spawn",

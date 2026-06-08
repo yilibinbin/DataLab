@@ -12,12 +12,18 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtGui import QImage
 
+from app_desktop.workbench_visual_contract import SUPPORTED_VISUAL_HEIGHT, SUPPORTED_VISUAL_WIDTH
+
 
 def test_desktop_gui_screenshot_capture_smoke(tmp_path) -> None:
     from tools.capture_desktop_gui_screens import capture_desktop_gui_screens
 
     out = tmp_path / "gui-screens"
-    report = capture_desktop_gui_screens(out=out, width=1280, height=820)
+    report = capture_desktop_gui_screens(
+        out=out,
+        width=SUPPORTED_VISUAL_WIDTH,
+        height=SUPPORTED_VISUAL_HEIGHT,
+    )
 
     assert report["count"] >= 10
     assert (out / "manifest.json").is_file()
@@ -30,7 +36,7 @@ def test_desktop_gui_screenshot_capture_smoke(tmp_path) -> None:
         assert path.stat().st_size > 0
         image = QImage(str(path))
         assert not image.isNull(), path
-        assert image.width() == 1280
-        assert image.height() == 820
-        assert item["width"] == 1280
-        assert item["height"] == 820
+        assert image.width() == SUPPORTED_VISUAL_WIDTH
+        assert image.height() == SUPPORTED_VISUAL_HEIGHT
+        assert item["width"] == SUPPORTED_VISUAL_WIDTH
+        assert item["height"] == SUPPORTED_VISUAL_HEIGHT
