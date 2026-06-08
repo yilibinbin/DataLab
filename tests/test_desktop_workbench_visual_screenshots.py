@@ -19,6 +19,8 @@ from app_desktop.workbench_visual_contract import (
     WORKSPACE_CANVAS_MIN_WIDTH,
 )
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
 
 def test_workbench_screenshot_manifest_contains_region_metrics(tmp_path) -> None:
     from tools.capture_desktop_gui_screens import capture_desktop_gui_screens
@@ -35,6 +37,7 @@ def test_workbench_screenshot_manifest_contains_region_metrics(tmp_path) -> None
         screenshot_path = Path(item["path"])
         assert screenshot_path.is_file(), screenshot_path
         assert screenshot_path.stat().st_size > 0, screenshot_path
+        assert screenshot_path.read_bytes().startswith(PNG_SIGNATURE), screenshot_path
         assert item["issue_count"] == 0
         assert item["issues"] == []
         regions = item["regions"]

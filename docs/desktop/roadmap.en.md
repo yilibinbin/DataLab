@@ -5,7 +5,7 @@ This roadmap is **desktop-only**. It does not cover web routes or web deployment
 ## Current Capabilities
 
 - Four modules: Extrapolation / Error propagation / Fitting / Statistics
-- Result area: Values / Log / LaTeX / PDF Preview
+- Result area: Values / Log / LaTeX / PDF preview
 - CSV export, LaTeX generation, optional PDF compilation
 - `log-x` / `log-y` protection for non-positive data in fitting plots
 - Offline documentation via the Help menu
@@ -27,4 +27,3 @@ This roadmap is **desktop-only**. It does not cover web routes or web deployment
 - Cross-platform packaging stability (resource bundling and font consistency on Windows/macOS/Linux)
 - More granular logging levels and better diagnostics
 - Extend UI coverage for more models/methods without changing the core numeric algorithms
-
