@@ -71,14 +71,20 @@ def _capture_scenarios(*, width: int, height: int) -> list[ScreenScenario]:
     return scenarios
 
 
-def _scenario_issue_count(window: Any) -> int:
-    count = 0
+def _scenario_issues(window: Any) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
     left_scroll = getattr(window, "_left_scroll", None)
     if left_scroll is not None:
         bar = left_scroll.horizontalScrollBar()
         if bar.maximum() != 0 or bar.isVisible():
-            count += 1
-    return count
+            issues.append(
+                {
+                    "kind": "config_horizontal_scrollbar",
+                    "maximum": int(bar.maximum()),
+                    "visible": bool(bar.isVisible()),
+                }
+            )
+    return issues
 
 
 def capture_desktop_gui_screens(
@@ -112,6 +118,15 @@ def capture_desktop_gui_screens(
             if not image.save(str(target), "PNG"):
                 raise RuntimeError(f"failed to save screenshot: {target}")
             metrics = workbench_region_metrics(window)
+            scenario_issues = _scenario_issues(window)
+            contract_issues = visual_contract_issues(window)
+            issues = [
+                {"source": "screenshot", **issue}
+                for issue in scenario_issues
+            ] + [
+                {"source": "visual_contract", **issue}
+                for issue in contract_issues
+            ]
             screenshots.append(
                 {
                     "path": str(target),
@@ -120,7 +135,8 @@ def capture_desktop_gui_screens(
                     "mode": scenario.mode,
                     "root_mode": scenario.root_mode,
                     "language": scenario.language,
-                    "issue_count": _scenario_issue_count(window) + len(visual_contract_issues(window)),
+                    "issue_count": len(issues),
+                    "issues": issues,
                     "regions": {key: asdict(metric) for key, metric in metrics.items()},
                 }
             )

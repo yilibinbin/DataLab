@@ -32,6 +32,7 @@ def test_workbench_screenshot_manifest_contains_region_metrics(tmp_path) -> None
     assert report["count"] >= 16
     for item in report["screenshots"]:
         assert item["issue_count"] == 0
+        assert item["issues"] == []
         regions = item["regions"]
         assert regions["workbench_config_rail"]["width"] >= CONFIG_RAIL_MIN_WIDTH
         assert regions["workbench_workspace_canvas"]["width"] >= WORKSPACE_CANVAS_MIN_WIDTH

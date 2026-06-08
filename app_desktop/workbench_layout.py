@@ -17,7 +17,6 @@ from app_desktop.theme import (
     RESULT_RAIL_WIDTH,
     STATUS_STRIP_HEIGHT,
     WORKSPACE_GUTTER,
-    workbench_region_style,
 )
 from app_desktop.workbench_visual_contract import (
     CONFIG_RAIL_MIN_WIDTH,
@@ -33,7 +32,6 @@ from app_desktop.workbench_visual_contract import (
 def _frame(object_name: str) -> QFrame:
     frame = QFrame()
     frame.setObjectName(object_name)
-    frame.setStyleSheet(workbench_region_style())
     return frame
 
 
@@ -44,7 +42,6 @@ def _scroll_wrapper(
 ) -> QScrollArea:
     scroll = QScrollArea()
     scroll.setObjectName(object_name)
-    scroll.setStyleSheet(workbench_region_style())
     scroll.setWidgetResizable(True)
     scroll.setHorizontalScrollBarPolicy(horizontal_policy)
     scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)

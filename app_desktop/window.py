@@ -1793,17 +1793,10 @@ class ExtrapolationWindow(
             self._latex_highlighter.refresh_theme()
         toolbar_qss = workbench_toolbar_style(dark=new_dark)
         region_qss = workbench_region_style(dark=new_dark)
-        for widget_name in (
-            "workbench_root",
-            "workbench_bar",
-            "workbench_config_rail",
-            "workbench_workspace_canvas",
-            "workbench_result_rail",
-            "workbench_status_strip",
-        ):
-            widget = getattr(self, widget_name, None)
-            if widget is not None:
-                widget.setStyleSheet(toolbar_qss if widget_name == "workbench_bar" else region_qss)
+        if hasattr(self, "workbench_root"):
+            self.workbench_root.setStyleSheet(region_qss)
+        if hasattr(self, "workbench_bar"):
+            self.workbench_bar.setStyleSheet(toolbar_qss)
 
     def _update_theme_from_palette(self, *args):
         self._apply_desktop_theme()

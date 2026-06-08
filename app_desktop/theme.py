@@ -197,7 +197,7 @@ QFrame#workbench_status_strip {{
     color: {fg};
     border-top: 1px solid {border};
 }}
-"""
+""" + scrollbar_style(dark=dark)
 
 
 def compact_button_style() -> str:
