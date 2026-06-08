@@ -2,20 +2,21 @@
 
 This page describes the desktop GUI workflow, organized by the desktop window layout.
 
-## Window Layout
+## Workbench Layout
 
-The main window is typically split into:
+The desktop window uses a three-zone scientific workbench:
 
 - Top workbench bar: New/Open/Save, Examples, Run/Stop, workspace status, Docs, and Updates
-- Left: inputs and parameters (mode selection, data input, options)
-- Right: result area (tabs to view outputs)
+- Left configuration rail: calculation mode, data source, and output settings
+- Center workspace: data editor, formula/model editor, parameters, and constants
+- Right result rail: result summary/status, result data, image, LaTeX, log, and PDF preview tabs
 
-The left side is organized as a sequence of sections: data source, mode-specific
-configuration, output options, and run controls. Hidden modes keep their drafts,
-so switching between modules does not erase partially prepared formulas,
-parameters, constants, or root-solving settings.
+The splitter keeps required controls visible at supported desktop sizes. Formula
+preview buttons open a rendered preview dialog without changing the formula text.
+Hidden modes keep their drafts, so switching between modules does not erase
+partially prepared formulas, parameters, constants, or root-solving settings.
 
-The result area includes:
+The result rail includes:
 
 - Numeric results: human-readable summary and tables
 - Images: generated plots with zoom/export controls
