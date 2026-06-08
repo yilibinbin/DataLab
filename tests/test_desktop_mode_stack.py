@@ -34,12 +34,11 @@ def _set_combo_data(combo: Any, value: str) -> None:
 
 
 def _refresh_mode_stack_width(window: Any) -> int:
-    window._refresh_main_splitter_left_min_width()
     QApplication.processEvents()
     return int(window.mode_stack.sizeHint().width())
 
 
-def test_hidden_top_level_pages_do_not_control_left_width_until_current(window: Any) -> None:
+def test_hidden_top_level_pages_do_not_control_mode_stack_width_until_current(window: Any) -> None:
     assert window.mode_stack.indexOf(window.extrap_box) == 0
     assert window.mode_stack.indexOf(window.error_box) == 1
     assert window.mode_stack.indexOf(window.fit_box) == 2
@@ -61,7 +60,7 @@ def test_hidden_top_level_pages_do_not_control_left_width_until_current(window: 
     assert current_root_width >= baseline_width + 200
 
 
-def test_hidden_extrapolation_submethod_pages_do_not_control_left_width_until_current(window: Any) -> None:
+def test_hidden_extrapolation_submethod_pages_do_not_control_mode_stack_width_until_current(window: Any) -> None:
     assert window.extrap_method_stack.indexOf(window.power_box) == 0
     assert window.extrap_method_stack.indexOf(window.levin_box) == 1
     assert window.extrap_method_stack.indexOf(window.richardson_box) == 2
