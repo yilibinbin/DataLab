@@ -75,6 +75,7 @@ from app_desktop.theme import (
 from app_desktop.workbench_layout import (
     build_workbench_main_splitter,
     make_status_strip,
+    reparent_widget,
     scroll_viewport_overhead,
 )
 from app_desktop.workbench_visual_contract import CONFIG_RAIL_MIN_WIDTH
@@ -295,6 +296,7 @@ def build_ui(self):
     self._left_scroll = self.workbench_config_rail
 
     self._build_left_panel()
+    reparent_widget(self.workbench_workspace_layout, self.manual_box, stretch=2)
     self._build_right_panel(self.workbench_result_layout)
     # 初始化手动输入占位示例
     self._update_manual_placeholder(self.mode_combo.currentData())
