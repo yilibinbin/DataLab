@@ -7,6 +7,12 @@ SECTION_SPACING = 8
 CONTROL_SPACING = 6
 MIN_LEFT_PANEL_WIDTH = 420
 SUPPORTED_MIN_WINDOW_WIDTH = 1280
+TOOLBAR_HEIGHT = 54
+STATUS_STRIP_HEIGHT = 26
+CONFIG_RAIL_WIDTH = 320
+RESULT_RAIL_WIDTH = 380
+WORKSPACE_GUTTER = 12
+REGION_RADIUS = 8
 
 
 def is_dark_theme() -> bool:
@@ -119,6 +125,68 @@ QTextBrowser {
 }
 """
     return style + scrollbar_style(dark=dark)
+
+
+def workbench_toolbar_style(*, dark: bool | None = None) -> str:
+    dark = is_dark_theme() if dark is None else bool(dark)
+    border = "rgba(255, 255, 255, 0.10)" if dark else "rgba(31, 35, 40, 0.12)"
+    bg = "#20242b" if dark else "#f8fafc"
+    fg = "#e5e7eb" if dark else "#1f2328"
+    hover = "#2b313a" if dark else "#eef2f7"
+    active = "#2563eb" if dark else "#2563eb"
+    return f"""
+QFrame#workbench_toolbar {{
+    background: {bg};
+    border-bottom: 1px solid {border};
+}}
+QFrame#workbench_toolbar QLabel {{
+    color: {fg};
+}}
+QFrame#workbench_toolbar QToolButton,
+QFrame#workbench_toolbar QPushButton {{
+    min-height: 34px;
+    padding: 4px 8px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: {fg};
+}}
+QFrame#workbench_toolbar QToolButton:hover,
+QFrame#workbench_toolbar QPushButton:hover {{
+    background: {hover};
+    border-color: {border};
+}}
+QFrame#workbench_toolbar QToolButton#workbench_run_button {{
+    color: #ffffff;
+    background: {active};
+    border-color: {active};
+}}
+"""
+
+
+def workbench_region_style(*, dark: bool | None = None) -> str:
+    dark = is_dark_theme() if dark is None else bool(dark)
+    app_bg = "#181a1f" if dark else "#f3f5f7"
+    panel_bg = "#20242b" if dark else "#ffffff"
+    border = "rgba(255, 255, 255, 0.10)" if dark else "#d8dee8"
+    fg = "#e5e7eb" if dark else "#1f2328"
+    return f"""
+QWidget#workbench_root {{
+    background: {app_bg};
+}}
+QScrollArea#workbench_config_rail,
+QScrollArea#workbench_workspace_canvas,
+QFrame#workbench_result_rail {{
+    background: {panel_bg};
+    color: {fg};
+    border: 1px solid {border};
+    border-radius: {REGION_RADIUS}px;
+}}
+QFrame#workbench_status_strip {{
+    background: {app_bg};
+    color: {fg};
+    border-top: 1px solid {border};
+}}
+"""
 
 
 def compact_button_style() -> str:
