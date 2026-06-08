@@ -80,6 +80,7 @@ def test_config_horizontal_scrollbar_gate_detects_overflow(qapp: Any) -> None:
         window.resize(1440, 900)
         window.show()
         huge_label = QLabel("X" * 500)
+        huge_label.setMinimumWidth(5000)
         window.workbench_config_layout.addWidget(huge_label)
 
         issues = _horizontal_scrollbar_issues(

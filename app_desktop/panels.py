@@ -2031,6 +2031,9 @@ def build_left_panel(self):
     self._update_model_controls()
 
 def build_right_panel(self, layout: QVBoxLayout):
+    self.workbench_result_overview_panel = build_result_overview(self)
+    layout.addWidget(self.workbench_result_overview_panel)
+
     self.tabs = QTabWidget()
     self.tabs.setProperty("datalab_schema_key", "main.result_tabs")
     layout.addWidget(self.tabs)
@@ -2064,8 +2067,6 @@ def build_right_panel(self, layout: QVBoxLayout):
         _result_view_alias(view_key): DESKTOP_RESULT_VIEWS[view_key].title.zh
         for view_key in _RESULT_VIEW_ORDER
     }
-    self.workbench_result_overview_panel = build_result_overview(self)
-    self.workbench_result_layout.insertWidget(0, self.workbench_result_overview_panel)
 
     numeric_tab = QWidget()
     numeric_layout = QVBoxLayout(numeric_tab)

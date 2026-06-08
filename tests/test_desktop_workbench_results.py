@@ -12,6 +12,8 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication, QTableWidget
 
+from app_desktop.workbench_results import MAX_RESULT_OVERVIEW_ROWS
+
 
 def _window(qtbot: Any) -> Any:
     from app_desktop.window import ExtrapolationWindow
@@ -42,6 +44,29 @@ def test_result_rail_mirrors_csv_rows(qtbot: Any) -> None:
     assert "1" in window.workbench_result_overview.text()
 
 
+def test_result_rail_clears_stale_columns_when_newer_result_is_narrower(qtbot: Any) -> None:
+    window = _window(qtbot)
+    window._set_csv_data([{"k": "2.47e-3", "y": "2.46e-6"}], ["k", "y"], "result.csv")
+    window._set_csv_data([{"k": "3.14"}], ["k"], "result.csv")
+
+    assert window.workbench_result_table.rowCount() == 1
+    assert window.workbench_result_table.columnCount() == 1
+    assert window.workbench_result_table.horizontalHeaderItem(0).text() == "k"
+    assert window.workbench_result_table.item(0, 0).text() == "3.14"
+
+
+def test_result_rail_caps_visible_rows_but_reports_total(qtbot: Any) -> None:
+    window = _window(qtbot)
+    rows = [{"i": str(index)} for index in range(MAX_RESULT_OVERVIEW_ROWS + 3)]
+
+    window._set_csv_data(rows, ["i"], "result.csv")
+    window._apply_language("en")
+
+    assert window.workbench_result_table.rowCount() == MAX_RESULT_OVERVIEW_ROWS
+    assert f"Result data: {len(rows)} rows, 1 column" in window.workbench_result_overview.text()
+    assert f"showing first {MAX_RESULT_OVERVIEW_ROWS}" in window.workbench_result_overview.text()
+
+
 def test_result_rail_clears_when_csv_data_resets(qtbot: Any) -> None:
     window = _window(qtbot)
     window._set_csv_data([{"k": "2.47e-3"}], ["k"], "result.csv")
@@ -56,6 +81,6 @@ def test_result_rail_summary_relocalizes_on_language_switch(qtbot: Any) -> None:
     window._set_csv_data([{"k": "2.47e-3"}], ["k"], "result.csv")
 
     window._apply_language("en")
-    assert "Result data: 1 rows" in window.workbench_result_overview.text()
+    assert "Result data: 1 row, 1 column" in window.workbench_result_overview.text()
     window._apply_language("zh")
     assert "结果数据：1 行" in window.workbench_result_overview.text()
