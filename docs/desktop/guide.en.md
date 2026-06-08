@@ -9,7 +9,7 @@ The desktop window uses a three-zone scientific workbench:
 - Top workbench bar: New/Open/Save, Examples, Run/Stop, workspace status, Docs, and Updates
 - Left configuration rail: calculation mode, data source, and output settings
 - Center workspace: data editor, formula/model editor, parameters, and constants
-- Right result rail: result summary/status, result data, image, LaTeX, log, and PDF preview tabs
+- Right result rail: an always-visible result summary/status panel above tabs for numeric results, images, log, LaTeX, and PDF preview
 
 The splitter keeps required controls visible at supported desktop sizes. Formula
 preview buttons open a rendered preview dialog without changing the formula text.

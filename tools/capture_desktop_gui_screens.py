@@ -155,6 +155,10 @@ def capture_desktop_gui_screens(
         window.deleteLater()
 
 
+def report_has_issues(report: dict[str, Any]) -> bool:
+    return any(int(item.get("issue_count", 0) or 0) != 0 for item in report.get("screenshots", []))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Capture deterministic DataLab desktop GUI screenshots.")
     parser.add_argument("--out", type=Path, default=Path("build/gui-screenshots"))
@@ -164,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
 
     report = capture_desktop_gui_screens(out=args.out, width=args.width, height=args.height)
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0
+    return 1 if report_has_issues(report) else 0
 
 
 if __name__ == "__main__":

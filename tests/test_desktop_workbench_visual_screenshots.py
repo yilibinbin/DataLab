@@ -40,3 +40,10 @@ def test_workbench_screenshot_manifest_contains_region_metrics(tmp_path) -> None
 
     manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["screenshots"][0]["regions"]["workbench_toolbar"]["height"] >= 44
+
+
+def test_screenshot_report_issue_status_controls_cli_exit() -> None:
+    from tools.capture_desktop_gui_screens import report_has_issues
+
+    assert report_has_issues({"screenshots": [{"issue_count": 0}]}) is False
+    assert report_has_issues({"screenshots": [{"issue_count": 0}, {"issue_count": 1}]}) is True

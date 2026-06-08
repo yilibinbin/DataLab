@@ -9,7 +9,7 @@ Run from `data_extrapolation_gui/DataLab`:
 
 ## Release Gate
 
-A release cannot proceed while the GUI scan reports issues, screenshot capture fails, or any packaging resource check fails.
+A release cannot proceed while the GUI scan reports issues, screenshot capture fails, any screenshot manifest entry has visual issues, or any packaging resource check fails.
 
 Run the full local gate before packaging:
 
