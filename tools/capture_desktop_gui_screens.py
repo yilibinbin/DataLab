@@ -156,7 +156,10 @@ def capture_desktop_gui_screens(
 
 
 def report_has_issues(report: dict[str, Any]) -> bool:
-    return any(int(item.get("issue_count", 0) or 0) != 0 for item in report.get("screenshots", []))
+    screenshots = report.get("screenshots", [])
+    if not screenshots:
+        return True
+    return any(int(item.get("issue_count", 0) or 0) != 0 for item in screenshots)
 
 
 def main(argv: list[str] | None = None) -> int:

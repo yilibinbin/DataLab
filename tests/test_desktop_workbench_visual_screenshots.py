@@ -45,5 +45,20 @@ def test_workbench_screenshot_manifest_contains_region_metrics(tmp_path) -> None
 def test_screenshot_report_issue_status_controls_cli_exit() -> None:
     from tools.capture_desktop_gui_screens import report_has_issues
 
+    assert report_has_issues({"screenshots": []}) is True
     assert report_has_issues({"screenshots": [{"issue_count": 0}]}) is False
     assert report_has_issues({"screenshots": [{"issue_count": 0}, {"issue_count": 1}]}) is True
+
+
+def test_screenshot_cli_returns_failure_when_manifest_has_issues(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tools.capture_desktop_gui_screens as capture_tool
+
+    monkeypatch.setattr(
+        capture_tool,
+        "capture_desktop_gui_screens",
+        lambda **_: {"screenshots": [{"issue_count": 1, "issues": [{"kind": "probe"}]}]},
+    )
+
+    assert capture_tool.main(["--out", str(tmp_path / "screens")]) == 1
