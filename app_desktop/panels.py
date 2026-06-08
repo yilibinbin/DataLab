@@ -64,15 +64,20 @@ from app_desktop.parallel_preferences import (
     save_current_parallel_config,
 )
 from app_desktop.schema_widgets import make_editor_header
-from app_desktop.shell_layout import build_workbench_bar
+from app_desktop.shell_layout import build_workbench_bar, update_workbench_status
 from app_desktop.theme import (
     CONTROL_SPACING,
-    MIN_LEFT_PANEL_WIDTH,
     SECTION_SPACING,
     is_dark_theme,
     result_style,
     table_style,
 )
+from app_desktop.workbench_layout import (
+    build_workbench_main_splitter,
+    make_status_strip,
+    scroll_viewport_overhead,
+)
+from app_desktop.workbench_visual_contract import CONFIG_RAIL_MIN_WIDTH
 from app_desktop.ui_schema_binder import bind_choices, bind_field
 from app_desktop.ui_schema_runtime import (
     bind_schema_command_button,
@@ -267,36 +272,30 @@ def build_ui(self):
     central = QWidget(self)
     self.setCentralWidget(central)
     layout = QVBoxLayout(central)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+
+    self.workbench_root = QWidget()
+    self.workbench_root.setObjectName("workbench_root")
+    root_layout = QVBoxLayout(self.workbench_root)
+    root_layout.setContentsMargins(0, 0, 0, 0)
+    root_layout.setSpacing(0)
+
     self.workbench_bar = build_workbench_bar(self)
-    layout.addWidget(self.workbench_bar)
-    splitter = QSplitter(Qt.Horizontal, self)
-    splitter.setHandleWidth(8)
-    splitter.setChildrenCollapsible(False)
-    # Expose as an instance attribute so the close handler and the
-    # QSettings restore path in ``main.py`` can reach it. Previously the
-    # splitter was purely local and its geometry was lost on every close.
-    self._main_splitter = splitter
-    layout.addWidget(splitter)
+    root_layout.addWidget(self.workbench_bar)
+    self._main_splitter = build_workbench_main_splitter(self)
+    root_layout.addWidget(self._main_splitter, 1)
+    self.workbench_status_strip, self.workbench_status_layout = make_status_strip(self)
+    update_workbench_status(self)
+    root_layout.addWidget(self.workbench_status_strip)
+    layout.addWidget(self.workbench_root)
 
-    left_scroll = QScrollArea()
-    left_scroll.setWidgetResizable(True)
-    self._left_scroll = left_scroll
-    left_container = QWidget()
-    self.left_container = left_container
-    self.left_layout = QVBoxLayout(left_container)
-    self.left_layout.setAlignment(Qt.AlignTop)
-    left_scroll.setWidget(left_container)
-    splitter.addWidget(left_scroll)
-
-    right_container = QWidget()
-    right_layout = QVBoxLayout(right_container)
-    splitter.addWidget(right_container)
-    splitter.setStretchFactor(0, 1)
-    splitter.setStretchFactor(1, 1)
-    splitter.setSizes([520, 820])
+    self.left_layout = self.workbench_config_layout
+    self.left_container = self.workbench_config_content
+    self._left_scroll = self.workbench_config_rail
 
     self._build_left_panel()
-    self._build_right_panel(right_layout)
+    self._build_right_panel(self.workbench_result_layout)
     # 初始化手动输入占位示例
     self._update_manual_placeholder(self.mode_combo.currentData())
     # 根据当前模式刷新可见性
@@ -306,7 +305,7 @@ def build_ui(self):
     # Restore persisted splitter geometry so the user's last-chosen
     # left/right proportions survive a restart. See
     # ``shared.settings_store`` for the key naming and on-failure
-    # fallback policy (defaults to the [520, 820] setSizes above).
+    # fallback policy (defaults to the three-zone splitter sizes above).
     # A single SettingsStore instance is cached on ``self`` and reused
     # by closeEvent's save path — avoids double-construction race on
     # Windows registry access and lets tests inject a fake via a
@@ -328,8 +327,9 @@ def build_ui(self):
             # Snapshot pre-restore sizes so we can roll back if the
             # restore succeeds syntactically (returns True) but applies
             # semantically nonsensical sizes — e.g. a blob from an
-            # older app version whose layout had 3 panes instead of 2,
-            # which Qt will happily accept and silently truncate.
+            # older app version whose layout had a different pane count,
+            # which Qt may accept and silently truncate.
+            splitter = self._main_splitter
             pre_restore_sizes = splitter.sizes()
             pre_restore_count = splitter.count()
             # The blob header stores the pane count. Pre-check it
@@ -371,6 +371,54 @@ def build_ui(self):
         )
 
 def _refresh_main_splitter_left_min_width(self) -> None:
+    config_content = getattr(self, "workbench_config_content", None)
+    config_scroll = getattr(self, "workbench_config_rail", None)
+    if config_content is not None and config_scroll is not None:
+        _activate_widget_layouts(config_content)
+        _refresh_visible_table_min_widths(config_content)
+        workspace_content = getattr(self, "workbench_workspace_content", None)
+        if workspace_content is not None:
+            _activate_widget_layouts(workspace_content)
+            _refresh_visible_table_min_widths(workspace_content)
+        _activate_widget_layouts(config_content)
+
+        content_min_width = max(
+            CONFIG_RAIL_MIN_WIDTH,
+            config_content.minimumSizeHint().width(),
+        )
+        config_content.setMinimumWidth(content_min_width)
+        left_min_width = content_min_width + scroll_viewport_overhead(config_scroll)
+        self._main_splitter_left_min_width = left_min_width
+        config_scroll.setMinimumWidth(left_min_width)
+
+        splitter = getattr(self, "_main_splitter", None)
+        workspace_scroll = getattr(self, "workbench_workspace_canvas", None)
+        result_rail = getattr(self, "workbench_result_rail", None)
+        if splitter is None or splitter.count() < 3 or workspace_scroll is None or result_rail is None:
+            return
+
+        center_min_width = max(1, workspace_scroll.minimumWidth())
+        right_min_width = max(1, result_rail.minimumWidth())
+        sizes = splitter.sizes()
+        if not sizes or len(sizes) < 3:
+            splitter.setSizes([left_min_width, center_min_width, right_min_width])
+            return
+        if (
+            sizes[0] >= left_min_width
+            and sizes[1] >= center_min_width
+            and sizes[2] >= right_min_width
+        ):
+            return
+
+        total = max(sum(sizes), splitter.width())
+        minimum_total = left_min_width + center_min_width + right_min_width
+        if total >= minimum_total:
+            center_width = max(center_min_width, total - left_min_width - right_min_width)
+            splitter.setSizes([left_min_width, center_width, right_min_width])
+        else:
+            splitter.setSizes([left_min_width, center_min_width, right_min_width])
+        return
+
     left_container = getattr(self, "left_container", None)
     left_scroll = getattr(self, "_left_scroll", None)
     if left_container is None or left_scroll is None:
@@ -386,7 +434,7 @@ def _refresh_main_splitter_left_min_width(self) -> None:
         left_container.minimumSizeHint().width(),
         _visible_left_content_min_width(left_container),
     )
-    left_min_width = max(MIN_LEFT_PANEL_WIDTH, content_min_width) + viewport_overhead
+    left_min_width = max(CONFIG_RAIL_MIN_WIDTH, content_min_width) + viewport_overhead
     self._main_splitter_left_min_width = left_min_width
     left_scroll.setMinimumWidth(left_min_width)
     splitter = getattr(self, "_main_splitter", None)

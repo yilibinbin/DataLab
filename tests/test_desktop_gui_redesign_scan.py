@@ -6,9 +6,10 @@ from typing import Any
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PySide6.QtWidgets import QLabel
 
-pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
+pytest.importorskip("pytestqt")
 
 from tools.scan_desktop_gui_schema import MODES, RESULT_TABS, ROOT_SOLVING_SUBMODES, SCAN_WIDTHS
 
@@ -63,5 +64,29 @@ def test_redesign_scan_returns_structured_strict_report(qapp: Any) -> None:
         )
         assert report["checks"]["missing_help_affordance_count"] == EXPECTED_CURRENT_HELP_GAP_COUNT
         assert report["issues"] == []
+    finally:
+        window.deleteLater()
+
+
+def test_config_horizontal_scrollbar_gate_detects_overflow(qapp: Any) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from tools.scan_desktop_gui_schema import (
+        ScreenScenario,
+        _horizontal_scrollbar_issues,
+    )
+
+    window = ExtrapolationWindow()
+    try:
+        window.resize(1440, 900)
+        window.show()
+        huge_label = QLabel("X" * 500)
+        window.workbench_config_layout.addWidget(huge_label)
+
+        issues = _horizontal_scrollbar_issues(
+            window,
+            [ScreenScenario(key="zh:fitting", language="zh", mode="fitting")],
+        )
+
+        assert any(issue["kind"] == "workbench_config_horizontal_scrollbar" for issue in issues)
     finally:
         window.deleteLater()

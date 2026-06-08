@@ -238,7 +238,7 @@ def test_left_panel_minimum_width_is_not_formula_size_hint(window: Any) -> None:
     QApplication.processEvents()
 
     assert left_scroll.minimumWidth() == before_width
-    window._main_splitter.setSizes([1, 1299])
+    window._main_splitter.setSizes([1, 979, 320])
     QApplication.processEvents()
     assert left_scroll.viewport().width() >= window.left_container.minimumSizeHint().width()
     assert left_scroll.horizontalScrollBar().maximum() == 0

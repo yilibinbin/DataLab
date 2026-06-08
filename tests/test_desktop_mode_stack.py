@@ -108,10 +108,12 @@ def test_supported_widths_modes_and_submethods_have_no_left_horizontal_scrollbar
         if method is not None:
             _set_combo_data(window.method_combo, method)
         window._refresh_main_splitter_left_min_width()
-        window._main_splitter.setSizes([1, max(1, width - 1)])
+        window._main_splitter.setSizes([1, max(1, width - 321), 320])
         QApplication.processEvents()
 
         horizontal_bar = window._left_scroll.horizontalScrollBar()
+        assert window._main_splitter.count() == 3
+        assert len(window._main_splitter.sizes()) == 3
         assert horizontal_bar.maximum() == 0, (width, mode, method)
 
 

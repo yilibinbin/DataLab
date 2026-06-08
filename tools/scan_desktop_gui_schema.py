@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QScrollArea,
     QTableWidget,
     QTabWidget,
     QTextEdit,
@@ -37,6 +38,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 )
 
 from app_desktop.theme import SUPPORTED_MIN_WINDOW_WIDTH  # noqa: E402
+from app_desktop.workbench_visual_contract import visual_contract_issues  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -161,16 +163,33 @@ def _horizontal_scrollbar_issues(window: Any, scenarios: list[ScreenScenario]) -
         _apply_screen_scenario(window, scenario)
         QApplication.processEvents()
         _force_smallest_left_splitter(window)
-        bar = window._left_scroll.horizontalScrollBar()
-        if bar.maximum() != 0 or bar.isVisible():
+        scroll = window.findChild(QScrollArea, "workbench_config_rail")
+        kind = "workbench_config_horizontal_scrollbar"
+        widget = "workbench_config_rail"
+        if scroll is None:
+            scroll = window._left_scroll
+            kind = "horizontal_scrollbar"
+            widget = "_left_scroll"
+        bar = scroll.horizontalScrollBar()
+        content = scroll.widget()
+        content_width = content.minimumSizeHint().width() if content is not None else 0
+        viewport_width = scroll.viewport().width()
+        if (
+            bar.maximum() != 0
+            or bar.isVisible()
+            or content_width > viewport_width
+            or content_width > window.width()
+        ):
             issues.append(
                 _issue(
-                    "horizontal_scrollbar",
+                    kind,
                     scenario,
-                    "_left_scroll",
-                    "left panel horizontal scrollbar is visible after splitter clamp",
+                    widget,
+                    "config rail overflows horizontally after splitter clamp",
                     maximum=int(bar.maximum()),
                     visible=bool(bar.isVisible()),
+                    content_width=int(content_width),
+                    viewport_width=int(viewport_width),
                 )
             )
     return issues
@@ -201,7 +220,11 @@ def _configure_root_scrollbar_scenario(window: Any, root_mode: str) -> None:
 
 def _force_smallest_left_splitter(window: Any) -> None:
     window._refresh_main_splitter_left_min_width()
-    window._main_splitter.setSizes([1, max(1, window.width() - 1)])
+    splitter = window._main_splitter
+    if splitter.count() >= 3:
+        splitter.setSizes([1, max(1, window.width() - 321), 320])
+    else:
+        splitter.setSizes([1, max(1, window.width() - 1)])
     QApplication.processEvents()
     window._refresh_main_splitter_left_min_width()
     QApplication.processEvents()
@@ -409,6 +432,18 @@ def scan_window(window: Any, *, refresh_language: bool = True, strict: bool = Fa
     layout_issues = _horizontal_scrollbar_issues(window, scenarios)
     structured_issues.extend(layout_issues)
     left_ok = not layout_issues
+    for issue in visual_contract_issues(window):
+        widget = str(issue.get("widget", "workbench"))
+        kind = str(issue.get("kind", "visual_contract"))
+        structured_issues.append(
+            _issue(
+                kind,
+                None,
+                widget,
+                f"visual workbench contract issue: {kind}",
+                contract_issue=issue,
+            )
+        )
 
     help_issues: list[dict[str, Any]] = []
     if strict:

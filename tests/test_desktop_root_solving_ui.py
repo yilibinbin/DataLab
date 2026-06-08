@@ -138,7 +138,7 @@ def test_main_splitter_clamps_left_panel_to_config_minimum(window: Any) -> None:
     QApplication.processEvents()
 
     splitter = window._main_splitter
-    splitter.setSizes([1, 1499])
+    splitter.setSizes([1, 1179, 320])
     QApplication.processEvents()
 
     assert splitter.sizes()[0] >= window._main_splitter_left_min_width
@@ -153,7 +153,7 @@ def test_main_splitter_minimum_prevents_left_horizontal_scrollbar(window: Any) -
         window.mode_combo.setCurrentIndex(window.mode_combo.findData(mode))
         QApplication.processEvents()
         window._refresh_main_splitter_left_min_width()
-        window._main_splitter.setSizes([1, 1299])
+        window._main_splitter.setSizes([1, 979, 320])
         QApplication.processEvents()
 
         horizontal_bar = window._left_scroll.horizontalScrollBar()
