@@ -10,12 +10,12 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QToolButton
 
 
-def _button(window: Any, object_name: str) -> QPushButton:
-    button = window.findChild(QPushButton, object_name)
-    assert button is not None, object_name
+def _button(window: Any, object_name: str) -> QToolButton:
+    button = getattr(window, object_name, None)
+    assert isinstance(button, QToolButton), object_name
     return button
 
 

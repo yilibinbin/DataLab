@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QStyle,
     QToolButton,
@@ -96,15 +95,6 @@ def make_toolbar_button(
         typed_owner._register_text(button, tooltip_zh, tooltip_en, "setAccessibleDescription")
 
     return button
-
-
-def _add_legacy_button_proxy(toolbar: QWidget, source: QToolButton, owner: object, *methods: str) -> None:
-    proxy = QPushButton(toolbar)
-    proxy.setObjectName(source.objectName())
-    proxy.setToolTip(source.toolTip())
-    proxy.setAccessibleDescription(source.accessibleDescription())
-    proxy.setVisible(False)
-    proxy.clicked.connect(_call_owner(owner, *methods))
 
 
 def build_workbench_toolbar(owner: object) -> QWidget:
@@ -240,8 +230,5 @@ def build_workbench_toolbar(owner: object) -> QWidget:
     )
     layout.addWidget(dynamic_owner.docs_button)
     layout.addWidget(dynamic_owner.check_updates_button)
-
-    _add_legacy_button_proxy(toolbar, dynamic_owner.open_examples_button, owner, "open_example_workspace")
-    _add_legacy_button_proxy(toolbar, dynamic_owner.docs_button, owner, "_open_docs", "_show_docs")
 
     return toolbar
