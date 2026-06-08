@@ -195,6 +195,27 @@ def _horizontal_scrollbar_issues(window: Any, scenarios: list[ScreenScenario]) -
     return issues
 
 
+def _workbench_visual_contract_issues(window: Any, scenarios: list[ScreenScenario]) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    for scenario in scenarios:
+        _apply_screen_scenario(window, scenario)
+        QApplication.processEvents()
+        _force_smallest_left_splitter(window)
+        for issue in visual_contract_issues(window):
+            widget = str(issue.get("widget", "workbench"))
+            kind = str(issue.get("kind", "visual_contract"))
+            issues.append(
+                _issue(
+                    kind,
+                    scenario,
+                    widget,
+                    f"visual workbench contract issue: {kind}",
+                    contract_issue=issue,
+                )
+            )
+    return issues
+
+
 def _configure_root_scrollbar_scenario(window: Any, root_mode: str) -> None:
     window.mode_combo.setCurrentIndex(_combo_index_for_data(window.mode_combo, "root_solving"))
     window.root_mode_combo.setCurrentIndex(_combo_index_for_data(window.root_mode_combo, root_mode))
@@ -432,18 +453,7 @@ def scan_window(window: Any, *, refresh_language: bool = True, strict: bool = Fa
     layout_issues = _horizontal_scrollbar_issues(window, scenarios)
     structured_issues.extend(layout_issues)
     left_ok = not layout_issues
-    for issue in visual_contract_issues(window):
-        widget = str(issue.get("widget", "workbench"))
-        kind = str(issue.get("kind", "visual_contract"))
-        structured_issues.append(
-            _issue(
-                kind,
-                None,
-                widget,
-                f"visual workbench contract issue: {kind}",
-                contract_issue=issue,
-            )
-        )
+    structured_issues.extend(_workbench_visual_contract_issues(window, scenarios))
 
     help_issues: list[dict[str, Any]] = []
     if strict:

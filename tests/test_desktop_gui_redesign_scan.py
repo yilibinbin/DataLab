@@ -90,3 +90,50 @@ def test_config_horizontal_scrollbar_gate_detects_overflow(qapp: Any) -> None:
         assert any(issue["kind"] == "workbench_config_horizontal_scrollbar" for issue in issues)
     finally:
         window.deleteLater()
+
+
+def test_visual_contract_scan_attributes_issue_to_scenario(qapp: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import tools.scan_desktop_gui_schema as scanner
+    from app_desktop.window import ExtrapolationWindow
+    from tools.scan_desktop_gui_schema import ScreenScenario
+
+    scenario = ScreenScenario(
+        key="current:1440:fitting:numeric",
+        language="current",
+        mode="fitting",
+        result_tab="numeric",
+        width=1440,
+    )
+
+    monkeypatch.setattr(scanner, "_screen_scenarios", lambda *, refresh_language: [scenario])
+    monkeypatch.setattr(scanner, "_legacy_language_issues", lambda window, lang: [])
+    monkeypatch.setattr(scanner, "_horizontal_scrollbar_issues", lambda window, scenarios: [])
+    monkeypatch.setattr(scanner, "_root_plot_display_ok", lambda window: True)
+    monkeypatch.setattr(scanner, "_workspace_result_round_trip_ok", lambda window: True)
+    monkeypatch.setattr(
+        scanner,
+        "visual_contract_issues",
+        lambda window: [{"kind": "visual_probe", "widget": "workbench_workspace_canvas"}],
+    )
+
+    window = ExtrapolationWindow()
+    try:
+        report = scanner.scan_window(window, refresh_language=False, strict=True)
+    finally:
+        window.deleteLater()
+
+    assert report["issues"] == [
+        {
+            "kind": "visual_probe",
+            "scenario": scenario.key,
+            "language": "current",
+            "widget": "workbench_workspace_canvas",
+            "message": "visual workbench contract issue: visual_probe",
+            "details": {
+                "contract_issue": {
+                    "kind": "visual_probe",
+                    "widget": "workbench_workspace_canvas",
+                }
+            },
+        }
+    ]
