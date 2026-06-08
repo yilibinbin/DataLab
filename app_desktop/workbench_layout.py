@@ -153,4 +153,5 @@ def build_workbench_main_splitter(owner: object) -> QSplitter:
 
 
 def reparent_widget(layout: QVBoxLayout | QHBoxLayout, widget: QWidget, stretch: int = 0) -> None:
+    widget.setParent(None)
     layout.addWidget(widget, stretch)

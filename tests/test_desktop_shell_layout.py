@@ -73,13 +73,15 @@ def test_shell_sections_are_visible_in_expected_order(qtbot: Any) -> None:
         for index in range(window.left_layout.count())
         if window.left_layout.itemAt(index).widget() is not None
     ]
-    assert layout_names[:5] == [
+    assert layout_names[:4] == [
         "input_section",
         "mode_section",
-        "parameters_section",
         "output_setup_section",
         "run_section",
     ]
+    assert window.mode_stack.parentWidget() is window.workbench_workspace_content
+    assert window.custom_params_table is not None
+    assert window.custom_constants_editor is not None
 
 
 def test_legacy_run_button_click_reaches_current_run_calculation(

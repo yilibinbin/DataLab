@@ -296,6 +296,10 @@ def build_ui(self):
     self._left_scroll = self.workbench_config_rail
 
     self._build_left_panel()
+    reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
+    if hasattr(self, "parameters_section"):
+        self.parameters_section.setParent(None)
+        self.parameters_section.deleteLater()
     reparent_widget(self.workbench_workspace_layout, self.manual_box, stretch=2)
     self._build_right_panel(self.workbench_result_layout)
     # 初始化手动输入占位示例

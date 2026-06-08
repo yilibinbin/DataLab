@@ -33,10 +33,10 @@ def _set_combo_data(combo: Any, value: str) -> None:
     QApplication.processEvents()
 
 
-def _refresh_left_width(window: Any) -> int:
+def _refresh_mode_stack_width(window: Any) -> int:
     window._refresh_main_splitter_left_min_width()
     QApplication.processEvents()
-    return int(window._main_splitter_left_min_width)
+    return int(window.mode_stack.sizeHint().width())
 
 
 def test_hidden_top_level_pages_do_not_control_left_width_until_current(window: Any) -> None:
@@ -47,15 +47,15 @@ def test_hidden_top_level_pages_do_not_control_left_width_until_current(window: 
     assert window.mode_stack.indexOf(window.stats_box) == 4
 
     _set_combo_data(window.mode_combo, "extrapolation")
-    baseline_width = _refresh_left_width(window)
+    baseline_width = _refresh_mode_stack_width(window)
 
     wide_root_child = QLabel("wide root draft")
     wide_root_child.setMinimumWidth(baseline_width + 240)
     window.root_box.layout().addWidget(wide_root_child)
-    hidden_root_width = _refresh_left_width(window)
+    hidden_root_width = _refresh_mode_stack_width(window)
 
     _set_combo_data(window.mode_combo, "root_solving")
-    current_root_width = _refresh_left_width(window)
+    current_root_width = _refresh_mode_stack_width(window)
 
     assert hidden_root_width == baseline_width
     assert current_root_width >= baseline_width + 200
@@ -69,15 +69,15 @@ def test_hidden_extrapolation_submethod_pages_do_not_control_left_width_until_cu
 
     _set_combo_data(window.mode_combo, "extrapolation")
     _set_combo_data(window.method_combo, "power_law")
-    baseline_width = _refresh_left_width(window)
+    baseline_width = _refresh_mode_stack_width(window)
 
     wide_custom_child = QLabel("wide custom draft")
     wide_custom_child.setMinimumWidth(baseline_width + 260)
     window.custom_formula_widget.layout().addWidget(wide_custom_child)
-    hidden_custom_width = _refresh_left_width(window)
+    hidden_custom_width = _refresh_mode_stack_width(window)
 
     _set_combo_data(window.method_combo, "custom")
-    current_custom_width = _refresh_left_width(window)
+    current_custom_width = _refresh_mode_stack_width(window)
 
     assert hidden_custom_width == baseline_width
     assert current_custom_width >= baseline_width + 220
