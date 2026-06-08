@@ -9,7 +9,7 @@ The desktop window uses a three-zone scientific workbench:
 - Top workbench bar: New/Open/Save, Examples, Run/Stop, workspace status, Docs, and Updates
 - Left configuration rail: calculation mode, data source, and output settings
 - Center workspace: data editor, formula/model editor, parameters, and constants
-- Right result rail: an always-visible result summary/status panel above tabs for Numeric results, Image results, Run log, LaTeX source, and PDF Preview
+- Right result rail: an always-visible result summary/status panel above tabs for Numeric results, Image results, Run log, LaTeX source, and PDF preview
 
 The splitter keeps required controls visible at supported desktop sizes. Formula
 preview buttons open a rendered preview dialog without changing the formula text.
@@ -22,7 +22,7 @@ The result rail includes:
 - Image results: generated plots with zoom/export controls
 - Run log: detailed steps and warnings (check this first when something fails)
 - LaTeX source: generated LaTeX text (editable before compiling)
-- PDF Preview: preview images after successful PDF compilation
+- PDF preview: preview images after successful PDF compilation
 
 ## Data Input
 

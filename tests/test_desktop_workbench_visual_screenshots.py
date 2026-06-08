@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -31,6 +32,9 @@ def test_workbench_screenshot_manifest_contains_region_metrics(tmp_path) -> None
 
     assert report["count"] >= 16
     for item in report["screenshots"]:
+        screenshot_path = Path(item["path"])
+        assert screenshot_path.is_file(), screenshot_path
+        assert screenshot_path.stat().st_size > 0, screenshot_path
         assert item["issue_count"] == 0
         assert item["issues"] == []
         regions = item["regions"]
