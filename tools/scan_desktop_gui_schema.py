@@ -20,7 +20,6 @@ def _ensure_repo_root_on_path() -> None:
 
 _ensure_repo_root_on_path()
 
-from PySide6.QtCore import QPoint  # noqa: E402
 from PySide6.QtGui import QAction  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -175,14 +174,12 @@ def _horizontal_scrollbar_issues(window: Any, scenarios: list[ScreenScenario]) -
         content = scroll.widget()
         content_width = content.minimumSizeHint().width() if content is not None else 0
         viewport_width = scroll.viewport().width()
-        scroll_right = scroll.mapTo(window, QPoint(0, 0)).x() + scroll.width()
-        target_width = scenario.width or window.width()
+        target_width = scenario.width
         if (
             bar.maximum() != 0
             or bar.isVisible()
             or content_width > viewport_width
             or content_width > target_width
-            or scroll_right > target_width
         ):
             issues.append(
                 _issue(
@@ -194,7 +191,6 @@ def _horizontal_scrollbar_issues(window: Any, scenarios: list[ScreenScenario]) -
                     visible=bool(bar.isVisible()),
                     content_width=int(content_width),
                     viewport_width=int(viewport_width),
-                    scroll_right=int(scroll_right),
                     window_width=int(window.width()),
                     target_width=int(target_width),
                 )

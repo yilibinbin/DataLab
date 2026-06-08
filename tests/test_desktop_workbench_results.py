@@ -12,7 +12,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication, QTableWidget
 
-from app_desktop.workbench_results import MAX_RESULT_OVERVIEW_ROWS
+from app_desktop.workbench_results import MAX_RESULT_OVERVIEW_ROWS, MAX_RESULT_OVERVIEW_TABLE_HEIGHT
 
 
 def _window(qtbot: Any) -> Any:
@@ -63,6 +63,7 @@ def test_result_rail_caps_visible_rows_but_reports_total(qtbot: Any) -> None:
     window._apply_language("en")
 
     assert window.workbench_result_table.rowCount() == MAX_RESULT_OVERVIEW_ROWS
+    assert window.workbench_result_table.maximumHeight() == MAX_RESULT_OVERVIEW_TABLE_HEIGHT
     assert f"Result data: {len(rows)} rows, 1 column" in window.workbench_result_overview.text()
     assert f"showing first {MAX_RESULT_OVERVIEW_ROWS}" in window.workbench_result_overview.text()
 

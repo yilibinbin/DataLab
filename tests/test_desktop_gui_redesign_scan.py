@@ -88,7 +88,10 @@ def test_config_horizontal_scrollbar_gate_detects_overflow(qapp: Any) -> None:
             [ScreenScenario(key="zh:fitting", language="zh", mode="fitting")],
         )
 
-        assert any(issue["kind"] == "workbench_config_horizontal_scrollbar" for issue in issues)
+        config_issues = [issue for issue in issues if issue["kind"] == "workbench_config_horizontal_scrollbar"]
+        assert config_issues
+        assert config_issues[0]["details"]["target_width"] == 1400
+        assert config_issues[0]["details"]["content_width"] > config_issues[0]["details"]["target_width"]
     finally:
         window.deleteLater()
 

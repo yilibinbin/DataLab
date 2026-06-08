@@ -7,6 +7,7 @@ from typing import Any
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QLabel,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
 from app_desktop.theme import table_style
 
 MAX_RESULT_OVERVIEW_ROWS = 50
+MAX_RESULT_OVERVIEW_TABLE_HEIGHT = 220
 
 
 def build_result_overview(owner: Any) -> QWidget:
@@ -34,6 +36,8 @@ def build_result_overview(owner: Any) -> QWidget:
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     table.setAlternatingRowColors(True)
     table.setStyleSheet(table_style())
+    table.setMaximumHeight(MAX_RESULT_OVERVIEW_TABLE_HEIGHT)
+    table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
     owner.workbench_result_table = table
     layout.addWidget(table)
     return widget
