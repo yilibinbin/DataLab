@@ -377,6 +377,8 @@ class WindowI18nMixin:
                 _on_root_uncertainty_method_changed(self)
             except Exception:
                 _LOGGER.exception("Failed to refresh root uncertainty i18n")
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
         if hasattr(self, "_refresh_main_splitter_left_min_width"):
             self._refresh_main_splitter_left_min_width()
 

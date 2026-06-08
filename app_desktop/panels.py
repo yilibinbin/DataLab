@@ -78,6 +78,7 @@ from app_desktop.workbench_layout import (
     reparent_widget,
     scroll_viewport_overhead,
 )
+from app_desktop.workbench_results import build_result_overview
 from app_desktop.workbench_visual_contract import CONFIG_RAIL_MIN_WIDTH
 from app_desktop.ui_schema_binder import bind_choices, bind_field
 from app_desktop.ui_schema_runtime import (
@@ -2063,6 +2064,8 @@ def build_right_panel(self, layout: QVBoxLayout):
         _result_view_alias(view_key): DESKTOP_RESULT_VIEWS[view_key].title.zh
         for view_key in _RESULT_VIEW_ORDER
     }
+    self.workbench_result_overview_panel = build_result_overview(self)
+    self.workbench_result_layout.insertWidget(0, self.workbench_result_overview_panel)
 
     numeric_tab = QWidget()
     numeric_layout = QVBoxLayout(numeric_tab)

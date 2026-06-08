@@ -2233,6 +2233,8 @@ class ExtrapolationWindow(
         self._csv_suggest_name = "results.csv"
         if hasattr(self, "export_csv_btn"):
             self.export_csv_btn.setEnabled(False)
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
 
     def _set_csv_data(self, rows: list[dict[str, object]] | None, headers: list[str] | None = None, suggestion: str | None = None):
         """Cache the latest tabular results for CSV export."""
@@ -2249,6 +2251,14 @@ class ExtrapolationWindow(
             self.export_csv_btn.setEnabled(bool(self._csv_rows))
         if hasattr(self, "_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
             self._mark_workspace_dirty()
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
+
+    def refresh_workbench_result_rail(self) -> None:
+        from app_desktop.workbench_results import refresh_result_overview
+
+        if hasattr(self, "workbench_result_table"):
+            refresh_result_overview(self)
 
     def _export_csv_data(self):
         if not getattr(self, "_csv_rows", None):
