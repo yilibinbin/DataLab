@@ -86,6 +86,11 @@ from app_desktop.workbench_formula_panel import (
 )
 from app_desktop.workbench_results import build_result_overview
 from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
+from app_desktop.workbench_variable_panel import (
+    build_variable_workspace_panel,
+    populate_variable_workspace_panel,
+    refresh_variable_workspace_panel,
+)
 from app_desktop.workbench_visual_contract import CONFIG_RAIL_MIN_WIDTH
 from app_desktop.ui_schema_binder import bind_choices, bind_field
 from app_desktop.ui_schema_runtime import (
@@ -307,7 +312,10 @@ def build_ui(self):
     reparent_widget(self.workbench_workspace_layout, self.manual_box, stretch=2)
     self.workbench_formula_panel = build_formula_workspace_panel(self)
     self.workbench_workspace_layout.addWidget(self.workbench_formula_panel)
+    self.workbench_variable_panel = build_variable_workspace_panel(self)
+    self.workbench_workspace_layout.addWidget(self.workbench_variable_panel)
     reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
+    populate_variable_workspace_panel(self)
     self._build_right_panel(self.workbench_result_layout)
     self._bind_workbench_state_roles()
     self._bind_workbench_spec_schema_keys()
@@ -446,6 +454,10 @@ def _connect_workbench_formula_editors(self) -> None:
 
 def refresh_workbench_formula_panel(self) -> None:
     refresh_formula_workspace_panel(self)
+
+
+def refresh_workbench_variable_panel(self) -> None:
+    refresh_variable_workspace_panel(self)
 
 
 def _clamp_workbench_splitter_sizes(sizes: list[int], minimums: list[int], total: int) -> list[int]:

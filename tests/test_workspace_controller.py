@@ -1619,3 +1619,26 @@ def test_fit_latex_report_escapes_quantum_defect_special_chars() -> None:
     assert r"\{d4\}" in text
     assert r"\textasciitilde{}" in text
     assert r"\$bad" in text
+
+
+def test_workspace_round_trip_preserves_workbench_variable_panel_state(qtbot, tmp_path) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from shared.workspace_io import read_workspace, write_workspace
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    window.custom_params_table.set_rows([{"name": "A", "initial": "1.25"}])
+    window.custom_constants_editor.setChecked(True)
+    window.custom_constants_editor.set_rows([{"name": "CR", "value": "3.2898419602500(36)[+9]"}])
+    path = tmp_path / "variables.datalab"
+
+    bundle = capture_workspace(window, title="variables")
+    write_workspace(path, bundle.manifest, bundle.attachments)
+    loaded = read_workspace(path)
+    restored = ExtrapolationWindow()
+    qtbot.addWidget(restored)
+    restore_workspace(restored, loaded.manifest, loaded.attachments)
+
+    assert restored.custom_params_table.rows()[0]["name"] == "A"
+    assert restored.custom_constants_editor.rows()[0]["name"] == "CR"

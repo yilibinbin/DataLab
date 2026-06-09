@@ -321,7 +321,7 @@ def test_implicit_constraints_checkbox_is_above_constants(window) -> None:
     window.show()
     _select_model(window, "self_consistent")
 
-    implicit_layout = window.implicit_model_widget.layout()
+    implicit_layout = window.workbench_variable_stack.currentWidget().layout()
     constraint_index = implicit_layout.indexOf(window.implicit_constraints_checkbox)
     constants_index = implicit_layout.indexOf(window.implicit_constants_editor)
 

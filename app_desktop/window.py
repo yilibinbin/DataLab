@@ -559,6 +559,11 @@ class ExtrapolationWindow(
 
         _panels.refresh_workbench_formula_panel(self)
 
+    def refresh_workbench_variable_panel(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_variable_panel(self)
+
     def _refresh_workbench_status(self) -> None:
         from .shell_layout import update_workbench_status
 
@@ -575,6 +580,7 @@ class ExtrapolationWindow(
                 "Failed to refresh workbench status i18n"
             )
         self.refresh_workbench_formula_panel()
+        self.refresh_workbench_variable_panel()
 
     def _set_button_to_stop_mode(self):
         WindowExtrapolationMixin._set_button_to_stop_mode(self)
@@ -1204,6 +1210,16 @@ class ExtrapolationWindow(
             self.pade_widget.setVisible(mode == "pade")
         if hasattr(self, "implicit_model_widget"):
             self.implicit_model_widget.setVisible(mode == "self_consistent")
+        show_implicit = mode == "self_consistent"
+        for name in (
+            "implicit_param_header_widget",
+            "implicit_params_table",
+            "implicit_constraints_checkbox",
+            "implicit_constants_editor",
+        ):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setVisible(show_implicit)
         show_expr = mode != "self_consistent"
         if hasattr(self, "fit_expr_title_widget"):
             self.fit_expr_title_widget.setVisible(show_expr)
@@ -1230,6 +1246,8 @@ class ExtrapolationWindow(
 
         if hasattr(self, "refresh_workbench_formula_panel"):
             self.refresh_workbench_formula_panel()
+        if hasattr(self, "refresh_workbench_variable_panel"):
+            self.refresh_workbench_variable_panel()
 
     def _refresh_mode_expression(self, mode: str | None = None):
         mode = mode or (self.fit_model_combo.currentData() if hasattr(self, "fit_model_combo") else None)
@@ -1838,6 +1856,8 @@ class ExtrapolationWindow(
         self._update_log_scale_visibility()
         if hasattr(self, "refresh_workbench_formula_panel"):
             self.refresh_workbench_formula_panel()
+        if hasattr(self, "refresh_workbench_variable_panel"):
+            self.refresh_workbench_variable_panel()
         if hasattr(self, "_refresh_main_splitter_left_min_width"):
             self._refresh_main_splitter_left_min_width()
 

@@ -25,6 +25,7 @@ def build_formula_workspace_panel(owner: Any) -> QWidget:
     owner.workbench_formula_preview_label = FormulaPreviewLabel()
     owner.workbench_formula_preview_label.setObjectName("workbench_formula_preview_label")
     owner.workbench_formula_preview_label.setMinimumHeight(44)
+    _localize_preview_label(owner, owner.workbench_formula_preview_label)
     layout.addWidget(owner.workbench_formula_preview_label)
 
     owner._workbench_active_formula_attr = ""
@@ -116,6 +117,7 @@ def refresh_formula_workspace_panel(owner: Any) -> None:
         if panel is not None:
             panel.setVisible(False)
         label.clear()
+        _localize_preview_label(owner, label)
         return
 
     if panel is not None:
@@ -125,6 +127,7 @@ def refresh_formula_workspace_panel(owner: Any) -> None:
         title.setText(_formula_mount_title(owner, editor, mount))
     text = editor.toPlainText().strip() if hasattr(editor, "toPlainText") else editor.text().strip()
     update_formula_preview(label, text, lhs=mount.lhs)
+    _localize_preview_label(owner, label)
 
 
 def _formula_editor_available(owner: Any, editor: QWidget | None) -> bool:
@@ -132,6 +135,12 @@ def _formula_editor_available(owner: Any, editor: QWidget | None) -> bool:
         return False
     is_read_only = getattr(editor, "isReadOnly", None)
     return not (callable(is_read_only) and bool(is_read_only()))
+
+
+def _localize_preview_label(owner: Any, label: QWidget) -> None:
+    text = owner._tr("点击放大公式", "Click to enlarge formula")
+    label.setToolTip(text)
+    label.setAccessibleDescription(text)
 
 
 def _formula_mount_title(owner: Any, editor: QWidget, mount: FormulaMount) -> str:
