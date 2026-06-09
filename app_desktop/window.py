@@ -554,6 +554,11 @@ class ExtrapolationWindow(
         from . import panels as _panels
         _panels._bind_workbench_state_roles(self)
 
+    def refresh_workbench_formula_panel(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_formula_panel(self)
+
     def _refresh_workbench_status(self) -> None:
         from .shell_layout import update_workbench_status
 
@@ -569,6 +574,7 @@ class ExtrapolationWindow(
             logging.getLogger(__name__).exception(
                 "Failed to refresh workbench status i18n"
             )
+        self.refresh_workbench_formula_panel()
 
     def _set_button_to_stop_mode(self):
         WindowExtrapolationMixin._set_button_to_stop_mode(self)
@@ -1221,6 +1227,10 @@ class ExtrapolationWindow(
             self.remove_variable_btn.setVisible(mode in {"custom", "self_consistent"})
             if mode not in {"custom", "self_consistent"}:
                 self._reset_variable_rows(default_var="x", default_column="A")
+
+        if hasattr(self, "refresh_workbench_formula_panel"):
+            self.refresh_workbench_formula_panel()
+
     def _refresh_mode_expression(self, mode: str | None = None):
         mode = mode or (self.fit_model_combo.currentData() if hasattr(self, "fit_model_combo") else None)
         if mode and mode != "custom" and hasattr(self, "fit_expr_edit"):
@@ -1826,6 +1836,8 @@ class ExtrapolationWindow(
             self._on_stats_mode_change()
         self._update_manual_placeholder(mode)
         self._update_log_scale_visibility()
+        if hasattr(self, "refresh_workbench_formula_panel"):
+            self.refresh_workbench_formula_panel()
         if hasattr(self, "_refresh_main_splitter_left_min_width"):
             self._refresh_main_splitter_left_min_width()
 
@@ -1868,6 +1880,8 @@ class ExtrapolationWindow(
 
         if hasattr(self, "mpmath_precision_spin"):
             self.mpmath_precision_spin.setEnabled(True)
+        if hasattr(self, "refresh_workbench_formula_panel"):
+            self.refresh_workbench_formula_panel()
 
     def _update_levin_weight_state(self):
         """Show/hide Levin beta parameter based on weight function selection."""

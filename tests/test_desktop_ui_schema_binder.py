@@ -7,7 +7,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel, QComboBox, QPlainTextEdit, QPushButton, QWidget
 
-from app_desktop.ui_schema_binder import bind_choices, bind_field, find_unbound_required_widgets
+from app_desktop.ui_schema_binder import (
+    SCHEMA_LABEL_EN_PROPERTY,
+    SCHEMA_LABEL_ZH_PROPERTY,
+    bind_choices,
+    bind_field,
+    find_unbound_required_widgets,
+)
 from shared.ui_schema import ChoiceSpec, FormFieldSpec, LocalizedText
 
 
@@ -35,16 +41,22 @@ def test_bind_field_applies_label_widget_and_help_metadata() -> None:
     bind_field(field=field, label=label, widget=widget, help_button=help_button, lang="en")
 
     assert label.text() == "Model expression:"
+    assert label.property(SCHEMA_LABEL_ZH_PROPERTY) == "模型表达式："
+    assert label.property(SCHEMA_LABEL_EN_PROPERTY) == "Model expression:"
     assert label.toolTip() == "Enter y=f(x,p) form"
     assert label.property("datalab_schema_key") == "fitting.custom.expression"
 
     assert widget.property("datalab_schema_key") == "fitting.custom.expression"
+    assert widget.property(SCHEMA_LABEL_ZH_PROPERTY) == "模型表达式："
+    assert widget.property(SCHEMA_LABEL_EN_PROPERTY) == "Model expression:"
     assert widget.property("datalab_schema_required") is True
     assert widget.toolTip() == "Enter y=f(x,p) form"
     assert widget.placeholderText() == "e.g. A*x + B"
 
     assert help_button.text() == "?"
     assert help_button.property("datalab_schema_key") == "fitting.custom.expression"
+    assert help_button.property(SCHEMA_LABEL_ZH_PROPERTY) == "模型表达式："
+    assert help_button.property(SCHEMA_LABEL_EN_PROPERTY) == "Model expression:"
     assert help_button.toolTip() == "Enter y=f(x,p) form"
     assert help_button.accessibleName() == "Model expression: help"
     assert help_button.accessibleDescription() == "Enter y=f(x,p) form"
@@ -130,3 +142,24 @@ def test_bind_field_clears_required_marker_when_rebinding_optional_field() -> No
 
     assert widget.property("datalab_schema_key") == "root.notes"
     assert widget.property("datalab_schema_required") is False
+
+
+def test_bind_field_clears_stale_label_metadata_when_rebinding_empty_label() -> None:
+    _app()
+    widget = QPlainTextEdit()
+    first = FormFieldSpec(
+        key="fitting.custom.expression",
+        widget_kind="textarea",
+        label=LocalizedText("模型表达式：", "Model expression:"),
+    )
+    empty = FormFieldSpec(
+        key="scratch.empty",
+        widget_kind="textarea",
+        label=LocalizedText("", ""),
+    )
+
+    bind_field(field=first, widget=widget)
+    bind_field(field=empty, widget=widget)
+
+    assert widget.property(SCHEMA_LABEL_ZH_PROPERTY) == ""
+    assert widget.property(SCHEMA_LABEL_EN_PROPERTY) == ""

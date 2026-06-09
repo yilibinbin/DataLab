@@ -10,6 +10,7 @@ size while keeping behavior unchanged.
 from __future__ import annotations
 
 import mpmath as mp
+import weakref
 
 from PySide6.QtCore import Qt, QSize, QObject, QEvent
 from PySide6.QtGui import QAction
@@ -78,7 +79,13 @@ from app_desktop.workbench_layout import (
     reparent_widget,
     scroll_viewport_overhead,
 )
+from app_desktop.workbench_formula_panel import (
+    build_formula_workspace_panel,
+    refresh_formula_workspace_panel,
+    schedule_formula_workspace_refresh,
+)
 from app_desktop.workbench_results import build_result_overview
+from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
 from app_desktop.workbench_visual_contract import CONFIG_RAIL_MIN_WIDTH
 from app_desktop.ui_schema_binder import bind_choices, bind_field
 from app_desktop.ui_schema_runtime import (
@@ -298,10 +305,13 @@ def build_ui(self):
 
     self._build_left_panel()
     reparent_widget(self.workbench_workspace_layout, self.manual_box, stretch=2)
+    self.workbench_formula_panel = build_formula_workspace_panel(self)
+    self.workbench_workspace_layout.addWidget(self.workbench_formula_panel)
     reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
     self._build_right_panel(self.workbench_result_layout)
     self._bind_workbench_state_roles()
     self._bind_workbench_spec_schema_keys()
+    _connect_workbench_formula_editors(self)
     # 初始化手动输入占位示例
     self._update_manual_placeholder(self.mode_combo.currentData())
     # 根据当前模式刷新可见性
@@ -378,8 +388,6 @@ def build_ui(self):
 
 
 def _bind_workbench_state_roles(self) -> None:
-    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
-
     self.manual_box.setObjectName("manual_box")
     self.manual_table.setObjectName("manual_table")
     self.manual_data_edit.setObjectName("manual_data_edit")
@@ -405,8 +413,6 @@ def _bind_workbench_state_roles(self) -> None:
 
 
 def _bind_workbench_spec_schema_keys(self) -> None:
-    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
-
     for spec in MODE_WORKBENCH_SPECS.values():
         for formula in spec.formulas:
             editor = getattr(self, formula.editor_attr, None)
@@ -419,6 +425,27 @@ def _bind_workbench_spec_schema_keys(self) -> None:
             widget = getattr(self, mount.widget_attr, None)
             if widget is not None:
                 widget.setProperty("datalab_schema_key", mount.schema_key)
+
+
+def _connect_workbench_formula_editors(self) -> None:
+    callbacks = []
+    owner_ref = weakref.ref(self)
+    for spec in MODE_WORKBENCH_SPECS.values():
+        for formula in spec.formulas:
+            editor = getattr(self, formula.editor_attr, None)
+            if editor is not None and hasattr(editor, "textChanged"):
+                def _refresh_formula(*args, _attr=formula.editor_attr) -> None:
+                    owner = owner_ref()
+                    if owner is not None:
+                        schedule_formula_workspace_refresh(owner, _attr)
+
+                callbacks.append(_refresh_formula)
+                editor.textChanged.connect(_refresh_formula)
+    self._workbench_formula_text_changed_callbacks = callbacks
+
+
+def refresh_workbench_formula_panel(self) -> None:
+    refresh_formula_workspace_panel(self)
 
 
 def _clamp_workbench_splitter_sizes(sizes: list[int], minimums: list[int], total: int) -> list[int]:
