@@ -773,9 +773,7 @@ class ExtrapolationWindow(
             self.result_edit.clear()
             self.log_edit.clear()
             self.latex_edit.clear()
-            self._reset_csv_data()
-            self.result_plot_bytes = None
-            self._result_plot_base_pixmap = None
+            self._reset_csv_data(clear_non_tabular_result=True)
             if hasattr(self, "result_plot_label"):
                 self.result_plot_label.setText(self._tr("尚无图片", "No image yet"))
             self._last_result_kind = None
@@ -2036,7 +2034,7 @@ class ExtrapolationWindow(
         QMessageBox.information(self, title, msg)
 
     # ------------------------------------------------------------- Logging --
-    def _set_result_text(self, text: str):
+    def _set_result_text(self, text: str, *, final_result: bool = False):
         """Display result text and cache the rendered source for workspace snapshots."""
         if hasattr(self.result_edit, 'setMarkdown'):
             self.result_edit.setMarkdown(text)
@@ -2047,6 +2045,13 @@ class ExtrapolationWindow(
         self._last_result_text = text
         self._last_result_text_format = text_format
         self._last_result_rendered_text = self.result_edit.toPlainText()
+        if final_result:
+            if self._last_result_rendered_text.strip():
+                self._clear_workbench_result_state()
+            else:
+                self._mark_workbench_result_complete()
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
 
     def _add_font_control_row(self, parent_layout: QVBoxLayout, editor, label: str):
         control_layout = QHBoxLayout()
@@ -2246,17 +2251,84 @@ class ExtrapolationWindow(
         """Re-render the latest fit plot using the selected log-scale (display-only)."""
         self._refresh_fit_plot_log_scale()
 
-    def _reset_csv_data(self):
+    def _mark_workbench_result_running(self) -> None:
+        self._workbench_result_state = "running"
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
+
+    def _mark_workbench_result_failed(self) -> None:
+        self._workbench_result_state = "failed"
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
+
+    def _mark_workbench_result_complete(self) -> None:
+        self._workbench_result_state = "complete"
+
+    def _clear_workbench_result_state(self) -> None:
+        self._workbench_result_state = "none"
+
+    def _start_worker_with_workbench_result_state(self, worker) -> None:
+        try:
+            self._reset_csv_data(clear_non_tabular_result=True, refresh_result_rail=False)
+            self._mark_workbench_result_running()
+            self._set_button_to_stop_mode()
+            worker.start()
+        except Exception:
+            self._mark_workbench_result_failed()
+            self._set_button_to_run_mode()
+            raise
+
+    def _reset_csv_data(
+        self,
+        *,
+        preserve_workbench_running: bool = False,
+        clear_non_tabular_result: bool = False,
+        refresh_result_rail: bool = True,
+    ):
         """Clear cached CSV rows and disable export control."""
+        if preserve_workbench_running and clear_non_tabular_result:
+            raise ValueError("preserve_workbench_running cannot be combined with clear_non_tabular_result")
         self._csv_rows: list[dict[str, object]] = []
         self._csv_headers: list[str] = []
         self._csv_suggest_name = "results.csv"
         if hasattr(self, "export_csv_btn"):
             self.export_csv_btn.setEnabled(False)
-        if hasattr(self, "refresh_workbench_result_rail"):
+        if clear_non_tabular_result:
+            self._last_result_text = ""
+            self._last_result_text_format = "plain"
+            self._last_result_rendered_text = ""
+            self.result_plot_bytes = None
+            self._result_plot_base_pixmap = None
+            self._image_mode = None
+            self.current_fit_figures = []
+            self.current_stats_figures = []
+            self.current_error_figures = []
+            self.current_extrap_figures = []
+            self.current_fit_index = 0
+            self.current_stats_index = 0
+            self.current_error_index = 0
+            self.current_extrap_index = 0
+            if hasattr(self, "result_edit"):
+                self.result_edit.clear()
+            if hasattr(self, "result_plot_label"):
+                self.result_plot_label.clear()
+                self.result_plot_label.setText(self._tr("尚无图片", "No image yet"))
+            if hasattr(self, "_update_image_status"):
+                self._update_image_status()
+            self._clear_workbench_result_state()
+        elif not preserve_workbench_running and getattr(self, "_workbench_result_state", "none") == "running":
+            self._clear_workbench_result_state()
+        if refresh_result_rail and hasattr(self, "refresh_workbench_result_rail"):
             self.refresh_workbench_result_rail()
 
-    def _set_csv_data(self, rows: list[dict[str, object]] | None, headers: list[str] | None = None, suggestion: str | None = None):
+    def _set_csv_data(
+        self,
+        rows: list[dict[str, object]] | None,
+        headers: list[str] | None = None,
+        suggestion: str | None = None,
+        *,
+        final_result: bool = True,
+    ):
         """Cache the latest tabular results for CSV export."""
         self._csv_rows = rows or []
         if headers:
@@ -2271,6 +2343,8 @@ class ExtrapolationWindow(
             self.export_csv_btn.setEnabled(bool(self._csv_rows))
         if hasattr(self, "_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
             self._mark_workspace_dirty()
+        if final_result and (self._csv_rows or self._csv_headers):
+            self._clear_workbench_result_state()
         if hasattr(self, "refresh_workbench_result_rail"):
             self.refresh_workbench_result_rail()
 

@@ -360,6 +360,88 @@ def test_workspace_preserves_root_result_plot_attachment(qtbot, monkeypatch) -> 
     assert target._csv_rows == [{"root": "1"}]
 
 
+def test_workspace_restore_refreshes_plot_only_result_overview(qtbot, tmp_path) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from shared.workspace_io import read_workspace, write_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._reset_csv_data()
+    source._last_result_rendered_text = ""
+    source._update_result_plot(PNG_1X1)
+    path = tmp_path / "plot-only.datalab"
+    bundle = capture_workspace(source, title="plot only")
+    write_workspace(path, bundle.manifest, bundle.attachments)
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    loaded = read_workspace(path)
+    restore_workspace(target, loaded.manifest, loaded.attachments)
+    target._apply_language("en")
+
+    assert target.workbench_result_overview.text() == "Result ready; no tabular data"
+
+
+def test_workspace_restore_clears_stale_failed_state_before_result_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._set_result_text("restored text", final_result=True)
+    bundle = capture_workspace(source, title="text result")
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    target._mark_workbench_result_failed()
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+    target._apply_language("en")
+
+    assert target.workbench_result_overview.text() == "Text result ready; no tabular data"
+
+
+def test_workspace_preserves_empty_success_result_overview(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._mark_workbench_result_complete()
+
+    bundle = capture_workspace(source, title="empty result")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    assert snapshot["present"] is True
+    assert snapshot["overview_state"] == "complete"
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+    target._apply_language("en")
+
+    assert target.workbench_result_overview.text() == "Calculation complete; no displayable result"
+
+
+def test_workspace_preserves_empty_tabular_result_schema(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._set_csv_data([], ["x", "y"])
+
+    bundle = capture_workspace(source, title="empty table")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    assert snapshot["present"] is True
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+    target._apply_language("en")
+
+    assert target.workbench_result_overview.text() == "Result data: 0 rows, 2 columns"
+
+
 def test_workspace_preserves_rendered_result_markdown_table(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace

@@ -17,6 +17,9 @@ from shared.update_checker import current_version
 from shared.workspace_schema import compute_workspace_hash, sha256_bytes
 
 
+_DURABLE_RESULT_OVERVIEW_STATES = {"complete", "failed"}
+
+
 @dataclass(frozen=True)
 class WorkspaceBundle:
     manifest: dict[str, Any]
@@ -926,7 +929,9 @@ def _capture_result_snapshot(window: Any, workspace_hash: str, attachments: dict
     csv_headers = list(getattr(window, "_csv_headers", []) or [])
     latex_source = _text(getattr(window, "latex_edit", None))
     plot_bytes = getattr(window, "result_plot_bytes", None)
-    present = bool(markdown or log_text or csv_rows or latex_source or plot_bytes)
+    overview_state = str(getattr(window, "_workbench_result_state", "none") or "none")
+    durable_overview_state = overview_state if overview_state in _DURABLE_RESULT_OVERVIEW_STATES else "none"
+    present = bool(markdown or log_text or csv_rows or csv_headers or latex_source or plot_bytes or durable_overview_state != "none")
     if not present:
         return {"present": False}
     plots = []
@@ -949,6 +954,7 @@ def _capture_result_snapshot(window: Any, workspace_hash: str, attachments: dict
         "result_of_hash": workspace_hash,
         "snapshot_only": True,
         "stale": False,
+        "overview_state": durable_overview_state,
         "markdown": markdown,
         "markdown_format": markdown_format,
         "log": log_text,
@@ -1071,6 +1077,8 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
     _restore_root_config(window, config.get("root_solving"))
 
     snapshot = workspace.get("result_snapshot") or {"present": False}
+    if hasattr(window, "_reset_csv_data"):
+        window._reset_csv_data(clear_non_tabular_result=True, refresh_result_rail=False)
     if snapshot.get("present"):
         result_text = str(snapshot.get("markdown") or "")
         if snapshot.get("markdown_format") == "markdown" and hasattr(window, "_set_result_text"):
@@ -1089,11 +1097,13 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
             first_path = plots[0].get("path")
             if first_path in attachments:
                 window._update_result_plot(attachments[first_path])
+        overview_state = str(snapshot.get("overview_state") or "none")
+        if overview_state in _DURABLE_RESULT_OVERVIEW_STATES:
+            window._workbench_result_state = overview_state
     else:
         window.result_edit.clear()
         window.log_edit.clear()
         window.latex_edit.clear()
-        window._reset_csv_data()
         window._last_result_text = ""
         window._last_result_text_format = "plain"
         window._last_result_rendered_text = ""
@@ -1101,6 +1111,8 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
     window._last_result_payloads = {}
     _restore_ui_state(window, workspace.get("ui") or {})
     window._workspace_snapshot_only = bool(snapshot.get("present"))
+    if hasattr(window, "refresh_workbench_result_rail"):
+        window.refresh_workbench_result_rail()
     window._workspace_dirty = False
     window._workspace_degraded = degraded
     if hasattr(window, "_set_snapshot_controls_enabled"):

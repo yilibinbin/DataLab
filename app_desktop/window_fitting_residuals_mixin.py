@@ -99,7 +99,7 @@ class WindowFittingResidualsMixin:
             else:
                 batch_texts.append(header + "\n" + self._tr("未获得该批次结果。", "No result for this batch."))
         combined = "\n\n".join(batch_texts)
-        self._set_result_text(combined)
+        self._set_result_text(combined, final_result=True)
         if csv_rows:
             self._set_csv_data(
                 csv_rows,
@@ -367,7 +367,7 @@ class WindowFittingResidualsMixin:
             else:
                 batch_texts.append(header + "\n" + self._tr("未获得该批次结果。", "No result for this batch."))
         combined = "\n\n".join(batch_texts)
-        self._set_result_text(combined)
+        self._set_result_text(combined, final_result=True)
         self._set_image_list("fit", figure_paths)
         if csv_rows:
             self._set_csv_data(
@@ -399,7 +399,7 @@ class WindowFittingResidualsMixin:
             self._append_log(self._tr(f"警告: {warn}", f"Warning: {warn}"))
         substituted = self._build_substituted_expression(expression, fit_result.params) if expression else None
         summary = self._format_fit_result_text(fit_result, expression, substituted)
-        self._set_result_text(summary)
+        self._set_result_text(summary, final_result=True)
         csv_rows = self._build_fit_csv_rows(fit_result, expression, batch_idx=1)
         if csv_rows:
             self._set_csv_data(
@@ -420,7 +420,7 @@ class WindowFittingResidualsMixin:
             self._image_mode = "fit"
             self.current_fit_figures = []
             self.current_fit_index = 0
-            self._update_result_plot(plot_bytes)
+            self._update_result_plot(plot_bytes, final_result=True)
         if job.generate_latex and job.output_path:
             self._write_fitting_latex(
                 job.headers,
@@ -441,6 +441,7 @@ class WindowFittingResidualsMixin:
         QMessageBox.information(self, self._tr("完成", "Done"), self._tr("拟合完成。", "Fit completed."))
 
     def _on_fit_failed(self, message: str):
+        self._mark_workbench_result_failed()
         localized = self._localize_text(message)
         QMessageBox.critical(self, self._tr("拟合失败", "Fit failed"), localized)
         log_msg = self._tr(f"拟合失败: {localized}", f"Fit failed: {localized}")

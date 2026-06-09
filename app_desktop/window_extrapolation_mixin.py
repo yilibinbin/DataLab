@@ -67,6 +67,7 @@ class WindowExtrapolationMixin:
     def _on_worker_cancelled(self):
         """Handle worker cancellation."""
         self._append_log(self._tr("任务已取消", "Task cancelled"))
+        self._reset_csv_data(clear_non_tabular_result=True)
 
     # --------------------------------------------------------- Main Action --
     def run_calculation(self):
@@ -74,8 +75,6 @@ class WindowExtrapolationMixin:
         if self._has_running_worker():
             self._stop_current_worker()
             return
-
-        self._reset_csv_data()
 
         mode = self.mode_combo.currentData()
         data_path, manual_content = self._active_data_source()
@@ -280,8 +279,7 @@ class WindowExtrapolationMixin:
                 if verbose:
                     worker.log_ready.connect(self._append_log)
                 self._calc_worker = worker
-                self._set_button_to_stop_mode()
-                worker.start()
+                self._start_worker_with_workbench_result_state(worker)
                 return
             if mode == "statistics":
                 headers, rows, sigma_rows, segments, _ = self._collect_batched_fitting_dataset(precision_hint=self._peek_user_precision())
@@ -321,8 +319,7 @@ class WindowExtrapolationMixin:
                 if verbose:
                     worker.log_ready.connect(self._append_log)
                 self._calc_worker = worker
-                self._set_button_to_stop_mode()
-                worker.start()
+                self._start_worker_with_workbench_result_state(worker)
                 return
             if mode == "fitting":
                 started = self._run_fitting_mode(generate_latex, output_path, verbose, render_plots=generate_plots)
@@ -343,6 +340,7 @@ class WindowExtrapolationMixin:
             )
             self.tabs.setCurrentIndex(target_tab_index)
         except Exception as exc:
+            self._mark_workbench_result_failed()
             import traceback
 
             tb = traceback.format_exc()
@@ -450,11 +448,13 @@ class WindowExtrapolationMixin:
         except Exception as exc:  # noqa: BLE001
             import traceback
 
+            self._mark_workbench_result_failed()
             self._append_log(traceback.format_exc())
             localized = self._localize_text(str(exc))
             QMessageBox.critical(self, self._tr("计算失败", "Calculation failed"), localized)
 
     def _on_calc_failed(self, message: str):
+        self._mark_workbench_result_failed()
         localized = self._localize_text(message)
         QMessageBox.critical(self, self._tr("计算失败", "Calculation failed"), localized)
         log_msg = self._tr(f"发生错误: {localized}", f"Error: {localized}")
@@ -494,8 +494,7 @@ class WindowExtrapolationMixin:
         worker.cancelled.connect(self._on_worker_cancelled)
         worker.log_ready.connect(self._append_log)
         self._root_worker = worker
-        self._set_button_to_stop_mode()
-        worker.start()
+        self._start_worker_with_workbench_result_state(worker)
 
     def _on_root_solving_finished(self, payload: dict[str, object]):
         log = str(payload.get("log", "")).strip()
@@ -529,8 +528,8 @@ class WindowExtrapolationMixin:
         plot_bytes = payload.get("plot_bytes")
         if isinstance(plot_bytes, bytes) and plot_bytes:
             self._image_mode = "root_solving"
-            self._update_result_plot(plot_bytes)
-        self._set_result_text(markdown)
+            self._update_result_plot(plot_bytes, final_result=True)
+        self._set_result_text(markdown, final_result=True)
         if isinstance(csv_rows, list) and csv_rows:
             headers = [str(header) for header in csv_headers] if isinstance(csv_headers, list) else None
             self._set_csv_data(csv_rows, headers, suggestion="root_solving_results.csv")
@@ -573,6 +572,7 @@ class WindowExtrapolationMixin:
             QMessageBox.warning(self, self._tr("写入失败", "Write Failed"), str(exc))
 
     def _on_root_solving_failed(self, message: str):
+        self._mark_workbench_result_failed()
         localized = self._localize_text(message)
         QMessageBox.critical(self, self._tr("计算失败", "Calculation failed"), localized)
         self._append_log(self._tr(f"发生错误: {localized}", f"Error: {localized}"))
@@ -651,7 +651,7 @@ class WindowExtrapolationMixin:
                     img_path = self._save_batch_figure(plot_data, "", idx, prefix="extrap")
                     if img_path:
                         figure_paths.append(img_path)
-        self._set_result_text(text)
+        self._set_result_text(text, final_result=True)
         if csv_rows:
             self._set_csv_data(csv_rows, ["index", "value", "uncertainty", "latex"], suggestion="extrapolation_results.csv")
         else:
@@ -831,7 +831,7 @@ class WindowExtrapolationMixin:
 
     def _show_error_results(self, headers, data_rows, results, formula):
         text, csv_rows = self._format_error_display(headers=headers, data_rows=data_rows, results=results, formula=formula)
-        self._set_result_text(text)
+        self._set_result_text(text, final_result=True)
         if csv_rows:
             self._set_csv_data(csv_rows, ["index", "value", "uncertainty", "latex"], suggestion="error_propagation_results.csv")
         else:
