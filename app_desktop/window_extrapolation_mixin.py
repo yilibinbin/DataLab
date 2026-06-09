@@ -340,7 +340,8 @@ class WindowExtrapolationMixin:
             )
             self.tabs.setCurrentIndex(target_tab_index)
         except Exception as exc:
-            self._mark_workbench_result_failed()
+            if getattr(self, "_workbench_result_state", "none") == "running":
+                self._mark_workbench_result_failed()
             import traceback
 
             tb = traceback.format_exc()

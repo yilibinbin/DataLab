@@ -450,6 +450,159 @@ def test_calc_success_handler_exception_marks_result_failed(qtbot: Any, monkeypa
     assert window.workbench_result_overview.text() == "Calculation failed"
 
 
+def test_fit_success_handler_exception_marks_result_failed(qtbot: Any, monkeypatch: Any) -> None:
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox
+
+    window = _window(qtbot)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        window,
+        "_format_fit_result_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("fit render boom")),
+    )
+    window._mark_workbench_result_running()
+
+    window._on_fit_finished(
+        SimpleNamespace(
+            job=SimpleNamespace(model_expr="A*x", render_plots=False, generate_latex=False, output_path=""),
+            fit_result=SimpleNamespace(params={"A": "1"}, details={}),
+            expression="A*x",
+            logs=[],
+            warnings=[],
+        )
+    )
+    window._apply_language("en")
+
+    assert window.workbench_result_overview.text() == "Calculation failed"
+
+
+def test_fit_batch_success_handler_exception_marks_result_failed(qtbot: Any, monkeypatch: Any) -> None:
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox
+
+    window = _window(qtbot)
+    window._fit_batch_context = {"generate_latex": False}
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        window,
+        "_format_fit_result_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("batch render boom")),
+    )
+    window._mark_workbench_result_running()
+    payload = SimpleNamespace(
+        job=SimpleNamespace(model_expr="A*x", render_plots=False),
+        expression="A*x",
+        fit_result=SimpleNamespace(params={"A": "1"}, details={}),
+    )
+
+    window._on_fit_batches_finished(
+        [SimpleNamespace(index=1, kind="fit", fit_payload=payload, error=None, captured_log="")]
+    )
+    window._apply_language("en")
+
+    assert window._fit_batch_context is None
+    assert window.workbench_result_overview.text() == "Calculation failed"
+
+
+def test_fit_success_post_processing_error_keeps_success_overview(qtbot: Any, monkeypatch: Any) -> None:
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox
+
+    window = _window(qtbot)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(window, "_build_substituted_expression", lambda *args, **kwargs: "A*x")
+    monkeypatch.setattr(window, "_format_fit_result_text", lambda *args, **kwargs: "fit summary")
+    monkeypatch.setattr(window, "_render_fit_plot_bytes", lambda *args, **kwargs: None)
+    monkeypatch.setattr(window, "_build_fit_csv_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(window, "_write_fitting_latex", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("latex boom")))
+    window._mark_workbench_result_running()
+
+    window._on_fit_finished(
+        SimpleNamespace(
+            job=SimpleNamespace(
+                model_expr="A*x",
+                render_plots=False,
+                generate_latex=True,
+                output_path="result.tex",
+                headers=[],
+                data_rows=[],
+                sigma_rows=[],
+                use_dcolumn=True,
+            ),
+            fit_result=SimpleNamespace(params={"A": "1"}, details={}),
+            expression="A*x",
+            logs=[],
+            warnings=[],
+        )
+    )
+    window._apply_language("en")
+
+    assert window._workbench_result_state == "none"
+    assert window.workbench_result_overview.text() == "Text result ready; no tabular data"
+
+
+def test_fit_batch_post_processing_error_keeps_success_overview(qtbot: Any, monkeypatch: Any) -> None:
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox
+
+    window = _window(qtbot)
+    window._fit_batch_context = {"generate_latex": True, "output_path": "result.tex"}
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(window, "_build_substituted_expression", lambda *args, **kwargs: "A*x")
+    monkeypatch.setattr(window, "_format_fit_result_text", lambda *args, **kwargs: "fit summary")
+    monkeypatch.setattr(window, "_render_fit_plot_bytes", lambda *args, **kwargs: None)
+    monkeypatch.setattr(window, "_build_fit_csv_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        window,
+        "_write_fitting_latex_batches",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("batch latex boom")),
+    )
+    window._mark_workbench_result_running()
+    payload = SimpleNamespace(
+        job=SimpleNamespace(model_expr="A*x", render_plots=False, headers=[], data_rows=[], sigma_rows=[]),
+        expression="A*x",
+        fit_result=SimpleNamespace(params={"A": "1"}, details={}),
+    )
+
+    window._on_fit_batches_finished(
+        [SimpleNamespace(index=1, kind="fit", fit_payload=payload, error=None, captured_log="")]
+    )
+    window._apply_language("en")
+
+    assert window._fit_batch_context is None
+    assert window._workbench_result_state == "none"
+    assert window.workbench_result_overview.text() == "Text result ready; no tabular data"
+
+
+def test_fit_setup_error_preserves_previous_valid_result_overview(qtbot: Any, monkeypatch: Any) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    window = _window(qtbot)
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
+    window._set_csv_data([{"x": "1"}], ["x"])
+    window._apply_language("en")
+    assert window.workbench_result_overview.text() == "Result data: 1 row, 1 column"
+
+    monkeypatch.setattr(window, "_active_data_source", lambda: (None, "x y\n"))
+    monkeypatch.setattr(
+        window,
+        "_run_fitting_mode",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("No data available for fitting.")),
+    )
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: None)
+
+    window.run_calculation()
+    window._apply_language("en")
+
+    assert window.workbench_result_overview.text() == "Result data: 1 row, 1 column"
+    assert window.workbench_result_table.rowCount() == 1
+
+
 def test_statistics_empty_batches_use_empty_success_overview(qtbot: Any) -> None:
     window = _window(qtbot)
 

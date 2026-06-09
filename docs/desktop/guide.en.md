@@ -16,6 +16,19 @@ preview buttons open a rendered preview dialog without changing the formula text
 Hidden modes keep their drafts, so switching between modules does not erase
 partially prepared formulas, parameters, constants, or root-solving settings.
 
+### Shared workbench
+
+The center workspace keeps the active data editor together with the formula
+preview, parameter table, and constants table when the active mode provides
+those inputs. Formula previews are display-only; calculation still uses the
+source expression in the editor.
+
+### Result overview
+
+The right rail summarizes the real result state. If a calculation produces
+plots or text without tabular rows, the overview reports that no tabular data is
+available instead of treating the run as missing.
+
 The result rail includes:
 
 - Numeric results: human-readable summary and tables

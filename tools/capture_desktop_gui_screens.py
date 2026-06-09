@@ -30,6 +30,7 @@ from tools.scan_desktop_gui_schema import (  # noqa: E402
 )
 from app_desktop.workbench_visual_contract import (  # noqa: E402
     visual_contract_issues,
+    widget_metric,
     workbench_region_metrics,
 )
 
@@ -108,6 +109,16 @@ def capture_desktop_gui_screens(
         for scenario in _capture_scenarios(width=width, height=height):
             _apply_screen_scenario(window, scenario)
             QApplication.processEvents()
+            if scenario.mode == "fitting" and hasattr(window, "fit_model_combo"):
+                custom_index = window.fit_model_combo.findData("custom")
+                if custom_index >= 0:
+                    window.fit_model_combo.setCurrentIndex(custom_index)
+                    QApplication.processEvents()
+            if scenario.mode == "extrapolation" and hasattr(window, "method_combo"):
+                custom_index = window.method_combo.findData("custom")
+                if custom_index >= 0:
+                    window.method_combo.setCurrentIndex(custom_index)
+                    QApplication.processEvents()
             image = window.grab()
             if image.size() != QSize(width, height):
                 window.resize(width, height)
@@ -127,6 +138,13 @@ def capture_desktop_gui_screens(
                 {"source": "visual_contract", **issue}
                 for issue in contract_issues
             ]
+            regions = {key: asdict(metric) for key, metric in metrics.items()}
+            for object_name in (
+                "workbench_formula_panel",
+                "workbench_variable_panel",
+                "workbench_result_overview_panel",
+            ):
+                regions[object_name] = asdict(widget_metric(window, object_name))
             screenshots.append(
                 {
                     "path": str(target),
@@ -138,7 +156,7 @@ def capture_desktop_gui_screens(
                     # Backward-compatible summary for older release gates; ``issues`` is authoritative.
                     "issue_count": len(issues),
                     "issues": issues,
-                    "regions": {key: asdict(metric) for key, metric in metrics.items()},
+                    "regions": regions,
                 }
             )
 

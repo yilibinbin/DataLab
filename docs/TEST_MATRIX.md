@@ -15,12 +15,18 @@ Run the full local gate before packaging:
 
 ```bash
 python -m compileall -q .
-QT_QPA_PLATFORM=offscreen pytest -q
-QT_QPA_PLATFORM=offscreen pytest -q tests/test_desktop_workbench_visual_contract.py tests/test_desktop_workbench_theme.py tests/test_desktop_workbench_toolbar.py tests/test_desktop_workbench_layout.py tests/test_desktop_workbench_data_area.py tests/test_desktop_workbench_editor_canvas.py tests/test_desktop_workbench_results.py tests/test_desktop_workbench_visual_screenshots.py
+QT_QPA_PLATFORM=offscreen pytest -q tests/test_desktop_workbench_specs.py tests/test_desktop_workbench_state_ownership.py tests/test_desktop_workbench_results.py tests/test_desktop_workbench_formula_panel.py tests/test_desktop_workbench_variable_panel.py
+QT_QPA_PLATFORM=offscreen pytest -q tests/test_desktop_workbench_visual_contract.py tests/test_desktop_workbench_theme.py tests/test_desktop_workbench_toolbar.py tests/test_desktop_workbench_layout.py tests/test_desktop_workbench_data_area.py tests/test_desktop_workbench_editor_canvas.py tests/test_desktop_workbench_visual_screenshots.py
+QT_QPA_PLATFORM=offscreen pytest -q tests/test_desktop_gui_workflows.py tests/test_desktop_gui_schema_scan.py tests/test_desktop_gui_redesign_scan.py tests/test_desktop_bilingual_inventory.py tests/test_workspace_controller.py tests/test_packaging_resources.py tests/test_desktop_docs_resources.py
 python tools/scan_desktop_gui_schema.py
 QT_QPA_PLATFORM=offscreen python tools/capture_desktop_gui_screens.py --out build/gui-screenshots --width 1440 --height 900
-pytest -q tests/test_packaging_resources.py tests/test_desktop_docs_resources.py
+QT_QPA_PLATFORM=offscreen pytest -q
 ```
+
+The screenshot capture gate intentionally switches fitting and extrapolation
+scenarios to their custom-expression submodes before grabbing the window. Those
+submodes exercise the shared formula workbench panel; the schema scan remains
+responsible for the broader default-mode coverage.
 
 ### Installer Update Release Gate
 

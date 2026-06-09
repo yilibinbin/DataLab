@@ -49,6 +49,36 @@ def test_workbench_screenshot_manifest_contains_region_metrics(tmp_path) -> None
     assert manifest["screenshots"][0]["regions"]["workbench_toolbar"]["height"] >= 44
 
 
+def test_screenshot_manifest_includes_common_workbench_panels(tmp_path) -> None:
+    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
+    from tools.capture_desktop_gui_screens import capture_desktop_gui_screens
+
+    manifest = capture_desktop_gui_screens(out=tmp_path, width=1440, height=900)
+
+    assert manifest["screenshots"]
+    for screenshot in manifest["screenshots"]:
+        regions = screenshot["regions"]
+        spec = MODE_WORKBENCH_SPECS[screenshot["mode"]]
+
+        result_metric = regions["workbench_result_overview_panel"]
+        assert result_metric["visible"] is True
+        assert result_metric["width"] >= 160
+        assert result_metric["height"] >= 48
+
+        formula_metric = regions["workbench_formula_panel"]
+        assert formula_metric["visible"] is bool(spec.formulas)
+        if spec.formulas:
+            assert formula_metric["width"] >= 160
+            assert formula_metric["height"] >= 48
+
+        variable_metric = regions["workbench_variable_panel"]
+        has_variables = bool(spec.parameters or spec.tables or spec.constants)
+        assert variable_metric["visible"] is has_variables
+        if has_variables:
+            assert variable_metric["width"] >= 160
+            assert variable_metric["height"] >= 48
+
+
 def test_screenshot_report_issue_status_controls_cli_exit() -> None:
     from tools.capture_desktop_gui_screens import report_has_issues
 
