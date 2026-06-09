@@ -421,6 +421,36 @@ def _bind_workbench_spec_schema_keys(self) -> None:
                 widget.setProperty("datalab_schema_key", mount.schema_key)
 
 
+def _clamp_workbench_splitter_sizes(sizes: list[int], minimums: list[int], total: int) -> list[int]:
+    if total <= sum(minimums):
+        return list(minimums)
+    clamped = [max(size, minimum) for size, minimum in zip(sizes, minimums, strict=True)]
+    overflow = sum(clamped) - total
+    while overflow > 0:
+        surplus = [size - minimum for size, minimum in zip(clamped, minimums, strict=True)]
+        candidates = [(available, index) for index, available in enumerate(surplus) if available > 0]
+        if not candidates:
+            break
+        total_surplus = sum(available for available, _ in candidates)
+        reductions: list[tuple[int, int]] = []
+        pass_overflow = overflow
+        for available, index in candidates:
+            proportional = int(pass_overflow * (available / total_surplus))
+            reductions.append((index, min(available, proportional)))
+        if not any(reduction for _, reduction in reductions):
+            _, index = max(candidates)
+            reductions = [(index, 1)]
+        for index, reduction in reductions:
+            if overflow <= 0:
+                break
+            reduction = min(reduction, clamped[index] - minimums[index], overflow)
+            if reduction <= 0:
+                continue
+            clamped[index] -= reduction
+            overflow -= reduction
+    return clamped
+
+
 def _refresh_main_splitter_left_min_width(self) -> None:
     config_content = getattr(self, "workbench_config_content", None)
     config_scroll = getattr(self, "workbench_config_rail", None)
@@ -454,49 +484,17 @@ def _refresh_main_splitter_left_min_width(self) -> None:
         if not sizes or len(sizes) < 3:
             splitter.setSizes([left_min_width, center_min_width, right_min_width])
             return
-        if (
-            sizes[0] >= left_min_width
-            and sizes[1] >= center_min_width
-            and sizes[2] >= right_min_width
-        ):
+        pane_sizes = sizes[:3]
+        minimums = [left_min_width, center_min_width, right_min_width]
+        if all(size >= minimum for size, minimum in zip(pane_sizes, minimums, strict=True)):
             return
 
-        total = max(sum(sizes), splitter.width())
-        minimum_total = left_min_width + center_min_width + right_min_width
-        if total >= minimum_total:
-            center_width = max(center_min_width, total - left_min_width - right_min_width)
-            splitter.setSizes([left_min_width, center_width, right_min_width])
-        else:
-            splitter.setSizes([left_min_width, center_min_width, right_min_width])
+        handle_total = splitter.handleWidth() * max(0, splitter.count() - 1)
+        total = sum(pane_sizes) or max(0, splitter.width() - handle_total - sum(sizes[3:]))
+        clamped = _clamp_workbench_splitter_sizes(pane_sizes, minimums, total)
+        if clamped != pane_sizes:
+            splitter.setSizes(clamped + sizes[3:])
         return
-
-    left_container = getattr(self, "left_container", None)
-    left_scroll = getattr(self, "_left_scroll", None)
-    if left_container is None or left_scroll is None:
-        return
-    _activate_widget_layouts(left_container)
-    _refresh_visible_table_min_widths(left_container)
-    _activate_widget_layouts(left_container)
-    viewport_overhead = (
-        left_scroll.frameWidth() * 2
-        + left_scroll.verticalScrollBar().sizeHint().width()
-    )
-    content_min_width = max(
-        left_container.minimumSizeHint().width(),
-        _visible_left_content_min_width(left_container),
-    )
-    left_min_width = max(CONFIG_RAIL_MIN_WIDTH, content_min_width) + viewport_overhead
-    self._main_splitter_left_min_width = left_min_width
-    left_scroll.setMinimumWidth(left_min_width)
-    splitter = getattr(self, "_main_splitter", None)
-    if splitter is None or splitter.count() < 2:
-        return
-    sizes = splitter.sizes()
-    if not sizes or sizes[0] >= left_min_width:
-        return
-    total = max(sum(sizes), left_min_width + 1)
-    right_width = max(1, total - left_min_width)
-    splitter.setSizes([left_min_width, right_width])
 
 
 def _activate_widget_layouts(widget: QWidget) -> None:
