@@ -300,6 +300,7 @@ def build_ui(self):
     reparent_widget(self.workbench_workspace_layout, self.manual_box, stretch=2)
     reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
     self._build_right_panel(self.workbench_result_layout)
+    self._bind_workbench_spec_schema_keys()
     # 初始化手动输入占位示例
     self._update_manual_placeholder(self.mode_combo.currentData())
     # 根据当前模式刷新可见性
@@ -373,6 +374,24 @@ def build_ui(self):
         logging.getLogger(__name__).debug(
             "Splitter state restore skipped", exc_info=True
         )
+
+
+def _bind_workbench_spec_schema_keys(self) -> None:
+    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
+
+    for spec in MODE_WORKBENCH_SPECS.values():
+        for formula in spec.formulas:
+            editor = getattr(self, formula.editor_attr, None)
+            if editor is not None:
+                editor.setProperty("datalab_schema_key", formula.schema_key)
+            button = getattr(self, formula.preview_button_attr, None)
+            if button is not None:
+                button.setProperty("datalab_schema_key", formula.schema_key)
+        for mount in spec.parameters + spec.constants + spec.tables:
+            widget = getattr(self, mount.widget_attr, None)
+            if widget is not None:
+                widget.setProperty("datalab_schema_key", mount.schema_key)
+
 
 def _refresh_main_splitter_left_min_width(self) -> None:
     config_content = getattr(self, "workbench_config_content", None)
@@ -1350,6 +1369,7 @@ def build_left_panel(self):
     self._register_text(self.custom_param_remove_btn, "- 行", "- Row")
     self.custom_param_remove_btn.clicked.connect(lambda: _remove_parameter_table_rows(self, "custom_params_table"))
     custom_param_header.addWidget(self.custom_param_remove_btn)
+    custom_param_header.setContentsMargins(0, 0, 0, 0)
     custom_param_header_widget = QWidget()
     custom_param_header_widget.setLayout(custom_param_header)
     self.custom_param_header_widget = custom_param_header_widget
@@ -1459,7 +1479,11 @@ def build_left_panel(self):
     self._register_text(self.implicit_param_remove_btn, "- 行", "- Row")
     self.implicit_param_remove_btn.clicked.connect(lambda: _remove_parameter_table_rows(self, "implicit_params_table"))
     implicit_param_header.addWidget(self.implicit_param_remove_btn)
-    implicit_layout.addLayout(implicit_param_header)
+    implicit_param_header.setContentsMargins(0, 0, 0, 0)
+    implicit_param_header_widget = QWidget()
+    implicit_param_header_widget.setLayout(implicit_param_header)
+    self.implicit_param_header_widget = implicit_param_header_widget
+    implicit_layout.addWidget(implicit_param_header_widget)
 
     self.implicit_params_table = ParameterTable()
     _register_table_headers(
@@ -1709,7 +1733,11 @@ def build_left_panel(self):
     self.root_remove_unknown_button.setToolTip(self._tr("删除选中的未知量行", "Remove selected unknown rows"))
     self.root_remove_unknown_button.clicked.connect(lambda: _remove_detected_rows_table_rows(self, "root_unknowns_table"))
     root_unknown_header.addWidget(self.root_remove_unknown_button)
-    root_layout.addLayout(root_unknown_header)
+    root_unknown_header.setContentsMargins(0, 0, 0, 0)
+    root_unknown_header_widget = QWidget()
+    root_unknown_header_widget.setLayout(root_unknown_header)
+    self.root_unknown_header_widget = root_unknown_header_widget
+    root_layout.addWidget(root_unknown_header_widget)
 
     self.root_unknowns_table = DetectedRowsTable(
         columns=("name", "initial", "lower", "upper"),

@@ -546,6 +546,10 @@ class ExtrapolationWindow(
         from . import panels as _panels
         _panels._refresh_main_splitter_left_min_width(self)
 
+    def _bind_workbench_spec_schema_keys(self) -> None:
+        from . import panels as _panels
+        _panels._bind_workbench_spec_schema_keys(self)
+
     def _refresh_workbench_status(self) -> None:
         from .shell_layout import update_workbench_status
 
