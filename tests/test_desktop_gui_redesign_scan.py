@@ -141,3 +141,278 @@ def test_visual_contract_scan_attributes_issue_to_scenario(qapp: Any, monkeypatc
             },
         }
     ]
+
+
+def test_gui_scan_reports_duplicate_state_roles(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    from app_desktop.window import ExtrapolationWindow
+    from tools.scan_desktop_gui_schema import ScreenScenario
+    from tools.scan_desktop_gui_schema import _state_ownership_issues
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    clone = QLabel("duplicate", window)
+    clone.setObjectName("duplicated_manual_owner")
+    clone.setProperty("datalab_state_role", "manual_data_owner")
+
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+    issues = _state_ownership_issues(window, scenario)
+    issue = next(issue for issue in issues if issue["kind"] == "duplicate_state_role")
+    assert issue["message"]
+    # Role-ownership issues use the role identifier in the shared "widget" field.
+    assert issue["widget"] == "manual_data_owner"
+    assert issue["details"]["count"] == 2
+    assert "duplicated_manual_owner" in issue["details"]["widgets"]
+
+
+def test_gui_scan_reports_missing_state_role_owner(qtbot: Any) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from tools.scan_desktop_gui_schema import ScreenScenario
+    from tools.scan_desktop_gui_schema import _state_ownership_issues
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    window.manual_box.setProperty("datalab_state_role", "")
+
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+    issues = _state_ownership_issues(window, scenario)
+
+    assert any(issue["kind"] == "missing_state_role_owner" for issue in issues)
+
+
+def test_gui_scan_reports_wrong_state_role_owner(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    from app_desktop.window import ExtrapolationWindow
+    from tools.scan_desktop_gui_schema import ScreenScenario
+    from tools.scan_desktop_gui_schema import _state_ownership_issues
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    window.manual_box.setProperty("datalab_state_role", "")
+    wrong = QLabel("wrong", window)
+    wrong.setObjectName("wrong_manual_owner")
+    wrong.setProperty("datalab_state_role", "manual_data_owner")
+
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+    issues = _state_ownership_issues(window, scenario)
+
+    assert any(issue["kind"] == "wrong_state_role_owner" for issue in issues)
+
+
+def test_gui_scan_reports_missing_manual_data_editor(qtbot: Any) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from tools.scan_desktop_gui_schema import ScreenScenario
+    from tools.scan_desktop_gui_schema import _state_ownership_issues
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    window.manual_table.setProperty("datalab_state_role", "")
+
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+    issues = _state_ownership_issues(window, scenario)
+
+    assert any(
+        issue["kind"] == "missing_manual_data_editor" and issue["widget"] == "manual_table_editor"
+        for issue in issues
+    )
+
+
+def test_gui_scan_reports_duplicate_manual_data_editor(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QTableWidget
+
+    from app_desktop.window import ExtrapolationWindow
+    from tools.scan_desktop_gui_schema import ScreenScenario
+    from tools.scan_desktop_gui_schema import _state_ownership_issues
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    duplicate = QTableWidget(window)
+    duplicate.setObjectName("duplicate_manual_table_editor")
+    duplicate.setProperty("datalab_state_role", "manual_table_editor")
+
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+    issues = _state_ownership_issues(window, scenario)
+
+    assert any(
+        issue["kind"] == "duplicate_manual_data_editor" and issue["widget"] == "manual_table_editor"
+        for issue in issues
+    )
+
+
+def test_gui_scan_reports_wrong_manual_data_editor(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QTableWidget
+
+    from app_desktop.window import ExtrapolationWindow
+    from tools.scan_desktop_gui_schema import ScreenScenario
+    from tools.scan_desktop_gui_schema import _state_ownership_issues
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    window.manual_table.setProperty("datalab_state_role", "")
+    wrong = QTableWidget(window)
+    wrong.setObjectName("wrong_manual_table_editor")
+    wrong.setProperty("datalab_state_role", "manual_table_editor")
+
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+    issues = _state_ownership_issues(window, scenario)
+
+    assert any(
+        issue["kind"] == "wrong_manual_data_editor" and issue["widget"] == "manual_table_editor"
+        for issue in issues
+    )
+
+
+def test_gui_scan_reports_untagged_manual_data_table_clone(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QTableWidget
+
+    from app_desktop.window import ExtrapolationWindow
+    from tools.scan_desktop_gui_schema import ScreenScenario
+    from tools.scan_desktop_gui_schema import _state_ownership_issues
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    clone = QTableWidget(window.manual_box)
+    clone.setObjectName("untagged_manual_table_clone")
+
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+    issues = _state_ownership_issues(window, scenario)
+
+    assert any(issue["kind"] == "unexpected_manual_data_table" for issue in issues)
+
+
+def test_gui_scan_reports_mirrored_manual_data_clone_outside_manual_box(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QPlainTextEdit, QTableWidget
+
+    from app_desktop.window import ExtrapolationWindow
+    from tools.scan_desktop_gui_schema import ScreenScenario
+    from tools.scan_desktop_gui_schema import _state_ownership_issues
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    table_clone = QTableWidget(window.workbench_workspace_content)
+    table_clone.setObjectName("workbench_data_preview_table")
+    text_clone = QPlainTextEdit(window.workbench_workspace_content)
+    text_clone.setObjectName("workbench_editor_stack")
+
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+    issues = _state_ownership_issues(window, scenario)
+
+    mirrored_widgets = {
+        issue["widget"]
+        for issue in issues
+        if issue["kind"] == "mirrored_editable_state_widget"
+    }
+    assert {"workbench_data_preview_table", "workbench_editor_stack"} <= mirrored_widgets
+
+
+def test_gui_scan_reports_duplicate_state_role_definitions(
+    qtbot: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
+    from tools import scan_desktop_gui_schema as scan
+    from tools.scan_desktop_gui_schema import ScreenScenario
+
+    specs = dict(MODE_WORKBENCH_SPECS)
+    fitting = specs["fitting"]
+    root = specs["root_solving"]
+    conflicting_mount = replace(root.tables[0], state_role=fitting.parameters[0].state_role)
+    specs["root_solving"] = replace(root, tables=(conflicting_mount,))
+    monkeypatch.setattr(scan, "MODE_WORKBENCH_SPECS", specs)
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+
+    issues = scan._state_ownership_issues(window, scenario)
+
+    assert any(issue["kind"] == "duplicate_state_role_definition" for issue in issues)
+
+
+def test_gui_scan_reports_spec_collision_with_baseline_state_role(
+    qtbot: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
+    from tools import scan_desktop_gui_schema as scan
+    from tools.scan_desktop_gui_schema import ScreenScenario
+
+    specs = dict(MODE_WORKBENCH_SPECS)
+    root = specs["root_solving"]
+    conflicting_mount = replace(root.tables[0], state_role="manual_data_owner")
+    specs["root_solving"] = replace(root, tables=(conflicting_mount,))
+    monkeypatch.setattr(scan, "MODE_WORKBENCH_SPECS", specs)
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    scenario = ScreenScenario(key="test", language="en", mode="root_solving")
+
+    issues = scan._state_ownership_issues(window, scenario)
+    issue = next(issue for issue in issues if issue["kind"] == "duplicate_state_role_definition")
+
+    assert issue["details"]["first_widget"] == "manual_box"
+    assert issue["details"]["second_widget"] == root.tables[0].widget_attr
+
+
+def test_gui_scan_reports_wrong_owner_without_unexpected_owner_when_object_name_missing(
+    qtbot: Any,
+) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
+    from tools.scan_desktop_gui_schema import ScreenScenario
+    from tools.scan_desktop_gui_schema import _state_ownership_issues
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    mount = MODE_WORKBENCH_SPECS["fitting"].parameters[0]
+    widget = getattr(window, mount.widget_attr)
+    widget.setObjectName("")
+
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+    issues = _state_ownership_issues(window, scenario)
+
+    assert any(
+        issue["kind"] == "wrong_state_role_owner" and issue["widget"] == mount.state_role
+        for issue in issues
+    )
+    assert not any(issue["kind"] == "unexpected_editable_state_owner" for issue in issues)
+
+
+def test_gui_scan_reports_named_parameter_table_clone_without_state_role(qtbot: Any) -> None:
+    from app_desktop.parameter_table import ParameterTable
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
+    from tools.scan_desktop_gui_schema import ScreenScenario
+    from tools.scan_desktop_gui_schema import _state_ownership_issues
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    mount = MODE_WORKBENCH_SPECS["fitting"].parameters[0]
+    clone = ParameterTable(window)
+    clone.setObjectName(mount.widget_attr)
+
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+    issues = _state_ownership_issues(window, scenario)
+
+    assert any(
+        issue["kind"] == "unexpected_editable_state_owner" and issue["widget"] == mount.widget_attr
+        for issue in issues
+    )
+
+
+def test_gui_scan_rejects_empty_scenario_list(qtbot: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from tools import scan_desktop_gui_schema as scan
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    monkeypatch.setattr(scan, "_screen_scenarios", lambda *, refresh_language: [])
+
+    with pytest.raises(ValueError, match="duplicate-state scan requires"):
+        scan.scan_window(window)

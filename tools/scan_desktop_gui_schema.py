@@ -37,7 +37,11 @@ from PySide6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
+from app_desktop.constants_editor import ConstantsEditor  # noqa: E402
+from app_desktop.detected_rows_table import DetectedRowsTable  # noqa: E402
+from app_desktop.parameter_table import ParameterTable  # noqa: E402
 from app_desktop.theme import SUPPORTED_MIN_WINDOW_WIDTH  # noqa: E402
+from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS  # noqa: E402
 from app_desktop.workbench_visual_contract import visual_contract_issues  # noqa: E402
 
 
@@ -59,6 +63,17 @@ RESULT_TABS = ("numeric", "image", "log", "latex", "pdf")
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg=="
 )
+REQUIRED_BASELINE_STATE_ROLES = {
+    # These owners are outside MODE_WORKBENCH_SPECS but are always present in the shell.
+    "manual_data_owner": "manual_box",
+    "mode_stack_owner": "mode_stack",
+    "result_tabs_owner": "result_tabs",
+}
+MIRRORED_STATE_OBJECT_NAMES = {
+    "workbench_data_preview_table",
+    "workbench_editor_stack",
+    "workbench_result_model_table",
+}
 
 
 def _combo_index_for_data(combo: Any, data: object) -> int:
@@ -110,6 +125,179 @@ def _issue_to_legacy_text(issue: dict[str, Any]) -> str:
     if language and scenario.endswith(":legacy"):
         return f"{language}: {message}"
     return message
+
+
+def _state_ownership_issues(window: Any, scenario: ScreenScenario) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    expected_owner_roles = dict(REQUIRED_BASELINE_STATE_ROLES)
+    for spec in MODE_WORKBENCH_SPECS.values():
+        for mount in spec.parameters + spec.constants + spec.tables:
+            existing_attr = expected_owner_roles.get(mount.state_role)
+            if existing_attr is not None and existing_attr != mount.widget_attr:
+                issues.append(
+                    _issue(
+                        "duplicate_state_role_definition",
+                        scenario,
+                        mount.state_role,
+                        "state role is mapped to multiple editable state widgets",
+                        first_widget=existing_attr,
+                        second_widget=mount.widget_attr,
+                    )
+                )
+                # First mapping wins so later claimants are reported against the canonical owner.
+                continue
+            expected_owner_roles[mount.state_role] = mount.widget_attr
+
+    for role, expected_object_name in expected_owner_roles.items():
+        widgets = [
+            widget
+            for widget in window.findChildren(QWidget)
+            if widget.property("datalab_state_role") == role
+        ]
+        if not widgets:
+            issues.append(
+                _issue(
+                    "missing_state_role_owner",
+                    scenario,
+                    role,
+                    f"expected state owner {expected_object_name} for role {role}, found none",
+                    count=0,
+                    widgets=[],
+                )
+            )
+        elif len(widgets) > 1:
+            issues.append(
+                _issue(
+                    "duplicate_state_role",
+                    scenario,
+                    role,
+                    f"expected exactly one state owner {expected_object_name} for role {role}, found {len(widgets)}",
+                    count=len(widgets),
+                    widgets=[widget.objectName() for widget in widgets],
+                )
+            )
+        elif widgets[0].objectName() != expected_object_name:
+            issues.append(
+                _issue(
+                    "wrong_state_role_owner",
+                    scenario,
+                    role,
+                    f"expected state owner {expected_object_name} for role {role}, found {widgets[0].objectName()}",
+                    expected=expected_object_name,
+                    found=widgets[0].objectName(),
+                )
+            )
+
+    owner_types = (ParameterTable, ConstantsEditor, DetectedRowsTable)
+    expected_objects = {
+        mount.widget_attr
+        for spec in MODE_WORKBENCH_SPECS.values()
+        for mount in spec.parameters + spec.constants + spec.tables
+    } | set(REQUIRED_BASELINE_STATE_ROLES.values())
+    owner_widgets = []
+    for owner_type in owner_types:
+        owner_widgets.extend(window.findChildren(owner_type))
+    # The scanner is a runtime GUI-tree gate: detached widgets are not visible state owners.
+    for widget in owner_widgets:
+        widget_role = widget.property("datalab_state_role")
+        if widget_role in expected_owner_roles:
+            continue
+        widget_name = widget.objectName()
+        if widget_name in expected_objects and getattr(window, widget_name, None) is widget:
+            continue
+        issues.append(
+            _issue(
+                "unexpected_editable_state_owner",
+                scenario,
+                widget_name or widget.__class__.__name__,
+                "unexpected editable state owner widget; common panels must mount existing owners",
+                widget_class=widget.__class__.__name__,
+                state_role=str(widget_role or ""),
+            )
+        )
+
+    for widget in window.findChildren(QWidget):
+        widget_name = widget.objectName()
+        if widget_name in MIRRORED_STATE_OBJECT_NAMES:
+            issues.append(
+                _issue(
+                    "mirrored_editable_state_widget",
+                    scenario,
+                    widget_name,
+                    "mirrored editable state widget detected; common panels must mount existing state owners",
+                    widget_class=widget.__class__.__name__,
+                )
+            )
+
+    manual_editor_specs = (
+        (QTableWidget, "manual_table_editor", "manual_table"),
+        (QPlainTextEdit, "manual_text_editor", "manual_data_edit"),
+    )
+    for widget_type, role, expected_object_name in manual_editor_specs:
+        widgets = [
+            widget
+            for widget in window.findChildren(widget_type)
+            if widget.property("datalab_state_role") == role
+        ]
+        if not widgets:
+            issues.append(
+                _issue(
+                    "missing_manual_data_editor",
+                    scenario,
+                    role,
+                    f"expected manual data editor {expected_object_name} for role {role}, found none",
+                    count=0,
+                    widgets=[],
+                )
+            )
+        elif len(widgets) > 1:
+            issues.append(
+                _issue(
+                    "duplicate_manual_data_editor",
+                    scenario,
+                    role,
+                    f"expected exactly one manual data editor {expected_object_name} for role {role}",
+                    count=len(widgets),
+                    widgets=[widget.objectName() for widget in widgets],
+                )
+            )
+        elif widgets[0].objectName() != expected_object_name:
+            issues.append(
+                _issue(
+                    "wrong_manual_data_editor",
+                    scenario,
+                    role,
+                    f"expected manual data editor {expected_object_name} for role {role}, found {widgets[0].objectName()}",
+                    expected=expected_object_name,
+                    found=widgets[0].objectName(),
+                )
+            )
+
+    manual_box = getattr(window, "manual_box", None)
+    manual_table = getattr(window, "manual_table", None)
+    manual_data_edit = getattr(window, "manual_data_edit", None)
+    if manual_box is not None:
+        for widget in manual_box.findChildren(QTableWidget):
+            if widget is not manual_table:
+                issues.append(
+                    _issue(
+                        "unexpected_manual_data_table",
+                        scenario,
+                        widget.objectName() or widget.__class__.__name__,
+                        "unexpected manual data table inside the manual data owner",
+                    )
+                )
+        for widget in manual_box.findChildren(QPlainTextEdit):
+            if widget is not manual_data_edit:
+                issues.append(
+                    _issue(
+                        "unexpected_manual_data_text_editor",
+                        scenario,
+                        widget.objectName() or widget.__class__.__name__,
+                        "unexpected manual data text editor inside the manual data owner",
+                    )
+                )
+    return issues
 
 
 def _screen_scenarios(*, refresh_language: bool) -> list[ScreenScenario]:
@@ -446,6 +634,9 @@ def scan_window(window: Any, *, refresh_language: bool = True, strict: bool = Fa
         QApplication.processEvents()
     languages = ("zh", "en") if refresh_language else ("current",)
     scenarios = _screen_scenarios(refresh_language=refresh_language)
+    if not scenarios:
+        raise ValueError("duplicate-state scan requires at least one representative scenario")
+    structured_issues.extend(_state_ownership_issues(window, scenarios[0]))
     text_inventory: list[dict[str, str]] = []
     for lang in languages:
         if refresh_language:

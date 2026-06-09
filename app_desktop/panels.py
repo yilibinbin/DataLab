@@ -300,6 +300,7 @@ def build_ui(self):
     reparent_widget(self.workbench_workspace_layout, self.manual_box, stretch=2)
     reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
     self._build_right_panel(self.workbench_result_layout)
+    self._bind_workbench_state_roles()
     self._bind_workbench_spec_schema_keys()
     # 初始化手动输入占位示例
     self._update_manual_placeholder(self.mode_combo.currentData())
@@ -374,6 +375,33 @@ def build_ui(self):
         logging.getLogger(__name__).debug(
             "Splitter state restore skipped", exc_info=True
         )
+
+
+def _bind_workbench_state_roles(self) -> None:
+    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
+
+    self.manual_box.setObjectName("manual_box")
+    self.manual_table.setObjectName("manual_table")
+    self.manual_data_edit.setObjectName("manual_data_edit")
+    self.mode_stack.setObjectName("mode_stack")
+    self.tabs.setObjectName("result_tabs")
+    self.custom_params_table.setObjectName("custom_params_table")
+    self.implicit_params_table.setObjectName("implicit_params_table")
+    self.root_unknowns_table.setObjectName("root_unknowns_table")
+    self.error_constants_editor.setObjectName("error_constants_editor")
+    self.custom_constants_editor.setObjectName("custom_constants_editor")
+    self.implicit_constants_editor.setObjectName("implicit_constants_editor")
+    self.root_constants_editor.setObjectName("root_constants_editor")
+
+    self.manual_box.setProperty("datalab_state_role", "manual_data_owner")
+    self.manual_table.setProperty("datalab_state_role", "manual_table_editor")
+    self.manual_data_edit.setProperty("datalab_state_role", "manual_text_editor")
+    self.mode_stack.setProperty("datalab_state_role", "mode_stack_owner")
+    self.tabs.setProperty("datalab_state_role", "result_tabs_owner")
+    self.workbench_result_table.setProperty("datalab_state_role", "result_csv_projection")
+    for spec in MODE_WORKBENCH_SPECS.values():
+        for mount in spec.parameters + spec.constants + spec.tables:
+            getattr(self, mount.widget_attr).setProperty("datalab_state_role", mount.state_role)
 
 
 def _bind_workbench_spec_schema_keys(self) -> None:
