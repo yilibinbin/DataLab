@@ -579,8 +579,6 @@ class ExtrapolationWindow(
             logging.getLogger(__name__).exception(
                 "Failed to refresh workbench status i18n"
             )
-        self.refresh_workbench_formula_panel()
-        self.refresh_workbench_variable_panel()
 
     def _set_button_to_stop_mode(self):
         WindowExtrapolationMixin._set_button_to_stop_mode(self)
