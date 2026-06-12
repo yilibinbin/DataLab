@@ -64,9 +64,10 @@ def _parse_stats_data(text: str):
                 "Statistics data requires a header and at least one data row.",
             )
         )
-    headers = lines[0].split()
-    if len(headers) < 1:
+    raw_headers = lines[0].split()
+    if len(raw_headers) < 1:
         raise ValueError(_dual_msg("表头至少需要一列。", "Table header must contain at least one column."))
+    headers = [raw_headers[0]]
 
     values: list[mp.mpf] = []
     sigmas: list[mp.mpf | None] = []

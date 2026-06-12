@@ -170,6 +170,51 @@ def test_web_statistics_logic_uses_core_request_builder_and_handler(monkeypatch)
     assert "\\begin" in result.latex_text
 
 
+def test_web_statistics_multicolumn_input_projects_to_value_and_sigma_only(monkeypatch):
+    from datalab_core.statistics import build_statistics_requests as real_build_statistics_requests
+
+    import app_web.logic.statistics as stats_logic
+
+    captured: dict[str, object] = {}
+
+    def fake_build_statistics_requests(**kwargs):
+        captured["headers"] = tuple(kwargs["headers"])
+        captured["rows"] = tuple(tuple(row) for row in kwargs["rows"])
+        captured["sigma_rows"] = tuple(tuple(row) for row in kwargs["sigma_rows"])
+        captured["value_col"] = kwargs["value_col"]
+        return real_build_statistics_requests(**kwargs)
+
+    monkeypatch.setattr(stats_logic, "build_statistics_requests", fake_build_statistics_requests, raising=False)
+
+    result = stats_logic._run_statistics(
+        "A sigma ignored\n"
+        "1.0000000000000000001 0.1 99\n"
+        "2.0000000000000000002 0.2 88\n"
+        "3.0000000000000000003 0.3 77\n",
+        {
+            "stats_mode": "weighted_sigma",
+            "stats_mp_precision": "80",
+            "stats_use_sample": "on",
+            "stats_use_weighted_variance": "on",
+        },
+        lang="en",
+    )
+
+    assert captured["headers"] == ("A",)
+    assert captured["value_col"] == "A"
+    assert [mp.nstr(row[0], 30) for row in captured["rows"]] == [
+        "1.0000000000000000001",
+        "2.0000000000000000002",
+        "3.0000000000000000003",
+    ]
+    assert [mp.nstr(row[0], 30) for row in captured["sigma_rows"]] == ["0.1", "0.2", "0.3"]
+    assert result.headers == ["A"]
+    assert result.raw_csv_data
+    assert result.raw_csv_data.splitlines()[0] == "index,A,A_sigma"
+    assert "ignored" not in result.raw_csv_data
+    assert "sigma_sigma" not in result.raw_csv_data
+
+
 def test_web_extrapolation_logic_uses_core_request_builder_and_handler(monkeypatch):
     from datalab_core.extrapolation import build_extrapolation_request as real_build_extrapolation_request
     from datalab_core.extrapolation import run_extrapolation as real_run_extrapolation
