@@ -29,23 +29,27 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
     for key in ("data", "constants", "config"):
         if key not in compute:
             raise WorkspaceValidationError(f"model.compute.{key} is required")
+        if not isinstance(compute[key], Mapping):
+            raise WorkspaceValidationError(f"model.compute.{key} must be a mapping")
     if "result_snapshot" not in model:
         raise WorkspaceValidationError("model.result_snapshot is required")
+    if not isinstance(model["result_snapshot"], Mapping):
+        raise WorkspaceValidationError("model.result_snapshot must be a mapping")
 
 
 def model_from_manifest(manifest: Mapping[str, Any]) -> WorkbenchModel:
     validate_manifest(manifest)
     model_payload = copy.deepcopy(dict(manifest["model"]))
-    compute = model_payload.get("compute") or {}
+    compute = model_payload["compute"]
     workspace = {
-        "title": model_payload.get("title") or "Untitled",
-        "current_mode": model_payload.get("current_mode") or "fitting",
-        "language": model_payload.get("language") or "auto",
-        "ui": model_payload.get("ui") or {},
-        "data": compute.get("data") or {},
-        "constants": compute.get("constants") or {},
-        "config": compute.get("config") or {},
-        "result_snapshot": model_payload.get("result_snapshot") or {"present": False},
+        "title": model_payload["title"] if "title" in model_payload else "Untitled",
+        "current_mode": model_payload["current_mode"] if "current_mode" in model_payload else "fitting",
+        "language": model_payload["language"] if "language" in model_payload else "auto",
+        "ui": model_payload["ui"] if "ui" in model_payload else {},
+        "data": compute["data"],
+        "constants": compute["constants"],
+        "config": compute["config"],
+        "result_snapshot": model_payload["result_snapshot"],
     }
     return WorkbenchModel.from_v1_workspace(workspace)
 

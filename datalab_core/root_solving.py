@@ -222,6 +222,8 @@ def _normalize_unknown_rows(rows: Sequence[Mapping[str, Any]], *, digit_hint: in
                 "source": source,
             }
         )
+    if not normalized:
+        raise ValueError("unknown_rows must contain at least one row with meaningful data.")
     return normalized
 
 

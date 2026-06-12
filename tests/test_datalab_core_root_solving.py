@@ -190,6 +190,9 @@ def test_core_root_solving_request_builder_validates_inputs() -> None:
     with pytest.raises(ValueError, match="unknown_rows must contain at least one row"):
         build_root_solving_request(equations=("x - 1",), unknown_rows=())
 
+    with pytest.raises(ValueError, match="unknown_rows must contain at least one row with meaningful data"):
+        build_root_solving_request(equations=("x - 1",), unknown_rows=({"source": "detected"},))
+
     with pytest.raises(ValueError, match="Root data row 1 is missing column B"):
         build_root_solving_request(
             equations=("x - A",),

@@ -233,6 +233,40 @@ def test_v2_fixture_compatible_workspace_matches_core_adapter() -> None:
     assert compute_workspace_hash(loaded.manifest["workspace"]).startswith("sha256:")
 
 
+@pytest.mark.parametrize("compute_key", ["data", "constants", "config"])
+def test_workspace_v2_validation_rejects_non_mapping_compute_sections(compute_key: str) -> None:
+    from datalab_core import workspace_v2
+    from shared.workspace_schema import WorkspaceValidationError
+
+    manifest = _minimal_v2_manifest()
+    manifest["model"]["compute"][compute_key] = []  # type: ignore[index]
+
+    with pytest.raises(WorkspaceValidationError, match=rf"model\.compute\.{compute_key} must be a mapping"):
+        workspace_v2.validate_manifest(manifest)
+
+
+def test_workspace_v2_validation_rejects_non_mapping_result_snapshot() -> None:
+    from datalab_core import workspace_v2
+    from shared.workspace_schema import WorkspaceValidationError
+
+    manifest = _minimal_v2_manifest()
+    manifest["model"]["result_snapshot"] = []  # type: ignore[index]
+
+    with pytest.raises(WorkspaceValidationError, match="model.result_snapshot must be a mapping"):
+        workspace_v2.validate_manifest(manifest)
+
+
+def test_workspace_v2_model_conversion_preserves_empty_result_snapshot() -> None:
+    from datalab_core import workspace_v2
+
+    manifest = _minimal_v2_manifest()
+    manifest["model"]["result_snapshot"] = {}  # type: ignore[index]
+
+    workspace = workspace_v2.to_v1_workspace(manifest)
+
+    assert workspace["result_snapshot"] == {}
+
+
 def test_workspace_read_v2_rejects_compute_json_floats_as_validation_error(tmp_path: Path) -> None:
     from shared.workspace_io import read_workspace
     from shared.workspace_schema import WorkspaceValidationError

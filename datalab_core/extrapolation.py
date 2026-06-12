@@ -89,7 +89,7 @@ def run_extrapolation(request: ComputeJobRequest) -> ResultEnvelope:
         check_cancelled()
         headers = _required_string_sequence(request.inputs.get("headers"), field_name="headers")
         rows = _required_matrix(request.inputs.get("rows"), field_name="rows", headers=headers)
-        method = _required_text(request.inputs.get("method", "quadratic"), field_name="method")
+        method = _required_text(request.inputs.get("method", "power_law"), field_name="method")
         method_options = _mapping_or_empty(request.inputs.get("method_options"), field_name="method_options")
         options = _options_from_payload(
             method,

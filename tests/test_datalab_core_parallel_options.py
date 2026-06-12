@@ -27,6 +27,12 @@ def test_core_parallel_options_normalize_high_precision_numeric_leaves() -> None
     }
 
 
+def test_core_parallel_options_preserves_explicit_zero_key() -> None:
+    from datalab_core.parallel_options import normalize_parallel_options
+
+    assert normalize_parallel_options({0: "auto"}, digit_hint=50) == {"0": "auto"}
+
+
 def test_core_parallel_options_reject_binary_float_values() -> None:
     from datalab_core.parallel_options import normalize_parallel_options
 

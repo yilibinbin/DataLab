@@ -138,6 +138,39 @@ def test_core_extrapolation_handler_runs_quadratic_request() -> None:
     assert mp.nstr(legacy_results[0].uncertainty, 30) == "0.875"
 
 
+def test_core_extrapolation_handler_defaults_missing_method_to_builder_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import datalab_core.extrapolation as core_extrapolation
+    from datalab_core.jobs import ComputeJobRequest, JobMode
+    from datalab_core.results import ResultStatus
+    from shared.extrapolation_engine import ExtrapolationResult
+
+    observed: dict[str, str] = {}
+
+    def fake_process(headers, rows, *, verbose=False, options=None):
+        observed["method"] = options.method
+        return [tuple(row) for row in rows], [
+            ExtrapolationResult(
+                value=mp.mpf("0"),
+                uncertainty=mp.mpf("0"),
+                method=options.method,
+            )
+        ]
+
+    monkeypatch.setattr(core_extrapolation, "process_extrapolation_rows", fake_process)
+
+    request = ComputeJobRequest(
+        mode=JobMode.EXTRAPOLATION,
+        inputs={"headers": ["A"], "rows": [["1"]]},
+    )
+    result = core_extrapolation.run_extrapolation(request)
+
+    assert result.status is ResultStatus.SUCCEEDED
+    assert observed["method"] == "power_law"
+    assert result.payload["method"] == "power_law"
+
+
 def test_core_extrapolation_handler_runs_custom_formula_without_latex_imports() -> None:
     from datalab_core.extrapolation import build_extrapolation_request, run_extrapolation
     from datalab_core.results import ResultStatus

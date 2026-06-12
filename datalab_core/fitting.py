@@ -326,11 +326,11 @@ def _normalize_sigma_value(value: Any | None, *, field_name: str, digit_hint: in
     return numeric_to_payload_string(value, field_name=field_name, digit_hint=digit_hint)
 
 
-def _sigma_series_value(value: dict[str, Any] | str | None) -> str | None:
+def _sigma_series_value(value: Mapping[str, Any] | str | None) -> str | None:
     if value is None:
         return None
     if isinstance(value, Mapping):
-        return str(value.get("value") or "")
+        return str(value.get("uncertainty") or "")
     return value
 
 

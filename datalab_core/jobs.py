@@ -56,5 +56,14 @@ class ComputeJobRequest:
         if not isinstance(inputs, Mapping):
             raise TypeError("inputs must be a mapping.")
         object.__setattr__(self, "inputs", inputs)
+        options = self.options
+        if isinstance(options, Mapping):
+            try:
+                options = JobOptions(**dict(options))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Invalid job options.") from exc
+        elif not isinstance(options, JobOptions):
+            raise TypeError("options must be JobOptions or a mapping.")
+        object.__setattr__(self, "options", options)
         if not isinstance(self.request_id, str):
             raise TypeError("request_id must be a string.")

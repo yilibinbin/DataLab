@@ -183,6 +183,39 @@ def test_core_job_options_parallel_must_be_mapping() -> None:
         JobOptions(parallel=["workers"])  # type: ignore[arg-type]
 
 
+def test_core_job_request_coerces_mapping_options() -> None:
+    from datalab_core.jobs import ComputeJobRequest, JobMode, JobOptions
+
+    request = ComputeJobRequest(
+        mode=JobMode.STATISTICS,
+        inputs={},
+        options={
+            "precision_digits": 80,
+            "uncertainty_digits": 2,
+            "parallel": {"workers": "auto"},
+        },  # type: ignore[arg-type]
+    )
+
+    assert isinstance(request.options, JobOptions)
+    assert request.options.precision_digits == 80
+    assert request.options.uncertainty_digits == 2
+    assert request.options.parallel == {"workers": "auto"}
+
+
+def test_core_job_request_rejects_invalid_options() -> None:
+    from datalab_core.jobs import ComputeJobRequest, JobMode
+
+    with pytest.raises(TypeError, match="options must be JobOptions or a mapping"):
+        ComputeJobRequest(mode=JobMode.STATISTICS, inputs={}, options=object())  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="Invalid job options"):
+        ComputeJobRequest(
+            mode=JobMode.STATISTICS,
+            inputs={},
+            options={"precision_digits": 80.0},  # type: ignore[arg-type]
+        )
+
+
 def test_core_job_request_copies_nested_inputs() -> None:
     from datalab_core.jobs import ComputeJobRequest, JobMode
 
@@ -824,6 +857,43 @@ def test_core_session_cancel_active_request_returns_cancelled_envelope() -> None
     }
     assert events == [("failure", "cancelled", "req-cancel")]
     assert service.active_request_id is None
+
+
+def test_core_session_cancel_uses_cached_token_reference() -> None:
+    from datalab_core.session import SessionService
+
+    class Token:
+        cancelled = False
+
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    class RaceSession(SessionService):
+        def __init__(self) -> None:
+            self._stored_cancel_token = None
+            self._token_reads = 0
+            super().__init__()
+
+        @property
+        def _cancel_token(self):  # type: ignore[override]
+            if self._stored_cancel_token is None:
+                return None
+            self._token_reads += 1
+            if self._token_reads == 1:
+                return self._stored_cancel_token
+            return None
+
+        @_cancel_token.setter
+        def _cancel_token(self, value) -> None:  # type: ignore[override]
+            self._stored_cancel_token = value
+
+    token = Token()
+    service = RaceSession()
+    service._active_request_id = "req"
+    service._cancel_token = token
+
+    assert service.cancel("req") is True
+    assert token.cancelled is True
 
 
 def test_core_session_external_cancellation_checker_is_observed_by_checkpoints() -> None:

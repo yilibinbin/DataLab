@@ -76,7 +76,7 @@ def test_core_fitting_request_builder_creates_string_payload() -> None:
     assert request.inputs["target_column"] == "y"
     assert request.inputs["target_series"] == ["2.5", "5"]
     assert request.inputs["y_series"] == ["2.5", "5"]
-    assert request.inputs["sigma_series"] == ["0.02", "0.04"]
+    assert request.inputs["sigma_series"] == ["0.001", "0.04"]
     assert request.inputs["weights"] is None
     assert request.inputs["model_expr"] == "a*x + b*z + C"
     assert request.inputs["parameter_config"] == {

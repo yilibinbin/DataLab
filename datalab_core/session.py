@@ -192,9 +192,10 @@ class SessionService:
             return False
         if request_id is not None and request_id != self._active_request_id:
             return False
-        if self._cancel_token is None:
+        token = self._cancel_token
+        if token is None:
             return False
-        self._cancel_token.cancel()
+        token.cancel()
         return True
 
     def _emit_status(self, status: SessionStatus, request: ComputeJobRequest | None) -> None:

@@ -57,4 +57,6 @@ def _text_value(value: Any, *, field_name: str) -> str:
         raise TypeError(f"JSON floats are not allowed at {field_name}; pass text inputs as strings.")
     if isinstance(value, bool):
         raise TypeError(f"{field_name} must be a string.")
-    return str(value or "").strip()
+    if value is None:
+        return ""
+    return str(value).strip()
