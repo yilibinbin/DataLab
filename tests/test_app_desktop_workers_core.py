@@ -525,6 +525,19 @@ def test_root_solving_job_payload_uses_data_rows_and_is_spawn_picklable() -> Non
 
 
 def test_root_worker_payload_round_trips_frozen_latex_settings() -> None:
+    from datalab_core.root_solving import build_root_solving_request
+
+    core_request = build_root_solving_request(
+        equations=("x**2 - A",),
+        unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+        data_headers=("A",),
+        data_rows=(("4.0(2)",),),
+        mode="scalar",
+        precision_digits=16,
+        display_digits=10,
+        uncertainty_digits=2,
+        request_id="root-roundtrip",
+    )
     job = RootSolvingJob(
         equations=("x**2 - A",),
         unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
@@ -546,6 +559,7 @@ def test_root_worker_payload_round_trips_frozen_latex_settings() -> None:
         latex_group_size=2,
         latex_include_dcolumn=True,
         latex_language="en",
+        core_request=core_request,
     )
 
     restored = _deserialize_root_solving_job(_serialize_root_solving_job(job))
@@ -556,6 +570,11 @@ def test_root_worker_payload_round_trips_frozen_latex_settings() -> None:
     assert restored.latex_include_dcolumn is True
     assert restored.latex_language == "en"
     assert restored.uncertainty_digits == 2
+    assert restored.core_request is not None
+    assert restored.core_request.mode is core_request.mode
+    assert restored.core_request.request_id == "root-roundtrip"
+    assert restored.core_request.inputs["data_rows"] == [["4.0(2)"]]
+    assert restored.core_request.options.precision_digits == 16
 
 
 def test_root_worker_payload_defaults_legacy_render_plots_to_false() -> None:
@@ -826,10 +845,12 @@ def test_execute_root_solving_job_payload_uses_core_service_when_request_availab
         core_request=core_request,
     )
 
-    payload = _execute_root_solving_job_payload(job)
+    payload = _execute_root_solving_job_payload(job, should_cancel=lambda: True)
 
     assert calls["request"] is core_request
     assert calls["request"].mode is JobMode.ROOT_SOLVING
+    assert callable(calls["cancellation_checker"])
+    assert calls["cancellation_checker"]() is True
     raw_rows = cast(list[dict[str, str]], payload["raw_rows"])
     assert raw_rows[0]["value"] == "7.0"
 

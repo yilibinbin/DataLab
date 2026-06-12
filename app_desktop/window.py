@@ -2422,6 +2422,8 @@ class ExtrapolationWindow(
             self._last_result_text = ""
             self._last_result_text_format = "plain"
             self._last_result_rendered_text = ""
+            self._last_result_kind = None
+            self._last_result_payloads = {}
             self.result_plot_bytes = None
             self._result_plot_base_pixmap = None
             self._image_mode = None

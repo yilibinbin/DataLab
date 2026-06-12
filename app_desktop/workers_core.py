@@ -21,7 +21,7 @@ from datalab_core.extrapolation import (
     extrapolation_payload_to_rows,
 )
 from datalab_core.fitting import fitting_payload_to_fit_result
-from datalab_core.jobs import ComputeJobRequest
+from datalab_core.jobs import ComputeJobRequest, JobMode, JobOptions
 from datalab_core.results import ResultStatus
 from datalab_core.root_solving import root_batch_payload_to_result
 from datalab_core.service_factory import create_core_session_service
@@ -1441,6 +1441,7 @@ def _serialize_root_solving_job(job: RootSolvingJob) -> dict[str, Any]:
         "latex_include_dcolumn": bool(job.latex_include_dcolumn),
         "latex_language": str(job.latex_language),
         "render_plots": bool(job.render_plots),
+        "core_request": _serialize_core_request(job.core_request),
     }
 
 
@@ -1499,6 +1500,44 @@ def _deserialize_root_solving_job(payload: Mapping[str, Any]) -> RootSolvingJob:
         ),
         latex_language=_deserialize_language(payload.get("latex_language", payload.get("language", "en"))),
         render_plots=_payload_bool(payload, "render_plots", False, namespace="root_solving_job"),
+        core_request=_deserialize_core_request(payload.get("core_request")),
+    )
+
+
+def _serialize_core_request(request: ComputeJobRequest | None) -> dict[str, object] | None:
+    if request is None:
+        return None
+    return {
+        "mode": request.mode.value,
+        "inputs": dict(request.inputs),
+        "options": {
+            "precision_digits": request.options.precision_digits,
+            "uncertainty_digits": request.options.uncertainty_digits,
+            "parallel": dict(request.options.parallel),
+        },
+        "request_id": request.request_id,
+    }
+
+
+def _deserialize_core_request(value: Any) -> ComputeJobRequest | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("core_request must be an object when present")
+    options_payload = value.get("options", {})
+    if options_payload is None:
+        options_payload = {}
+    if not isinstance(options_payload, Mapping):
+        raise ValueError("core_request.options must be an object")
+    return ComputeJobRequest(
+        mode=JobMode(str(value.get("mode", ""))),
+        inputs=cast(Mapping[str, Any], value.get("inputs", {})),
+        options=JobOptions(
+            precision_digits=options_payload.get("precision_digits"),
+            uncertainty_digits=options_payload.get("uncertainty_digits"),
+            parallel=cast(Mapping[str, Any], options_payload.get("parallel", {})),
+        ),
+        request_id=str(value.get("request_id", "")),
     )
 
 
@@ -1572,7 +1611,19 @@ def _dict_string_row(row: Mapping[str, Any]) -> dict[str, str]:
     return {str(key): "" if value is None else str(value) for key, value in row.items()}
 
 
-def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
+def _execute_root_solving_job_payload(
+    job: RootSolvingJob,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict[str, object]:
+    def _service_cancel_requested() -> bool:
+        if should_cancel is None:
+            return False
+        try:
+            return bool(should_cancel())
+        except Exception:
+            return True
+
     constants_state = normalize_constants_state(
         enabled=job.constants_enabled,
         rows=job.constants_rows,
@@ -1581,7 +1632,7 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         numeric_mode="uncertainty",
     )
     if job.core_request is not None:
-        root_service = create_core_session_service()
+        root_service = create_core_session_service(cancellation_checker=_service_cancel_requested)
         envelope = root_service.submit(job.core_request)
         if envelope.status is not ResultStatus.SUCCEEDED:
             message = str(envelope.payload.get("message") or envelope.payload.get("error_code") or "Root solving failed.")

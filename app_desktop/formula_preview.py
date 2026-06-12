@@ -351,7 +351,7 @@ def _translate_for_widget(widget: QWidget | None, zh: str, en: str) -> str:
                 current = top_level
                 continue
         current = parent
-    return en
+    return zh
 
 
 def configure_formula_preview_label(label: QLabel, *, constrain_size: bool = False) -> None:

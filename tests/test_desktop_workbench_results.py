@@ -49,6 +49,10 @@ def test_result_view_titles_use_compact_tabs_and_full_tooltips() -> None:
         "result.numeric",
         "en",
     )
+    with pytest.raises(ValueError, match="Unknown result view key"):
+        result_view_tab_title("result.unknown", "en")
+    with pytest.raises(ValueError, match="Unknown result view key"):
+        result_view_tooltip("result.unknown", "zh")
 
 
 def test_result_rail_has_overview_and_data_table(qtbot: Any) -> None:
@@ -333,6 +337,17 @@ def test_hard_reset_clears_failed_state(qtbot: Any) -> None:
     window._apply_language("en")
 
     assert window.workbench_result_overview.text() == "No results"
+
+
+def test_hard_reset_clears_display_format_result_cache(qtbot: Any) -> None:
+    window = _window(qtbot)
+    window._last_result_kind = "fitting"
+    window._last_result_payloads = {"fitting": {"kind": "fitting", "text": "stale"}}
+
+    window._reset_csv_data(clear_non_tabular_result=True)
+
+    assert window._last_result_kind is None
+    assert window._last_result_payloads == {}
 
 
 def test_result_rail_shows_running_while_worker_is_in_flight(qtbot: Any) -> None:

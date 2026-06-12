@@ -22,6 +22,12 @@ def window(qtbot):
     return win
 
 
+def test_formula_preview_translation_fallback_uses_chinese_default() -> None:
+    from app_desktop.formula_preview import _translate_for_widget
+
+    assert _translate_for_widget(None, "预览公式", "Preview formula") == "预览公式"
+
+
 def _contrast_ratio(foreground: QColor, background: QColor) -> float:
     def channel(value: int) -> float:
         normalized = value / 255

@@ -4,6 +4,7 @@ import io
 from pathlib import Path
 from typing import Any
 
+import pytest
 from PIL import Image
 
 
@@ -222,3 +223,39 @@ def test_tex_compile_argv_is_sandboxed_and_network_free() -> None:
     assert pdflatex_argv[0] == "/usr/bin/pdflatex"
     assert "-no-shell-escape" in pdflatex_argv
     assert str(tex_path.name) in pdflatex_argv
+
+
+def test_tex_compile_process_terminates_child_on_communicate_error(monkeypatch: Any, tmp_path: Path) -> None:
+    import app_desktop.formula_tex_render_worker as worker
+
+    class FakeProcess:
+        pid = 12345
+        returncode: int | None = None
+        alive = True
+
+        def communicate(self, *, timeout: float) -> tuple[str, str]:
+            raise OSError("pipe failure")
+
+        def poll(self) -> int | None:
+            return None if self.alive else self.returncode
+
+    process = FakeProcess()
+    calls: dict[str, object] = {}
+
+    def fake_popen(argv: list[str], **kwargs: object) -> FakeProcess:
+        calls["argv"] = argv
+        calls["kwargs"] = kwargs
+        return process
+
+    def fake_terminate(target: FakeProcess) -> None:
+        calls["terminated"] = target
+        target.alive = False
+        target.returncode = -15
+
+    monkeypatch.setattr(worker.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(worker, "_terminate_process_group", fake_terminate)
+
+    with pytest.raises(OSError, match="pipe failure"):
+        worker._run_compile_process(["latex", "formula.tex"], cwd=tmp_path, timeout_seconds=1.0)
+
+    assert calls["terminated"] is process

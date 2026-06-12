@@ -217,6 +217,13 @@ def _run_compile_process(
     except subprocess.TimeoutExpired as exc:
         _terminate_process_group(process)
         raise RuntimeError("LaTeX formula preview timed out.") from exc
+    except Exception:
+        if process.poll() is None:
+            _terminate_process_group(process)
+        raise
+    finally:
+        if process.poll() is None:
+            _terminate_process_group(process)
     return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
