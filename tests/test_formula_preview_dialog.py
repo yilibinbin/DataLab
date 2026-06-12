@@ -86,7 +86,7 @@ def test_formula_preview_dialog_falls_back_to_source_when_mathtext_pixmap_is_nul
     qtbot.addWidget(dialog)
 
     assert dialog.formula_surface.text() == "sin(x)"
-    assert "Formula rendering unavailable" in dialog.error_label.text()
+    assert "公式渲染不可用" in dialog.error_label.text()
     assert not dialog.error_label.isHidden()
 
 
@@ -192,8 +192,8 @@ def test_formula_preview_dialog_exposes_high_fidelity_latex_controls(qtbot):
     assert dialog.render_tier_combo.findData("high_fidelity_latex") >= 0
     assert dialog.latex_source_edit.toPlainText().strip()
     assert dialog.high_fidelity_render_button.text()
-    assert "display" in dialog.latex_source_edit.toolTip().lower()
-    assert "cached" in dialog.high_fidelity_render_button.toolTip().lower()
+    assert "显示" in dialog.latex_source_edit.toolTip()
+    assert "缓存" in dialog.high_fidelity_render_button.toolTip()
 
 
 def test_formula_preview_dialog_localizes_from_parent_window(window, qtbot):
