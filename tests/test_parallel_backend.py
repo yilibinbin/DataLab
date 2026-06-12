@@ -321,6 +321,27 @@ def test_parallel_worker_depth_initializer_sets_process_marker(
     assert current_parallel_depth() == 1
 
 
+@pytest.mark.parametrize("depth", [1.9, True, "2"])
+def test_parallel_worker_depth_initializer_rejects_malformed_depth(
+    monkeypatch: pytest.MonkeyPatch, depth: object
+) -> None:
+    monkeypatch.delenv("DATALAB_PARALLEL_DEPTH", raising=False)
+
+    with pytest.raises(TypeError, match="depth must be an integer"):
+        initialize_parallel_worker_depth(depth)  # type: ignore[arg-type]
+
+    assert os.environ.get("DATALAB_PARALLEL_DEPTH") is None
+
+
+@pytest.mark.parametrize("depth_text", ["1.9", "true", ""])
+def test_malformed_env_parallel_depth_is_ignored(
+    monkeypatch: pytest.MonkeyPatch, depth_text: str
+) -> None:
+    monkeypatch.setenv("DATALAB_PARALLEL_DEPTH", depth_text)
+
+    assert current_parallel_depth() == 0
+
+
 def test_process_mode_serial_fallback_allows_unpicklable_callable_task_count_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -372,6 +393,37 @@ def test_local_worker_budget_shared_permit_behavior() -> None:
     assert not budget.try_acquire(1)
     budget.release(1)
     assert budget.try_acquire(1)
+
+
+@pytest.mark.parametrize("total", [1.9, True, "2"])
+def test_local_worker_budget_rejects_malformed_total(total: object) -> None:
+    with pytest.raises(TypeError, match="total must be an integer"):
+        LocalWorkerBudget(total=total)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("permits", [1.9, True, "1"])
+def test_local_worker_budget_rejects_malformed_acquire_permits(
+    permits: object,
+) -> None:
+    budget = LocalWorkerBudget(total=2)
+
+    with pytest.raises(TypeError, match="permits must be an integer"):
+        budget.try_acquire(permits)  # type: ignore[arg-type]
+
+    assert budget.available == 2
+
+
+@pytest.mark.parametrize("permits", [1.9, True, "1"])
+def test_local_worker_budget_rejects_malformed_release_permits(
+    permits: object,
+) -> None:
+    budget = LocalWorkerBudget(total=2)
+    assert budget.try_acquire(1)
+
+    with pytest.raises(TypeError, match="permits must be an integer"):
+        budget.release(permits)  # type: ignore[arg-type]
+
+    assert budget.available == 1
 
 
 def test_killable_runner_returns_payload() -> None:

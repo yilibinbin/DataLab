@@ -86,6 +86,27 @@ def test_shell_sections_are_visible_in_expected_order(qtbot: Any) -> None:
     assert window.custom_constants_editor is not None
 
 
+def test_left_configuration_sections_are_visual_cards(qtbot: Any) -> None:
+    window = _make_window(qtbot)
+
+    for section in (
+        window.input_section,
+        window.mode_section,
+        window.output_setup_section,
+        window.run_section,
+    ):
+        assert section.property("datalab_config_card") is True
+        assert "border-radius" in section.styleSheet()
+
+    window.refresh_workbench_config_cards()
+
+    assert window.input_section.property("datalab_config_card") is True
+    assert "border-radius" in window.input_section.styleSheet()
+    assert window.run_button.property("datalab_primary_run_button") is True
+    assert window.run_button.property("datalab_run_state") == "run"
+    assert 'QPushButton[datalab_primary_run_button="true"]' in window.run_section.styleSheet()
+
+
 def test_legacy_run_button_click_reaches_current_run_calculation(
     qtbot: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -124,8 +145,11 @@ def test_workbench_job_status_refreshes_on_run_stop_mode_methods(
     window._set_button_to_stop_mode()
 
     assert window.job_status_label.text() == "Running"
+    assert window.run_button.property("datalab_run_state") == "stop"
+    assert window.run_button.styleSheet() == ""
 
     monkeypatch.setattr(window, "_has_running_worker", lambda: False)
     window._set_button_to_run_mode()
 
     assert window.job_status_label.text() == "Ready"
+    assert window.run_button.property("datalab_run_state") == "run"

@@ -5,6 +5,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Qt
 
+from app_desktop.widget_hints import set_accessible_description
 from shared.ui_schema import ChoiceSpec, FormFieldSpec
 
 SCHEMA_KEY_PROPERTY = "datalab_schema_key"
@@ -35,6 +36,7 @@ def bind_field(
         _call_if_supported(label, "setText", label_text)
         if tooltip:
             _call_if_supported(label, "setToolTip", tooltip)
+            set_accessible_description(label, tooltip)
             _set_localized_tooltip(label, field.tooltip.zh, field.tooltip.en)
 
     if widget is not None:
@@ -43,6 +45,7 @@ def bind_field(
         _set_property(widget, SCHEMA_REQUIRED_PROPERTY, field.required)
         if tooltip:
             _call_if_supported(widget, "setToolTip", tooltip)
+            set_accessible_description(widget, tooltip)
             _set_localized_tooltip(widget, field.tooltip.zh, field.tooltip.en)
         if placeholder:
             _call_if_supported(widget, "setPlaceholderText", placeholder)
@@ -57,7 +60,7 @@ def bind_field(
             _set_localized_tooltip(help_button, field.tooltip.zh, field.tooltip.en)
         _call_if_supported(help_button, "setAccessibleName", f"{label_text} help")
         if tooltip and not preserve_tooltip:
-            _call_if_supported(help_button, "setAccessibleDescription", tooltip)
+            set_accessible_description(help_button, tooltip)
 
 
 def bind_choices(combo: Any, choices: Sequence[ChoiceSpec], *, lang: str = "zh") -> None:

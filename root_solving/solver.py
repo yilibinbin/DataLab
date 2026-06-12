@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+import importlib
 import math
 import re
 from typing import Any
@@ -176,7 +177,7 @@ def _solve_polynomial_scipy_or_fallback(problem: RootProblem, system: RootExpres
 
 
 def _solve_scipy(problem: RootProblem, system: RootExpressionSystem, mode: RootMode) -> _Candidate:
-    import scipy.optimize
+    scipy_optimize = importlib.import_module("scipy.optimize")
 
     if mode == "scalar":
         unknown = _single_unknown(problem)
@@ -187,7 +188,7 @@ def _solve_scipy(problem: RootProblem, system: RootExpressionSystem, mode: RootM
             def scalar_float(value: float) -> float:
                 return float(system.evaluate({unknown.name: mp.mpf(str(value))}))
 
-            result = scipy.optimize.root_scalar(scalar_float, bracket=(float(lower), float(upper)), method="brentq")
+            result = scipy_optimize.root_scalar(scalar_float, bracket=(float(lower), float(upper)), method="brentq")
             if not result.converged:
                 raise ValueError("SciPy scalar bracket solve did not converge.")
             return _Candidate((_finite_mpf(str(result.root), "SciPy scalar root"),), "scipy")
@@ -198,7 +199,7 @@ def _solve_scipy(problem: RootProblem, system: RootExpressionSystem, mode: RootM
         def scalar_float(value: float) -> float:
             return float(system.evaluate({unknown.name: mp.mpf(str(value))}))
 
-        result = scipy.optimize.root_scalar(
+        result = scipy_optimize.root_scalar(
             scalar_float,
             x0=float(initial),
             x1=float(second),
@@ -218,7 +219,7 @@ def _solve_scipy(problem: RootProblem, system: RootExpressionSystem, mode: RootM
         scope = {name: mp.mpf(str(value)) for name, value in zip(unknown_names, values, strict=True)}
         return [float(value) for value in system.residuals(scope)]
 
-    result = scipy.optimize.root(system_vector, [float(value) for value in initials])
+    result = scipy_optimize.root(system_vector, [float(value) for value in initials])
     if not bool(getattr(result, "success", False)):
         raise ValueError("SciPy system root solve did not converge.")
     return _Candidate(tuple(_finite_mpf(str(value), "SciPy system root") for value in result.x), "scipy")
@@ -308,12 +309,12 @@ def _refine_scalar_bracket(
     precision: int,
 ) -> mp.mpf:
     if precision <= 16:
-        import scipy.optimize
+        scipy_optimize = importlib.import_module("scipy.optimize")
 
         def scalar_float(value: float) -> float:
             return float(system.evaluate({unknown_name: mp.mpf(str(value))}))
 
-        result = scipy.optimize.root_scalar(scalar_float, bracket=(float(lower), float(upper)), method="brentq")
+        result = scipy_optimize.root_scalar(scalar_float, bracket=(float(lower), float(upper)), method="brentq")
         if not result.converged:
             raise ValueError("SciPy scan bracket solve did not converge.")
         return _finite_mpf(str(result.root), "SciPy scan root")
@@ -332,7 +333,7 @@ def _refine_abs_minimum(
     precision: int,
 ) -> mp.mpf:
     if precision <= 16:
-        import scipy.optimize
+        scipy_optimize = importlib.import_module("scipy.optimize")
 
         def objective(value: float) -> float:
             try:
@@ -341,7 +342,7 @@ def _refine_abs_minimum(
                 return float("inf")
             return float(abs(residual))
 
-        result = scipy.optimize.minimize_scalar(objective, bounds=(float(lower), float(upper)), method="bounded")
+        result = scipy_optimize.minimize_scalar(objective, bounds=(float(lower), float(upper)), method="bounded")
         if not bool(getattr(result, "success", False)):
             raise ValueError("SciPy scan minimum refinement did not converge.")
         return _finite_mpf(str(result.x), "SciPy scan minimum")
@@ -639,7 +640,7 @@ def _literal_is_binary64_exact(literal: str) -> bool:
     except (OverflowError, ValueError):
         return False
     with precision_guard(max(80, len(text) + 10), clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
-        return mp.mpf(as_float) == numeric
+        return bool(mp.mpf(as_float) == numeric)
 
 
 def _parse_mpf(value: str, label: str) -> mp.mpf:

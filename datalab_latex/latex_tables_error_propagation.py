@@ -8,6 +8,11 @@ from typing import Literal, overload
 from mpmath import mp
 
 from shared.bilingual import _dual_msg, _split_dual
+from shared.error_propagation_engine import (
+    apply_formula_to_data as _shared_apply_formula_to_data,
+    detect_used_error_propagation_inputs as _shared_detect_used_error_propagation_inputs,
+    error_propagation as _shared_error_propagation,
+)
 from shared.uncertainty import UncertainValue, parse_uncertainty_format
 
 from .derivatives import (
@@ -817,6 +822,11 @@ def generate_error_propagation_table(
         format_type = "dcolumn format with number spacing" if use_dcolumn else "regular format with spacing"
         print("Error propagation LaTeX table ({0}) written to: {1}".format(format_type, output_filename))
         print("Total rows: {0}".format(len(parsed_data)))
+
+
+globals()["apply_formula_to_data"] = _shared_apply_formula_to_data
+globals()["detect_used_error_propagation_inputs"] = _shared_detect_used_error_propagation_inputs
+globals()["error_propagation"] = _shared_error_propagation
 
 
 __all__ = [

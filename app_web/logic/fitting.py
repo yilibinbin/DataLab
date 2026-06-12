@@ -7,6 +7,9 @@ import mpmath as mp
 
 from .._security_shim import compile_latex_safe, mpmath_synchronized, validate_latex_engine
 
+from datalab_core.fitting import build_fitting_request, fitting_payload_to_fit_result
+from datalab_core.results import ResultStatus
+from datalab_core.service_factory import create_core_session_service
 from data_extrapolation_latex_latest import (
     _dual_msg,
     _precision_guard,
@@ -18,10 +21,7 @@ from data_extrapolation_latex_latest import (
 from datalab_latex.sisetup_block import build_sisetup_block
 from fitting import (
     build_inverse_series_definition,
-    build_model_specification,
-    build_parameter_state,
     build_polynomial_definition,
-    fit_custom_model,
     render_fitting_overview,
     summarize_fit_result,
 )
@@ -646,11 +646,9 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
         if any(val is not None for val in collected):
             sigma_list = collected
 
-    sigmas_for_fit = None
     fit_weights: list[mp.mpf] | None = None
     if sigma_list:
         uncertainty_policy = fit_uncertainty_policy(sigma_list, weighted=use_weights)
-        sigmas_for_fit = list(uncertainty_policy.data_sigmas)
         fit_weights = list(uncertainty_policy.weights) if uncertainty_policy.weights is not None else None
     elif use_weights:
         fit_uncertainty_policy([], weighted=True)
@@ -735,83 +733,30 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
             return None
 
     with _precision_guard(mp_precision):
+        model_expr = ""
+        parameter_config: dict[str, dict[str, object]] | None = None
+        parameter_names: list[str] | None = None
+        template_expr: str | None = None
+        template_params: dict[str, object] | None = None
+        variable_map = {"x": x_column}
+
         if fit_mode == "polynomial":
             definition = build_polynomial_definition(max(1, poly_degree))
-            from fitting.auto_models import fit_linear_model
-
-            fit_res = fit_linear_model(
-                definition,
-                x_vals,
-                y_vals,
-                precision=mp_precision,
-                weights=fit_weights,
-                data_sigmas=sigmas_for_fit,
-            )
             best_label = definition.label
-            params = _collect_params(fit_res)
-            metrics = _collect_metrics(fit_res)
-            summary_text = summarize_fit_result(fit_res)
-            plot_b64 = _render_plot(fit_res)
-            expression_for_csv = fit_res.details.get("expression")
         elif fit_mode == "inverse_power":
             definition = build_inverse_series_definition(inv_min, inv_max)
-            from fitting.auto_models import fit_linear_model
-
-            fit_res = fit_linear_model(
-                definition,
-                x_vals,
-                y_vals,
-                precision=mp_precision,
-                weights=fit_weights,
-                data_sigmas=sigmas_for_fit,
-            )
             best_label = definition.label
-            params = _collect_params(fit_res)
-            metrics = _collect_metrics(fit_res)
-            summary_text = summarize_fit_result(fit_res)
-            plot_b64 = _render_plot(fit_res)
-            expression_for_csv = fit_res.details.get("expression")
         elif fit_mode == "power_limit":
-            expr, params_cfg = _power_limit_template()
-            spec = build_model_specification(expr, ["x"], list(params_cfg.keys()))
-            state = build_parameter_state(params_cfg, list(params_cfg.keys()))
-            fit_res = fit_custom_model(
-                spec,
-                state,
-                {"x": x_vals},
-                y_vals,
-                precision=mp_precision,
-                weights=fit_weights,
-                data_sigmas=sigmas_for_fit,
-            )
+            template_expr, params_cfg = _power_limit_template()
+            template_params = dict(params_cfg)
             best_label = "幂律极限模型 / Power-law limit model"
-            params = _collect_params(fit_res)
-            metrics = _collect_metrics(fit_res)
-            summary_text = summarize_fit_result(fit_res)
-            plot_b64 = _render_plot(fit_res)
-            expression_for_csv = expr
         elif fit_mode == "pade":
             payload = _pade_template(pade_m, pade_n)
             if not payload:
                 raise ValueError(_dual_msg("Padé 参数无效。", "Invalid Padé parameters."))
-            expr, params_cfg = payload
-            spec = build_model_specification(expr, ["x"], list(params_cfg.keys()))
-            state = build_parameter_state(params_cfg, list(params_cfg.keys()))
-            fit_res = fit_custom_model(
-                spec,
-                state,
-                {"x": x_vals},
-                y_vals,
-                precision=mp_precision,
-                weights=fit_weights,
-                data_sigmas=sigmas_for_fit,
-            )
+            template_expr, params_cfg = payload
+            template_params = dict(params_cfg)
             best_label = f"Padé({pade_m}|{pade_n})"
-            params = _collect_params(fit_res)
-            metrics = _collect_metrics(fit_res)
-            summary_text = summarize_fit_result(fit_res)
-            plot_b64 = _render_plot(fit_res)
-            expression_for_csv = expr
         elif fit_mode == "custom":
             if not custom_expr:
                 raise ValueError(
@@ -821,8 +766,6 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                     )
                 )
             try:
-                variable_names = list(var_mapping.keys()) if var_mapping else ["x"]
-
                 params_cfg = json.loads(custom_params_text) if str(custom_params_text).strip() else {}
                 if not isinstance(params_cfg, dict):
                     raise ValueError(
@@ -837,9 +780,8 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                         normalized_cfg[str(name)] = conf
                     else:
                         normalized_cfg[str(name)] = {"initial": conf}
+                parameter_config = normalized_cfg
                 parameter_names = list(normalized_cfg.keys())
-                spec = build_model_specification(custom_expr, variable_names, parameter_names)
-                params_state = build_parameter_state(normalized_cfg, parameter_names)
             except Exception as exc:
                 raise ValueError(
                     _dual_msg(
@@ -847,28 +789,48 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                         f"Failed to parse custom model: {exc}",
                     )
                 ) from exc
-            data_mapping = (
-                {name: _column_series(headers, rows, col) for name, col in var_mapping.items()}
-                if var_mapping
-                else {"x": x_vals}
-            )
-            fit_res = fit_custom_model(
-                spec,
-                params_state,
-                data_mapping,
-                y_vals,
-                precision=mp_precision,
-                weights=fit_weights,
-                data_sigmas=sigmas_for_fit,
-            )
+            model_expr = custom_expr
+            variable_map = dict(var_mapping) if var_mapping else {"x": x_column}
             best_label = "自定义模型 / Custom model"
-            params = _collect_params(fit_res)
-            metrics = _collect_metrics(fit_res)
-            summary_text = summarize_fit_result(fit_res)
-            plot_b64 = _render_plot(fit_res)
-            expression_for_csv = custom_expr
         else:
             raise _unsupported_fit_mode_error(fit_mode)
+
+        request = build_fitting_request(
+            model_type=fit_mode,
+            headers=headers,
+            data_rows=rows,
+            variable_map=variable_map,
+            target_column=target_column,
+            model_expr=model_expr,
+            sigma_rows=sigma_rows,
+            sigma_series=sigma_list,
+            parameter_config=parameter_config,
+            parameter_names=parameter_names,
+            template_expr=template_expr,
+            template_params=template_params,
+            poly_degree=max(1, poly_degree),
+            inverse_min=inv_min,
+            inverse_max=inv_max,
+            pade_m=pade_m,
+            pade_n=pade_n,
+            weighted=use_weights,
+            label=best_label,
+            weights=fit_weights,
+            precision_digits=mp_precision,
+            uncertainty_digits=result_digits,
+            request_id="web-fitting",
+        )
+        core_result = create_core_session_service().submit(request)
+        if core_result.status is not ResultStatus.SUCCEEDED:
+            message = str(core_result.payload.get("message") or "Fitting failed.")
+            raise ValueError(message)
+        fit_res = fitting_payload_to_fit_result(core_result.payload["fit_result"])
+        warnings.extend(core_result.payload.get("warnings") or core_result.warnings)
+        expression_for_csv = str(core_result.payload.get("expression") or model_expr)
+        params = _collect_params(fit_res)
+        metrics = _collect_metrics(fit_res)
+        summary_text = summarize_fit_result(fit_res)
+        plot_b64 = _render_plot(fit_res)
 
     csv_data = None
     if fit_res:

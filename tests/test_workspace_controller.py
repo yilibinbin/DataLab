@@ -300,6 +300,256 @@ def test_workspace_round_trip_preserves_redesigned_shell_ui_state(qtbot, tmp_pat
     assert getattr(target, "_workspace_dirty", True) is False
 
 
+def test_workspace_round_trip_preserves_formula_preview_syntax_without_hash_change(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from datalab_latex.formula_render_service import InputLanguage
+    from shared.workspace_schema import compute_workspace_hash
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    source.fit_model_combo.setCurrentIndex(source.fit_model_combo.findData("custom"))
+    source.fit_expr_edit.setPlainText("Sin[x] + A")
+
+    baseline = capture_workspace(source, title="formula syntax baseline").manifest["workspace"]
+    source.workbench_formula_language_combo.setCurrentIndex(
+        source.workbench_formula_language_combo.findData(InputLanguage.MATHEMATICA.value)
+    )
+    changed = capture_workspace(source, title="formula syntax changed").manifest["workspace"]
+
+    assert changed["ui"]["formula_preview"]["fitting.custom.expression"] == InputLanguage.MATHEMATICA.value
+    assert compute_workspace_hash(baseline) == compute_workspace_hash(changed)
+    source.fit_expr_edit.setPlainText("Sin[x] + A + B")
+    formula_changed = capture_workspace(source, title="formula text changed").manifest["workspace"]
+    assert compute_workspace_hash(baseline) != compute_workspace_hash(formula_changed)
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, {"workspace": changed}, {})
+
+    assert target.mode_combo.currentData() == "fitting"
+    assert target.workbench_formula_language_combo.currentData() == InputLanguage.MATHEMATICA.value
+    assert target._workspace_dirty is False
+
+
+def test_workspace_round_trip_omits_default_formula_preview_syntax(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from datalab_latex.formula_render_service import InputLanguage
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    source.fit_model_combo.setCurrentIndex(source.fit_model_combo.findData("custom"))
+    source.fit_expr_edit.setPlainText("A*x + B")
+
+    workspace = capture_workspace(source, title="default formula preview").manifest["workspace"]
+
+    assert "formula_preview" not in workspace["ui"]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    target._workbench_formula_preview_languages = {
+        "fitting.custom.expression": InputLanguage.MATHEMATICA.value
+    }
+    target.workbench_formula_language_combo.setCurrentIndex(
+        target.workbench_formula_language_combo.findData(InputLanguage.MATHEMATICA.value)
+    )
+
+    restore_workspace(target, {"workspace": workspace}, {})
+
+    assert target.workbench_formula_language_combo.currentData() == InputLanguage.DATALAB.value
+
+
+def test_workspace_capture_omits_unknown_formula_preview_schema_keys(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace
+    from datalab_latex.formula_render_service import InputLanguage
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._workbench_formula_preview_languages = {
+        "fitting.custom.expression": InputLanguage.MATHEMATICA.value,
+        "unknown.formula": InputLanguage.PYTHON.value,
+    }
+
+    workspace = capture_workspace(source, title="unknown formula preview key").manifest["workspace"]
+
+    assert workspace["ui"]["formula_preview"] == {
+        "fitting.custom.expression": InputLanguage.MATHEMATICA.value
+    }
+
+
+@pytest.mark.parametrize("corrupt_state", ["python", ["python"], {"fitting.custom.expression": 42}])
+def test_workspace_capture_rejects_corrupt_formula_preview_state(qtbot, corrupt_state) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._workbench_formula_preview_languages = corrupt_state
+
+    with pytest.raises(TypeError, match="Formula preview UI state"):
+        capture_workspace(source, title="corrupt formula preview")
+
+
+def test_workspace_capture_treats_missing_formula_preview_state_as_default(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+
+    delattr(source, "_workbench_formula_preview_languages")
+    missing_workspace = capture_workspace(source, title="missing formula preview").manifest["workspace"]
+    assert "formula_preview" not in missing_workspace["ui"]
+
+    source._workbench_formula_preview_languages = None
+    none_workspace = capture_workspace(source, title="none formula preview").manifest["workspace"]
+    assert "formula_preview" not in none_workspace["ui"]
+
+
+def test_workspace_capture_routes_compute_state_through_workbench_model(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app_desktop.workspace_controller as workspace_controller
+    from app_desktop.window import ExtrapolationWindow
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    original_capture_config = workspace_controller._capture_config
+
+    def capture_config_with_float(window) -> dict[str, object]:
+        config = original_capture_config(window)
+        config["fitting"]["parameter_rows"] = [{"name": "A", "initial": 1.0}]
+        return config
+
+    monkeypatch.setattr(workspace_controller, "_capture_config", capture_config_with_float)
+
+    with pytest.raises(TypeError, match="JSON floats are not allowed"):
+        workspace_controller.capture_workspace(source, title="float compute config")
+
+
+def test_workspace_restore_ignores_malformed_formula_preview_state(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    bundle = capture_workspace(source, title="malformed preview restore")
+    workspace = bundle.manifest["workspace"]
+    workspace["ui"]["formula_preview"] = ["python"]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, {"workspace": workspace}, {})
+
+    assert target._workbench_formula_preview_languages == {}
+
+
+def test_workspace_restore_ignores_unknown_formula_preview_schema_keys(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from datalab_latex.formula_render_service import InputLanguage
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    bundle = capture_workspace(source, title="unknown preview restore")
+    workspace = bundle.manifest["workspace"]
+    workspace["ui"]["formula_preview"] = {
+        "fitting.custom.expression": InputLanguage.MATHEMATICA.value,
+        "unknown.formula": InputLanguage.PYTHON.value,
+    }
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, {"workspace": workspace}, {})
+
+    assert target._workbench_formula_preview_languages == {
+        "fitting.custom.expression": InputLanguage.MATHEMATICA.value
+    }
+
+
+def test_workspace_restore_routes_legacy_compute_float_through_workbench_model(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    bundle = capture_workspace(source, title="float restore")
+    workspace = bundle.manifest["workspace"]
+    workspace["config"]["fitting"]["parameter_rows"] = [{"name": "A", "initial": 1.0}]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.custom_params_table.rows()[0]["initial"] == "1.0"
+
+
+def test_workspace_restore_allows_ui_float_state_through_workbench_model(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    bundle = capture_workspace(source, title="ui float restore")
+    bundle.manifest["workspace"]["ui"]["plot_zoom"] = 1.25
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.zoom_percent_spin.value() == 125
+
+
+def test_restore_workspace_restoring_flag_is_exception_safe(qtbot, monkeypatch) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    import app_desktop.workspace_controller as workspace_controller
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    target._workspace_restoring = False
+
+    def fail_restore_data_section(*_args, **_kwargs) -> None:
+        raise RuntimeError("forced restore failure")
+
+    monkeypatch.setattr(workspace_controller, "_restore_data_section", fail_restore_data_section)
+
+    with pytest.raises(RuntimeError, match="forced restore failure"):
+        workspace_controller.restore_workspace(target, {"workspace": {"config": {}}}, {})
+
+    assert target._workspace_restoring is False
+
+
+def test_restore_workspace_refresh_failure_marks_dirty_and_degraded(qtbot, monkeypatch) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    bundle = capture_workspace(source, title="refresh failure")
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    target._workspace_dirty = False
+    target._workspace_degraded = False
+
+    def fail_refresh() -> None:
+        raise RuntimeError("forced formula refresh failure")
+
+    monkeypatch.setattr(target, "refresh_workbench_formula_panel", fail_refresh)
+
+    with pytest.raises(RuntimeError, match="forced formula refresh failure"):
+        restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target._workspace_restoring is False
+    assert target._workspace_dirty is True
+    assert target._workspace_degraded is True
+
+
 def test_workspace_restore_clamps_invalid_ui_indices(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace
@@ -401,6 +651,56 @@ def test_workspace_restore_clears_stale_failed_state_before_result_snapshot(qtbo
     assert target.workbench_result_overview.text() == "Text result ready; no tabular data"
 
 
+def test_workspace_restore_preserves_failed_result_subtab(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.log_edit.setPlainText("traceback")
+    source._mark_workbench_result_failed()
+    source.result_tabs.setCurrentIndex(source.result_tabs_indices["numeric"])
+    bundle = capture_workspace(source, title="failed result")
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    target._workbench_result_details_kind = "running"
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+    target._apply_language("en")
+
+    assert target.workbench_result_overview.text() == "Calculation failed"
+    assert target.result_tabs.currentIndex() == target.result_tabs_indices["numeric"]
+
+
+def test_workspace_restore_failed_result_next_run_autoselects_log(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    class Worker:
+        def start(self) -> None:
+            pass
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.log_edit.setPlainText("traceback")
+    source._mark_workbench_result_failed()
+    source.result_tabs.setCurrentIndex(source.result_tabs_indices["numeric"])
+    bundle = capture_workspace(source, title="failed result")
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+    target._apply_language("en")
+    assert target.result_tabs.currentIndex() == target.result_tabs_indices["numeric"]
+
+    target._start_worker_with_workbench_result_state(Worker())
+    assert target.result_tabs.currentIndex() == target.result_tabs_indices["log"]
+
+    target.result_tabs.setCurrentIndex(target.result_tabs_indices["numeric"])
+    target._mark_workbench_result_failed()
+    assert target.result_tabs.currentIndex() == target.result_tabs_indices["log"]
+
+
 def test_workspace_preserves_empty_success_result_overview(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace
@@ -416,10 +716,31 @@ def test_workspace_preserves_empty_success_result_overview(qtbot) -> None:
 
     target = ExtrapolationWindow()
     qtbot.addWidget(target)
+    target._workbench_result_details_kind = "running"
     restore_workspace(target, bundle.manifest, bundle.attachments)
     target._apply_language("en")
 
     assert target.workbench_result_overview.text() == "Calculation complete; no displayable result"
+
+
+def test_workspace_restore_preserves_empty_success_result_subtab(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.log_edit.setPlainText("completed without displayable output")
+    source._mark_workbench_result_complete()
+    source.result_tabs.setCurrentIndex(source.result_tabs_indices["numeric"])
+    bundle = capture_workspace(source, title="empty result subtab")
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+    target._apply_language("en")
+
+    assert target.workbench_result_overview.text() == "Calculation complete; no displayable result"
+    assert target.result_tabs.currentIndex() == target.result_tabs_indices["numeric"]
 
 
 def test_workspace_preserves_empty_tabular_result_schema(qtbot) -> None:
@@ -513,6 +834,42 @@ def test_legacy_result_snapshot_fixture_round_trips_display_and_attachment(qtbot
     assert reopened._csv_rows == [{"name": "legacy", "value": "1.23(4)"}]
     assert reopened.result_plot_bytes == PNG_1X1
     assert reopened._workspace_snapshot_only is True
+
+
+def test_v2_workspace_fixture_restores_and_saves_back_as_v1(qtbot, tmp_path) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import restore_workspace
+    from shared.workspace_io import read_workspace
+
+    fixture_path = Path(__file__).parent / "fixtures" / "workspaces" / "model_native_v2_minimal.datalab"
+    loaded = read_workspace(fixture_path)
+
+    restored = ExtrapolationWindow()
+    qtbot.addWidget(restored)
+    restore_workspace(restored, loaded.manifest, loaded.attachments)
+
+    assert restored.mode_combo.currentData() == "fitting"
+    assert restored.fit_expr_edit.toPlainText() == "a*x"
+    assert restored.fit_target_edit.text() == "y"
+    assert restored.custom_params_table.rows()[0]["name"] == "a"
+    assert restored._workbench_formula_preview_languages == {
+        "fitting.custom.expression": "latex"
+    }
+    assert restored._csv_rows == [{"name": "a", "value": "2.0"}]
+    assert restored.result_plot_bytes == loaded.attachments["attachments/plots/plot-001.png"]
+    assert getattr(restored, "_workspace_snapshot_only", False) is True
+
+    saved_path = tmp_path / "saved-from-v2.datalab"
+    assert restored._save_workspace_to_path(saved_path)
+    saved = read_workspace(saved_path)
+
+    assert saved.manifest["schema"] == "datalab.workspace.v1"
+    assert saved.manifest["schema_version"] == 1
+    assert saved.manifest["workspace"]["ui"]["formula_preview"] == {
+        "fitting.custom.expression": "latex"
+    }
+    assert saved.manifest["workspace"]["config"]["fitting"]["expression"] == "a*x"
+    assert saved.manifest["workspace"]["result_snapshot"]["present"] is True
 
 
 def test_workspace_preserves_root_solving_config(qtbot) -> None:

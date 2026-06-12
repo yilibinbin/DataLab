@@ -12,12 +12,20 @@ from app_desktop.fitting_input_normalization import (
     normalize_constants_state,
     normalize_parameter_rows,
 )
+from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
 from app_desktop.workers_core import _READ_FALLBACK_ENCODINGS
+from datalab_core.workbench_model import FORMULA_PREVIEW_LANGUAGES, WorkbenchModel
 from shared.update_checker import current_version
-from shared.workspace_schema import compute_workspace_hash, sha256_bytes
+from shared.workspace_schema import sha256_bytes
 
 
 _DURABLE_RESULT_OVERVIEW_STATES = {"complete", "failed"}
+_WORKSPACE_PREVIEW_LANGUAGES = FORMULA_PREVIEW_LANGUAGES
+_WORKSPACE_PREVIEW_SCHEMA_KEYS = frozenset(
+    formula.schema_key
+    for spec in MODE_WORKBENCH_SPECS.values()
+    for formula in spec.formulas
+)
 
 
 @dataclass(frozen=True)
@@ -840,6 +848,18 @@ def _workspace_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _model_from_v1_workspace(workspace: dict[str, Any]) -> WorkbenchModel:
+    return WorkbenchModel.from_v1_workspace(workspace)
+
+
+def _workspace_from_model_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    return WorkbenchModel.from_v1_workspace(
+        _workspace_from_manifest(manifest),
+        allow_legacy_floats=True,
+        lenient_ui=True,
+    ).to_v1_workspace()
+
+
 def _degrade_obsolete_auto_fit_config(window: Any, fitting: dict[str, Any]) -> bool:
     has_obsolete_auto = fitting.get("model") == "auto" or "auto_fit" in fitting
     if not has_obsolete_auto:
@@ -862,7 +882,7 @@ def _capture_ui(window: Any) -> dict[str, Any]:
     cursor = window.latex_edit.textCursor() if hasattr(window, "latex_edit") else None
     tabs = getattr(window, "tabs", None)
     result_tabs = getattr(window, "result_tabs", None)
-    return {
+    ui = {
         "main_tab": tabs.currentIndex() if tabs is not None else 0,
         "result_subtab": result_tabs.currentIndex() if result_tabs is not None else 0,
         "selected_plot_index": max(0, _value(getattr(window, "image_page_spin", None), 1) - 1),
@@ -873,11 +893,29 @@ def _capture_ui(window: Any) -> dict[str, Any]:
             "cursor_column": cursor.positionInBlock() + 1 if cursor is not None else 1,
         },
     }
+    formula_preview = _capture_formula_preview_ui(window)
+    if formula_preview:
+        ui["formula_preview"] = formula_preview
+    return ui
+
+
+def _capture_formula_preview_ui(window: Any) -> dict[str, str]:
+    state = getattr(window, "_workbench_formula_preview_languages", None)
+    if state is not None and not isinstance(state, dict):
+        raise TypeError("Formula preview UI state must be a dictionary")
+    if isinstance(state, dict) and not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in state.items()
+    ):
+        raise TypeError("Formula preview UI state keys and values must be strings")
+    return _sanitize_formula_preview_ui(state)
 
 
 def _restore_ui_state(window: Any, ui: dict[str, Any]) -> None:
     if not isinstance(ui, dict):
         return
+    window._workbench_formula_preview_languages = _restore_formula_preview_ui(
+        ui.get("formula_preview")
+    )
 
     def _bounded_index(value: object, count: int) -> int | None:
         try:
@@ -914,6 +952,30 @@ def _restore_ui_state(window: Any, ui: dict[str, Any]) -> None:
         main_index = _bounded_index(ui.get("main_tab"), tabs.count())
         if main_index is not None:
             tabs.setCurrentIndex(main_index)
+
+
+def _restore_formula_preview_ui(raw_state: object) -> dict[str, str]:
+    # Workspace restore is reader-first: malformed or future UI-only preview
+    # metadata is ignored instead of blocking the workspace from opening.
+    return _sanitize_formula_preview_ui(raw_state)
+
+
+def _sanitize_formula_preview_ui(raw_state: object) -> dict[str, str]:
+    if not isinstance(raw_state, dict):
+        return {}
+    restored: dict[str, str] = {}
+    for key, value in raw_state.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        schema_key = key.strip()
+        language = value.strip()
+        if (
+            schema_key
+            and schema_key in _WORKSPACE_PREVIEW_SCHEMA_KEYS
+            and language in _WORKSPACE_PREVIEW_LANGUAGES
+        ):
+            restored[schema_key] = language
+    return restored
 
 
 def _capture_result_snapshot(window: Any, workspace_hash: str, attachments: dict[str, bytes]) -> dict[str, Any]:
@@ -978,7 +1040,9 @@ def capture_workspace(window: Any, *, title: str = "Untitled") -> WorkspaceBundl
         "result_snapshot": {"present": False},
     }
     attachments = {**data_attachments, **constants_attachments}
-    workspace_hash = compute_workspace_hash(workspace)
+    model = _model_from_v1_workspace(workspace)
+    workspace = model.to_v1_workspace()
+    workspace_hash = model.compute_hash()
     workspace["result_snapshot"] = _capture_result_snapshot(window, workspace_hash, attachments)
     now = _utc_now()
     return WorkspaceBundle(
@@ -1042,7 +1106,20 @@ def _restore_data_section(window: Any, section: dict[str, Any], *, constants: bo
 
 
 def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[str, bytes]) -> None:
-    workspace = _workspace_from_manifest(manifest)
+    previous_restoring = bool(getattr(window, "_workspace_restoring", False))
+    window._workspace_restoring = True
+    try:
+        _restore_workspace_contents(window, manifest, attachments)
+    except Exception:
+        window._workspace_dirty = True
+        window._workspace_degraded = True
+        raise
+    finally:
+        window._workspace_restoring = previous_restoring
+
+
+def _restore_workspace_contents(window: Any, manifest: dict[str, Any], attachments: dict[str, bytes]) -> None:
+    workspace = _workspace_from_model_manifest(manifest)
     _set_combo_data(getattr(window, "mode_combo", None), str(workspace.get("current_mode") or "fitting"))
     _restore_data_section(window, workspace.get("data") or {}, constants=False)
     _restore_data_section(window, workspace.get("constants") or {}, constants=True)
@@ -1112,8 +1189,17 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
     _restore_ui_state(window, workspace.get("ui") or {})
     window._workspace_snapshot_only = bool(snapshot.get("present"))
     if hasattr(window, "refresh_workbench_result_rail"):
-        window.refresh_workbench_result_rail()
-    window._workspace_dirty = False
+        previous_autoselect_suppression = bool(getattr(window, "_suppress_result_log_autoselect", False))
+        window._suppress_result_log_autoselect = True
+        try:
+            window.refresh_workbench_result_rail()
+        finally:
+            window._suppress_result_log_autoselect = previous_autoselect_suppression
     window._workspace_degraded = degraded
     if hasattr(window, "_set_snapshot_controls_enabled"):
         window._set_snapshot_controls_enabled(not window._workspace_snapshot_only)
+    if hasattr(window, "refresh_workbench_formula_panel"):
+        window.refresh_workbench_formula_panel()
+    if hasattr(window, "refresh_workbench_variable_panel"):
+        window.refresh_workbench_variable_panel()
+    window._workspace_dirty = False

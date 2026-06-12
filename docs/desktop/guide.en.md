@@ -64,6 +64,24 @@ not silently replaced by the example. Use the preview button beside formula
 fields to inspect the rendered expression, and use the Functions button for the
 supported expression syntax.
 
+### Formula Preview Syntax
+
+The formula card's Preview syntax selector controls how the preview interprets
+the current text: DataLab compatible, Python style, or Mathematica style. It does
+not rewrite the formula editor and does not change computation input, fitting
+model configuration, or workspace compute hashes. Calculations still use the raw
+expression in the editor through the active module's safe expression engine. The
+preview syntax is saved as workspace UI preference, so changing it may mark the
+workspace as unsaved, but reopening the workspace restores the same preview
+setting.
+
+The enlarged preview dialog also offers an optional High-fidelity LaTeX render
+path for display-only inspection of constructs such as `cases` and matrices. It
+uses only TeX engines and packages already installed or cached on the machine;
+the preview path does not install or download TeX packages. If unavailable, the
+dialog keeps the existing math preview and shows an error message, with a
+source-text message when needed.
+
 Parameter and constants tables share the same interaction model across fitting,
 self-consistent/implicit models, error propagation, and root solving:
 

@@ -9,7 +9,8 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QComboBox, QPushButton, QStyle
 
 from formula_help import get_function_tooltip
-from shared.ui_specs import DESKTOP_RESULT_VIEWS
+from app_desktop.result_view_titles import result_view_tab_title, result_view_tooltip
+from app_desktop.theme import round_icon_button_style
 
 from .resources import (
     _apply_system_theme,
@@ -70,20 +71,7 @@ class WindowI18nMixin:
     def _style_round_icon_button(self, button: QPushButton):
         """Apply a rounded style with subtle hover/pressed feedback."""
         button.setFixedSize(32, 32)
-        button.setStyleSheet(
-            """
-            QPushButton {
-                border-radius: 6px;
-                padding: 4px;
-            }
-            QPushButton:hover {
-                background-color: rgba(0, 0, 0, 0.08);
-            }
-            QPushButton:pressed {
-                background-color: rgba(0, 0, 0, 0.16);
-            }
-            """
-        )
+        button.setStyleSheet(round_icon_button_style())
 
     def _localize_label(self, label: str) -> str:
         mapping = {
@@ -353,9 +341,8 @@ class WindowI18nMixin:
                     index = result_indices.get(alias)
                     if index is None or index >= self.result_tabs.count():
                         continue
-                    title = DESKTOP_RESULT_VIEWS[view_key].title.for_lang(effective_lang)
-                    self.result_tabs.setTabText(index, title)
-                    self.result_tabs.setTabToolTip(index, title)
+                    self.result_tabs.setTabText(index, result_view_tab_title(view_key, effective_lang))
+                    self.result_tabs.setTabToolTip(index, result_view_tooltip(view_key, effective_lang))
             if hasattr(self, "main_tabs_indices"):
                 self.tabs.setTabText(self.main_tabs_indices["result"], "结果" if effective_lang == _LANG_ZH else "Result")
             if hasattr(self, "latex_edit"):
@@ -383,6 +370,10 @@ class WindowI18nMixin:
             self.refresh_workbench_formula_panel()
         if hasattr(self, "refresh_workbench_variable_panel"):
             self.refresh_workbench_variable_panel()
+        if hasattr(self, "refresh_workbench_data_card"):
+            self.refresh_workbench_data_card()
+        if hasattr(self, "refresh_workbench_data_summary"):
+            self.refresh_workbench_data_summary()
         if hasattr(self, "_refresh_main_splitter_left_min_width"):
             self._refresh_main_splitter_left_min_width()
 

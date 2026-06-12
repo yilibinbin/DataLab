@@ -47,7 +47,6 @@ import threading
 import time
 from typing import Iterator
 
-import mpmath as mp
 from flask import Blueprint, Response, request
 
 from app_web._security_shim import mpmath_lock
@@ -333,9 +332,36 @@ def _materialise_mpf_pairs(
     keeps its precision (whereas the previous early-``float`` path
     would round to ~17 digits before reaching the fitter).
     """
+    import mpmath as mp
+
     xs = [mp.mpf(s) for s in xs_str]
     ys = [mp.mpf(s) for s in ys_str]
     return xs, ys
+
+
+def _core_fitting_runtime():
+    build_request = globals().get("build_fitting_request")
+    rehydrate_result = globals().get("fitting_payload_to_fit_result")
+    result_status = globals().get("ResultStatus")
+    service_factory = globals().get("create_core_session_service")
+
+    if build_request is None:
+        from datalab_core.fitting import build_fitting_request
+
+        build_request = build_fitting_request
+    if rehydrate_result is None:
+        from datalab_core.fitting import fitting_payload_to_fit_result
+
+        rehydrate_result = fitting_payload_to_fit_result
+    if result_status is None:
+        from datalab_core.results import ResultStatus
+
+        result_status = ResultStatus
+    if service_factory is None:
+        from datalab_core.service_factory import create_core_session_service
+
+        service_factory = create_core_session_service
+    return build_request, rehydrate_result, result_status, service_factory
 
 
 def _single_fit_events(
@@ -361,7 +387,6 @@ def _single_fit_events(
         build_inverse_series_definition,
         build_polynomial_definition,
     )
-    from fitting.auto_models import fit_linear_model
     from shared.precision import precision_guard
 
     yield ("started", {
@@ -390,9 +415,24 @@ def _single_fit_events(
     try:
         with _MP_SERIAL_LOCK, precision_guard(precision):
             xs, ys = _materialise_mpf_pairs(xs_str, ys_str, precision)
-            fit_result = fit_linear_model(
-                definition, xs, ys, precision=precision
+            build_request, rehydrate_result, result_status, service_factory = _core_fitting_runtime()
+            request = build_request(
+                model_type=model_id,
+                headers=("x", "y"),
+                data_rows=list(zip(xs, ys, strict=True)),
+                variable_map={"x": "x"},
+                target_column="y",
+                poly_degree=1,
+                inverse_min=1,
+                inverse_max=3,
+                precision_digits=precision,
+                request_id=f"web-sse-fit-{model_id}",
             )
+            envelope = service_factory().submit(request)
+            if envelope.status is not result_status.SUCCEEDED:
+                message = str(envelope.payload.get("message") or "Fitting failed.")
+                raise ValueError(message)
+            fit_result = rehydrate_result(envelope.payload["fit_result"])
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
             "fit_stream failed: model=%s n_points=%d precision=%d: %s",

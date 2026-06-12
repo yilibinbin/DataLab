@@ -11,10 +11,16 @@ from PySide6.QtWidgets import QLabel
 pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
-from tools.scan_desktop_gui_schema import MODES, RESULT_TABS, ROOT_SOLVING_SUBMODES, SCAN_WIDTHS
+from tools.scan_desktop_gui_schema import (
+    FITTING_SUBMODES,
+    MODES,
+    RESULT_TABS,
+    ROOT_SOLVING_SUBMODES,
+    SCAN_WIDTHS,
+)
 
 EXPECTED_SCENARIO_COUNT = len(SCAN_WIDTHS) * 2 * len(RESULT_TABS) * (
-    (len(MODES) - 1) + len(ROOT_SOLVING_SUBMODES)
+    (len(MODES) - 2) + len(FITTING_SUBMODES) + len(ROOT_SOLVING_SUBMODES)
 )
 EXPECTED_CURRENT_HELP_GAP_COUNT = 0
 
@@ -143,6 +149,38 @@ def test_visual_contract_scan_attributes_issue_to_scenario(qapp: Any, monkeypatc
     ]
 
 
+def test_visual_contract_scan_uses_stable_fallback_shape(qapp: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import tools.scan_desktop_gui_schema as scanner
+    from app_desktop.window import ExtrapolationWindow
+    from tools.scan_desktop_gui_schema import ScreenScenario
+
+    scenario = ScreenScenario(
+        key="zh:1440:root:numeric",
+        language="zh",
+        mode="root_solving",
+        result_tab="numeric",
+        width=1440,
+    )
+    monkeypatch.setattr(scanner, "visual_contract_issues", lambda window: [{"width": 1}])
+
+    window = ExtrapolationWindow()
+    try:
+        issues = scanner._workbench_visual_contract_issues(window, [scenario])
+    finally:
+        window.deleteLater()
+
+    assert issues == [
+        {
+            "kind": "visual_contract",
+            "scenario": scenario.key,
+            "language": "zh",
+            "widget": "workbench",
+            "message": "visual workbench contract issue: visual_contract",
+            "details": {"contract_issue": {"width": 1}},
+        }
+    ]
+
+
 def test_gui_scan_reports_duplicate_state_roles(qtbot: Any) -> None:
     from PySide6.QtWidgets import QLabel
 
@@ -199,6 +237,35 @@ def test_gui_scan_reports_wrong_state_role_owner(qtbot: Any) -> None:
     issues = _state_ownership_issues(window, scenario)
 
     assert any(issue["kind"] == "wrong_state_role_owner" for issue in issues)
+
+
+def test_gui_scan_reports_cross_mode_widget_sharing_from_scanner_spec(
+    qtbot: Any, monkeypatch: Any
+) -> None:
+    from app_desktop import workbench_formula_panel as formula_panel
+    from app_desktop.window import ExtrapolationWindow
+    from tools import scan_desktop_gui_schema as scan
+    from tools.scan_desktop_gui_schema import ScreenScenario
+    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS, ModeWorkbenchSpec, FormulaMount
+
+    specs = dict(MODE_WORKBENCH_SPECS)
+    specs["dummy_test_mode"] = ModeWorkbenchSpec(
+        mode_key="dummy_test_mode",
+        mode_stack_index=99,
+        formulas=(FormulaMount("fit_expr_edit", "dummy_btn", "dummy"),),
+    )
+    monkeypatch.setattr(scan, "MODE_WORKBENCH_SPECS", specs)
+    assert "dummy_test_mode" not in formula_panel.MODE_WORKBENCH_SPECS
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+    issues = scan._state_ownership_issues(window, scenario)
+
+    issue = next((i for i in issues if i["kind"] == "cross_mode_widget_sharing"), None)
+    assert issue is not None
+    assert issue["widget"] == "fit_expr_edit"
+    assert "multiple modes" in issue["message"]
 
 
 def test_gui_scan_reports_missing_manual_data_editor(qtbot: Any) -> None:
@@ -402,6 +469,52 @@ def test_gui_scan_reports_named_parameter_table_clone_without_state_role(qtbot: 
 
     assert any(
         issue["kind"] == "unexpected_editable_state_owner" and issue["widget"] == mount.widget_attr
+        for issue in issues
+    )
+
+
+def test_gui_scan_reports_missing_model_path_binding(qtbot: Any) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workbench_model_bindings import MODEL_PATH_PROPERTY
+    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
+    from tools.scan_desktop_gui_schema import ScreenScenario
+    from tools.scan_desktop_gui_schema import _state_ownership_issues
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    mount = MODE_WORKBENCH_SPECS["fitting"].parameters[0]
+    getattr(window, mount.widget_attr).setProperty(MODEL_PATH_PROPERTY, "")
+
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+    issues = _state_ownership_issues(window, scenario)
+
+    assert any(
+        issue["kind"] == "missing_model_path_binding" and issue["widget"] == mount.widget_attr
+        for issue in issues
+    )
+
+
+def test_gui_scan_reports_duplicate_model_path_binding(qtbot: Any) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workbench_model_bindings import MODEL_PATH_PROPERTY
+    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
+    from tools.scan_desktop_gui_schema import ScreenScenario
+    from tools.scan_desktop_gui_schema import _state_ownership_issues
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    first = MODE_WORKBENCH_SPECS["fitting"].parameters[0]
+    second = MODE_WORKBENCH_SPECS["root_solving"].tables[0]
+    first_path = getattr(window, first.widget_attr).property(MODEL_PATH_PROPERTY)
+    getattr(window, second.widget_attr).setProperty(MODEL_PATH_PROPERTY, first_path)
+
+    scenario = ScreenScenario(key="test", language="en", mode="fitting")
+    issues = _state_ownership_issues(window, scenario)
+
+    assert any(
+        issue["kind"] == "duplicate_model_path_binding"
+        and first.widget_attr in issue["details"]["widgets"]
+        and second.widget_attr in issue["details"]["widgets"]
         for issue in issues
     )
 

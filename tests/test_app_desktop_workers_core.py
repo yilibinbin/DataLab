@@ -100,6 +100,389 @@ def _small_self_consistent_fit_job(
     )
 
 
+def test_statistics_calc_job_uses_core_statistics_request_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datalab_core.statistics import build_statistics_requests as real_build_statistics_requests
+    from datalab_core.statistics import run_statistics as real_run_statistics
+
+    calls: dict[str, object] = {}
+
+    def fake_build_statistics_requests(**kwargs: object) -> object:
+        calls["builder_kwargs"] = kwargs
+        return real_build_statistics_requests(**kwargs)
+
+    def fake_run_statistics(request: object) -> object:
+        calls.setdefault("request_ids", []).append(getattr(request, "request_id", ""))
+        return real_run_statistics(request)  # type: ignore[arg-type]
+
+    class FakeService:
+        def submit(self, request: object) -> object:
+            calls.setdefault("submit_request_ids", []).append(getattr(request, "request_id", ""))
+            return fake_run_statistics(request)
+
+    def fake_create_core_session_service(*, cancellation_checker=None) -> FakeService:
+        calls["factory_calls"] = int(calls.get("factory_calls", 0)) + 1
+        calls["cancellation_checker"] = cancellation_checker
+        return FakeService()
+
+    monkeypatch.setattr(workers_core, "build_statistics_requests", fake_build_statistics_requests, raising=False)
+    monkeypatch.setattr(workers_core, "run_statistics", fake_run_statistics, raising=False)
+    monkeypatch.setattr(workers_core, "create_core_session_service", fake_create_core_session_service, raising=False)
+
+    with mp.workdps(80):
+        rows = [
+            (mp.mpf("1.0000000000000000001"), mp.mpf("-0.1")),
+            (mp.mpf("2.0000000000000000002"), mp.mpf("0.2")),
+        ]
+
+    job = CalcJob(
+        mode="statistics",
+        data_path=None,
+        manual_content="",
+        manual_constants="",
+        constants_file_path=None,
+        options=SimpleNamespace(mp_precision=80, warnings=[]),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        stats_value_col="A",
+        stats_sigma_col="sigma",
+        stats_mode="weighted_sigma",
+        stats_sample=True,
+        stats_weighted_variance=True,
+        dataset=(
+            ["A", "sigma"],
+            rows,
+            [(None, None), (None, None)],
+        ),
+        latex_digits=16,
+        segments=[(0, 2)],
+        uncertainty_digits=2,
+    )
+
+    result = _execute_calc_job(job)
+
+    assert calls["factory_calls"] == 1
+    assert callable(calls["cancellation_checker"])
+    assert calls["submit_request_ids"] == ["statistics-1"]
+    assert calls["request_ids"] == ["statistics-1"]
+    builder_kwargs = calls["builder_kwargs"]
+    assert isinstance(builder_kwargs, dict)
+    assert builder_kwargs["headers"] == ["A", "sigma"]
+    assert builder_kwargs["value_col"] == "A"
+    assert builder_kwargs["sigma_col"] == "sigma"
+    assert builder_kwargs["precision_digits"] == 80
+    assert builder_kwargs["segments"] == [(0, 2)]
+    assert result.mode == "statistics"
+    batch = result.payload["batches"][0]  # type: ignore[index]
+    assert batch["value_col"] == "A"
+    assert batch["row_count"] == 2
+    assert [mp.nstr(value, 30) for value in batch["values"]] == [
+        "1.0000000000000000001",
+        "2.0000000000000000002",
+    ]
+    assert [mp.nstr(sigma, 30) if sigma is not None else None for sigma in batch["sigmas"]] == ["0.1", "0.2"]
+    assert mp.nstr(batch["result"]["mean"], 30) == "1.20000000000000000012"
+
+
+def test_statistics_calc_job_rejects_malformed_segments_before_core_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_called(**_kwargs: object) -> object:
+        raise AssertionError("core builder should not receive malformed worker segments")
+
+    monkeypatch.setattr(workers_core, "build_statistics_requests", fail_if_called, raising=False)
+
+    job = CalcJob(
+        mode="statistics",
+        data_path=None,
+        manual_content="",
+        manual_constants="",
+        constants_file_path=None,
+        options=SimpleNamespace(mp_precision=80, warnings=[]),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        stats_value_col="A",
+        stats_mode="mean",
+        dataset=(["A"], [(mp.mpf("1"),), (mp.mpf("2"),)], [(None,), (None,)]),
+        latex_digits=16,
+        segments=cast(Any, [("0", 2)]),
+        uncertainty_digits=2,
+    )
+
+    with pytest.raises(TypeError, match="segments\\[0\\] bounds must be integers"):
+        _execute_calc_job(job)
+
+
+def test_statistics_calc_job_preserves_legacy_value_precision_above_compute_dps() -> None:
+    value_text = "1.12345678901234567890123456789012345678901234567890123456789"
+    with mp.workdps(90):
+        rows = [(mp.mpf(value_text),), (mp.mpf("2.0"),)]
+
+    job = CalcJob(
+        mode="statistics",
+        data_path=None,
+        manual_content="",
+        manual_constants="",
+        constants_file_path=None,
+        options=SimpleNamespace(mp_precision=50, warnings=[]),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        stats_value_col="A",
+        stats_mode="mean",
+        dataset=(["A"], rows, [(None,), (None,)]),
+        latex_digits=16,
+        segments=[(0, 2)],
+        uncertainty_digits=2,
+    )
+
+    result = _execute_calc_job(job)
+
+    batch = result.payload["batches"][0]  # type: ignore[index]
+    assert mp.nstr(batch["values"][0], 80) == value_text
+    assert result.payload["precision_used"] == 50
+
+
+def test_statistics_calc_job_restores_global_mpmath_precision_after_service_submit() -> None:
+    job = CalcJob(
+        mode="statistics",
+        data_path=None,
+        manual_content="",
+        manual_constants="",
+        constants_file_path=None,
+        options=SimpleNamespace(mp_precision=70, warnings=[]),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        stats_value_col="A",
+        stats_mode="mean",
+        dataset=(
+            ["A"],
+            [(mp.mpf("1.0000000000000000001"),), (mp.mpf("2.0000000000000000002"),)],
+            [(None,), (None,)],
+        ),
+        latex_digits=16,
+        segments=[(0, 2)],
+        uncertainty_digits=2,
+    )
+    previous = mp.mp.dps
+    mp.mp.dps = 29
+    try:
+        result = _execute_calc_job(job)
+        observed_after = mp.mp.dps
+    finally:
+        mp.mp.dps = previous
+
+    assert observed_after == 29
+    assert result.payload["precision_used"] == 70
+    batch = result.payload["batches"][0]  # type: ignore[index]
+    assert mp.nstr(batch["result"]["mean"], 30) == "1.5"
+
+
+def test_statistics_calc_job_maps_explicit_sigma_column_to_latex_sigma_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_generate_statistics_latex_batches(value_col: str, batches: list[dict], *args: object, **kwargs: object) -> None:
+        captured["value_col"] = value_col
+        captured["batches"] = batches
+
+    monkeypatch.setattr(workers_core, "generate_statistics_latex_batches", fake_generate_statistics_latex_batches)
+
+    job = CalcJob(
+        mode="statistics",
+        data_path=None,
+        manual_content="",
+        manual_constants="",
+        constants_file_path=None,
+        options=SimpleNamespace(mp_precision=80, warnings=[]),
+        caption=None,
+        generate_latex=True,
+        output_path=str(tmp_path / "stats.tex"),
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        stats_value_col="A",
+        stats_sigma_col="sigma",
+        stats_mode="weighted_sigma",
+        dataset=(
+            ["A", "sigma"],
+            [(mp.mpf("1.0"), mp.mpf("-0.1")), (mp.mpf("2.0"), mp.mpf("0.2"))],
+            [(None, None), (None, None)],
+        ),
+        latex_digits=16,
+        segments=[(0, 2)],
+        uncertainty_digits=2,
+    )
+
+    result = _execute_calc_job(job)
+
+    assert result.latex_path == str(tmp_path / "stats.tex")
+    assert captured["value_col"] == "A"
+    batch = captured["batches"][0]  # type: ignore[index]
+    assert [
+        tuple(mp.nstr(value, 30) if value is not None else None for value in row)
+        for row in batch["sigma_rows"]
+    ] == [("0.1", None), ("0.2", None)]
+
+
+def test_statistics_calc_job_preserves_multi_segment_batch_alignment() -> None:
+    job = CalcJob(
+        mode="statistics",
+        data_path=None,
+        manual_content="",
+        manual_constants="",
+        constants_file_path=None,
+        options=SimpleNamespace(mp_precision=60, warnings=[]),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        stats_value_col="A",
+        stats_mode="mean",
+        dataset=(
+            ["A"],
+            [(mp.mpf("1"),), (mp.mpf("2"),), (mp.mpf("3"),)],
+            [(None,), (None,), (None,)],
+        ),
+        latex_digits=16,
+        segments=[(0, 1), (1, 3)],
+        uncertainty_digits=2,
+    )
+
+    result = _execute_calc_job(job)
+
+    batches = result.payload["batches"]
+    assert [batch["index"] for batch in batches] == [1, 2]  # type: ignore[index]
+    assert [batch["row_count"] for batch in batches] == [1, 2]  # type: ignore[index]
+    assert [[mp.nstr(value, 10) for value in batch["values"]] for batch in batches] == [["1.0"], ["2.0", "3.0"]]  # type: ignore[index]
+
+
+def test_statistics_calc_job_wraps_core_handler_errors_with_batch_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datalab_core.results import ResultEnvelope, ResultKind, ResultStatus
+
+    class FailingService:
+        def submit(self, _request: object) -> object:
+            return ResultEnvelope(
+                kind=ResultKind.TEXT,
+                status=ResultStatus.FAILED,
+                payload={"message": "core exploded"},
+            )
+
+    monkeypatch.setattr(
+        workers_core,
+        "create_core_session_service",
+        lambda *, cancellation_checker=None: FailingService(),
+        raising=False,
+    )
+
+    job = CalcJob(
+        mode="statistics",
+        data_path=None,
+        manual_content="",
+        manual_constants="",
+        constants_file_path=None,
+        options=SimpleNamespace(mp_precision=60, warnings=[]),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        stats_value_col="A",
+        stats_mode="mean",
+        dataset=(
+            ["A"],
+            [(mp.mpf("1"),), (mp.mpf("2"),)],
+            [(None,), (None,)],
+        ),
+        latex_digits=16,
+        segments=[(0, 2)],
+        uncertainty_digits=2,
+    )
+
+    with pytest.raises(ValueError, match="Batch 1 failed: core exploded"):
+        _execute_calc_job(job)
+
+
+def test_statistics_calc_job_handles_failed_envelope_without_mapping_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datalab_core.results import ResultStatus
+
+    class FailingEnvelope:
+        status = ResultStatus.FAILED
+        payload = None
+
+    class FailingService:
+        def submit(self, _request: object) -> object:
+            return FailingEnvelope()
+
+    monkeypatch.setattr(
+        workers_core,
+        "create_core_session_service",
+        lambda *, cancellation_checker=None: FailingService(),
+        raising=False,
+    )
+
+    job = CalcJob(
+        mode="statistics",
+        data_path=None,
+        manual_content="",
+        manual_constants="",
+        constants_file_path=None,
+        options=SimpleNamespace(mp_precision=60, warnings=[]),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        stats_value_col="A",
+        stats_mode="mean",
+        dataset=(
+            ["A"],
+            [(mp.mpf("1"),), (mp.mpf("2"),)],
+            [(None,), (None,)],
+        ),
+        latex_digits=16,
+        segments=[(0, 2)],
+        uncertainty_digits=2,
+    )
+
+    with pytest.raises(ValueError, match="Batch 1 failed: Statistics failed\\."):
+        _execute_calc_job(job)
+
+
 def test_root_solving_job_payload_uses_data_rows_and_is_spawn_picklable() -> None:
     job = RootSolvingJob(
         equations=("x**2 - A",),
@@ -352,6 +735,103 @@ def test_execute_root_solving_job_payload_forwards_uncertainty_options(
     assert captured["display_digits"] == 20
     assert captured["uncertainty_digits"] == 3
     assert captured["language"] == "en"
+
+
+def _root_batch_payload_with_scalar_root(value: str) -> dict[str, object]:
+    return {
+        "headers": [],
+        "warnings": [],
+        "details": {},
+        "rows": [
+            {
+                "row_index": None,
+                "source_values": {},
+                "failure": None,
+                "warnings": [],
+                "result": {
+                    "roots": [
+                        {
+                            "name": "x",
+                            "value": {"kind": "real", "value": value},
+                            "uncertainty": None,
+                            "contributions": {},
+                        }
+                    ],
+                    "backend": "mpmath",
+                    "mode": "scalar",
+                    "residual_norm": {"kind": "real", "value": "0"},
+                    "jacobian_condition": None,
+                    "warnings": [],
+                    "details": {},
+                },
+            }
+        ],
+    }
+
+
+def test_execute_root_solving_job_payload_uses_core_service_when_request_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datalab_core.jobs import ComputeJobRequest, JobMode
+    from datalab_core.results import ResultEnvelope, ResultKind, ResultStatus
+    from datalab_core.root_solving import build_root_solving_request
+
+    core_request = build_root_solving_request(
+        equations=("x^2 - 4",),
+        unknown_rows=({"name": "x", "initial": "2", "lower": "0", "upper": "10"},),
+        mode="scalar",
+        precision_digits=50,
+        display_digits=12,
+        request_id="desktop-root-test",
+    )
+    calls: dict[str, object] = {}
+
+    class FakeService:
+        def submit(self, request: ComputeJobRequest) -> ResultEnvelope:
+            calls["request"] = request
+            return ResultEnvelope(
+                kind=ResultKind.TABLE,
+                status=ResultStatus.SUCCEEDED,
+                payload={
+                    "batch": _root_batch_payload_with_scalar_root("7"),
+                    "row_count": 1,
+                    "roots_count": 1,
+                    "precision_used": 50,
+                },
+            )
+
+    def fake_create_core_session_service(*, cancellation_checker=None) -> FakeService:
+        calls["cancellation_checker"] = cancellation_checker
+        return FakeService()
+
+    monkeypatch.setattr(workers_core, "create_core_session_service", fake_create_core_session_service)
+    monkeypatch.setattr(
+        workers_core,
+        "solve_root_batch",
+        lambda **_kwargs: pytest.fail("root solving should use the core batch service"),
+    )
+    job = RootSolvingJob(
+        equations=("x^2 - 4",),
+        unknown_rows=({"name": "x", "initial": "2", "lower": "0", "upper": "10"},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=50,
+        display_digits=12,
+        core_request=core_request,
+    )
+
+    payload = _execute_root_solving_job_payload(job)
+
+    assert calls["request"] is core_request
+    assert calls["request"].mode is JobMode.ROOT_SOLVING
+    raw_rows = cast(list[dict[str, str]], payload["raw_rows"])
+    assert raw_rows[0]["value"] == "7.0"
 
 
 def test_execute_root_solving_job_payload_formats_under_job_precision(
@@ -957,6 +1437,150 @@ def test_execute_fit_job_payload_poly_recovers_linear_params():
     assert mp.almosteq(fit.params["b1"], mp.mpf("2"), abs_eps=mp.mpf("1e-50"))
 
 
+def _fit_result_payload_with_params(params: dict[str, str]) -> dict[str, object]:
+    return {
+        "params": params,
+        "param_errors": {},
+        "chi2": "0",
+        "reduced_chi2": "0",
+        "aic": "0",
+        "bic": "0",
+        "r2": "1",
+        "rmse": "0",
+        "residuals": [],
+        "fitted_curve": [],
+        "covariance": [],
+        "param_errors_stat": {},
+        "param_errors_sys": {},
+        "param_errors_total": {},
+        "details": {},
+    }
+
+
+def test_execute_fit_job_payload_direct_fit_uses_core_service_when_request_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datalab_core.fitting import build_fitting_request
+    from datalab_core.jobs import ComputeJobRequest, JobMode
+    from datalab_core.results import ResultEnvelope, ResultKind, ResultStatus
+
+    x_series = [mp.mpf(v) for v in ["0", "1", "2", "3"]]
+    y_series = [mp.mpf("2") * x + mp.mpf("1") for x in x_series]
+    core_request = build_fitting_request(
+        model_type="polynomial",
+        headers=("x", "y"),
+        data_rows=tuple(zip(x_series, y_series)),
+        variable_map={"x": "x"},
+        target_column="y",
+        poly_degree=1,
+        precision_digits=80,
+        request_id="desktop-fit-test",
+    )
+    calls: dict[str, object] = {}
+
+    class FakeService:
+        def submit(self, request: ComputeJobRequest) -> ResultEnvelope:
+            calls["request"] = request
+            return ResultEnvelope(
+                kind=ResultKind.TABLE,
+                status=ResultStatus.SUCCEEDED,
+                payload={
+                    "model_type": "polynomial",
+                    "fit_result": _fit_result_payload_with_params({"b0": "10", "b1": "20"}),
+                    "expression": "core-expression",
+                    "logs": ["core fit complete"],
+                    "warnings": [],
+                },
+            )
+
+    def fake_create_core_session_service(*, cancellation_checker=None) -> FakeService:
+        calls["cancellation_checker"] = cancellation_checker
+        return FakeService()
+
+    monkeypatch.setattr(workers_core, "create_core_session_service", fake_create_core_session_service)
+    job = FitJob(
+        model_type="polynomial",
+        headers=["x", "y"],
+        data_rows=list(zip(x_series, y_series)),
+        sigma_rows=[(None, None) for _ in x_series],
+        x_series=x_series,
+        y_series=y_series,
+        sigma_series=[None] * len(y_series),
+        weights=None,
+        variable_map={"x": "x"},
+        variable_data={"x": x_series},
+        target_series=y_series,
+        target_column="y",
+        model_expr="",
+        parameter_config={},
+        parameter_names=[],
+        poly_degree=1,
+        precision=80,
+        weighted=False,
+        label="desktop-fit-core",
+        core_request=core_request,
+    )
+
+    payload = _execute_fit_job_payload(job)
+
+    assert calls["request"] is core_request
+    assert callable(calls["cancellation_checker"])
+    assert calls["request"].mode is JobMode.FITTING
+    assert payload.fit_result.params == {"b0": mp.mpf("10"), "b1": mp.mpf("20")}
+    assert payload.expression == "core-expression"
+    assert payload.logs == ["core fit complete"]
+
+
+def test_execute_fit_job_payload_self_consistent_does_not_use_core_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datalab_core.fitting import build_fitting_request
+
+    job = _small_self_consistent_fit_job()
+    job.core_request = build_fitting_request(
+        model_type="self_consistent",
+        headers=job.headers,
+        data_rows=job.data_rows,
+        sigma_rows=job.sigma_rows,
+        variable_map=job.variable_map,
+        target_column=job.target_column,
+        model_expr=job.model_expr,
+        parameter_config=job.parameter_config,
+        parameter_names=job.parameter_names,
+        implicit_definition=job.implicit_definition,
+        precision_digits=job.precision,
+    )
+    monkeypatch.setattr(
+        workers_core,
+        "create_core_session_service",
+        lambda: pytest.fail("self_consistent fit must not use direct core service"),
+    )
+    monkeypatch.setattr(workers_core, "_self_consistent_hooks_replaced", lambda: True)
+    monkeypatch.setattr(
+        workers_core,
+        "_fit_self_consistent_with_legacy_hooks",
+        lambda received_job: FitResult(
+            params={"a": mp.mpf("1"), "b": mp.mpf("2")},
+            param_errors={},
+            chi2=mp.mpf("0"),
+            reduced_chi2=mp.mpf("0"),
+            aic=mp.mpf("0"),
+            bic=mp.mpf("0"),
+            r2=mp.mpf("1"),
+            rmse=mp.mpf("0"),
+            residuals=[],
+            fitted_curve=[],
+            covariance=[],
+            details={},
+        ),
+    )
+
+    payload = _execute_fit_job_payload(job)
+
+    assert payload.fit_result.params == {"a": mp.mpf("1"), "b": mp.mpf("2")}
+    assert payload.expression == "u"
+
+
 def test_execute_fit_job_payload_self_consistent_wires_definition_and_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1220,6 +1844,237 @@ def test_deserialize_fit_job_rejects_malformed_parallel_config(value: object) ->
         _deserialize_fit_job(payload)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_workers", 2.5),
+        ("max_workers", True),
+        ("reserve_cores", 1.25),
+        ("reserve_cores", False),
+        ("default_worker_cap", 8.5),
+        ("default_worker_cap", True),
+        ("min_process_tasks", 4.5),
+        ("min_process_tasks", False),
+    ],
+)
+def test_deserialize_fit_job_rejects_lossy_parallel_config_numeric_fields(
+    field: str,
+    value: object,
+) -> None:
+    payload = _serialize_fit_job(_small_self_consistent_fit_job())
+    payload["parallel_config"][field] = value
+
+    with pytest.raises(ValueError, match=rf"parallel_config\.{field} must be an integer"):
+        _deserialize_fit_job(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("precision", 50.5),
+        ("precision", True),
+        ("poly_degree", 2.5),
+        ("poly_degree", False),
+        ("inverse_min", 1.25),
+        ("inverse_max", True),
+        ("pade_m", 1.5),
+        ("pade_n", False),
+        ("latex_digits", 16.5),
+    ],
+)
+def test_deserialize_fit_job_rejects_lossy_integer_fields(
+    field: str,
+    value: object,
+) -> None:
+    payload = _serialize_fit_job(_small_self_consistent_fit_job())
+    payload[field] = value
+
+    with pytest.raises(ValueError, match=rf"fit_job\.{field} must be an integer"):
+        _deserialize_fit_job(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("generate_latex", "False"),
+        ("use_dcolumn", "False"),
+        ("verbose", 0),
+        ("render_plots", 1),
+        ("weighted", "true"),
+        ("is_multidim", None),
+    ],
+)
+def test_deserialize_fit_job_rejects_non_boolean_fields(
+    field: str,
+    value: object,
+) -> None:
+    payload = _serialize_fit_job(_small_self_consistent_fit_job())
+    payload[field] = value
+
+    with pytest.raises(ValueError, match=rf"fit_job\.{field} must be a boolean"):
+        _deserialize_fit_job(payload)
+
+
+def test_fit_subprocess_entry_rejects_malformed_precision_before_precision_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _serialize_fit_job(_small_self_consistent_fit_job())
+    payload["precision"] = 50.5
+
+    def fail_guard(_dps: object) -> object:
+        raise AssertionError("precision guard should not run before payload validation")
+
+    monkeypatch.setattr(workers_core, "_mp_precision_guard", fail_guard)
+
+    with pytest.raises(ValueError, match=r"fit_job\.precision must be an integer"):
+        workers_core._fit_job_subprocess_entry(payload)
+
+
+def test_fit_result_payload_rejects_malformed_job_precision_before_precision_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _small_self_consistent_fit_job()
+    result_payload = workers_core._serialize_fit_result_payload(
+        workers_core.FitResultPayload(
+            job=job,
+            fit_result=FitResult(
+                params={"a": mp.mpf("1"), "b": mp.mpf("2")},
+                param_errors={},
+                chi2=mp.mpf("0"),
+                reduced_chi2=mp.mpf("0"),
+                aic=mp.mpf("0"),
+                bic=mp.mpf("0"),
+                r2=mp.mpf("1"),
+                rmse=mp.mpf("0"),
+                residuals=[],
+                fitted_curve=[],
+                covariance=[],
+                details={},
+            ),
+            expression="u",
+            logs=[],
+            warnings=[],
+        )
+    )
+    result_payload["job"]["precision"] = 50.5
+
+    def fail_guard(_dps: object) -> object:
+        raise AssertionError("precision guard should not run before payload validation")
+
+    monkeypatch.setattr(workers_core, "_mp_precision_guard", fail_guard)
+
+    with pytest.raises(ValueError, match=r"fit_job\.precision must be an integer"):
+        workers_core._deserialize_fit_result_payload(result_payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_workers", 2.5),
+        ("reserve_cores", 1.25),
+        ("default_worker_cap", True),
+        ("min_process_tasks", False),
+    ],
+)
+def test_deserialize_root_solving_job_rejects_lossy_parallel_config_numeric_fields(
+    field: str,
+    value: object,
+) -> None:
+    payload = _serialize_root_solving_job(
+        RootSolvingJob(
+            equations=("x^2 - A",),
+            unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+            data_headers=("A",),
+            data_rows=(("2",),),
+            constants_enabled=False,
+            constants_rows=(),
+            constants_view="table",
+            constants_text="",
+            mode="scalar",
+            scan_config={},
+            precision=50,
+            display_digits=12,
+        )
+    )
+    payload["parallel_config"][field] = value
+
+    with pytest.raises(ValueError, match=rf"parallel_config\.{field} must be an integer"):
+        _deserialize_root_solving_job(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("precision", 50.5),
+        ("precision", True),
+        ("display_digits", 12.5),
+        ("display_digits", False),
+        ("uncertainty_digits", 1.5),
+        ("latex_digits", True),
+        ("latex_group_size", 3.25),
+    ],
+)
+def test_deserialize_root_solving_job_rejects_lossy_integer_fields(
+    field: str,
+    value: object,
+) -> None:
+    payload = _serialize_root_solving_job(
+        RootSolvingJob(
+            equations=("x^2 - A",),
+            unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+            data_headers=("A",),
+            data_rows=(("2",),),
+            constants_enabled=False,
+            constants_rows=(),
+            constants_view="table",
+            constants_text="",
+            mode="scalar",
+            scan_config={},
+            precision=50,
+            display_digits=12,
+        )
+    )
+    payload[field] = value
+
+    with pytest.raises(ValueError, match=rf"root_solving_job\.{field} must be an integer"):
+        _deserialize_root_solving_job(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("constants_enabled", "False"),
+        ("generate_latex", "true"),
+        ("latex_include_dcolumn", 0),
+        ("render_plots", 1),
+    ],
+)
+def test_deserialize_root_solving_job_rejects_non_boolean_fields(
+    field: str,
+    value: object,
+) -> None:
+    payload = _serialize_root_solving_job(
+        RootSolvingJob(
+            equations=("x^2 - A",),
+            unknown_rows=({"name": "x", "initial": "1", "lower": "", "upper": ""},),
+            data_headers=("A",),
+            data_rows=(("2",),),
+            constants_enabled=False,
+            constants_rows=(),
+            constants_view="table",
+            constants_text="",
+            mode="scalar",
+            scan_config={},
+            precision=50,
+            display_digits=12,
+        )
+    )
+    payload[field] = value
+
+    with pytest.raises(ValueError, match=rf"root_solving_job\.{field} must be a boolean"):
+        _deserialize_root_solving_job(payload)
+
+
 def test_self_consistent_fit_subprocess_uses_killable_runner_and_forwards_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1475,6 +2330,8 @@ def test_fit_batch_worker_emits_cancelled_when_self_consistent_subprocess_interr
 
 
 def test_execute_calc_job_extrapolation_returns_payload() -> None:
+    from datalab_core.jobs import JobMode
+
     with mp.workdps(80):
         limit = mp.mpf("1")
         amp = mp.mpf("0.5")
@@ -1512,9 +2369,254 @@ def test_execute_calc_job_extrapolation_returns_payload() -> None:
         assert payload["precision_used"] == 80
         assert payload["render_plots"] is False
         assert "plots" not in payload
+        assert payload["core_request"].mode is JobMode.EXTRAPOLATION
+        assert payload["core_request"].inputs["headers"] == headers
+        assert payload["core_request"].inputs["rows"][0][0] == mp.nstr(terms[0], 80)
+        assert payload["core_request"].inputs["method"] == "richardson"
+        assert payload["core_request"].inputs["segments"] == [[0, 1]]
 
         res0 = payload["results"][0]
         assert mp.fabs(res0.value - limit) < mp.mpf("1e-2")
+
+
+def test_execute_calc_job_extrapolation_uses_core_service_when_request_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _legacy_process_should_not_run(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("desktop extrapolation worker should use the core extrapolation service")
+
+    monkeypatch.setattr(workers_core, "process_data_string", _legacy_process_should_not_run)
+
+    job = CalcJob(
+        mode="extrapolation",
+        data_path=None,
+        manual_content="A B C\n1 1.5 1.75\n",
+        manual_constants="",
+        constants_file_path=None,
+        options=ExtrapolationOptions(method="quadratic", mp_precision=80),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        latex_digits=16,
+        latex_group_size=3,
+        uncertainty_digits=2,
+    )
+
+    result = _execute_calc_job(job)
+
+    assert result.mode == "extrapolation"
+    payload = result.payload
+    assert payload["headers"] == ["A", "B", "C"]
+    assert len(payload["data_rows"]) == 1
+    assert payload["results"][0].method == "quadratic"
+    assert payload["results"][0].value == mp.mpf("1.875")
+    assert payload["core_request"].request_id == "desktop-worker-extrapolation"
+
+
+def test_execute_calc_job_error_returns_core_request_snapshot() -> None:
+    from datalab_core.jobs import JobMode
+
+    job = CalcJob(
+        mode="error",
+        data_path=None,
+        manual_content="x y\n1.0(1) 2.0(2)\n",
+        manual_constants="C 3.0(3)\n",
+        constants_file_path=None,
+        options=ExtrapolationOptions(mp_precision=50),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        constants_enabled=True,
+        use_constants_file=False,
+        formula="x + C",
+        error_propagation_method="taylor",
+        error_propagation_order=2,
+        error_mc_samples=123,
+        error_mc_seed=7,
+        lang="en",
+        latex_digits=16,
+        latex_group_size=3,
+        uncertainty_digits=2,
+    )
+
+    result = _execute_calc_job(job)
+
+    assert result.mode == "error"
+    payload = result.payload
+    assert payload["core_request"].mode is JobMode.UNCERTAINTY
+    assert payload["core_request"].inputs["headers"] == ["x", "y"]
+    assert payload["core_request"].inputs["formula"] == "x + C"
+    assert payload["core_request"].inputs["constants"]["C"]["value"] == "3.0"
+    assert payload["core_request"].inputs["constants"]["C"]["uncertainty"] == "0.3"
+    assert payload["core_request"].inputs["propagation"] == {
+        "method": "taylor",
+        "order": 2,
+        "mc_samples": 123,
+        "mc_seed": 7,
+    }
+    assert payload["core_request"].inputs["segments"] == [[0, 1]]
+
+
+def test_execute_calc_job_error_uses_core_service_when_request_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _direct_apply_should_not_run(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("desktop error worker should use the core uncertainty service")
+
+    monkeypatch.setattr(workers_core, "apply_formula_to_data", _direct_apply_should_not_run)
+
+    job = CalcJob(
+        mode="error",
+        data_path=None,
+        manual_content="x\n1.0(1)\n",
+        manual_constants="",
+        constants_file_path=None,
+        options=ExtrapolationOptions(mp_precision=50),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        constants_enabled=False,
+        use_constants_file=False,
+        formula="x",
+        error_propagation_method="taylor",
+        error_propagation_order=1,
+        lang="en",
+        latex_digits=16,
+        latex_group_size=3,
+        uncertainty_digits=2,
+    )
+
+    result = _execute_calc_job(job)
+
+    assert result.mode == "error"
+    assert len(result.payload["results"]) == 1
+    assert result.payload["results"][0].value == mp.mpf("1.0")
+    assert mp.almosteq(result.payload["results"][0].uncertainty, mp.mpf("0.1"))
+
+
+def test_execute_calc_job_extrapolation_core_snapshot_failure_is_nonfatal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail_snapshot(**_kwargs: object) -> object:
+        raise RuntimeError("snapshot failed")
+
+    monkeypatch.setattr(workers_core, "build_extrapolation_request", _fail_snapshot)
+
+    job = CalcJob(
+        mode="extrapolation",
+        data_path=None,
+        manual_content="A B C\n1.0 1.5 1.75\n",
+        manual_constants="",
+        constants_file_path=None,
+        options=ExtrapolationOptions(method="quadratic", mp_precision=50),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        latex_digits=16,
+        latex_group_size=3,
+        uncertainty_digits=2,
+    )
+
+    result = _execute_calc_job(job)
+
+    assert result.mode == "extrapolation"
+    assert "core_request" not in result.payload
+    assert len(result.payload["results"]) == 1
+
+
+def test_extrapolation_method_options_accept_integer_levin_order() -> None:
+    options = ExtrapolationOptions(method="levin_u", levin_order=4)
+
+    payload = workers_core._extrapolation_method_options(options)
+
+    assert payload["levin_order"] == 4
+
+
+def test_extrapolation_method_options_preserve_power_law_payload() -> None:
+    from extrapolation_methods import PowerLawConfig
+
+    options = ExtrapolationOptions(
+        method="power_law",
+        power_law_config=PowerLawConfig(
+            x_values=("4", "5", "6"),
+            precision=90,
+            exponent_override="3.5",
+            initial_guess="1.25",
+            seed_guesses=("0.5", "1.0", "2.0"),
+        ),
+    )
+
+    payload = workers_core._extrapolation_method_options(options)
+
+    assert payload["power_law_config"] == {
+        "x_values": ["4", "5", "6"],
+        "precision": "90",
+        "initial_guess": "1.25",
+        "exponent_override": "3.5",
+        "seed_guesses": ["0.5", "1.0", "2.0"],
+    }
+
+
+@pytest.mark.parametrize("malformed", [4.9, True, "4"])
+def test_extrapolation_method_options_reject_malformed_levin_order(malformed: object) -> None:
+    options = ExtrapolationOptions(method="levin_u")
+    options.levin_order = malformed  # type: ignore[assignment]
+
+    with pytest.raises(TypeError, match="levin_order"):
+        workers_core._extrapolation_method_options(options)
+
+
+def test_execute_calc_job_error_core_snapshot_failure_is_nonfatal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail_snapshot(**_kwargs: object) -> object:
+        raise RuntimeError("snapshot failed")
+
+    monkeypatch.setattr(workers_core, "build_uncertainty_request", _fail_snapshot)
+
+    job = CalcJob(
+        mode="error",
+        data_path=None,
+        manual_content="x\n1.0(1)\n",
+        manual_constants="",
+        constants_file_path=None,
+        options=ExtrapolationOptions(mp_precision=50),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        constants_enabled=False,
+        use_constants_file=False,
+        formula="x",
+        error_propagation_method="taylor",
+        error_propagation_order=1,
+        lang="en",
+        latex_digits=16,
+        latex_group_size=3,
+        uncertainty_digits=2,
+    )
+
+    result = _execute_calc_job(job)
+
+    assert result.mode == "error"
+    assert "core_request" not in result.payload
+    assert len(result.payload["results"]) == 1
 
 
 def test_run_calculation_excludes_disabled_error_constants_from_calc_job(

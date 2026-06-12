@@ -12,6 +12,12 @@ def _allow_discard(win):
     return win
 
 
+def _formula_preview_has_content(win) -> bool:
+    label = win.workbench_formula_preview_label
+    pixmap = label.pixmap()
+    return bool(label.text().strip()) or (pixmap is not None and not pixmap.isNull())
+
+
 def test_example_workspace_menu_action_exists(qtbot):
     from app_desktop.window import ExtrapolationWindow
 
@@ -122,6 +128,28 @@ def test_direct_template_open_save_as_does_not_write_temp_or_bundle(qtbot, monke
     assert temp_copy.read_bytes() == temp_before
     assert source.read_bytes() == bundle_before
     assert win._workspace_path == saved_path
+
+
+def test_example_workspaces_open_as_live_templates(qtbot):
+    from app_desktop.window import ExtrapolationWindow, list_example_workspaces
+
+    QApplication.instance() or QApplication([])
+    win = ExtrapolationWindow()
+    _allow_discard(win)
+    qtbot.addWidget(win)
+
+    for source in list_example_workspaces():
+        assert win._open_workspace_from_path(source, as_template=True), source.name
+        assert win._workspace_path is None
+        assert win._workspace_template_source == source
+        assert win._workspace_snapshot_only is False
+        assert win.scientific_checkbox.isEnabled()
+        assert win.display_digits_spin.isEnabled()
+        assert win.run_button.isEnabled()
+        assert win.workbench_run_button.isEnabled()
+        assert win.result_edit.toPlainText().strip()
+        if win.workbench_formula_panel.isVisible():
+            assert _formula_preview_has_content(win), source.name
 
 
 def test_template_save_as_refuses_bundled_example_path(qtbot, monkeypatch):

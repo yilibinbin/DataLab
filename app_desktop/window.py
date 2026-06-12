@@ -31,6 +31,7 @@ from examples.catalog import EXAMPLE_NAMES as CATALOG_EXAMPLE_NAMES
 from examples.catalog import example_index_payload
 from app_desktop.fitting_input_normalization import normalize_fitting_input_from_widgets
 from app_desktop.update_controller import UpdateController
+from datalab_core.root_solving import build_root_solving_request
 from shared.computation_inputs import extract_expression_symbols
 from shared.update_checker import REPOSITORY_URL
 
@@ -564,6 +565,31 @@ class ExtrapolationWindow(
 
         _panels.refresh_workbench_variable_panel(self)
 
+    def refresh_workbench_config_cards(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_config_cards(self)
+
+    def refresh_workbench_data_card(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_data_card(self)
+
+    def refresh_workbench_data_summary(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_data_summary(self)
+
+    def refresh_workbench_result_overview_card(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_result_overview_card(self)
+
+    def refresh_workbench_result_details_card(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_result_details_card(self)
+
     def _refresh_workbench_status(self) -> None:
         from .shell_layout import update_workbench_status
 
@@ -935,6 +961,10 @@ class ExtrapolationWindow(
                 restore_workspace(self, loaded.manifest, loaded.attachments)
             finally:
                 self._workspace_restoring = False
+            if as_template and getattr(self, "_workspace_snapshot_only", False):
+                self._workspace_snapshot_only = False
+                self._workspace_snapshot_stale = False
+                self._set_snapshot_controls_enabled(True)
         except Exception as exc:  # noqa: BLE001
             self._workspace_restoring = False
             QMessageBox.critical(self, self._tr("打开失败", "Open failed"), str(exc))
@@ -1210,6 +1240,8 @@ class ExtrapolationWindow(
             self.implicit_model_widget.setVisible(mode == "self_consistent")
         show_implicit = mode == "self_consistent"
         for name in (
+            "implicit_equation_edit",
+            "implicit_output_edit",
             "implicit_param_header_widget",
             "implicit_params_table",
             "implicit_constraints_checkbox",
@@ -1578,6 +1610,55 @@ class ExtrapolationWindow(
             data_path=data_path,
             manual_content=manual_content,
         )
+        precision = int(self._read_precision())
+        uncertainty_digits = int(self._uncertainty_digits_value())
+        uncertainty_options = {
+            "method": str(
+                getattr(getattr(self, "root_uncertainty_method_combo", None), "currentData", lambda: "taylor")()
+                or "taylor"
+            ),
+            "taylor_order": int(
+                getattr(getattr(self, "root_uncertainty_order_spin", None), "value", lambda: 1)()
+                or 1
+            ),
+            "monte_carlo_samples": int(
+                getattr(getattr(self, "root_monte_carlo_samples_spin", None), "value", lambda: 2000)()
+                or 2000
+            ),
+            "monte_carlo_seed": str(
+                getattr(getattr(self, "root_monte_carlo_seed_edit", None), "text", lambda: "")()
+                or ""
+            ),
+        }
+        parallel_config = self._current_parallel_config()
+        mode = str(self.root_mode_combo.currentData() or "scalar")
+        display_digits = int(self._display_digits_limit())
+        core_request = build_root_solving_request(
+            equations=equations,
+            unknown_rows=tuple(dict(row) for row in self.root_unknowns_table.rows()),
+            data_headers=data_headers,
+            data_rows=data_rows,
+            constants_enabled=constants_enabled,
+            constants_rows=constants_rows,
+            constants_view=constants_view,
+            constants_text=constants_text,
+            mode=mode,
+            scan_config={},
+            uncertainty_options=uncertainty_options,
+            precision_digits=precision,
+            display_digits=display_digits,
+            uncertainty_digits=uncertainty_digits,
+            parallel={
+                "mode": parallel_config.mode,
+                "max_workers": parallel_config.max_workers,
+                "reserve_cores": parallel_config.reserve_cores,
+                "default_worker_cap": parallel_config.default_worker_cap,
+                "min_process_tasks": parallel_config.min_process_tasks,
+                "nested_policy": parallel_config.nested_policy,
+                "process_start_method": parallel_config.process_start_method,
+            },
+            request_id="desktop-root-solving",
+        )
         return RootSolvingJob(
             equations=equations,
             unknown_rows=tuple(dict(row) for row in self.root_unknowns_table.rows()),
@@ -1587,31 +1668,14 @@ class ExtrapolationWindow(
             constants_rows=constants_rows,
             constants_view=constants_view,
             constants_text=constants_text,
-            mode=str(self.root_mode_combo.currentData() or "scalar"),
+            mode=mode,
             scan_config={},
-            precision=int(self._read_precision()),
-            display_digits=int(self._display_digits_limit()),
-            uncertainty_digits=int(self._uncertainty_digits_value()),
-            uncertainty_options={
-                "method": str(
-                    getattr(getattr(self, "root_uncertainty_method_combo", None), "currentData", lambda: "taylor")()
-                    or "taylor"
-                ),
-                "taylor_order": int(
-                    getattr(getattr(self, "root_uncertainty_order_spin", None), "value", lambda: 1)()
-                    or 1
-                ),
-                "monte_carlo_samples": int(
-                    getattr(getattr(self, "root_monte_carlo_samples_spin", None), "value", lambda: 2000)()
-                    or 2000
-                ),
-                "monte_carlo_seed": str(
-                    getattr(getattr(self, "root_monte_carlo_seed_edit", None), "text", lambda: "")()
-                    or ""
-                ),
-            },
+            precision=precision,
+            display_digits=display_digits,
+            uncertainty_digits=uncertainty_digits,
+            uncertainty_options=uncertainty_options,
             language=self._current_output_language(),
-            parallel_config=self._current_parallel_config(),
+            parallel_config=parallel_config,
             generate_latex=generate_latex,
             output_path=output_path,
             latex_caption=self._caption_value(require=False) if generate_latex else "",
@@ -1623,6 +1687,7 @@ class ExtrapolationWindow(
                 getattr(self, "generate_plots_checkbox", None)
                 and self.generate_plots_checkbox.isChecked()
             ),
+            core_request=core_request,
         )
 
     def _current_output_language(self) -> str:
@@ -1829,6 +1894,16 @@ class ExtrapolationWindow(
             self.workbench_root.setStyleSheet(region_qss)
         if hasattr(self, "workbench_bar"):
             self.workbench_bar.setStyleSheet(toolbar_qss)
+        if hasattr(self, "refresh_workbench_config_cards"):
+            self.refresh_workbench_config_cards()
+        if hasattr(self, "refresh_workbench_data_card"):
+            self.refresh_workbench_data_card()
+        if hasattr(self, "refresh_workbench_result_overview_card"):
+            self.refresh_workbench_result_overview_card()
+        if hasattr(self, "refresh_workbench_result_details_card"):
+            self.refresh_workbench_result_details_card()
+        if hasattr(self, "refresh_workbench_variable_panel"):
+            self.refresh_workbench_variable_panel()
         if hasattr(self, "_refresh_main_splitter_left_min_width"):
             self._refresh_main_splitter_left_min_width()
 
@@ -1895,6 +1970,8 @@ class ExtrapolationWindow(
         if method_stack is not None:
             method_stack.setCurrentIndex(method_indices.get(str(method), 0))
             method_stack.setVisible(method in method_indices)
+        if hasattr(self, "custom_formula_edit"):
+            self.custom_formula_edit.setVisible(method == "custom")
 
         if hasattr(self, "mpmath_precision_spin"):
             self.mpmath_precision_spin.setEnabled(True)
@@ -2304,11 +2381,27 @@ class ExtrapolationWindow(
             self._reset_csv_data(clear_non_tabular_result=True, refresh_result_rail=False)
             self._mark_workbench_result_running()
             self._set_button_to_stop_mode()
+            self._install_workbench_worker_failure_guard(worker)
             worker.start()
         except Exception:
             self._mark_workbench_result_failed()
             self._set_button_to_run_mode()
             raise
+
+    def _install_workbench_worker_failure_guard(self, worker) -> None:
+        failed_signal = getattr(worker, "failed", None)
+        connect = getattr(failed_signal, "connect", None)
+        if not callable(connect):
+            return
+
+        def mark_failed(*_args: object) -> None:
+            self._mark_workbench_result_failed()
+
+        try:
+            connect(mark_failed)
+        except (RuntimeError, TypeError):
+            return
+        setattr(worker, "_datalab_workbench_failed_guard", mark_failed)
 
     def _reset_csv_data(
         self,
@@ -2383,7 +2476,7 @@ class ExtrapolationWindow(
     def refresh_workbench_result_rail(self) -> None:
         from app_desktop.workbench_results import refresh_result_overview
 
-        if hasattr(self, "workbench_result_table"):
+        if hasattr(self, "workbench_result_overview"):
             refresh_result_overview(self)
 
     def _export_csv_data(self):

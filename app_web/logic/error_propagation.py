@@ -12,9 +12,11 @@ from .._security_shim import (
     validate_latex_engine,
 )
 
+from datalab_core.results import ResultStatus
+from datalab_core.service_factory import create_core_session_service
+from datalab_core.uncertainty import build_uncertainty_request, uncertainty_payload_to_results
 from data_extrapolation_latex_latest import (
     _precision_guard,
-    apply_formula_to_data,
     detect_used_error_propagation_inputs,
     format_result_with_uncertainty_latex,
     generate_error_propagation_table,
@@ -149,19 +151,25 @@ def _run_error_propagation(data_text: str, constants_text: str, form, lang: str 
             constants = process_constants_string(constants_text, verbose=False)
         used_headers, used_constants = detect_used_error_propagation_inputs(headers, constants, formula)
         constants_used = {name: constants[name] for name in used_constants if name in constants}
-        results = apply_formula_to_data(
-            headers,
-            parsed_data,
-            constants_used,
-            formula,
-            verbose=False,
-            warnings=warnings,
-            return_components=True,
+        request = build_uncertainty_request(
+            headers=headers,
+            rows=parsed_data,
+            formula=formula,
+            constants=constants_used,
             propagation_method=propagation_method,
             propagation_order=propagation_order,
             mc_samples=mc_samples,
             mc_seed=mc_seed,
+            precision_digits=mp_precision,
+            uncertainty_digits=result_digits,
+            request_id="web-uncertainty",
         )
+        core_result = create_core_session_service().submit(request)
+        if core_result.status is not ResultStatus.SUCCEEDED:
+            message = str(core_result.payload.get("message") or "Error propagation failed.")
+            raise ValueError(message)
+        results = uncertainty_payload_to_results(core_result.payload)
+        warnings.extend(core_result.warnings)
         latex_text = _render_error_latex(
             headers,
             parsed_data,
@@ -213,4 +221,3 @@ def _run_error_propagation(data_text: str, constants_text: str, form, lang: str 
         formula=formula,
         mp_precision=mp_precision,
     )
-

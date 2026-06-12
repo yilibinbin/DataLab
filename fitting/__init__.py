@@ -1,7 +1,7 @@
 """High-precision fitting toolkit for the GUI."""
 
 from collections.abc import Mapping
-from typing import Any, NoReturn, cast
+from typing import Any, Callable, cast
 
 from .implicit_model import (
     ImplicitEvaluationCache,
@@ -42,18 +42,26 @@ def build_parameter_state(parameter_config: Any, parameter_names: Any | None = N
     )
 
 
-try:
-    from .plot_fitting import render_fitting_overview, sample_mp_function
-except ImportError as exc:  # pragma: no cover - optional dependency guard
-    _plotting_import_error = exc
-
-    def _plotting_missing(*_args: object, **_kwargs: object) -> NoReturn:
+def _plotting_helper(name: str) -> Callable[..., Any]:
+    try:
+        from . import plot_fitting
+    except ImportError as exc:  # pragma: no cover - optional dependency guard
         raise ImportError(
             "Matplotlib/numpy is required for plotting helpers but is not available."
-        ) from _plotting_import_error
+        ) from exc
+    return cast("Callable[..., Any]", getattr(plot_fitting, name))
 
-    render_fitting_overview = _plotting_missing
-    sample_mp_function = _plotting_missing
+
+def render_fitting_overview(*args: object, **kwargs: object) -> bytes:
+    """Render the fitting overview, importing matplotlib only on demand."""
+
+    return cast("bytes", _plotting_helper("render_fitting_overview")(*args, **kwargs))
+
+
+def sample_mp_function(*args: object, **kwargs: object) -> Any:
+    """Sample a high-precision function, importing plotting helpers on demand."""
+
+    return _plotting_helper("sample_mp_function")(*args, **kwargs)
 
 __all__ = [
     "ModelSpecification",

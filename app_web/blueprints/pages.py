@@ -3,14 +3,10 @@ from __future__ import annotations
 from flask import Blueprint, flash, render_template, request
 
 from .._security_shim import csrf_protect
-from ..logic import (
+from ..logic.common import (
     _extract_data_text,
     _extract_named_text,
     _is_checked,
-    _run_error_propagation,
-    _run_extrapolation,
-    _run_fit,
-    _run_statistics,
 )
 from .utils import get_lang
 
@@ -65,6 +61,30 @@ def _error_key_for_exception(exc: Exception) -> str:
     ):
         return "errors.non_positive_log_axis"
     return "errors.compute_failed"
+
+
+def _run_extrapolation(raw_text, form, *, lang: str):
+    from ..logic.extrapolation import _run_extrapolation as run
+
+    return run(raw_text, form, lang=lang)
+
+
+def _run_error_propagation(data_text, const_text, form, *, lang: str):
+    from ..logic.error_propagation import _run_error_propagation as run
+
+    return run(data_text, const_text, form, lang=lang)
+
+
+def _run_fit(data_text, form):
+    from ..logic.fitting import _run_fit as run
+
+    return run(data_text, form)
+
+
+def _run_statistics(data_text, form, *, lang: str):
+    from ..logic.statistics import _run_statistics as run
+
+    return run(data_text, form, lang=lang)
 
 
 @bp.route("/", methods=["GET", "POST"])

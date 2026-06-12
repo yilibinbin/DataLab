@@ -15,6 +15,7 @@ import sympy as sp
 
 from fitting.implicit_model import ImplicitModelDefinition
 from shared.bilingual import _dual_msg
+from shared.precision import precision_guard
 from shared.symbolic_math import parse_symbolic_expression
 from shared.uncertainty import parse_numeric_value
 
@@ -209,7 +210,7 @@ def detect_output_inversion(
         return _coerce_real_mpf(derivative_func(*_row_values(row), mp.mpf(implicit_value)))
 
     def _candidates_row(row: Mapping[str, mp.mpf], target: mp.mpf) -> tuple[mp.mpf, ...]:
-        with mp.workdps(dps):
+        with precision_guard(dps):
             target_value = mp.mpf(target)
             accepted: list[mp.mpf] = []
             for candidate_func in compiled_candidates:

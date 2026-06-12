@@ -30,6 +30,7 @@ def _combo_data(combo: Any) -> list[object]:
 
 
 def test_statistics_inputs_have_schema_metadata(window: Any) -> None:
+    assert window.stats_box.property("datalab_view_module") == "app_desktop.views.statistics"
     assert window.stats_value_column_edit.property("datalab_schema_key") == "statistics.value_column"
     assert window.stats_value_column_edit.property("datalab_schema_required") is True
     assert window.stats_value_column_edit.toolTip()

@@ -30,6 +30,7 @@ def _combo_data(combo: Any) -> list[object]:
 
 
 def test_extrapolation_method_and_help_have_schema_metadata(window: Any) -> None:
+    assert window.extrap_box.property("datalab_view_module") == "app_desktop.views.extrapolation"
     assert window.method_combo.property("datalab_schema_key") == "extrapolation.method"
     assert window.method_combo.property("datalab_schema_required") is True
     assert window.method_combo.property("datalab_schema_choices") is True
@@ -128,6 +129,101 @@ def test_extrapolation_schema_tooltips_and_choices_refresh_with_language(window:
     assert window.method_combo.itemText(window.method_combo.findData("power_law")) == "幂律外推(三点外推)"
     assert "选择外推算法" in window.method_combo.toolTip()
     assert "重新扫描数据" in window.uncertainty_refresh_btn.toolTip()
+
+
+def test_desktop_extrapolation_method_options_are_read_from_controls() -> None:
+    from types import SimpleNamespace
+
+    from app_desktop.window_extrapolation_mixin import (
+        _read_extrapolation_method_options_from_controls,
+    )
+
+    class Spin:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def value(self) -> object:
+            return self._value
+
+    class Combo:
+        def __init__(self, data: object) -> None:
+            self._data = data
+
+        def currentData(self) -> object:
+            return self._data
+
+    owner = SimpleNamespace(
+        richardson_p_spin=Spin(3.5),
+        levin_order_spin=Spin(4),
+        levin_weight_combo=Combo("reciprocal_beta"),
+        levin_beta_spin=Spin(2.75),
+    )
+
+    assert _read_extrapolation_method_options_from_controls(owner) == {
+        "richardson_p": 3.5,
+        "levin_order": 4,
+        "levin_weight": "reciprocal_beta",
+        "levin_beta": 2.75,
+    }
+
+
+def test_run_calculation_preserves_extrapolation_method_options_in_job(
+    window: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app_desktop import window_extrapolation_mixin
+    from app_desktop.workers_core import CalcJob
+
+    captured: dict[str, object] = {}
+
+    class _Signal:
+        def connect(self, _callback: object) -> None:
+            return
+
+    class _DummyCalcWorker:
+        def __init__(self, job: CalcJob) -> None:
+            captured["job"] = job
+            self.finished_ok = _Signal()
+            self.failed = _Signal()
+            self.finished = _Signal()
+            self.cancelled = _Signal()
+            self.log_ready = _Signal()
+
+        def start(self) -> None:
+            captured["started"] = True
+
+        def isRunning(self) -> bool:  # noqa: N802 - Qt-style test double
+            return False
+
+        def wait(self, _timeout: int | None = None) -> bool:
+            return True
+
+        def terminate(self) -> None:
+            return None
+
+        def deleteLater(self) -> None:  # noqa: N802 - Qt-style test double
+            return None
+
+    monkeypatch.setattr(window_extrapolation_mixin, "CalcWorker", _DummyCalcWorker)
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("extrapolation"))
+    window.method_combo.setCurrentIndex(window.method_combo.findData("levin_u"))
+    window._data_stack.setCurrentIndex(1)
+    window.manual_data_edit.setPlainText("A B C\n1 2 3\n2 3 4\n")
+    window.richardson_p_spin.setValue(3.5)
+    window.levin_order_spin.setValue(4)
+    window.levin_weight_combo.setCurrentIndex(window.levin_weight_combo.findData("reciprocal_beta"))
+    window.levin_beta_spin.setValue(2.75)
+
+    window.run_calculation()
+
+    job = captured["job"]
+    assert captured["started"] is True
+    assert isinstance(job, CalcJob)
+    assert job.mode == "extrapolation"
+    assert job.options.richardson_p == pytest.approx(3.5)
+    assert job.options.levin_order == 4
+    assert job.options.levin_weight == "reciprocal_beta"
+    assert job.options.levin_beta == pytest.approx(2.75)
 
 
 def test_extrapolation_panel_has_no_unbound_required_schema_widgets(window: Any) -> None:

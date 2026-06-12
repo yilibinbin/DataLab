@@ -6,8 +6,7 @@ from typing import Any, Callable, cast
 
 from mpmath import mp
 
-import sympy as sp
-from sympy.parsing.sympy_parser import parse_expr
+from datalab_latex import formula_render_service
 
 # Canonical bilingual message helpers live in shared.bilingual so every
 # frontend/worker/scientific module resolves _dual_msg to the same function
@@ -264,109 +263,8 @@ def _resolve_callable(
     raise ValueError(_dual_msg(f"不支持的函数调用: {ast.dump(func_node)}", f"Unsupported function call: {ast.dump(func_node)}"))
 
 
-def _format_latex_formula_manual(formula_str: str) -> str:
-    """Fallback manual LaTeX formatter for very simple formulas."""
-
-    def _find_matching(expr: str, start: int) -> int:
-        depth = 0
-        for idx in range(start, len(expr)):
-            if expr[idx] == "(":
-                depth += 1
-            elif expr[idx] == ")":
-                depth -= 1
-                if depth == 0:
-                    return idx
-        return -1
-
-    def _wrap_calls(expr: str) -> str:
-        functions = {
-            "sinh": "\\sinh",
-            "cosh": "\\cosh",
-            "tanh": "\\tanh",
-            "asin": "\\arcsin",
-            "acos": "\\arccos",
-            "atan": "\\arctan",
-            "sin": "\\sin",
-            "cos": "\\cos",
-            "tan": "\\tan",
-            "exp": "\\exp",
-            "log": "\\log",
-            "ln": "\\ln",
-            "sqrt": "\\sqrt",
-            "abs": "\\abs",
-        }
-        i = 0
-        out: list[str] = []
-        while i < len(expr):
-            matched = False
-            for name, latex_name in functions.items():
-                prefix = f"{name}("
-                if expr.startswith(prefix, i):
-                    start = i + len(prefix) - 1
-                    end = _find_matching(expr, start)
-                    if end == -1:
-                        out.append(expr[i:])
-                        i = len(expr)
-                        matched = True
-                        break
-                    inner = _wrap_calls(expr[start + 1 : end])
-                    if name == "abs":
-                        out.append(f"\\left|{inner}\\right|")
-                    elif name == "sqrt":
-                        out.append(f"{latex_name}{{{inner}}}")
-                    else:
-                        out.append(f"{latex_name}\\left({inner}\\right)")
-                    i = end + 1
-                    matched = True
-                    break
-            if not matched:
-                out.append(expr[i])
-                i += 1
-        return "".join(out)
-
-    latex_str = formula_str.replace("**", "^")
-    latex_str = latex_str.replace("*", " \\cdot ")
-    latex_str = latex_str.replace("pi", "\\pi")
-    latex_str = re.sub(r"\be\b", "e", latex_str)
-    latex_str = _wrap_calls(latex_str)
-    latex_str = re.sub(r"\^(\w+)", r"^{\1}", latex_str)
-    latex_str = re.sub(r"\^\(([^)]+)\)", r"^{(\1)}", latex_str)
-    latex_str = re.sub(r"\s+", " ", latex_str)
-    return latex_str.strip()
-
-
 def format_latex_formula(formula_str: str) -> str:
     """
-    Format a formula string for LaTeX display.
-
-    Primary path uses Sympy's parser + latex to handle nesting robustly.
-    Falls back to a lightweight manual formatter if parsing fails.
+    Format a formula string for LaTeX display through the shared render service.
     """
-    local_funcs = {
-        "sin": sp.sin,
-        "cos": sp.cos,
-        "tan": sp.tan,
-        "asin": sp.asin,
-        "acos": sp.acos,
-        "atan": sp.atan,
-        "sinh": sp.sinh,
-        "cosh": sp.cosh,
-        "tanh": sp.tanh,
-        "exp": sp.exp,
-        "log": sp.log,
-        "ln": sp.log,
-        "sqrt": sp.sqrt,
-        "abs": sp.Abs,
-        "pi": sp.pi,
-        "e": sp.E,
-    }
-    try:
-        expr = parse_expr(
-            formula_str,
-            local_dict=local_funcs,
-            global_dict={},
-            evaluate=False,
-        )
-        return str(sp.latex(expr))
-    except Exception:
-        return _format_latex_formula_manual(formula_str)
+    return formula_render_service.format_formula_latex(formula_str)

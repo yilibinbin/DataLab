@@ -44,6 +44,7 @@ def test_bind_field_applies_label_widget_and_help_metadata() -> None:
     assert label.property(SCHEMA_LABEL_ZH_PROPERTY) == "模型表达式："
     assert label.property(SCHEMA_LABEL_EN_PROPERTY) == "Model expression:"
     assert label.toolTip() == "Enter y=f(x,p) form"
+    assert label.accessibleDescription() == "Enter y=f(x,p) form"
     assert label.property("datalab_schema_key") == "fitting.custom.expression"
 
     assert widget.property("datalab_schema_key") == "fitting.custom.expression"
@@ -51,6 +52,7 @@ def test_bind_field_applies_label_widget_and_help_metadata() -> None:
     assert widget.property(SCHEMA_LABEL_EN_PROPERTY) == "Model expression:"
     assert widget.property("datalab_schema_required") is True
     assert widget.toolTip() == "Enter y=f(x,p) form"
+    assert widget.accessibleDescription() == "Enter y=f(x,p) form"
     assert widget.placeholderText() == "e.g. A*x + B"
 
     assert help_button.text() == "?"

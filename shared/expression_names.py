@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datalab_latex.expression_engine import _ALLOWED_CONSTANTS, _ALLOWED_FUNCTIONS
+from shared.expression_engine import _ALLOWED_CONSTANTS, _ALLOWED_FUNCTIONS
 
 
 def reserved_expression_names() -> set[str]:

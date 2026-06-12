@@ -20,13 +20,15 @@ def _ensure_repo_root_on_path() -> None:
 _ensure_repo_root_on_path()
 
 from PySide6.QtCore import QSize  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QComboBox  # noqa: E402
 
 from tools.scan_desktop_gui_schema import (  # noqa: E402
+    FITTING_SUBMODES,
     MODES,
     ROOT_SOLVING_SUBMODES,
     ScreenScenario,
     _apply_screen_scenario,
+    _refresh_workbench_panels,
 )
 from app_desktop.workbench_visual_contract import (  # noqa: E402
     visual_contract_issues,
@@ -53,6 +55,35 @@ def _capture_scenarios(*, width: int, height: int) -> list[ScreenScenario]:
                             language=language,
                             mode=mode,
                             root_mode=root_mode,
+                            result_tab="numeric",
+                            width=width,
+                            height=height,
+                        )
+                    )
+            elif mode == "fitting":
+                for fit_mode in FITTING_SUBMODES:
+                    scenarios.append(
+                        ScreenScenario(
+                            key=f"{language}:{mode}:{fit_mode}",
+                            language=language,
+                            mode=mode,
+                            root_mode=fit_mode,
+                            result_tab="numeric",
+                            width=width,
+                            height=height,
+                        )
+                    )
+                # The ordinary fitting/custom scenario above covers the
+                # default DataLab preview syntax. These supplemental scenarios
+                # exercise only the alternate render-only preview syntaxes.
+                for formula_syntax in ("python", "mathematica"):
+                    scenarios.append(
+                        ScreenScenario(
+                            key=f"{language}:{mode}:custom:{formula_syntax}",
+                            language=language,
+                            mode=mode,
+                            root_mode="custom",
+                            formula_syntax=formula_syntax,
                             result_tab="numeric",
                             width=width,
                             height=height,
@@ -88,6 +119,44 @@ def _scenario_issues(window: Any) -> list[dict[str, Any]]:
     return issues
 
 
+def _select_result_tab(window: Any, result_tab: str) -> None:
+    result_tabs = getattr(window, "result_tabs", None)
+    result_tab_indices = getattr(window, "result_tabs_indices", {})
+    if result_tabs is None or result_tab not in result_tab_indices:
+        raise AssertionError(f"missing result tab for screenshot scenario: {result_tab!r}")
+    tabs = getattr(window, "tabs", None)
+    result_tab_index = getattr(window, "result_tab_index", -1)
+    if tabs is None or result_tab_index < 0:
+        raise AssertionError("missing result tab container for screenshot scenario")
+    tabs.setCurrentIndex(result_tab_index)
+    result_tabs.setCurrentIndex(int(result_tab_indices[result_tab]))
+
+
+def _clear_result_state_for_capture(window: Any) -> None:
+    reset_csv_data = getattr(window, "_reset_csv_data", None)
+    if callable(reset_csv_data):
+        reset_csv_data(clear_non_tabular_result=True)
+
+
+def _prepare_screenshot_scenario(window: Any, scenario: ScreenScenario) -> None:
+    _apply_screen_scenario(window, scenario)
+    _clear_result_state_for_capture(window)
+    _select_result_tab(window, scenario.result_tab)
+    _refresh_workbench_panels(window)
+    QApplication.processEvents()
+
+
+def _current_formula_syntax(window: Any, scenario: ScreenScenario) -> str:
+    panel = getattr(window, "workbench_formula_panel", None)
+    if panel is not None and not panel.isVisible():
+        return ""
+    combo = getattr(window, "workbench_formula_language_combo", None)
+    if isinstance(combo, QComboBox):
+        data = combo.currentData()
+        return str(data) if data else "datalab"
+    return scenario.formula_syntax or "datalab"
+
+
 def capture_desktop_gui_screens(
     *,
     out: Path,
@@ -107,17 +176,12 @@ def capture_desktop_gui_screens(
 
         screenshots: list[dict[str, Any]] = []
         for scenario in _capture_scenarios(width=width, height=height):
-            _apply_screen_scenario(window, scenario)
-            QApplication.processEvents()
-            if scenario.mode == "fitting" and hasattr(window, "fit_model_combo"):
-                custom_index = window.fit_model_combo.findData("custom")
-                if custom_index >= 0:
-                    window.fit_model_combo.setCurrentIndex(custom_index)
-                    QApplication.processEvents()
+            _prepare_screenshot_scenario(window, scenario)
             if scenario.mode == "extrapolation" and hasattr(window, "method_combo"):
                 custom_index = window.method_combo.findData("custom")
                 if custom_index >= 0:
                     window.method_combo.setCurrentIndex(custom_index)
+                    _refresh_workbench_panels(window)
                     QApplication.processEvents()
             image = window.grab()
             if image.size() != QSize(width, height):
@@ -140,9 +204,11 @@ def capture_desktop_gui_screens(
             ]
             regions = {key: asdict(metric) for key, metric in metrics.items()}
             for object_name in (
+                "manual_box",
                 "workbench_formula_panel",
                 "workbench_variable_panel",
                 "workbench_result_overview_panel",
+                "workbench_result_details_panel",
             ):
                 regions[object_name] = asdict(widget_metric(window, object_name))
             screenshots.append(
@@ -153,6 +219,7 @@ def capture_desktop_gui_screens(
                     "mode": scenario.mode,
                     "root_mode": scenario.root_mode,
                     "language": scenario.language,
+                    "formula_syntax": _current_formula_syntax(window, scenario),
                     # Backward-compatible summary for older release gates; ``issues`` is authoritative.
                     "issue_count": len(issues),
                     "issues": issues,

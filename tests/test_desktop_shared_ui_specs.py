@@ -114,3 +114,10 @@ def test_shared_package_does_not_reexport_legacy_widget_aliases() -> None:
 
     assert legacy_names.isdisjoint(set(shared.__all__))
     assert all(not hasattr(shared, name) for name in legacy_names)
+
+
+def test_shared_package_lazy_formula_help_exports_use_legacy_top_level_facade() -> None:
+    import shared
+
+    assert shared.get_method_name("power_law", "en") == "Power-law (3-point)"
+    assert shared.get_method_name.__module__ == "formula_help"

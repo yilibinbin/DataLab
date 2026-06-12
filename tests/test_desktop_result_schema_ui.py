@@ -11,6 +11,7 @@ pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication
+from app_desktop.result_view_titles import result_view_tab_title
 from shared.ui_specs import DESKTOP_RESULT_VIEWS
 
 
@@ -59,7 +60,7 @@ def test_result_tabs_and_status_widgets_have_schema_metadata(window: Any) -> Non
     assert window.result_tabs.count() == len(RESULT_VIEW_ORDER)
     for index, view_key in enumerate(RESULT_VIEW_ORDER):
         spec = DESKTOP_RESULT_VIEWS[view_key]
-        assert window.result_tabs.tabText(index) == spec.title.zh
+        assert window.result_tabs.tabText(index) == result_view_tab_title(view_key, "zh")
         assert window.result_tabs.tabToolTip(index) == spec.title.zh
 
     assert window.result_edit.property("datalab_schema_key") == "results.numeric.markdown"
@@ -101,7 +102,7 @@ def test_result_schema_metadata_refreshes_with_language(window: Any) -> None:
     assert window.tabs.tabText(window.main_tabs_indices["result"]) == "Result"
     for index, view_key in enumerate(RESULT_VIEW_ORDER):
         spec = DESKTOP_RESULT_VIEWS[view_key]
-        assert window.result_tabs.tabText(index) == spec.title.en
+        assert window.result_tabs.tabText(index) == result_view_tab_title(view_key, "en")
         assert window.result_tabs.tabToolTip(index) == spec.title.en
     assert window.export_csv_btn.accessibleName() == "Export CSV"
     assert window.result_export_btn.accessibleName() == "Export image"
@@ -114,7 +115,7 @@ def test_result_schema_metadata_refreshes_with_language(window: Any) -> None:
     assert window.tabs.tabText(window.main_tabs_indices["result"]) == "结果"
     for index, view_key in enumerate(RESULT_VIEW_ORDER):
         spec = DESKTOP_RESULT_VIEWS[view_key]
-        assert window.result_tabs.tabText(index) == spec.title.zh
+        assert window.result_tabs.tabText(index) == result_view_tab_title(view_key, "zh")
         assert window.result_tabs.tabToolTip(index) == spec.title.zh
     assert window.export_csv_btn.accessibleName() == "导出 CSV"
     assert window.latex_open_button.accessibleName() == "打开 LaTeX 文件"

@@ -5,8 +5,13 @@ from pathlib import Path
 
 from flask import Blueprint, current_app, request
 
-from data_extrapolation_latex_latest import DEFAULT_THREE_POINT_FORMULA
+from datalab_latex.formula_render_service import (
+    InputLanguage,
+    RenderRequest,
+    render_formula_metadata,
+)
 from formula_help import get_function_help, get_method_description
+from shared.formula_defaults import DEFAULT_THREE_POINT_FORMULA
 from shared.ui_specs import (
     EXTRAPOLATION_METHOD_SPECS,
     METHOD_DISPLAY_ORDER,
@@ -18,6 +23,14 @@ from shared.ui_schema import FormFieldSpec
 bp = Blueprint("api", __name__)
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _json_response(payload: dict[str, object], *, status: int = 200):
+    return current_app.response_class(
+        response=json.dumps(payload, ensure_ascii=False),
+        status=status,
+        mimetype="application/json",
+    )
 
 
 def form_field_to_api_payload(field: FormFieldSpec, *, lang: str = "zh") -> dict[str, object]:
@@ -117,6 +130,49 @@ def api_function_help():
         ),
         status=200,
         mimetype="application/json",
+    )
+
+
+@bp.route("/api/formula-preview", methods=["GET"])
+def api_formula_preview():
+    """Return shared formula preview metadata for the web view adapter."""
+    source = request.args.get("source", "")
+    raw_language = request.args.get("language", InputLanguage.DATALAB.value)
+    lhs = request.args.get("lhs") or None
+
+    try:
+        language = InputLanguage(raw_language)
+    except ValueError:
+        return _json_response(
+            {
+                "ok": False,
+                "source": source,
+                "language": raw_language,
+                "latex": "",
+                "mathtext": "",
+                "fallback_text": source,
+                "error_message": "Unsupported formula preview language.",
+            },
+            status=400,
+        )
+
+    result = render_formula_metadata(
+        RenderRequest(
+            source=source,
+            language=language,
+            lhs=lhs,
+        )
+    )
+    return _json_response(
+        {
+            "ok": result.ok,
+            "source": result.source,
+            "language": result.language.value,
+            "latex": result.latex,
+            "mathtext": result.mathtext,
+            "fallback_text": result.fallback_text,
+            "error_message": result.error_message,
+        }
     )
 
 

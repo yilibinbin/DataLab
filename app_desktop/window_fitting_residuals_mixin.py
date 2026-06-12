@@ -60,8 +60,8 @@ State variables READ/WRITTEN:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 import traceback
-import mpmath as mp
 
 from PySide6.QtWidgets import QMessageBox
 
@@ -77,6 +77,9 @@ from .workers_core import (
     FitJob,
     FitResultPayload,
 )
+
+if TYPE_CHECKING:
+    import mpmath as mp
 
 
 class WindowFittingResidualsMixin:

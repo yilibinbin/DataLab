@@ -80,9 +80,9 @@ def test_common_workbench_panel_titles_refresh_on_language_change(qtbot: Any) ->
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
 
     window._apply_language("en")
-    assert window.workbench_formula_panel_title.text() == "Model expression:"
+    assert window.workbench_formula_panel_title.text() == "Formula preview"
     assert window.workbench_variable_title.text() == "Parameters and constants"
 
     window._apply_language("zh")
-    assert window.workbench_formula_panel_title.text() == "模型表达式："
+    assert window.workbench_formula_panel_title.text() == "公式预览"
     assert window.workbench_variable_title.text() == "参数与常数"

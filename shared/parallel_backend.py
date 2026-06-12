@@ -19,6 +19,7 @@ from concurrent.futures import (
 from dataclasses import dataclass, field
 from typing import Any, Callable, Generic, Iterable, Iterator, Sequence, TypeVar, cast
 
+from shared.integer_validation import strict_int
 from shared.parallel_config import (
     ParallelConfig,
     ParallelMode,
@@ -39,7 +40,7 @@ _parallel_depth_var: contextvars.ContextVar[int] = contextvars.ContextVar(
 def _env_parallel_depth() -> int:
     try:
         return max(0, int(os.environ.get(_PARALLEL_DEPTH_ENV, "0")))
-    except ValueError:
+    except (TypeError, ValueError):
         return 0
 
 
@@ -52,7 +53,7 @@ def current_parallel_depth() -> int:
 
 
 def initialize_parallel_worker_depth(depth: int = 1) -> None:
-    os.environ[_PARALLEL_DEPTH_ENV] = str(max(1, int(depth)))
+    os.environ[_PARALLEL_DEPTH_ENV] = str(max(1, strict_int(depth, field_name="depth")))
 
 
 @contextlib.contextmanager
@@ -95,9 +96,10 @@ def _terminate_process_pool_workers(pool: ProcessPoolExecutor) -> None:
 
 class LocalWorkerBudget:
     def __init__(self, total: int):
+        total = strict_int(total, field_name="total")
         if total < 1:
             raise ValueError("LocalWorkerBudget total must be at least 1")
-        self._total = int(total)
+        self._total = total
         self._used = 0
         self._lock = threading.Lock()
 
@@ -111,9 +113,9 @@ class LocalWorkerBudget:
             return self._total - self._used
 
     def try_acquire(self, permits: int = 1) -> bool:
+        permits = strict_int(permits, field_name="permits")
         if permits < 1:
             raise ValueError("permits must be at least 1")
-        permits = int(permits)
         with self._lock:
             if self._used + permits > self._total:
                 return False
@@ -121,9 +123,9 @@ class LocalWorkerBudget:
             return True
 
     def release(self, permits: int = 1) -> None:
+        permits = strict_int(permits, field_name="permits")
         if permits < 1:
             raise ValueError("permits must be at least 1")
-        permits = int(permits)
         with self._lock:
             if permits > self._used:
                 raise ValueError("cannot release more permits than acquired")

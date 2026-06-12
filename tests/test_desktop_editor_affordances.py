@@ -114,6 +114,19 @@ def test_detected_rows_table_preserves_manual_and_detected_sources(qtbot: Any) -
     ]
 
 
+def test_detected_rows_table_tooltip_updates_accessible_descriptions(qtbot: Any) -> None:
+    table = DetectedRowsTable(
+        columns=("name", "initial", "lower", "upper"),
+        headers=("Name", "Initial", "Lower", "Upper"),
+    )
+    qtbot.addWidget(table)
+
+    table.setToolTip("Detected rows help")
+
+    assert table.accessibleDescription() == "Detected rows help"
+    assert table.table_view.accessibleDescription() == "Detected rows help"
+
+
 def test_formula_fields_keep_real_defaults_separate_from_placeholders(window: Any) -> None:
     assert window.custom_formula_edit.toPlainText() == "(C - B)^2/(B - A) + C"
     assert "(C - B)^2/(B - A) + C" in window.custom_formula_edit.placeholderText()
@@ -158,6 +171,63 @@ def test_preview_function_and_help_buttons_keep_affordances(window: Any) -> None
     assert window.root_formula_preview_button.accessibleDescription()
 
 
+def test_extracted_formula_preview_button_uses_current_language_and_dispatches(
+    qtbot: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app_desktop.views import helpers
+
+    class Owner:
+        def __init__(self) -> None:
+            self.registrations: list[tuple[Any, str, str, str]] = []
+
+        def _tr(self, zh: str, en: str) -> str:
+            return zh
+
+        def _register_text(self, widget: Any, zh: str, en: str, attr: str = "setText") -> None:
+            self.registrations.append((widget, zh, en, attr))
+
+    class Edit:
+        def toPlainText(self) -> str:
+            return "  x^2-A  "
+
+    owner = Owner()
+    edit = Edit()
+    calls: list[tuple[Any, Any, Any]] = []
+    monkeypatch.setattr(
+        helpers,
+        "open_formula_preview",
+        lambda preview_owner, preview_edit, lhs=None: calls.append(
+            (preview_owner, preview_edit, lhs() if callable(lhs) else lhs)
+        ),
+    )
+
+    button = helpers.make_formula_preview_button(
+        owner,
+        edit,
+        lhs=lambda: "f(x)",
+        title="Preview root equation",
+        tooltip_zh="预览求根方程",
+        object_name="root_formula_preview_button",
+    )
+    qtbot.addWidget(button)
+
+    assert button.text() == "预览"
+    assert button.toolTip() == "预览求根方程"
+    assert button.accessibleName() == "预览"
+    assert button.accessibleDescription() == "预览求根方程"
+    assert button.objectName() == "root_formula_preview_button"
+    assert owner.registrations == [
+        (button, "预览", "Preview", "setText"),
+        (button, "预览求根方程", "Preview root equation", "setToolTip"),
+        (button, "预览", "Preview", "setAccessibleName"),
+        (button, "预览求根方程", "Preview root equation", "setAccessibleDescription"),
+    ]
+
+    button.click()
+
+    assert calls == [(owner, edit, "f(x)")]
+
+
 def test_editor_table_headers_follow_language_registration(window: Any) -> None:
     window._apply_language("zh")
 
@@ -191,3 +261,4 @@ def test_editor_header_tooltips_follow_canonical_widget_specs_after_language_swi
             label = _schema_label(window, key)
             assert label.toolTip()
             assert label.toolTip() == widget.toolTip(), key
+            assert label.accessibleDescription() == label.toolTip(), key

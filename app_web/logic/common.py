@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import base64
+from decimal import Decimal, InvalidOperation
 import io
 import re
-from typing import Iterable
-
-import mpmath as mp
+from typing import TYPE_CHECKING, Iterable
 
 from .._security_shim import validate_text_size
 
-from data_extrapolation_latex_latest import _dual_msg, format_result_with_uncertainty_latex
+from shared.bilingual import _dual_msg
+
+if TYPE_CHECKING:
+    import mpmath as mp
+
+
+def _mp_math():
+    import mpmath as mp
+
+    return mp
 
 
 def _extract_data_text(form, files, allow_file: bool = True) -> str:
@@ -61,10 +69,10 @@ def _parse_int(text: str | None) -> int | None:
     except Exception as exc:
         # Be tolerant to inputs like "80.0" or "1e2" coming from browsers.
         try:
-            as_float = float(text)
-            if as_float.is_integer():
-                return int(as_float)
-        except Exception:
+            as_decimal = Decimal(text)
+            if as_decimal.is_finite() and as_decimal == as_decimal.to_integral_value():
+                return int(as_decimal)
+        except (InvalidOperation, ValueError):
             pass
         raise ValueError(f"无法解析整数: {text} / Failed to parse integer: {text}") from exc
 
@@ -127,7 +135,7 @@ def _is_checked(form, name: str, default: bool = False) -> bool:
 
 def _format_number(value, digits: int = 10) -> str:
     try:
-        return mp.nstr(value, digits)
+        return _mp_math().nstr(value, digits)
     except Exception:
         return str(value)
 
@@ -148,7 +156,7 @@ def _format_with_precision(value, mp_precision: int | None = None) -> str:
             mp_precision = 16  # Use default precision
         # Use mp_precision as the max significant digits
         # This ensures we don't show more digits than what mpmath can accurately represent
-        result = mp.nstr(value, min(int(mp_precision), 50))  # Cap at 50 for safety
+        result = _mp_math().nstr(value, min(int(mp_precision), 50))  # Cap at 50 for safety
         return str(result) if result else str(value)
     except Exception:
         return str(value)
@@ -196,11 +204,8 @@ def _latex_to_plain(text: str) -> str:
 
 def _split_result(result) -> tuple[mp.mpf, mp.mpf]:
     """Normalize result objects/tuples to (value, sigma)."""
-    try:
-        from data_extrapolation_latex_latest import ExtrapolationResult as _Result
-    except Exception:
-        _Result = None  # pragma: no cover
-    if _Result and isinstance(result, _Result):
+    mp = _mp_math()
+    if hasattr(result, "value") and hasattr(result, "uncertainty"):
         return mp.mpf(result.value), mp.mpf(result.uncertainty)
     if isinstance(result, (tuple, list)) and len(result) >= 2:
         return mp.mpf(result[0]), mp.mpf(result[1])
@@ -224,6 +229,8 @@ def _format_rows(
     - uncertainty: numerical uncertainty (limited by mp_precision)
     - latex: LaTeX formatted display with uncertainty
     """
+    from datalab_latex.latex_formatting import format_result_with_uncertainty_latex
+
     formatted: list[dict[str, object]] = []
     for idx, (_row, result) in enumerate(zip(rows, results), 1):
         value, sigma = _split_result(result)
@@ -241,4 +248,3 @@ def _format_rows(
 
 def _encode_b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
-

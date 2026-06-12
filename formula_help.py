@@ -14,10 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-try:
-    from data_extrapolation_latex_latest import DEFAULT_THREE_POINT_FORMULA
-except Exception:  # pragma: no cover - import failure fallback for minimal tooling
-    DEFAULT_THREE_POINT_FORMULA = "(C - B)^2/(B - A) + C"
+from shared.formula_defaults import DEFAULT_THREE_POINT_FORMULA
 
 
 _FALLBACK_FUNCTION_HELP: dict[str, str] = {

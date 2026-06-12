@@ -18,6 +18,7 @@ def register_schema_text_refresh(
     if widget is not None:
         if field.tooltip.zh or field.tooltip.en:
             owner._register_text(widget, field.tooltip.zh, field.tooltip.en, "setToolTip")
+            owner._register_text(widget, field.tooltip.zh, field.tooltip.en, "setAccessibleDescription")
         if field.placeholder.zh or field.placeholder.en:
             owner._register_text(widget, field.placeholder.zh, field.placeholder.en, "setPlaceholderText")
     if (
@@ -26,6 +27,7 @@ def register_schema_text_refresh(
         and not bool(help_button.property(PRESERVE_TOOLTIP_PROPERTY))
     ):
         owner._register_text(help_button, field.tooltip.zh, field.tooltip.en, "setToolTip")
+        owner._register_text(help_button, field.tooltip.zh, field.tooltip.en, "setAccessibleDescription")
 
 
 def bind_schema_help_button(
@@ -50,7 +52,4 @@ def bind_schema_command_button(
     bind_field(field=field, widget=button, lang=lang)
     register_schema_text_refresh(owner, field, widget=button)
     button.setAccessibleName(accessible_name.for_lang(lang))
-    if field.tooltip.zh or field.tooltip.en:
-        button.setAccessibleDescription(field.tooltip.for_lang(lang))
-        owner._register_text(button, field.tooltip.zh, field.tooltip.en, "setAccessibleDescription")
     owner._register_text(button, accessible_name.zh, accessible_name.en, "setAccessibleName")

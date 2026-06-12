@@ -56,6 +56,21 @@ def test_screenshot_manifest_includes_common_workbench_panels(tmp_path) -> None:
     manifest = capture_desktop_gui_screens(out=tmp_path, width=1440, height=900)
 
     assert manifest["screenshots"]
+    assert any(
+        item["mode"] == "fitting" and item["root_mode"] == "self_consistent"
+        for item in manifest["screenshots"]
+    )
+    formula_syntaxes = {
+        item["formula_syntax"]
+        for item in manifest["screenshots"]
+        if item["mode"] == "fitting" and item["root_mode"] == "custom"
+    }
+    assert {"datalab", "python", "mathematica"} <= formula_syntaxes
+    assert all(
+        item["formula_syntax"] == ""
+        for item in manifest["screenshots"]
+        if item["mode"] == "statistics"
+    )
     for screenshot in manifest["screenshots"]:
         regions = screenshot["regions"]
         spec = MODE_WORKBENCH_SPECS[screenshot["mode"]]
@@ -64,6 +79,16 @@ def test_screenshot_manifest_includes_common_workbench_panels(tmp_path) -> None:
         assert result_metric["visible"] is True
         assert result_metric["width"] >= 160
         assert result_metric["height"] >= 48
+
+        result_details_metric = regions["workbench_result_details_panel"]
+        assert result_details_metric["visible"] is True
+        assert result_details_metric["width"] >= 160
+        assert result_details_metric["height"] >= 240
+
+        data_metric = regions["manual_box"]
+        assert data_metric["visible"] is True
+        assert data_metric["width"] >= 240
+        assert data_metric["height"] >= 180
 
         formula_metric = regions["workbench_formula_panel"]
         assert formula_metric["visible"] is bool(spec.formulas)
@@ -77,6 +102,143 @@ def test_screenshot_manifest_includes_common_workbench_panels(tmp_path) -> None:
         if has_variables:
             assert variable_metric["width"] >= 160
             assert variable_metric["height"] >= 48
+
+
+def test_screen_scenario_refreshes_formula_preview_without_waiting_for_debounce(qtbot) -> None:
+    from PySide6.QtWidgets import QApplication
+
+    from app_desktop.window import ExtrapolationWindow
+    from tools.scan_desktop_gui_schema import ScreenScenario, _apply_screen_scenario
+
+    QApplication.instance() or QApplication([])
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    window.resize(1440, 900)
+    window.show()
+
+    _apply_screen_scenario(
+        window,
+        ScreenScenario(
+            key="zh:root_solving:scalar:python",
+            language="zh",
+            mode="root_solving",
+            root_mode="scalar",
+            formula_syntax="python",
+            result_tab="numeric",
+            width=1440,
+            height=900,
+        ),
+    )
+
+    assert window.workbench_formula_language_combo.currentData() == "python"
+    pixmap = window.workbench_formula_preview_label.pixmap()
+    assert pixmap is not None
+    assert not pixmap.isNull()
+    assert pixmap.height() >= 64
+
+
+def test_screen_scenario_resets_formula_syntax_when_unspecified(qtbot) -> None:
+    from PySide6.QtWidgets import QApplication
+
+    from app_desktop.window import ExtrapolationWindow
+    from tools.capture_desktop_gui_screens import _current_formula_syntax
+    from tools.scan_desktop_gui_schema import ScreenScenario, _apply_screen_scenario
+
+    QApplication.instance() or QApplication([])
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    window.resize(1440, 900)
+    window.show()
+
+    _apply_screen_scenario(
+        window,
+        ScreenScenario(
+            key="en:fitting:custom:python",
+            language="en",
+            mode="fitting",
+            root_mode="custom",
+            formula_syntax="python",
+            result_tab="numeric",
+            width=1440,
+            height=900,
+        ),
+    )
+    assert window.workbench_formula_language_combo.currentData() == "python"
+
+    default_custom = ScreenScenario(
+        key="en:fitting:custom",
+        language="en",
+        mode="fitting",
+        root_mode="custom",
+        result_tab="numeric",
+        width=1440,
+        height=900,
+    )
+    _apply_screen_scenario(window, default_custom)
+
+    assert window.workbench_formula_language_combo.currentData() == "datalab"
+    assert _current_formula_syntax(window, default_custom) == "datalab"
+
+    _apply_screen_scenario(
+        window,
+        ScreenScenario(
+            key="en:fitting:self_consistent",
+            language="en",
+            mode="fitting",
+            root_mode="self_consistent",
+            result_tab="numeric",
+            width=1440,
+            height=900,
+        ),
+    )
+
+    assert window.workbench_formula_language_combo.currentData() == "datalab"
+
+
+def test_screenshot_scenarios_do_not_leak_fake_result_state(qtbot) -> None:
+    from PySide6.QtWidgets import QApplication
+
+    from app_desktop.window import ExtrapolationWindow
+    from tools.capture_desktop_gui_screens import _prepare_screenshot_scenario
+    from tools.scan_desktop_gui_schema import PNG_1X1, ScreenScenario, _apply_screen_scenario
+
+    QApplication.instance() or QApplication([])
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    window.resize(1440, 900)
+    window.show()
+
+    _apply_screen_scenario(
+        window,
+        ScreenScenario(
+            key="zh:root_solving:scan_multiple",
+            language="zh",
+            mode="root_solving",
+            root_mode="scan_multiple",
+            result_tab="image",
+            width=1440,
+            height=900,
+        ),
+    )
+    assert window.result_plot_bytes == PNG_1X1
+
+    _prepare_screenshot_scenario(
+        window,
+        ScreenScenario(
+            key="en:fitting:self_consistent",
+            language="en",
+            mode="fitting",
+            root_mode="self_consistent",
+            result_tab="numeric",
+            width=1440,
+            height=900,
+        ),
+    )
+
+    assert window.result_plot_bytes is None
+    assert window.workbench_result_status_badge.text() == "Waiting"
+    assert window.workbench_result_overview.text() == "No results"
+    assert window.result_tabs.currentIndex() == window.result_tabs_indices["numeric"]
 
 
 def test_screenshot_report_issue_status_controls_cli_exit() -> None:

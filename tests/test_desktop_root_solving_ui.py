@@ -42,6 +42,7 @@ def test_mode_combo_contains_root_solving(window: Any) -> None:
 
 
 def test_root_solving_page_has_required_widgets(window: Any) -> None:
+    assert window.root_box.property("datalab_view_module") == "app_desktop.views.root_solving"
     required = [
         "root_equations_edit",
         "root_equations_help_button",
@@ -312,6 +313,10 @@ def test_root_solving_job_uses_active_data_source_and_preserves_raw_cells(window
     assert job.data_headers == ("A",)
     assert job.data_rows == (("4.0(2)",), ("9.00(3)",))
     assert job.mode == "scalar"
+    assert job.core_request is not None
+    assert job.core_request.inputs["data_headers"] == ["A"]
+    assert job.core_request.inputs["data_rows"] == [["4.0(2)"], ["9.00(3)"]]
+    assert job.core_request.inputs["mode"] == "scalar"
 
 
 def test_root_solving_job_freezes_latex_settings(window: Any) -> None:
@@ -454,7 +459,7 @@ def test_root_formula_preview_uses_f_left_hand_side(window: Any, monkeypatch: py
     def fake_open(parent: Any, expression: str, lhs: str | None = None) -> None:
         captured.append((parent, expression, lhs))
 
-    monkeypatch.setattr("app_desktop.panels.open_formula_preview_dialog", fake_open)
+    monkeypatch.setattr("app_desktop.views.root_solving.open_formula_preview_dialog", fake_open)
     window.root_equations_edit.setPlainText("x^2 - C\nx + y - 3")
 
     qtbot.mouseClick(window.root_formula_preview_button, Qt.MouseButton.LeftButton)

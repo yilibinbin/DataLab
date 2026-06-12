@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from enum import StrEnum
 
+from shared.integer_validation import strict_int
+
 
 class ParallelMode(StrEnum):
     AUTO = "auto"
@@ -36,6 +38,7 @@ class ParallelConfig:
 
 
 def should_use_serial_for_nested(config: ParallelConfig, *, depth: int) -> bool:
+    depth = strict_int(depth, field_name="depth")
     return (
         depth > 0
         and config.nested_policy == NestedParallelPolicy.SERIAL_WHEN_NESTED
@@ -49,11 +52,21 @@ def resolve_worker_count(
     workload: ParallelWorkload,
     depth: int = 0,
 ) -> int:
+    task_count = strict_int(task_count, field_name="task_count")
+    depth = strict_int(depth, field_name="depth")
+    min_process_tasks = strict_int(config.min_process_tasks, field_name="min_process_tasks")
+    reserve_cores = strict_int(config.reserve_cores, field_name="reserve_cores")
+    default_worker_cap = strict_int(config.default_worker_cap, field_name="default_worker_cap")
+    max_workers = (
+        None
+        if config.max_workers is None
+        else strict_int(config.max_workers, field_name="max_workers")
+    )
     if task_count <= 1 or should_use_serial_for_nested(config, depth=depth):
         return 1
 
     cpu_workloads = {ParallelWorkload.CPU_MPMATH, ParallelWorkload.CPU_FLOAT}
-    if task_count < config.min_process_tasks and workload in cpu_workloads:
+    if task_count < min_process_tasks and workload in cpu_workloads:
         return 1
 
     if config.mode == ParallelMode.SERIAL:
@@ -70,11 +83,11 @@ def resolve_worker_count(
         return 1
 
     configured = (
-        config.max_workers
-        if config.max_workers is not None and config.max_workers > 0
+        max_workers
+        if max_workers is not None and max_workers > 0
         else None
     )
-    available_workers = max(1, cpu_count - max(0, config.reserve_cores))
-    workers = configured or min(config.default_worker_cap, available_workers)
+    available_workers = max(1, cpu_count - max(0, reserve_cores))
+    workers = configured or min(default_worker_cap, available_workers)
 
-    return max(1, min(int(workers), int(task_count)))
+    return max(1, min(workers, task_count))

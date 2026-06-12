@@ -13,8 +13,16 @@ from .._security_shim import (
     validate_latex_engine,
 )
 
-from data_extrapolation_latex_latest import ExtrapolationOptions, generate_latex_table, process_data_string
+from datalab_core.extrapolation import (
+    build_extrapolation_request,
+    extrapolation_payload_to_results,
+    extrapolation_payload_to_rows,
+)
+from datalab_core.results import ResultStatus
+from datalab_core.service_factory import create_core_session_service
+from data_extrapolation_latex_latest import ExtrapolationOptions, _precision_guard, generate_latex_table
 from extrapolation_methods import PowerLawConfig
+from shared.extrapolation_engine import parse_extrapolation_string
 
 from .common import (
     _encode_b64,
@@ -91,6 +99,49 @@ def _build_power_config(form, mp_precision: int | None) -> PowerLawConfig:
     )
 
 
+def _power_config_payload(power_config: PowerLawConfig | None) -> dict[str, object] | None:
+    if power_config is None:
+        return None
+    payload: dict[str, object] = {
+        "x_values": [str(value) for value in power_config.x_values],
+        "precision": str(power_config.precision),
+        "initial_guess": str(power_config.initial_guess),
+    }
+    if power_config.exponent_override not in (None, ""):
+        payload["exponent_override"] = str(power_config.exponent_override)
+    if power_config.seed_guesses:
+        payload["seed_guesses"] = [str(value) for value in power_config.seed_guesses]
+    return payload
+
+
+def _method_options_payload(
+    *,
+    power_config: PowerLawConfig | None,
+    reference_column: str | None,
+    levin_variant: str,
+    custom_formula: str | None,
+    richardson_p: float,
+    levin_order: int,
+    levin_weight: str,
+    levin_beta: float,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "levin_variant": levin_variant,
+        "richardson_p": str(richardson_p),
+        "levin_order": levin_order,
+        "levin_weight": levin_weight,
+        "levin_beta": str(levin_beta),
+    }
+    if reference_column:
+        payload["uncertainty_column"] = reference_column
+    if custom_formula:
+        payload["custom_formula"] = custom_formula
+    power_payload = _power_config_payload(power_config)
+    if power_payload is not None:
+        payload["power_law_config"] = power_payload
+    return payload
+
+
 @mpmath_synchronized
 def _run_extrapolation(data_text: str, form, lang: str = "zh") -> ExtrapolationResultBundle:
     method = (form.get("method") or "power_law").strip()
@@ -144,11 +195,38 @@ def _run_extrapolation(data_text: str, form, lang: str = "zh") -> ExtrapolationR
         levin_weight=levin_weight,
         levin_beta=levin_beta,
     )
-    headers, data_rows, raw_results = process_data_string(
-        data_text,
-        verbose=False,
-        options=options,
-    )
+    with _precision_guard(mp_precision) as applied_precision:
+        headers, parsed_rows = parse_extrapolation_string(
+            data_text,
+            verbose=False,
+            options=options,
+        )
+        method_options = _method_options_payload(
+            power_config=power_config,
+            reference_column=reference_column,
+            levin_variant=levin_variant,
+            custom_formula=custom_formula,
+            richardson_p=richardson_p,
+            levin_order=levin_order,
+            levin_weight=levin_weight,
+            levin_beta=levin_beta,
+        )
+        request = build_extrapolation_request(
+            headers=headers,
+            rows=parsed_rows,
+            method=method,
+            method_options=method_options,
+            precision_digits=applied_precision,
+            uncertainty_digits=result_digits,
+            request_id="web-extrapolation",
+        )
+        core_result = create_core_session_service().submit(request)
+        if core_result.status is not ResultStatus.SUCCEEDED:
+            message = str(core_result.payload.get("message") or "Extrapolation failed.")
+            raise ValueError(message)
+        data_rows = extrapolation_payload_to_rows(core_result.payload)
+        raw_results = extrapolation_payload_to_results(core_result.payload)
+        warnings = [*options.warnings, *core_result.warnings]
     latex_text = _render_latex(
         headers,
         data_rows,
@@ -181,7 +259,7 @@ def _run_extrapolation(data_text: str, form, lang: str = "zh") -> ExtrapolationR
     pdf_b64 = None
     if compile_pdf:
         validated_engine = validate_latex_engine(latex_engine)
-        pdf_bytes = compile_latex_safe(latex_text, validated_engine, options.warnings, "extrapolation")
+        pdf_bytes = compile_latex_safe(latex_text, validated_engine, warnings, "extrapolation")
         if pdf_bytes:
             pdf_b64 = _encode_b64(pdf_bytes)
 
@@ -196,9 +274,8 @@ def _run_extrapolation(data_text: str, form, lang: str = "zh") -> ExtrapolationR
         pdf_b64=pdf_b64,
         plot_b64_list=plot_b64_list,
         csv_data=csv_data,
-        warnings=options.warnings,
+        warnings=warnings,
         method=method,
         caption=caption,
         mp_precision=mp_precision,
     )
-

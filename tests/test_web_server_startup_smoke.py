@@ -9,22 +9,17 @@ import threading
 import time
 from pathlib import Path
 
-import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _port_available(port: int) -> bool:
+def _unused_local_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return sock.connect_ex(("127.0.0.1", port)) != 0
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def _start_and_wait_for_output(command: list[str], port: int) -> str:
-    if not _port_available(port):
-        pytest.skip(f"Port {port} is already in use")
-
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env["DATALAB_PORT"] = str(port)
@@ -81,13 +76,13 @@ def _start_and_wait_for_output(command: list[str], port: int) -> str:
                 process.wait(timeout=5)
 
 
-@pytest.mark.parametrize(
-    ("command", "port"),
-    [
-        ([sys.executable, "app_web/server.py"], 18011),
-        ([sys.executable, "-m", "app_web.server"], 18012),
-    ],
-)
-def test_web_server_entrypoints_start(command: list[str], port: int) -> None:
-    output = _start_and_wait_for_output(command, port)
+def test_web_server_script_entrypoint_starts() -> None:
+    port = _unused_local_port()
+    output = _start_and_wait_for_output([sys.executable, "app_web/server.py"], port)
+    assert f"http://127.0.0.1:{port}" in output
+
+
+def test_web_server_module_entrypoint_starts() -> None:
+    port = _unused_local_port()
+    output = _start_and_wait_for_output([sys.executable, "-m", "app_web.server"], port)
     assert f"http://127.0.0.1:{port}" in output

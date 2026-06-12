@@ -46,8 +46,10 @@ def test_register_schema_text_refresh_registers_tooltip_and_placeholder() -> Non
     register_schema_text_refresh(win, field, widget=edit, help_button=help_button)
 
     assert (edit, "提示", "Hint", "setToolTip") in win.calls
+    assert (edit, "提示", "Hint", "setAccessibleDescription") in win.calls
     assert (edit, "示例", "Example", "setPlaceholderText") in win.calls
     assert (help_button, "提示", "Hint", "setToolTip") in win.calls
+    assert (help_button, "提示", "Hint", "setAccessibleDescription") in win.calls
 
 
 def test_bind_schema_command_button_sets_accessibility_and_schema_key() -> None:
@@ -96,3 +98,4 @@ def test_bind_schema_help_button_binds_tooltip_and_refresh_registration() -> Non
     assert button.accessibleName() == "Formula: help"
     assert button.accessibleDescription() == "View formula help"
     assert (button, "查看公式帮助", "View formula help", "setToolTip") in win.calls
+    assert (button, "查看公式帮助", "View formula help", "setAccessibleDescription") in win.calls

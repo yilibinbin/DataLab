@@ -53,6 +53,7 @@ TECHNICAL_TEXT_ALLOWLIST = {
     "PNG",
     "SVG",
     "LaTeX",
+    "TeX",
     "Markdown",
     "HTML",
     "JSON",

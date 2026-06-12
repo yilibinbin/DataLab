@@ -10,6 +10,7 @@ import mpmath as mp
 from PySide6.QtWidgets import QMessageBox
 
 from data_extrapolation_latex_latest import ExtrapolationOptions, format_uncertainty_display_latex
+from datalab_core.statistics import build_statistics_requests
 
 from .workers_core import (
     CalcResult,
@@ -20,6 +21,33 @@ from .workers_core import (
     CalcJob,
 )
 from .workers_qt import CalcWorker, RootSolvingWorker
+
+
+def _widget_value(owner, attr_name: str, default: object) -> object:
+    widget = getattr(owner, attr_name, None)
+    value_func = getattr(widget, "value", None)
+    if callable(value_func):
+        return value_func()
+    return default
+
+
+def _combo_current_data(owner, attr_name: str, default: str) -> str:
+    combo = getattr(owner, attr_name, None)
+    data_func = getattr(combo, "currentData", None)
+    if callable(data_func):
+        value = data_func()
+        if value is not None and str(value).strip():
+            return str(value)
+    return default
+
+
+def _read_extrapolation_method_options_from_controls(owner) -> dict[str, object]:
+    return {
+        "richardson_p": float(_widget_value(owner, "richardson_p_spin", 2.0)),
+        "levin_order": int(_widget_value(owner, "levin_order_spin", 2)),
+        "levin_weight": _combo_current_data(owner, "levin_weight_combo", "default"),
+        "levin_beta": float(_widget_value(owner, "levin_beta_spin", 1.0)),
+    }
 
 
 class WindowExtrapolationMixin:
@@ -37,13 +65,19 @@ class WindowExtrapolationMixin:
         """Change the run button to stop mode (red color, stop text)."""
         if hasattr(self, "run_button"):
             self.run_button.setText(self._tr("停止", "Stop"))
-            self.run_button.setStyleSheet("background-color: #d32f2f; color: white; font-weight: bold;")
+            self.run_button.setStyleSheet("")
+            self.run_button.setProperty("datalab_run_state", "stop")
+            self.run_button.style().unpolish(self.run_button)
+            self.run_button.style().polish(self.run_button)
 
     def _set_button_to_run_mode(self):
         """Restore the run button to normal run mode."""
         if hasattr(self, "run_button"):
             self.run_button.setText(self._tr("开始执行", "Run"))
             self.run_button.setStyleSheet("")
+            self.run_button.setProperty("datalab_run_state", "run")
+            self.run_button.style().unpolish(self.run_button)
+            self.run_button.style().polish(self.run_button)
 
     def _stop_current_worker(self):
         """Request all running workers to stop."""
@@ -201,8 +235,7 @@ class WindowExtrapolationMixin:
         if hasattr(self, "levin_variant_combo"):
             levin_variant = self.levin_variant_combo.currentData() or "u"
 
-        # Note: levin_order is currently UI-only; backend support may be needed
-        # levin_order = self.levin_order_spin.value() if hasattr(self, "levin_order_spin") else 2
+        method_option_values = _read_extrapolation_method_options_from_controls(self)
 
         options = ExtrapolationOptions(
             method=method_choice,
@@ -212,6 +245,7 @@ class WindowExtrapolationMixin:
             levin_variant=levin_variant,
             custom_formula=custom_formula,
             uncertainty_digits=uncertainty_digits,
+            **method_option_values,
         )
 
         capture_stream = io.StringIO() if verbose else None
@@ -284,6 +318,30 @@ class WindowExtrapolationMixin:
             if mode == "statistics":
                 headers, rows, sigma_rows, segments, _ = self._collect_batched_fitting_dataset(precision_hint=self._peek_user_precision())
                 dataset = (headers, rows, sigma_rows)
+                stats_value_col = self.stats_value_column_edit.text().strip()
+                stats_sigma_col = self.stats_sigma_column_edit.text().strip()
+                stats_mode = self.stats_mode_combo.currentData()
+                stats_sample = self.stats_sample_checkbox.isChecked()
+                stats_weighted_variance = self.stats_weight_variance_checkbox.isChecked()
+                core_request = None
+                try:
+                    core_batches = build_statistics_requests(
+                        headers=headers,
+                        rows=rows,
+                        sigma_rows=sigma_rows,
+                        value_col=stats_value_col,
+                        sigma_col=stats_sigma_col or None,
+                        stats_mode=stats_mode or "mean",
+                        use_sample=stats_sample,
+                        use_weighted_variance=stats_weighted_variance,
+                        precision_digits=mp_precision,
+                        uncertainty_digits=uncertainty_digits,
+                        segments=segments,
+                        request_id_prefix="desktop-statistics",
+                    )
+                    core_request = core_batches[0].request if core_batches else None
+                except Exception:  # noqa: BLE001 - projection must not alter legacy worker validation.
+                    core_request = None
                 job = CalcJob(
                     mode=mode,
                     data_path=None,
@@ -300,16 +358,17 @@ class WindowExtrapolationMixin:
                     constants_enabled=False,
                     use_constants_file=False,
                     lang="en" if self._is_en() else "zh",
-                    stats_value_col=self.stats_value_column_edit.text().strip(),
-                    stats_sigma_col=self.stats_sigma_column_edit.text().strip(),
-                    stats_mode=self.stats_mode_combo.currentData(),
-                    stats_sample=self.stats_sample_checkbox.isChecked(),
-                    stats_weighted_variance=self.stats_weight_variance_checkbox.isChecked(),
+                    stats_value_col=stats_value_col,
+                    stats_sigma_col=stats_sigma_col,
+                    stats_mode=stats_mode,
+                    stats_sample=stats_sample,
+                    stats_weighted_variance=stats_weighted_variance,
                     dataset=dataset,
                     latex_digits=self.latex_input_precision_spin.value(),
                     latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
                     segments=segments,
                     uncertainty_digits=uncertainty_digits,
+                    core_request=core_request,
                 )
                 worker = CalcWorker(job)
                 worker.finished_ok.connect(self._on_calc_finished)

@@ -138,3 +138,38 @@ def test_no_unowned_parameter_or_constant_state_widgets(qtbot: Any) -> None:
         )
     for attr, role in expected_by_attr.items():
         assert getattr(window, attr).property("datalab_state_role") == role
+
+
+def test_workbench_state_and_formula_widgets_have_model_paths(qtbot: Any) -> None:
+    from app_desktop.workbench_model_bindings import (
+        MODEL_PATH_PROPERTY,
+        STATE_ROLE_MODEL_PATHS,
+        model_path_for_formula_schema_key,
+        model_path_for_state_role,
+    )
+    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
+
+    window = _window(qtbot)
+
+    for role, expected_path in STATE_ROLE_MODEL_PATHS.items():
+        widgets = [
+            widget
+            for widget in window.findChildren(QWidget)
+            if widget.property("datalab_state_role") == role
+        ]
+        assert widgets, role
+        for widget in widgets:
+            schema_key = str(widget.property("datalab_schema_key") or "")
+            assert widget.property(MODEL_PATH_PROPERTY) == model_path_for_state_role(
+                role,
+                schema_key=schema_key or None,
+            )
+            if not schema_key:
+                assert widget.property(MODEL_PATH_PROPERTY) == expected_path
+
+    for spec in MODE_WORKBENCH_SPECS.values():
+        for formula in spec.formulas:
+            editor = getattr(window, formula.editor_attr)
+            assert editor.property(MODEL_PATH_PROPERTY) == model_path_for_formula_schema_key(
+                formula.schema_key
+            )

@@ -8,6 +8,7 @@ from typing import Sequence
 from mpmath import mp
 
 from shared.bilingual import _dual_msg
+from shared.integer_validation import strict_int
 from shared.precision import precision_guard
 
 
@@ -23,7 +24,7 @@ class SequenceAcceleratorConfig:
     levin_variant: str = "u"
 
     def sanitized_precision(self) -> int:
-        return max(int(self.precision or 0), 1)
+        return max(strict_int(self.precision, field_name="precision"), 1)
 
 
 @dataclass

@@ -41,6 +41,12 @@ from app_desktop.constants_editor import ConstantsEditor  # noqa: E402
 from app_desktop.detected_rows_table import DetectedRowsTable  # noqa: E402
 from app_desktop.parameter_table import ParameterTable  # noqa: E402
 from app_desktop.theme import SUPPORTED_MIN_WINDOW_WIDTH  # noqa: E402
+from app_desktop.workbench_model_bindings import (  # noqa: E402
+    MODEL_PATH_PROPERTY,
+    STATE_ROLE_MODEL_PATHS,
+    model_path_for_formula_schema_key,
+    model_path_for_state_role,
+)
 from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS  # noqa: E402
 from app_desktop.workbench_visual_contract import visual_contract_issues  # noqa: E402
 
@@ -51,12 +57,14 @@ class ScreenScenario:
     language: str
     mode: str
     root_mode: str = ""
+    formula_syntax: str = ""
     result_tab: str = ""
     width: int = 1400
     height: int = 900
 
 
 MODES = ("extrapolation", "error", "fitting", "root_solving", "statistics")
+FITTING_SUBMODES = ("custom", "self_consistent")
 ROOT_SOLVING_SUBMODES = ("scalar", "scan_multiple", "polynomial", "system")
 SCAN_WIDTHS = (SUPPORTED_MIN_WINDOW_WIDTH, 1440, 1680)
 RESULT_TABS = ("numeric", "image", "log", "latex", "pdf")
@@ -129,8 +137,25 @@ def _issue_to_legacy_text(issue: dict[str, Any]) -> str:
 
 def _state_ownership_issues(window: Any, scenario: ScreenScenario) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
+    model_bound_widgets: dict[int, tuple[Any, str]] = {}
     expected_owner_roles = dict(REQUIRED_BASELINE_STATE_ROLES)
+    seen_widget_attrs: dict[str, str] = {}
     for spec in MODE_WORKBENCH_SPECS.values():
+        for attr in spec.required_widget_attrs():
+            existing_mode = seen_widget_attrs.get(attr)
+            if existing_mode is not None and existing_mode != spec.mode_key:
+                issues.append(
+                    _issue(
+                        "cross_mode_widget_sharing",
+                        scenario,
+                        attr,
+                        f"widget {attr} is mounted in multiple modes ({existing_mode} and {spec.mode_key}), which causes visual ghosting when reparenting",
+                        first_mode=existing_mode,
+                        second_mode=spec.mode_key,
+                    )
+                )
+            seen_widget_attrs[attr] = spec.mode_key
+
         for mount in spec.parameters + spec.constants + spec.tables:
             existing_attr = expected_owner_roles.get(mount.state_role)
             if existing_attr is not None and existing_attr != mount.widget_attr:
@@ -185,6 +210,68 @@ def _state_ownership_issues(window: Any, scenario: ScreenScenario) -> list[dict[
                     f"expected state owner {expected_object_name} for role {role}, found {widgets[0].objectName()}",
                     expected=expected_object_name,
                     found=widgets[0].objectName(),
+                )
+            )
+        elif role in STATE_ROLE_MODEL_PATHS:
+            _record_expected_model_binding(
+                issues,
+                model_bound_widgets,
+                scenario,
+                widgets[0],
+                model_path_for_state_role(role),
+            )
+
+    for role in ("manual_table_editor", "manual_text_editor"):
+        widgets = [
+            widget
+            for widget in window.findChildren(QWidget)
+            if widget.property("datalab_state_role") == role
+        ]
+        if len(widgets) == 1:
+            _record_expected_model_binding(
+                issues,
+                model_bound_widgets,
+                scenario,
+                widgets[0],
+                STATE_ROLE_MODEL_PATHS[role],
+            )
+
+    for spec in MODE_WORKBENCH_SPECS.values():
+        for formula in spec.formulas:
+            editor = getattr(window, formula.editor_attr, None)
+            if editor is not None:
+                _record_expected_model_binding(
+                    issues,
+                    model_bound_widgets,
+                    scenario,
+                    editor,
+                    model_path_for_formula_schema_key(formula.schema_key),
+                )
+        for mount in spec.parameters + spec.constants + spec.tables:
+            widget = getattr(window, mount.widget_attr, None)
+            if widget is not None:
+                _record_expected_model_binding(
+                    issues,
+                    model_bound_widgets,
+                    scenario,
+                    widget,
+                    model_path_for_state_role(mount.state_role, schema_key=mount.schema_key),
+                )
+
+    seen_model_paths: dict[str, list[str]] = {}
+    for widget, path in model_bound_widgets.values():
+        seen_model_paths.setdefault(path, []).append(_widget_name(widget))
+    for path, names in sorted(seen_model_paths.items()):
+        unique_names = sorted(set(names))
+        if len(unique_names) > 1:
+            issues.append(
+                _issue(
+                    "duplicate_model_path_binding",
+                    scenario,
+                    path,
+                    "model path is bound to multiple editable state widgets",
+                    model_path=path,
+                    widgets=unique_names,
                 )
             )
 
@@ -300,9 +387,46 @@ def _state_ownership_issues(window: Any, scenario: ScreenScenario) -> list[dict[
     return issues
 
 
+def _record_expected_model_binding(
+    issues: list[dict[str, Any]],
+    model_bound_widgets: dict[int, tuple[Any, str]],
+    scenario: ScreenScenario,
+    widget: Any,
+    expected_path: str,
+) -> None:
+    actual = str(widget.property(MODEL_PATH_PROPERTY) or "") if hasattr(widget, "property") else ""
+    widget_name = _widget_name(widget)
+    if not actual:
+        issues.append(
+            _issue(
+                "missing_model_path_binding",
+                scenario,
+                widget_name,
+                "editable state widget is missing a model path binding",
+                expected=expected_path,
+            )
+        )
+        return
+    if actual != expected_path:
+        issues.append(
+            _issue(
+                "wrong_model_path_binding",
+                scenario,
+                widget_name,
+                "editable state widget has the wrong model path binding",
+                expected=expected_path,
+                found=actual,
+            )
+        )
+    model_bound_widgets[id(widget)] = (widget, actual)
+
+
 def _screen_scenarios(*, refresh_language: bool) -> list[ScreenScenario]:
     languages = ("zh", "en") if refresh_language else ("current",)
-    modes: list[tuple[str, str]] = [(mode, "") for mode in MODES if mode != "root_solving"]
+    modes: list[tuple[str, str]] = [
+        (mode, "") for mode in MODES if mode not in {"fitting", "root_solving"}
+    ]
+    modes.extend(("fitting", fit_mode) for fit_mode in FITTING_SUBMODES)
     modes.extend(("root_solving", root_mode) for root_mode in ROOT_SOLVING_SUBMODES)
 
     scenarios: list[ScreenScenario] = []
@@ -332,6 +456,8 @@ def _apply_screen_scenario(window: Any, scenario: ScreenScenario) -> None:
     if scenario.language != "current":
         window._apply_language(scenario.language)
     window.mode_combo.setCurrentIndex(_combo_index_for_data(window.mode_combo, scenario.mode))
+    if scenario.mode == "fitting":
+        _configure_fitting_scrollbar_scenario(window, scenario.root_mode or FITTING_SUBMODES[0])
     if scenario.mode == "root_solving":
         _configure_root_scrollbar_scenario(window, scenario.root_mode or ROOT_SOLVING_SUBMODES[0])
     result_tabs = getattr(window, "result_tabs", None)
@@ -343,6 +469,35 @@ def _apply_screen_scenario(window: Any, scenario: ScreenScenario) -> None:
             tabs.setCurrentIndex(result_tab_index)
         result_tabs.setCurrentIndex(int(result_tab_indices[scenario.result_tab]))
     QApplication.processEvents()
+    _refresh_workbench_panels(window)
+    _apply_formula_syntax_scenario(window, scenario.formula_syntax)
+    QApplication.processEvents()
+
+
+def _apply_formula_syntax_scenario(window: Any, formula_syntax: str) -> None:
+    if not formula_syntax:
+        panel = getattr(window, "workbench_formula_panel", None)
+        if panel is not None and not panel.isVisible():
+            return
+        formula_syntax = "datalab"
+    combo = getattr(window, "workbench_formula_language_combo", None)
+    if not isinstance(combo, QComboBox):
+        return
+    index = combo.findData(formula_syntax)
+    if index < 0:
+        raise AssertionError(f"missing formula preview syntax {formula_syntax!r}")
+    combo.setCurrentIndex(index)
+    QApplication.processEvents()
+    # The combo handler normally debounces preview work; scan/screenshot gates
+    # need the selected render-only syntax visible immediately and without TeX.
+    _refresh_workbench_panels(window)
+
+
+def _refresh_workbench_panels(window: Any) -> None:
+    for name in ("refresh_workbench_formula_panel", "refresh_workbench_variable_panel"):
+        refresh = getattr(window, name, None)
+        if callable(refresh):
+            refresh()
 
 
 def _horizontal_scrollbar_issues(window: Any, scenarios: list[ScreenScenario]) -> list[dict[str, Any]]:
@@ -405,6 +560,28 @@ def _workbench_visual_contract_issues(window: Any, scenarios: list[ScreenScenari
                 )
             )
     return issues
+
+
+def _configure_fitting_scrollbar_scenario(window: Any, fit_mode: str) -> None:
+    window.mode_combo.setCurrentIndex(_combo_index_for_data(window.mode_combo, "fitting"))
+    window.fit_model_combo.setCurrentIndex(_combo_index_for_data(window.fit_model_combo, fit_mode))
+    if fit_mode == "self_consistent":
+        window.implicit_equation_edit.setPlainText("u - a*x")
+        window.implicit_output_edit.setPlainText("u + b")
+        window.implicit_params_table.set_rows(
+            [
+                {"name": "a", "initial": "1"},
+                {"name": "b", "initial": "0"},
+            ]
+        )
+    else:
+        window.fit_expr_edit.setPlainText("A*x + B")
+        window.custom_params_table.set_rows(
+            [
+                {"name": "A", "initial": "1"},
+                {"name": "B", "initial": "0"},
+            ]
+        )
 
 
 def _configure_root_scrollbar_scenario(window: Any, root_mode: str) -> None:

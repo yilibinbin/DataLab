@@ -21,15 +21,17 @@ from app_desktop.fitting_input_normalization import (
     normalize_constants_state,
     parse_constants_text,
 )
+from app_desktop.theme import constants_editor_style
+from app_desktop.widget_hints import set_accessible_description
 
 
 _TABLE_VIEW = 0
 _TEXT_VIEW = 1
 
-
 class _HelpButton(QPushButton):
     def setToolTip(self, text: str) -> None:  # noqa: N802 - Qt API override
         super().setToolTip(text)
+        set_accessible_description(self, text)
         self.setVisible(bool(text.strip()))
 
 
@@ -55,10 +57,14 @@ class ConstantsEditor(QWidget):
         self._text_source_table_revision = -1
         self._inputs_visible = True
         self._constructed = False
+        self.setProperty("datalab_constants_card", True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setMinimumHeight(52)
+        self.setStyleSheet(constants_editor_style())
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
@@ -118,6 +124,17 @@ class ConstantsEditor(QWidget):
         self._on_checked_changed(self.checkbox.isChecked())
         self._constructed = True
 
+    def set_embedded_in_workbench(self, embedded: bool) -> None:
+        embedded = bool(embedded)
+        self.setProperty("datalab_constants_embedded", embedded)
+        layout = self.layout()
+        if layout is not None:
+            margin = 0 if embedded else 8
+            layout.setContentsMargins(margin, margin, margin, margin)
+        self.setStyleSheet(constants_editor_style(embedded=embedded))
+        self.style().unpolish(self)
+        self.style().polish(self)
+
     def setChecked(self, checked: bool) -> None:  # noqa: N802 - Qt-style API
         self.checkbox.setChecked(bool(checked))
 
@@ -126,10 +143,14 @@ class ConstantsEditor(QWidget):
 
     def setToolTip(self, text: str) -> None:  # noqa: N802 - Qt API override
         super().setToolTip(text)
+        set_accessible_description(self, text)
         self.checkbox.setToolTip(text)
+        set_accessible_description(self.checkbox, text)
         self.help_button.setToolTip(text)
         self.table_view.setToolTip(text)
+        set_accessible_description(self.table_view, text)
         self.text_view.setToolTip(text)
+        set_accessible_description(self.text_view, text)
 
     def isChecked(self) -> bool:  # noqa: N802 - Qt-style API
         return bool(self.checkbox.isChecked())

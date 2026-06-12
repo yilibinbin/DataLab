@@ -36,6 +36,7 @@ from shared.latex_engine import (
     tectonic_compile_argv,
 )
 
+from . import theme
 from .resources import _ensure_default_path_augmented, _pil_to_qpixmap
 from .workers_core import _safe_read_text, _safe_resolve_path
 
@@ -659,8 +660,7 @@ class WindowLatexPdfMixin:
         invert = self.pdf_dark_mode
         zoom = max(0.35, min(self.pdf_zoom, 4.0))
         self.pdf_zoom = zoom
-        bg_color = "#1b1b1b" if invert else "#f7f7f7"
-        self.pdf_scroll.viewport().setStyleSheet(f"background:{bg_color};")
+        self.pdf_scroll.viewport().setStyleSheet(theme.pdf_preview_viewport_style(inverted=invert))
         for i in reversed(range(self.pdf_container_layout.count())):
             item = self.pdf_container_layout.takeAt(i)
             widget = item.widget()
@@ -681,7 +681,7 @@ class WindowLatexPdfMixin:
             label.setAlignment(Qt.AlignCenter)
             caption = QLabel(self._tr(f"页 {idx}", f"Page {idx}"))
             caption.setAlignment(Qt.AlignLeft)
-            caption.setStyleSheet("font-weight: bold; margin-top: 12px;")
+            caption.setStyleSheet(theme.pdf_preview_caption_style())
             self.pdf_container_layout.addWidget(caption)
             self.pdf_container_layout.addWidget(label)
         name = self.last_pdf_path.name if self.last_pdf_path else "PDF"
