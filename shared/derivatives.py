@@ -234,14 +234,16 @@ def _build_symbolic_partials(
     except Exception:
         return None
 
-    modules = [
-        {
-            # Ensure mpmath has these even if sympy's default mapping misses them.
-            "hyper": mp.hyper,
-            "sign": mp.sign,
-        },
-        "mpmath",
-    ]
+    modules_dict = {
+        # Ensure mpmath has these even if sympy's default mapping misses them.
+        "hyper": mp.hyper,
+        "sign": mp.sign,
+    }
+    if hasattr(mp, "polygamma"):
+        modules_dict["polygamma"] = mp.polygamma
+    if hasattr(mp, "digamma"):
+        modules_dict["digamma"] = mp.digamma
+    modules = [modules_dict, "mpmath"]
 
     partials: list[_SymbolicCallable | None] = []
     for sym in symbols:

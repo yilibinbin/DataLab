@@ -56,3 +56,17 @@ def test_symbolic_derivative_caches_are_lock_guarded(module_name: str, monkeypat
     assert module._get_symbolic_hessian("x", ["x"]) == [[None]]
     assert module._get_symbolic_hessian("x", ["x"]) == [[None]]
 
+
+@pytest.mark.parametrize("module_name", ["shared.derivatives", "datalab_latex.derivatives"])
+def test_symbolic_partials_support_mpmath_special_functions(module_name: str) -> None:
+    from mpmath import mp
+
+    module = import_module(module_name)
+    with mp.workdps(60):
+        partials = module._build_symbolic_partials("Gamma(x)", ["x"])
+        assert partials is not None
+        assert partials[0] is not None
+        derivative = mp.mpf(partials[0](mp.mpf("3.5")))
+
+        expected = mp.gamma(mp.mpf("3.5")) * mp.digamma(mp.mpf("3.5"))
+        assert mp.almosteq(derivative, expected)

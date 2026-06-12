@@ -198,7 +198,7 @@ def _optional_number_from_payload(payload: Any | None) -> mp.mpf | mp.mpc | None
 
 
 def _json_safe_tree(value: Any, digits: int) -> Any:
-    if isinstance(value, mp.mpf | mp.mpc):
+    if isinstance(value, (mp.mpf, mp.mpc)):
         return _number_payload(value, digits=digits)
     if isinstance(value, float):
         return _mp_to_string(value, digits)

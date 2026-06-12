@@ -33,7 +33,7 @@ def _apply_aliases(formula: str, alias_map: dict[str, str]) -> str:
     return result
 
 
-def _extract_referenced_names(expression: str) -> set[str] | None:
+def _extract_referenced_names(expression: str | None) -> set[str] | None:
     if expression is None:
         return None
     expr = (expression or "").strip()
@@ -441,13 +441,21 @@ def _apply_second_order(
         sigma_i = sigma_vec[i]
         if sigma_i <= 0:
             continue
-        for j, _name_j in enumerate(variables):
+        for j in range(i, len(variables)):
+            name_j = variables[j]
             sigma_j = sigma_vec[j]
             if sigma_j <= 0:
                 continue
             second = None
             if hessian and i < len(hessian) and j < len(hessian[i]):
                 func = hessian[i][j]
+                if func is not None:
+                    try:
+                        second = mp.mpf(func(*values))
+                    except Exception:
+                        second = None
+            if second is None and hessian and j < len(hessian) and i < len(hessian[j]):
+                func = hessian[j][i]
                 if func is not None:
                     try:
                         second = mp.mpf(func(*values))
@@ -465,7 +473,12 @@ def _apply_second_order(
                 )
             if i == j:
                 mean_shift += half * second * (sigma_i**2)
-            contrib2 = half * (second * sigma_i * sigma_j) ** 2
-            total_variance += contrib2
-            contrib_map[name_i] = contrib_map.get(name_i, mp.mpf("0")) + mp.mpf(contrib2)
+                contrib2 = half * (second * sigma_i * sigma_j) ** 2
+                total_variance += contrib2
+                contrib_map[name_i] = contrib_map.get(name_i, mp.mpf("0")) + mp.mpf(contrib2)
+                continue
+            pair_contrib = half * (second * sigma_i * sigma_j) ** 2
+            total_variance += mp.mpf("2") * pair_contrib
+            contrib_map[name_i] = contrib_map.get(name_i, mp.mpf("0")) + mp.mpf(pair_contrib)
+            contrib_map[name_j] = contrib_map.get(name_j, mp.mpf("0")) + mp.mpf(pair_contrib)
     return mp.mpf(result_value) + mean_shift, total_variance
