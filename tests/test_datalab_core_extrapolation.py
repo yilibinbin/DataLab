@@ -171,6 +171,23 @@ def test_core_extrapolation_handler_defaults_missing_method_to_builder_default(
     assert result.payload["method"] == "power_law"
 
 
+@pytest.mark.parametrize(
+    ("raw_result", "missing_field"),
+    [
+        ({"uncertainty": "0"}, "value"),
+        ({"value": "1"}, "uncertainty"),
+    ],
+)
+def test_core_extrapolation_payload_to_results_reports_missing_required_fields(
+    raw_result: dict[str, str],
+    missing_field: str,
+) -> None:
+    from datalab_core.extrapolation import extrapolation_payload_to_results
+
+    with pytest.raises(ValueError, match=rf"payload\.results\[0\]\.{missing_field} is required"):
+        extrapolation_payload_to_results({"results": [raw_result]})
+
+
 def test_core_extrapolation_handler_runs_custom_formula_without_latex_imports() -> None:
     from datalab_core.extrapolation import build_extrapolation_request, run_extrapolation
     from datalab_core.results import ResultStatus

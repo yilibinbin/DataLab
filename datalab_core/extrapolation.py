@@ -153,10 +153,16 @@ def extrapolation_payload_to_results(payload: Mapping[str, Any]) -> list[Extrapo
         details: dict[str, mp.mpf | str] = {}
         for name, value in raw_details.items():
             details[str(name)] = _detail_from_payload(value)
+        raw_value = raw_result.get("value")
+        raw_uncertainty = raw_result.get("uncertainty")
+        if raw_value is None:
+            raise ValueError(f"payload.results[{index}].value is required.")
+        if raw_uncertainty is None:
+            raise ValueError(f"payload.results[{index}].uncertainty is required.")
         results.append(
             ExtrapolationResult(
-                value=mp.mpf(str(raw_result.get("value"))),
-                uncertainty=mp.mpf(str(raw_result.get("uncertainty"))),
+                value=mp.mpf(str(raw_value)),
+                uncertainty=mp.mpf(str(raw_uncertainty)),
                 method=str(raw_result.get("method") or "quadratic"),
                 details=details,
             )
