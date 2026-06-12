@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from mpmath import mp
+from threading import Lock
 from typing import Callable
 
 import sympy as sp
@@ -21,6 +22,7 @@ _SYMBOLIC_PARTIALS_CACHE_MAX = 64
 
 _SYMBOLIC_HESSIAN_CACHE: "OrderedDict[tuple[str, tuple[str, ...]], list[list[_SymbolicCallable | None]] | None]" = OrderedDict()
 _SYMBOLIC_HESSIAN_CACHE_MAX = 32
+_SYMBOLIC_CACHE_LOCK = Lock()
 
 
 def _auto_finite_diff_step(x_value: object, derivative_order: int) -> mp.mpf:
@@ -189,13 +191,18 @@ def _get_symbolic_hessian(
     formula_str: str, variables: list[str]
 ) -> list[list[_SymbolicCallable | None]] | None:
     key = (formula_str or "", tuple(variables or []))
-    if key in _SYMBOLIC_HESSIAN_CACHE:
-        _SYMBOLIC_HESSIAN_CACHE.move_to_end(key)
-        return _SYMBOLIC_HESSIAN_CACHE[key]
-    if len(_SYMBOLIC_HESSIAN_CACHE) >= _SYMBOLIC_HESSIAN_CACHE_MAX:
-        _SYMBOLIC_HESSIAN_CACHE.popitem(last=False)
+    with _SYMBOLIC_CACHE_LOCK:
+        if key in _SYMBOLIC_HESSIAN_CACHE:
+            _SYMBOLIC_HESSIAN_CACHE.move_to_end(key)
+            return _SYMBOLIC_HESSIAN_CACHE[key]
     hessian = _build_symbolic_hessian(formula_str, variables)
-    _SYMBOLIC_HESSIAN_CACHE[key] = hessian
+    with _SYMBOLIC_CACHE_LOCK:
+        if key in _SYMBOLIC_HESSIAN_CACHE:
+            _SYMBOLIC_HESSIAN_CACHE.move_to_end(key)
+            return _SYMBOLIC_HESSIAN_CACHE[key]
+        if len(_SYMBOLIC_HESSIAN_CACHE) >= _SYMBOLIC_HESSIAN_CACHE_MAX:
+            _SYMBOLIC_HESSIAN_CACHE.popitem(last=False)
+        _SYMBOLIC_HESSIAN_CACHE[key] = hessian
     return hessian
 
 
@@ -264,13 +271,18 @@ def _get_symbolic_partials(
     formula_str: str, variables: list[str]
 ) -> list[_SymbolicCallable | None] | None:
     key = (formula_str or "", tuple(variables or []))
-    if key in _SYMBOLIC_PARTIALS_CACHE:
-        _SYMBOLIC_PARTIALS_CACHE.move_to_end(key)
-        return _SYMBOLIC_PARTIALS_CACHE[key]
-    if len(_SYMBOLIC_PARTIALS_CACHE) >= _SYMBOLIC_PARTIALS_CACHE_MAX:
-        _SYMBOLIC_PARTIALS_CACHE.popitem(last=False)
+    with _SYMBOLIC_CACHE_LOCK:
+        if key in _SYMBOLIC_PARTIALS_CACHE:
+            _SYMBOLIC_PARTIALS_CACHE.move_to_end(key)
+            return _SYMBOLIC_PARTIALS_CACHE[key]
     partials = _build_symbolic_partials(formula_str, variables)
-    _SYMBOLIC_PARTIALS_CACHE[key] = partials
+    with _SYMBOLIC_CACHE_LOCK:
+        if key in _SYMBOLIC_PARTIALS_CACHE:
+            _SYMBOLIC_PARTIALS_CACHE.move_to_end(key)
+            return _SYMBOLIC_PARTIALS_CACHE[key]
+        if len(_SYMBOLIC_PARTIALS_CACHE) >= _SYMBOLIC_PARTIALS_CACHE_MAX:
+            _SYMBOLIC_PARTIALS_CACHE.popitem(last=False)
+        _SYMBOLIC_PARTIALS_CACHE[key] = partials
     return partials
 
 
