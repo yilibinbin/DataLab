@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
@@ -301,7 +300,20 @@ def _convert_expression(
         text = _convert_python_functions(text, allow_mathematica=allow_mathematica)
     text = _convert_powers(text)
     text = _replace_multiplication(text)
+    text = _replace_greek_identifiers(text)
     return text
+
+
+def _find_matching_delimiter(expr: str, start: int, *, open_char: str, close_char: str) -> int:
+    depth = 0
+    for idx in range(start, len(expr)):
+        if expr[idx] == open_char:
+            depth += 1
+        elif expr[idx] == close_char:
+            depth -= 1
+            if depth == 0:
+                return idx
+    return -1
 
 
 def _convert_mathematica_functions(text: str, *, allow_python: bool = True) -> str:
@@ -331,61 +343,143 @@ def _convert_mathematica_functions(text: str, *, allow_python: bool = True) -> s
 
 
 def _convert_python_functions(text: str, *, allow_mathematica: bool = True) -> str:
-    for name, command in _FUNCTION_NAMES.items():
-        if name == "abs":
+    i = 0
+    out: list[str] = []
+    while i < len(text):
+        char = text[i]
+        if not (char.isalpha() or char == "_"):
+            out.append(char)
+            i += 1
             continue
-        if name == "sqrt":
-            text = re.sub(
-                rf"\b{name}\s*\(([^()]+)\)",
-                _sqrt_replacer(allow_mathematica=allow_mathematica),
-                text,
-                flags=re.IGNORECASE,
-            )
-            continue
-        text = re.sub(
-            rf"\b{name}\s*\(([^()]+)\)",
-            _function_replacer(command, allow_mathematica=allow_mathematica),
-            text,
-            flags=re.IGNORECASE,
-        )
-    return text
 
+        start = i
+        i += 1
+        while i < len(text) and (text[i].isalnum() or text[i] == "_"):
+            i += 1
+        name = text[start:i]
+        lower_name = name.lower()
+        j = i
+        while j < len(text) and text[j].isspace():
+            j += 1
 
-def _sqrt_replacer(*, allow_mathematica: bool) -> Callable[[re.Match[str]], str]:
-    def replace(match: re.Match[str]) -> str:
-        return rf"\sqrt{{{_convert_expression(match.group(1), allow_mathematica=allow_mathematica)}}}"
+        if lower_name in _FUNCTION_NAMES and lower_name != "abs" and j < len(text) and text[j] == "(":
+            end = _find_matching_delimiter(text, j, open_char="(", close_char=")")
+            if end != -1:
+                body = _convert_expression(
+                    text[j + 1 : end],
+                    allow_mathematica=allow_mathematica,
+                    allow_python=True,
+                )
+                command = _FUNCTION_NAMES[lower_name]
+                if lower_name == "sqrt":
+                    out.append(rf"{command}{{{body}}}")
+                else:
+                    out.append(rf"{command}\left({body}\right)")
+                i = end + 1
+                continue
 
-    return replace
-
-
-def _function_replacer(command: str, *, allow_mathematica: bool) -> Callable[[re.Match[str]], str]:
-    def replace(match: re.Match[str]) -> str:
-        return rf"{command}\left({_convert_expression(match.group(1), allow_mathematica=allow_mathematica)}\right)"
-
-    return replace
-
-
-def _replace_parenthesized_power(match: re.Match[str]) -> str:
-    return f"^{{{_convert_expression(match.group(1))}}}"
+        out.append(text[start:i])
+    return "".join(out)
 
 
 def _convert_powers(text: str) -> str:
-    text = re.sub(r"\*\*\s*\(([^()]+)\)", _replace_parenthesized_power, text)
-    text = re.sub(r"\^\s*\(([^()]+)\)", _replace_parenthesized_power, text)
-    exponent_token = r"([+-]?(?:[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d*)?|\.\d+))"
-    text = re.sub(r"\*\*\s*" + exponent_token, r"^{\1}", text)
-    text = re.sub(r"\^\s*" + exponent_token, r"^{\1}", text)
-    return text
+    i = 0
+    out: list[str] = []
+    while i < len(text):
+        if text.startswith("**", i):
+            exponent, end = _consume_power_exponent(text, i + 2)
+        elif text[i] == "^":
+            exponent, end = _consume_power_exponent(text, i + 1)
+        else:
+            out.append(text[i])
+            i += 1
+            continue
+        if exponent is None:
+            out.append("**" if text.startswith("**", i) else "^")
+            i += 2 if text.startswith("**", i) else 1
+            continue
+        out.append(f"^{{{exponent}}}")
+        i = end
+    return "".join(out)
+
+
+def _consume_power_exponent(text: str, start: int) -> tuple[str | None, int]:
+    i = start
+    while i < len(text) and text[i].isspace():
+        i += 1
+    if i >= len(text):
+        return None, start
+
+    sign = ""
+    if text[i] in "+-":
+        sign = text[i]
+        i += 1
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i >= len(text):
+            return None, start
+
+    if text[i] == "(":
+        end = _find_matching_delimiter(text, i, open_char="(", close_char=")")
+        if end == -1:
+            return None, start
+        body = _convert_expression(text[i + 1 : end])
+        return f"{sign}{body}", end + 1
+
+    if text[i] == "\\":
+        end = _consume_latex_command_expression(text, i)
+        if end == i:
+            return None, start
+        return f"{sign}{text[i:end]}", end
+
+    token_match = re.match(r"(?:\d+(?:\.\d*)?|\.\d+|[A-Za-z_][A-Za-z0-9_]*)", text[i:])
+    if token_match is None:
+        return None, start
+    end = i + token_match.end()
+    if end < len(text) and text[end] == "(":
+        call_end = _find_matching_delimiter(text, end, open_char="(", close_char=")")
+        if call_end != -1:
+            end = call_end + 1
+    exponent = _convert_expression(text[i:end])
+    return f"{sign}{exponent}", end
+
+
+def _consume_latex_command_expression(text: str, start: int) -> int:
+    match = re.match(r"\\[A-Za-z]+", text[start:])
+    if match is None:
+        return start
+    end = start + match.end()
+    if text.startswith(r"\left(", end):
+        paren_start = end + len(r"\left")
+        paren_end = _find_matching_delimiter(text, paren_start, open_char="(", close_char=")")
+        if paren_end != -1:
+            end = paren_end + 1
+            if text.startswith(r"\right)", end):
+                end += len(r"\right)")
+            return end
+    if end < len(text) and text[end] == "{":
+        brace_end = _find_matching_delimiter(text, end, open_char="{", close_char="}")
+        if brace_end != -1:
+            return brace_end + 1
+    return end
 
 
 def _replace_multiplication(text: str) -> str:
     return text.replace("*", r"\cdot ")
 
 
+def _replace_greek_identifiers(text: str) -> str:
+    return re.sub(
+        r"(?<!\\)\b[A-Za-z_][A-Za-z0-9_]*\b",
+        lambda match: _escape_identifier(match.group(0)),
+        text,
+    )
+
+
 def _escape_identifier(identifier: str) -> str:
     if len(identifier) == 1:
         return identifier
-    greek = {
+    lowercase_greek = {
         "alpha",
         "beta",
         "gamma",
@@ -398,8 +492,12 @@ def _escape_identifier(identifier: str) -> str:
         "sigma",
         "omega",
     }
-    if identifier.lower() in greek:
-        return "\\" + identifier.lower()
+    uppercase_greek = {"gamma", "delta", "theta", "lambda", "pi", "sigma", "omega"}
+    lower = identifier.lower()
+    if lower in lowercase_greek:
+        if identifier[:1].isupper() and identifier[1:].islower() and lower in uppercase_greek:
+            return "\\" + identifier[:1].upper() + identifier[1:].lower()
+        return "\\" + lower
     return identifier
 
 

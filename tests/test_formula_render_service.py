@@ -128,6 +128,39 @@ def test_render_service_accepts_datalab_python_and_mathematica_sources() -> None
     assert r"\sqrt{A}" in mathematica.latex
 
 
+def test_python_formula_preview_handles_nested_calls_and_function_exponents() -> None:
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula_metadata,
+    )
+
+    result = render_formula_metadata(
+        RenderRequest(
+            source="sin(cos(x)) + x**((y+1)) + a**f(y) + b**sin(y) + c**sqrt(A)",
+            language=InputLanguage.PYTHON,
+        )
+    )
+
+    assert result.ok
+    assert r"\sin\left(\cos\left(x\right)\right)" in result.latex
+    assert "x^{(y+1)}" in result.latex
+    assert "a^{f(y)}" in result.latex
+    assert r"b^{\sin\left(y\right)}" in result.latex
+    assert r"c^{\sqrt{A}}" in result.latex
+
+
+def test_formula_preview_preserves_uppercase_greek_identifiers() -> None:
+    from datalab_latex.formula_render_service import RenderRequest, render_formula_metadata
+
+    result = render_formula_metadata(RenderRequest(source="Delta + Gamma + delta"))
+
+    assert result.ok
+    assert r"\Delta" in result.latex
+    assert r"\Gamma" in result.latex
+    assert r"\delta" in result.latex
+
+
 def test_python_language_does_not_convert_mathematica_bracket_calls() -> None:
     from datalab_latex.formula_render_service import (
         InputLanguage,
