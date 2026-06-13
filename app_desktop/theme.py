@@ -170,6 +170,39 @@ def workbench_message_surface_style(
     return f"color: {color}; background: {background}; border: 1px solid {border}; border-radius: 6px; padding: 6px;"
 
 
+def workbench_section_card_style(*, dark: bool | None = None) -> str:
+    dark = is_dark_theme() if dark is None else bool(dark)
+    if dark:
+        card_bg = "#20242b"
+        border = "rgba(255, 255, 255, 0.10)"
+        title_fg = "#e5e7eb"
+        muted_fg = "#a5b4c3"
+    else:
+        card_bg = "#ffffff"
+        border = "#d8dee8"
+        title_fg = "#0f172a"
+        muted_fg = "#64748b"
+    return f"""
+QGroupBox[datalab_workbench_section_host="true"] {{
+    border: none;
+    margin: 0;
+    padding: 0;
+}}
+QFrame[datalab_workbench_section_card="true"] {{
+    background: {card_bg};
+    border: 1px solid {border};
+    border-radius: {REGION_RADIUS}px;
+}}
+QLabel[datalab_workbench_section_title="true"] {{
+    color: {title_fg};
+    font-weight: 600;
+}}
+QLabel[datalab_workbench_section_description="true"] {{
+    color: {muted_fg};
+}}
+"""
+
+
 def formula_preview_surface_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
     background = "#1f2328" if dark else "#ffffff"
@@ -256,7 +289,19 @@ QWidget[datalab_config_card="true"] {{
     border-radius: {REGION_RADIUS}px;
 }}
 QWidget[datalab_config_card="true"] QGroupBox {{
+    background: transparent;
+    border: none;
+    margin-top: 18px;
+    padding: 0px;
     color: {title_fg};
+    font-weight: 600;
+}}
+QWidget[datalab_config_card="true"] QGroupBox::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 0px;
+    top: 0px;
+    padding: 0px;
 }}
 QWidget[datalab_config_card="true"] QPushButton[datalab_primary_run_button="true"] {{
     min-height: 28px;
@@ -312,8 +357,12 @@ QLabel#workbench_result_details_title {{
     color: {title_fg};
     font-weight: 600;
 }}
+QWidget#workbench_result_details_empty_panel {{
+    background: transparent;
+}}
 QLabel#workbench_result_details_empty_label {{
     color: {muted_fg};
+    font-size: 13px;
 }}
 QTabWidget#result_detail_tabs::pane {{
     border: 1px solid {border};

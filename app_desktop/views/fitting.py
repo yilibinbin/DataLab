@@ -29,11 +29,19 @@ from shared.ui_schema import ChoiceSpec, FormFieldSpec, LocalizedText
 
 
 def build_fitting_mode_view(owner: Any) -> QGroupBox:
-    # Fitting module
-    owner.fit_box = QGroupBox("拟合模块")
-    owner.fit_box.setProperty("datalab_view_module", "app_desktop.views.fitting")
-    owner._register_title(owner.fit_box, "拟合模块", "Fitting")
-    fit_layout = QVBoxLayout(owner.fit_box)
+    section = view_helpers.make_workbench_section_card_view(
+        owner,
+        object_name="fitting_mode_view",
+        view_module="app_desktop.views.fitting",
+        card_object_name="fitting_settings_card",
+        role="fitting",
+        title_zh="拟合模块",
+        title_en="Fitting",
+        description_zh="选择拟合模型和模型级选项。",
+        description_en="Choose the fitting model and model-level options.",
+    )
+    owner.fit_box = section.host
+    fit_layout = section.card_layout
     model_row = QHBoxLayout()
     lbl_model = QLabel("拟合模型：")
     owner._register_text(lbl_model, "拟合模型：", "Model:")

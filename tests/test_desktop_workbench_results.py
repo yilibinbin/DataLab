@@ -10,8 +10,8 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QObject, Signal
 
 from app_desktop.workbench_results import MAX_RESULT_OVERVIEW_ROWS
 
@@ -73,8 +73,16 @@ def test_result_rail_has_overview_and_data_table(qtbot: Any) -> None:
     assert not hasattr(window, "workbench_result_table")
     assert window.workbench_result_details_panel.parentWidget() is window.workbench_result_rail
     assert window.workbench_result_details_title.text() in {"结果详情", "Result details"}
+    assert window.workbench_result_details_empty_panel.parentWidget() is window.workbench_result_details_panel
     assert window.workbench_result_details_empty_label.text() in {"暂无结果详情", "No result details"}
     assert not window.workbench_result_details_empty_label.isHidden()
+    assert window.workbench_result_details_empty_panel.isVisibleTo(window.workbench_result_details_panel)
+    window._apply_language("en")
+    assert window.workbench_result_details_empty_label.text() == "No result details"
+    window._apply_language("zh")
+    assert window.workbench_result_details_empty_label.text() == "暂无结果详情"
+    assert window.workbench_result_details_empty_label.alignment() & Qt.AlignmentFlag.AlignHCenter
+    assert window.workbench_result_details_empty_label.alignment() & Qt.AlignmentFlag.AlignVCenter
     assert window.workbench_result_details_panel.property("datalab_result_detail_card") is True
     assert "QWidget#workbench_result_details_panel" in window.workbench_result_details_panel.styleSheet()
     assert window.tabs.parentWidget() is window.workbench_result_details_panel
@@ -97,6 +105,8 @@ def test_result_rail_uses_csv_state_without_hidden_table_projection(qtbot: Any) 
     assert window._csv_rows == [{"k": "2.47e-3", "y": "2.46e-6"}]
     assert window._csv_headers == ["k", "y"]
     assert "1" in window.workbench_result_overview.text()
+    assert window.workbench_result_details_empty_panel.isHidden()
+    assert window.tabs.isVisibleTo(window.workbench_result_details_panel)
 
 
 def test_result_rail_hidden_projection_stays_empty_when_result_shape_changes(qtbot: Any) -> None:
@@ -305,7 +315,7 @@ def test_result_rail_distinguishes_failed_result(qtbot: Any) -> None:
     assert window.workbench_result_overview.text() == "Calculation failed"
     assert window.workbench_result_status_badge.text() == "Failed"
     assert window.workbench_result_status_badge.property("datalab_result_status") == "failed"
-    assert window.workbench_result_details_empty_label.isHidden()
+    assert not window.workbench_result_details_empty_label.isVisible()
     assert not window.tabs.isHidden()
     assert window.result_tabs.currentIndex() == window.result_tabs_indices["log"]
 
@@ -359,7 +369,7 @@ def test_result_rail_shows_running_while_worker_is_in_flight(qtbot: Any) -> None
     assert window.workbench_result_overview.text() == "Running"
     assert window.workbench_result_status_badge.text() == "Running"
     assert window.workbench_result_status_badge.property("datalab_result_status") == "running"
-    assert window.workbench_result_details_empty_label.isHidden()
+    assert not window.workbench_result_details_empty_label.isVisible()
     assert not window.tabs.isHidden()
     assert window.result_tabs.currentIndex() == window.result_tabs_indices["log"]
 
@@ -523,7 +533,7 @@ def test_result_rail_empty_success_is_not_no_results(qtbot: Any) -> None:
     assert window.workbench_result_overview.text() == "Calculation complete; no displayable result"
     assert window.workbench_result_status_badge.text() == "Complete"
     assert window.workbench_result_status_badge.property("datalab_result_status") == "complete"
-    assert window.workbench_result_details_empty_label.isHidden()
+    assert not window.workbench_result_details_empty_label.isVisible()
     assert not window.tabs.isHidden()
     assert window.result_tabs.currentIndex() == window.result_tabs_indices["log"]
 

@@ -7,7 +7,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QFrame, QWidget  # noqa: E402
 
 from fitting.auto_models import AUTO_MODELS  # noqa: E402
 
@@ -50,6 +50,28 @@ def test_implicit_controls_exist_and_method_options(window) -> None:
         for index in range(window.implicit_method_combo.count())
     } == {"fixed_point", "root"}
     assert not window.implicit_model_widget.isHidden()
+
+
+def test_fitting_panel_uses_workbench_section_card_for_model_controls(window) -> None:
+    assert window.fit_box.objectName() == "fitting_mode_view"
+    assert window.fit_box.property("datalab_view_module") == "app_desktop.views.fitting"
+    assert window.fit_box.property("datalab_workbench_section_host") is True
+
+    card = window.fit_box.findChild(QFrame, "fitting_settings_card")
+
+    assert card is not None
+    assert card.property("datalab_workbench_section_role") == "fitting"
+    card_children = card.findChildren(QWidget)
+    for widget in (
+        window.fit_model_combo,
+        window.fit_mcmc_refine,
+        window.fit_model_hint,
+        window.inverse_power_widget,
+        window.pade_widget,
+        window.poly_degree_widget,
+        window.implicit_model_widget,
+    ):
+        assert widget.parentWidget() is card or widget.parentWidget() in card_children
 
 
 def test_implicit_ui_is_formula_first_and_generic(window) -> None:

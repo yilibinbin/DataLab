@@ -248,6 +248,7 @@ def test_formula_workspace_description_uses_schema_metadata(qtbot: Any) -> None:
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
+    window.fit_expr_edit.setPlainText("")
     window.refresh_workbench_formula_panel()
 
     description = window.workbench_formula_description_label
@@ -258,16 +259,34 @@ def test_formula_workspace_description_uses_schema_metadata(qtbot: Any) -> None:
     assert "自定义模型表达式" in description.text()
     assert description.accessibleDescription() == description.text()
 
-    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    window.fit_expr_edit.setPlainText("a*x + b")
     window.refresh_workbench_formula_panel()
 
+    assert not description.isVisibleTo(window.workbench_formula_panel)
+    assert description.property("datalab_schema_key") == "fitting.custom.expression"
+    assert "输入自定义拟合表达式" in description.toolTip()
+    assert description.accessibleDescription() == description.text()
+
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    window.root_equations_edit.setPlainText("")
+    window.refresh_workbench_formula_panel()
+
+    assert description.isVisibleTo(window.workbench_formula_panel)
     assert description.property("datalab_schema_key") == "root.equations"
     assert "输入要求解的方程" in description.text()
     assert "x^2 - A" in description.text()
 
+    window.root_equations_edit.setPlainText("x^2 - A")
+    window.refresh_workbench_formula_panel()
+
+    assert not description.isVisibleTo(window.workbench_formula_panel)
+    assert "输入要求解的方程" in description.toolTip()
+
+    window.root_equations_edit.setPlainText("")
     window._apply_language("en")
     window.refresh_workbench_formula_panel()
 
+    assert description.isVisibleTo(window.workbench_formula_panel)
     assert "Enter equations to solve" in description.text()
     assert "example: x^2 - a" in description.text().lower()
 
@@ -301,6 +320,170 @@ def test_formula_workspace_function_entry_reuses_function_help(qtbot: Any, monke
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
     window.refresh_workbench_formula_panel()
     assert button.parentWidget().objectName() == "workbench_formula_actions_root_equations_edit"
+
+
+def test_formula_workspace_action_buttons_do_not_overlap_in_english_self_consistent(
+    qtbot: Any,
+) -> None:
+    window = _window(qtbot)
+    window._apply_language("en")
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
+    window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("self_consistent"))
+    window.implicit_equation_edit.setPlainText("u - a*x")
+    window.implicit_output_edit.setPlainText("u + b")
+    window.implicit_output_edit.setFocus()
+    window.refresh_workbench_formula_panel()
+    QApplication.processEvents()
+
+    action_page = window.workbench_formula_actions_stack.currentWidget()
+    preview_button = window.implicit_output_preview_button
+    function_button = window.workbench_formula_function_button
+
+    assert action_page is preview_button.parentWidget()
+    assert action_page is function_button.parentWidget()
+    assert preview_button.isVisibleTo(action_page)
+    assert function_button.isVisibleTo(action_page)
+    assert [
+        button
+        for button in (
+            window.fit_formula_preview_button,
+            window.implicit_equation_preview_button,
+            window.implicit_output_preview_button,
+        )
+        if button.isVisibleTo(window)
+    ] == [preview_button]
+    assert window.workbench_formula_actions_stack.minimumWidth() >= action_page.sizeHint().width()
+    assert preview_button.width() >= preview_button.sizeHint().width()
+    assert function_button.width() >= function_button.sizeHint().width()
+    assert not preview_button.geometry().intersects(function_button.geometry())
+
+
+def test_formula_workspace_action_stack_width_tracks_current_page(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QHBoxLayout, QPushButton
+
+    from app_desktop.workbench_formula_panel import (
+        _CurrentPageSizeStack,
+        _formula_action_page_required_width,
+        _reserve_formula_actions_width,
+    )
+
+    class Owner:
+        pass
+
+    owner = Owner()
+    owner.workbench_formula_actions_stack = _CurrentPageSizeStack()
+    qtbot.addWidget(owner.workbench_formula_actions_stack)
+
+    wide_page = QWidget()
+    wide_layout = QHBoxLayout(wide_page)
+    wide_button = QPushButton("wide")
+    wide_button.setMinimumWidth(220)
+    wide_layout.addWidget(wide_button)
+
+    narrow_page = QWidget()
+    narrow_layout = QHBoxLayout(narrow_page)
+    narrow_button = QPushButton("narrow")
+    narrow_button.setMinimumWidth(60)
+    narrow_layout.addWidget(narrow_button)
+
+    owner.workbench_formula_actions_stack.addWidget(wide_page)
+    owner.workbench_formula_actions_stack.addWidget(narrow_page)
+
+    owner.workbench_formula_actions_stack.setCurrentWidget(wide_page)
+    _reserve_formula_actions_width(owner, wide_page)
+    wide_width = owner.workbench_formula_actions_stack.minimumWidth()
+    owner.workbench_formula_actions_stack.setCurrentWidget(narrow_page)
+    _reserve_formula_actions_width(owner, narrow_page)
+
+    assert _formula_action_page_required_width(narrow_page) < _formula_action_page_required_width(wide_page)
+    assert owner.workbench_formula_actions_stack.minimumWidth() < wide_width
+    assert owner.workbench_formula_actions_stack.minimumWidth() == _formula_action_page_required_width(narrow_page)
+    assert owner.workbench_formula_actions_stack.minimumSizeHint().width() == narrow_page.minimumSizeHint().width()
+    assert owner.workbench_formula_actions_stack.minimumSizeHint().width() < wide_page.minimumSizeHint().width()
+
+
+def test_formula_action_required_width_includes_fixed_spacers(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QHBoxLayout, QPushButton
+
+    from app_desktop.workbench_formula_panel import _formula_action_page_required_width
+
+    page = QWidget()
+    qtbot.addWidget(page)
+    layout = QHBoxLayout(page)
+    layout.setSpacing(8)
+    first = QPushButton("first")
+    first.setMinimumWidth(100)
+    second = QPushButton("second")
+    second.setMinimumWidth(120)
+    layout.addWidget(first)
+    layout.addSpacing(40)
+    layout.addWidget(second)
+    layout.activate()
+    page.adjustSize()
+
+    margins = layout.contentsMargins()
+    expected_minimum = margins.left() + margins.right() + 100 + 40 + 120 + (8 * 2)
+
+    assert _formula_action_page_required_width(page) >= expected_minimum
+
+
+def test_formula_action_required_width_uses_style_spacing_when_layout_inherits_spacing(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QHBoxLayout, QPushButton, QStyle
+
+    from app_desktop.workbench_formula_panel import _formula_action_page_required_width
+
+    page = QWidget()
+    qtbot.addWidget(page)
+    layout = QHBoxLayout(page)
+    layout.setSpacing(-1)
+    first = QPushButton("first")
+    first.setMinimumWidth(100)
+    second = QPushButton("second")
+    second.setMinimumWidth(120)
+    layout.addWidget(first)
+    layout.addWidget(second)
+    layout.activate()
+    page.adjustSize()
+
+    margins = layout.contentsMargins()
+    style_spacing = page.style().pixelMetric(QStyle.PixelMetric.PM_LayoutHorizontalSpacing, None, page)
+    if style_spacing < 0:
+        style_spacing = 6
+    expected_minimum = margins.left() + margins.right() + 100 + 120 + style_spacing
+
+    assert _formula_action_page_required_width(page) >= expected_minimum
+
+
+def test_formula_action_required_width_includes_nested_layouts(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout
+
+    from app_desktop.workbench_formula_panel import _formula_action_page_required_width
+
+    page = QWidget()
+    qtbot.addWidget(page)
+    outer_layout = QHBoxLayout(page)
+    outer_layout.setSpacing(6)
+    nested_layout = QVBoxLayout()
+    nested_button = QPushButton("nested")
+    nested_button.setMinimumWidth(140)
+    nested_layout.addWidget(nested_button)
+    sibling = QPushButton("sibling")
+    sibling.setMinimumWidth(80)
+    outer_layout.addLayout(nested_layout)
+    outer_layout.addWidget(sibling)
+    outer_layout.activate()
+    page.adjustSize()
+
+    margins = outer_layout.contentsMargins()
+    expected_minimum = (
+        margins.left()
+        + margins.right()
+        + nested_layout.minimumSize().width()
+        + sibling.minimumSizeHint().width()
+        + outer_layout.spacing()
+    )
+
+    assert _formula_action_page_required_width(page) >= expected_minimum
 
 
 def test_formula_workspace_function_entry_requires_action_page_layout(qtbot: Any) -> None:

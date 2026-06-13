@@ -570,6 +570,11 @@ class ExtrapolationWindow(
 
         _panels.refresh_workbench_config_cards(self)
 
+    def refresh_workbench_section_cards(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_section_cards(self)
+
     def refresh_workbench_data_card(self) -> None:
         from . import panels as _panels
 
@@ -1896,6 +1901,8 @@ class ExtrapolationWindow(
             self.workbench_bar.setStyleSheet(toolbar_qss)
         if hasattr(self, "refresh_workbench_config_cards"):
             self.refresh_workbench_config_cards()
+        if hasattr(self, "refresh_workbench_section_cards"):
+            self.refresh_workbench_section_cards()
         if hasattr(self, "refresh_workbench_data_card"):
             self.refresh_workbench_data_card()
         if hasattr(self, "refresh_workbench_result_overview_card"):
@@ -1946,6 +1953,8 @@ class ExtrapolationWindow(
         from app_desktop.panels import _apply_equal_column_stretch
 
         _apply_equal_column_stretch(table)
+        if hasattr(self, "refresh_workbench_data_summary"):
+            self.refresh_workbench_data_summary()
 
     def _manual_table_has_content(self) -> bool:
         table = getattr(self, "manual_table", None)

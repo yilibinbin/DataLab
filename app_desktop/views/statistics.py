@@ -2,19 +2,43 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QGroupBox, QLabel, QLineEdit
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
+    QGroupBox,
+    QLabel,
+    QLineEdit,
+)
 
 from app_desktop.ui_schema_binder import bind_choices, bind_field
 from app_desktop.ui_schema_runtime import register_schema_text_refresh
+from app_desktop.views import helpers as view_helpers
 from shared.ui_schema import ChoiceSpec, FormFieldSpec, LocalizedText
 
 
 def build_statistics_mode_view(owner: Any) -> QGroupBox:
-    stats_box = QGroupBox("统计平均设置")
-    stats_box.setProperty("datalab_view_module", "app_desktop.views.statistics")
-    owner._register_title(stats_box, "统计平均设置", "Statistics")
+    section = view_helpers.make_workbench_section_card_view(
+        owner,
+        object_name="statistics_mode_view",
+        view_module="app_desktop.views.statistics",
+        card_object_name="statistics_settings_card",
+        role="statistics",
+        title_zh="统计设置",
+        title_en="Statistics settings",
+        description_zh="选择数值列、可选的不确定度列，以及平均方式。",
+        description_en="Choose the value column, optional sigma column, and averaging mode.",
+    )
+    stats_box = section.host
+    stats_box.setProperty("datalab_statistics_panel", True)
+    card_layout = section.card_layout
 
-    stats_layout = QFormLayout(stats_box)
+    stats_layout = QFormLayout()
+    stats_layout.setContentsMargins(0, 0, 0, 0)
+    stats_layout.setSpacing(8)
+    stats_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    stats_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
     owner.stats_value_column_edit = QLineEdit("A")
     lbl_stats_value = QLabel("数值列：")
     owner._register_text(lbl_stats_value, "数值列：", "Value column:")
@@ -51,6 +75,7 @@ def build_statistics_mode_view(owner: Any) -> QGroupBox:
     lbl_stats_sample = QLabel("样本/总体：")
     owner._register_text(lbl_stats_sample, "样本/总体：", "Sample/Population:")
     stats_layout.addRow(lbl_stats_sample, owner.stats_sample_checkbox)
+    card_layout.addLayout(stats_layout)
 
     _bind_statistics_schema_fields(
         owner,

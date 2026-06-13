@@ -64,6 +64,7 @@ from app_desktop.theme import (
     result_style,
     result_tab_pane_style,
     table_style,
+    workbench_section_card_style,
 )
 from app_desktop.workbench_layout import (
     build_workbench_main_splitter,
@@ -488,6 +489,13 @@ def refresh_workbench_variable_panel(self) -> None:
 def refresh_workbench_config_cards(self) -> None:
     for section in _config_card_sections(self):
         _style_config_card(section, dark=is_dark_theme())
+
+
+def refresh_workbench_section_cards(self) -> None:
+    qss = workbench_section_card_style(dark=is_dark_theme())
+    for section in self.findChildren(QGroupBox):
+        if section.property("datalab_workbench_section_host") is True and section.styleSheet() != qss:
+            section.setStyleSheet(qss)
 
 
 def refresh_workbench_data_card(self) -> None:
@@ -1089,10 +1097,20 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.workbench_result_details_title.setObjectName("workbench_result_details_title")
     self._register_text(self.workbench_result_details_title, "结果详情", "Result details")
     details_layout.addWidget(self.workbench_result_details_title)
+    self.workbench_result_details_empty_panel = QWidget()
+    self.workbench_result_details_empty_panel.setObjectName("workbench_result_details_empty_panel")
+    empty_layout = QVBoxLayout(self.workbench_result_details_empty_panel)
+    empty_layout.setContentsMargins(8, 8, 8, 8)
+    empty_layout.setSpacing(6)
+    empty_layout.addStretch(1)
     self.workbench_result_details_empty_label = QLabel(self._tr("暂无结果详情", "No result details"))
     self.workbench_result_details_empty_label.setObjectName("workbench_result_details_empty_label")
     self.workbench_result_details_empty_label.setWordWrap(True)
-    details_layout.addWidget(self.workbench_result_details_empty_label)
+    self.workbench_result_details_empty_label.setAlignment(Qt.AlignCenter)
+    self._register_text(self.workbench_result_details_empty_label, "暂无结果详情", "No result details")
+    empty_layout.addWidget(self.workbench_result_details_empty_label)
+    empty_layout.addStretch(1)
+    details_layout.addWidget(self.workbench_result_details_empty_panel, 1)
 
     self.tabs = QTabWidget()
     self.tabs.setProperty("datalab_schema_key", "main.result_tabs")
@@ -1665,10 +1683,12 @@ def _update_data_summary(self):
         if has:
             data_rows += 1
     cols = table.columnCount()
+    row_unit = "row" if data_rows == 1 else "rows"
+    column_unit = "column" if cols == 1 else "columns"
     summary_label.setText(
         self._tr(
             f"{data_rows} 行 · {cols} 列",
-            f"{data_rows} rows · {cols} columns",
+            f"{data_rows} {row_unit} · {cols} {column_unit}",
         )
     )
 

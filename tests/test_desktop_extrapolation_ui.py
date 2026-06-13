@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFrame, QLabel, QWidget
 
 from app_desktop.ui_schema_binder import find_unbound_required_widgets
 
@@ -44,6 +44,25 @@ def test_extrapolation_method_and_help_have_schema_metadata(window: Any) -> None
 
     assert window.method_help_btn.property("datalab_schema_key") == "extrapolation.method"
     assert window.method_help_btn.toolTip()
+
+
+def test_extrapolation_panel_uses_workbench_section_card(window: Any) -> None:
+    assert window.extrap_box.objectName() == "extrapolation_mode_view"
+    assert window.extrap_box.property("datalab_view_module") == "app_desktop.views.extrapolation"
+    assert window.extrap_box.property("datalab_workbench_section_host") is True
+
+    card = window.extrap_box.findChild(QFrame, "extrapolation_settings_card")
+
+    assert card is not None
+    assert card.property("datalab_workbench_section_role") == "extrapolation"
+    card_children = card.findChildren(QWidget)
+    for widget in (
+        window.method_combo,
+        window.extrap_method_stack,
+        window.uncertainty_combo,
+        window.uncertainty_refresh_btn,
+    ):
+        assert widget.parentWidget() is card or widget.parentWidget() in card_children
 
 
 def test_extrapolation_custom_formula_controls_have_schema_metadata(window: Any) -> None:
@@ -129,6 +148,28 @@ def test_extrapolation_schema_tooltips_and_choices_refresh_with_language(window:
     assert window.method_combo.itemText(window.method_combo.findData("power_law")) == "幂律外推(三点外推)"
     assert "选择外推算法" in window.method_combo.toolTip()
     assert "重新扫描数据" in window.uncertainty_refresh_btn.toolTip()
+
+
+def test_extrapolation_custom_function_hint_refreshes_with_language(window: Any) -> None:
+    def function_hint_texts() -> list[str]:
+        return [
+            label.text()
+            for label in window.custom_formula_widget.findChildren(QLabel)
+            if "Sin[x]" in label.text() or "Cos[x]" in label.text()
+        ]
+
+    assert any(text.startswith("支持") for text in function_hint_texts())
+
+    window._apply_language("en")
+
+    english_hints = function_hint_texts()
+    assert any(text.startswith("Supports") for text in english_hints)
+    assert all("支持" not in text for text in english_hints)
+
+    window._apply_language("zh")
+
+    chinese_hints = function_hint_texts()
+    assert any(text.startswith("支持") for text in chinese_hints)
 
 
 def test_desktop_extrapolation_method_options_are_read_from_controls() -> None:

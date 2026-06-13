@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -27,10 +26,19 @@ from shared.ui_schema import ChoiceSpec, FormFieldSpec, LocalizedText
 
 
 def build_root_solving_mode_view(owner: Any) -> QGroupBox:
-    root_box = QGroupBox("求根")
-    root_box.setProperty("datalab_view_module", "app_desktop.views.root_solving")
-    owner._register_title(root_box, "求根", "Root solving")
-    root_layout = QVBoxLayout(root_box)
+    section = view_helpers.make_workbench_section_card_view(
+        owner,
+        object_name="root_solving_mode_view",
+        view_module="app_desktop.views.root_solving",
+        card_object_name="root_solving_settings_card",
+        role="root_solving",
+        title_zh="求根",
+        title_en="Root solving",
+        description_zh="设置求解模式和根的不确定度传播。",
+        description_en="Configure solve mode and root uncertainty propagation.",
+    )
+    root_box = section.host
+    root_layout = section.card_layout
 
     owner.root_equations_help_button = view_helpers.make_small_help_button()
     owner.root_formula_preview_button = view_helpers.make_formula_preview_button(

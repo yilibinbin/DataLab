@@ -33,10 +33,19 @@ from shared.ui_specs import EXTRAPOLATION_METHOD_SPECS, get_method_options
 
 
 def build_extrapolation_mode_view(owner: Any) -> QGroupBox:
-    extrap_box = QGroupBox("外推设置")
-    extrap_box.setProperty("datalab_view_module", "app_desktop.views.extrapolation")
-    owner._register_title(extrap_box, "外推设置", "Extrapolation")
-    extrap_layout = QVBoxLayout(extrap_box)
+    section = view_helpers.make_workbench_section_card_view(
+        owner,
+        object_name="extrapolation_mode_view",
+        view_module="app_desktop.views.extrapolation",
+        card_object_name="extrapolation_settings_card",
+        role="extrapolation",
+        title_zh="外推设置",
+        title_en="Extrapolation",
+        description_zh="选择外推方法、参数和不确定度参考列。",
+        description_en="Choose the extrapolation method, parameters, and uncertainty reference column.",
+    )
+    extrap_box = section.host
+    extrap_layout = section.card_layout
 
     method_layout = QHBoxLayout()
     method_label = QLabel("外推方法：")
@@ -127,6 +136,12 @@ def build_extrapolation_mode_view(owner: Any) -> QGroupBox:
             "Supports Sin[x], Cos[x], Log[x], Exp[x], Sqrt[x]; use A/B/C, headers, or x1/x2.",
         )
     )
+    owner._register_text(
+        hint_lbl,
+        "支持 Sin[x], Cos[x], Log[x], Exp[x], Sqrt[x]，可用 A/B/C、列名或 x1/x2。",
+        "Supports Sin[x], Cos[x], Log[x], Exp[x], Sqrt[x]; use A/B/C, headers, or x1/x2.",
+    )
+    owner.custom_formula_function_hint_label = hint_lbl
     hint_lbl.setWordWrap(True)
     hint_lbl.setStyleSheet(workbench_muted_text_style())
     custom_hint_row.addWidget(hint_lbl)

@@ -27,10 +27,19 @@ from shared.ui_schema import ChoiceSpec, FormFieldSpec, LocalizedText
 
 
 def build_error_mode_view(owner: Any) -> QGroupBox:
-    error_box = QGroupBox("误差传递设置")
-    error_box.setProperty("datalab_view_module", "app_desktop.views.error")
-    owner._register_title(error_box, "误差传递设置", "Error propagation")
-    error_layout = QVBoxLayout(error_box)
+    section = view_helpers.make_workbench_section_card_view(
+        owner,
+        object_name="error_mode_view",
+        view_module="app_desktop.views.error",
+        card_object_name="error_settings_card",
+        role="error",
+        title_zh="误差传递设置",
+        title_en="Error propagation",
+        description_zh="输入公式、常数和不确定度传播方法。",
+        description_en="Enter the formula, constants, and uncertainty propagation method.",
+    )
+    error_box = section.host
+    error_layout = section.card_layout
 
     owner.error_formula_preview_button = view_helpers.make_formula_preview_button(
         owner,

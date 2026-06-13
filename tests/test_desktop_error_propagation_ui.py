@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QLineEdit, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QLineEdit, QWidget
 
 from app_desktop.ui_schema_binder import find_unbound_required_widgets
 
@@ -39,6 +39,25 @@ def test_error_formula_and_help_controls_have_schema_metadata(window: Any) -> No
 
     assert window.func_help_btn.property("datalab_schema_key") == "error.functions"
     assert window.func_help_btn.toolTip()
+
+
+def test_error_panel_uses_workbench_section_card(window: Any) -> None:
+    assert window.error_box.objectName() == "error_mode_view"
+    assert window.error_box.property("datalab_view_module") == "app_desktop.views.error"
+    assert window.error_box.property("datalab_workbench_section_host") is True
+
+    card = window.error_box.findChild(QFrame, "error_settings_card")
+
+    assert card is not None
+    assert card.property("datalab_workbench_section_role") == "error"
+    card_children = card.findChildren(QWidget)
+    for widget in (
+        window.constants_widget,
+        window.error_method_combo,
+        window.error_taylor_widget,
+        window.error_mc_widget,
+    ):
+        assert widget.parentWidget() is card or widget.parentWidget() in card_children
 
 
 def test_error_constants_controls_have_schema_metadata_and_help(window: Any) -> None:

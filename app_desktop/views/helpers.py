@@ -1,13 +1,32 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHeaderView, QLabel, QPushButton, QTableWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QGroupBox,
+    QHeaderView,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QTableWidget,
+    QVBoxLayout,
+)
 
 from app_desktop.formula_preview import open_formula_preview_dialog
-from app_desktop.theme import table_style
+from app_desktop.theme import table_style, workbench_section_card_style
 from shared.ui_schema import FormFieldSpec
+
+
+@dataclass(frozen=True)
+class WorkbenchSectionCardView:
+    host: QGroupBox
+    card: QFrame
+    card_layout: QVBoxLayout
+    title_label: QLabel
+    description_label: QLabel
 
 
 def apply_equal_column_stretch(table: QTableWidget) -> None:
@@ -73,6 +92,63 @@ def make_small_help_button() -> QPushButton:
     button.setFocusPolicy(Qt.NoFocus)
     button.setFixedWidth(24)
     return button
+
+
+def make_workbench_section_card_view(
+    owner: Any,
+    *,
+    object_name: str,
+    view_module: str,
+    card_object_name: str,
+    role: str,
+    title_zh: str,
+    title_en: str,
+    description_zh: str = "",
+    description_en: str = "",
+    maximum_height: int | None = None,
+) -> WorkbenchSectionCardView:
+    host = QGroupBox()
+    host.setObjectName(object_name)
+    host.setProperty("datalab_view_module", view_module)
+    host.setProperty("datalab_workbench_section_host", True)
+    host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+    if maximum_height is not None:
+        host.setMaximumHeight(maximum_height)
+    host.setStyleSheet(workbench_section_card_style())
+
+    outer_layout = QVBoxLayout(host)
+    outer_layout.setContentsMargins(0, 0, 0, 0)
+    outer_layout.setSpacing(0)
+
+    card = QFrame()
+    card.setObjectName(card_object_name)
+    card.setProperty("datalab_workbench_section_card", True)
+    card.setProperty("datalab_workbench_section_role", role)
+    card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+    card_layout = QVBoxLayout(card)
+    card_layout.setContentsMargins(12, 10, 12, 12)
+    card_layout.setSpacing(8)
+
+    title_label = QLabel(_translate_owner(owner, title_zh, title_en))
+    title_label.setProperty("datalab_workbench_section_title", True)
+    owner._register_text(title_label, title_zh, title_en)
+    card_layout.addWidget(title_label)
+
+    description_label = QLabel(_translate_owner(owner, description_zh, description_en))
+    description_label.setProperty("datalab_workbench_section_description", True)
+    description_label.setWordWrap(True)
+    description_label.setVisible(bool(description_zh or description_en))
+    owner._register_text(description_label, description_zh, description_en)
+    card_layout.addWidget(description_label)
+
+    outer_layout.addWidget(card)
+    return WorkbenchSectionCardView(
+        host=host,
+        card=card,
+        card_layout=card_layout,
+        title_label=title_label,
+        description_label=description_label,
+    )
 
 
 class HeaderRegistration:
@@ -162,10 +238,12 @@ __all__ = [
     "get_table_style",
     "make_formula_preview_button",
     "make_small_help_button",
+    "make_workbench_section_card_view",
     "open_formula_preview",
     "remove_detected_rows_table_rows",
     "remove_parameter_table_rows",
     "register_constant_headers",
     "register_schema_label_refresh",
     "register_table_headers",
+    "WorkbenchSectionCardView",
 ]

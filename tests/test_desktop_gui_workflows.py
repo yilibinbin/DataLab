@@ -12,7 +12,7 @@ pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QTableWidgetItem
 
 
 @pytest.fixture  # type: ignore[untyped-decorator]
@@ -55,6 +55,24 @@ def _click_run_and_wait(qtbot: Any, window: Any, *, timeout: int = 10000) -> Non
 
 def _result_text(window: Any) -> str:
     return window.result_edit.toPlainText()
+
+
+def test_mode_switch_refreshes_manual_data_summary_columns(window: Any) -> None:
+    window._apply_language("en")
+
+    _select_mode(window, "root_solving")
+    assert window.manual_table.columnCount() == 1
+    assert window.manual_data_summary.text() == "0 rows · 1 column"
+    window.manual_table.setItem(0, 0, QTableWidgetItem("4"))
+    window.refresh_workbench_data_summary()
+    assert window.manual_data_summary.text() == "1 row · 1 column"
+    window.manual_table.item(0, 0).setText("")
+    window.refresh_workbench_data_summary()
+
+    _select_mode(window, "statistics")
+
+    assert window.manual_table.columnCount() == 3
+    assert window.manual_data_summary.text() == "0 rows · 3 columns"
 
 
 def test_extrapolation_click_workflow_en(window: Any, qtbot: Any) -> None:

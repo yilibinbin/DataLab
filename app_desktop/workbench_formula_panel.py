@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QEvent, QObject, QTimer
+from PySide6.QtCore import QEvent, QObject, QSize, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -48,6 +50,18 @@ _PREVIEW_LANGUAGES: tuple[InputLanguage, ...] = (
 )
 
 
+class _CurrentPageSizeStack(QStackedWidget):
+    """Stack whose layout footprint follows the visible action page."""
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override name
+        current = self.currentWidget()
+        return current.sizeHint() if current is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override name
+        current = self.currentWidget()
+        return current.minimumSizeHint() if current is not None else super().minimumSizeHint()
+
+
 def build_formula_workspace_panel(owner: Any) -> QWidget:
     panel = QWidget()
     panel.setObjectName("workbench_formula_panel")
@@ -72,11 +86,11 @@ def build_formula_workspace_panel(owner: Any) -> QWidget:
     owner.workbench_formula_panel_title.setStyleSheet(workbench_title_text_style())
     title_layout.addWidget(owner.workbench_formula_panel_title, 1)
 
-    owner.workbench_formula_actions_stack = QStackedWidget()
+    owner.workbench_formula_actions_stack = _CurrentPageSizeStack()
     owner.workbench_formula_actions_stack.setObjectName("workbench_formula_actions_stack")
     owner.workbench_formula_actions_stack.setMaximumHeight(WORKBENCH_FORMULA_TITLE_ROW_MAX_HEIGHT)
     owner.workbench_formula_actions_stack.setSizePolicy(
-        QSizePolicy.Policy.Maximum,
+        QSizePolicy.Policy.Minimum,
         QSizePolicy.Policy.Maximum,
     )
     owner.workbench_formula_empty_actions_page = QWidget()
@@ -92,6 +106,7 @@ def build_formula_workspace_panel(owner: Any) -> QWidget:
     owner.workbench_formula_function_button.clicked.connect(lambda: owner._show_error_functions())
     _localize_function_button(owner)
     empty_actions_layout.addWidget(owner.workbench_formula_function_button)
+    _reserve_formula_actions_width(owner, owner.workbench_formula_empty_actions_page)
     layout.addWidget(title_row)
 
     owner.workbench_formula_language_row = QWidget()
@@ -456,13 +471,16 @@ def refresh_formula_workspace_panel(owner: Any) -> None:
 
     if panel is not None:
         panel.setVisible(True)
-    _show_formula_function_button(owner, True)
     language = _formula_language_for_mount(owner, mount)
     _sync_formula_language_controls(owner, mount)
     editor = getattr(owner, mount.editor_attr)
     if title is not None:
         title.setText(_formula_panel_title(owner, mode))
     _show_formula_actions(owner, mount)
+    _show_formula_function_button(owner, True)
+    actions_stack = getattr(owner, "workbench_formula_actions_stack", None)
+    if actions_stack is not None:
+        _reserve_formula_actions_width(owner, actions_stack.currentWidget())
     _set_formula_description(owner, mount)
     text = editor.toPlainText().strip() if hasattr(editor, "toPlainText") else editor.text().strip()
     result = update_formula_preview_with_empty_text(
@@ -585,7 +603,18 @@ def _set_formula_description(owner: Any, mount: FormulaMount | None) -> None:
     label.setText(text)
     label.setToolTip(text)
     label.setAccessibleDescription(text)
-    label.setVisible(bool(text))
+    formula_text = _formula_editor_text(editor)
+    label.setVisible(bool(text) and not formula_text)
+
+
+def _formula_editor_text(editor: QWidget | None) -> str:
+    if editor is None:
+        return ""
+    if hasattr(editor, "toPlainText"):
+        return str(editor.toPlainText()).strip()
+    if hasattr(editor, "text"):
+        return str(editor.text()).strip()
+    return ""
 
 
 def _formula_description_text(owner: Any, editor: QWidget | None) -> str:
@@ -687,17 +716,20 @@ def _show_formula_actions(owner: Any, mount: FormulaMount | None) -> None:
         if empty_page is not None:
             _attach_formula_function_button(owner, empty_page)
             stack.setCurrentWidget(empty_page)
+            _reserve_formula_actions_width(owner, empty_page)
         return
     pages = getattr(owner, "_workbench_formula_action_pages", {})
     page = pages.get(mount.editor_attr)
     if page is not None:
         _attach_formula_function_button(owner, page)
         stack.setCurrentWidget(page)
+        _reserve_formula_actions_width(owner, page)
         return
     empty_page = getattr(owner, "workbench_formula_empty_actions_page", None)
     if empty_page is not None:
         _attach_formula_function_button(owner, empty_page)
         stack.setCurrentWidget(empty_page)
+        _reserve_formula_actions_width(owner, empty_page)
 
 
 def _attach_formula_function_button(owner: Any, page: QWidget) -> None:
@@ -708,9 +740,81 @@ def _attach_formula_function_button(owner: Any, page: QWidget) -> None:
     if layout is None:
         raise RuntimeError("Formula action page has no layout")
     if layout.indexOf(button) >= 0:
+        _reserve_formula_actions_width(owner, page)
         return
     _remove_from_parent_layout(button)
     layout.addWidget(button)
+    _reserve_formula_actions_width(owner, page)
+
+
+def _reserve_formula_actions_width(owner: Any, page: QWidget) -> None:
+    stack = getattr(owner, "workbench_formula_actions_stack", None)
+    if stack is None:
+        return
+    layout = page.layout()
+    if layout is not None:
+        layout.activate()
+    page.adjustSize()
+    required_width = _formula_action_page_required_width(page)
+    if required_width <= 0:
+        return
+    _clear_other_formula_action_page_minimums(stack, page)
+    page.setMinimumWidth(required_width)
+    stack.setMinimumWidth(required_width)
+    stack.updateGeometry()
+
+
+def _clear_other_formula_action_page_minimums(stack: QStackedWidget, current_page: QWidget) -> None:
+    for index in range(stack.count()):
+        candidate = stack.widget(index)
+        if candidate is not None and candidate is not current_page:
+            candidate.setMinimumWidth(0)
+
+
+def _formula_action_page_required_width(page: QWidget) -> int:
+    layout = page.layout()
+    if layout is None:
+        return page.sizeHint().width()
+    margins = layout.contentsMargins()
+    required_width = margins.left() + margins.right()
+    visible_items = 0
+    for index in range(layout.count()):
+        item = layout.itemAt(index)
+        if item is None:
+            continue
+        widget = item.widget()
+        if widget is not None and not widget.isHidden():
+            hint = widget.sizeHint()
+            minimum_hint = widget.minimumSizeHint()
+            required_width += max(hint.width(), minimum_hint.width(), widget.minimumWidth())
+            visible_items += 1
+            continue
+        spacer = item.spacerItem()
+        if spacer is not None:
+            required_width += spacer.minimumSize().width()
+            visible_items += 1
+            continue
+        nested_layout = item.layout()
+        if nested_layout is not None:
+            required_width += max(
+                nested_layout.minimumSize().width(),
+                nested_layout.sizeHint().width(),
+            )
+            visible_items += 1
+    if visible_items > 1:
+        required_width += _effective_layout_spacing(layout, page) * (visible_items - 1)
+    return max(required_width, page.sizeHint().width())
+
+
+def _effective_layout_spacing(layout: QLayout, page: QWidget) -> int:
+    spacing = layout.spacing()
+    if spacing >= 0:
+        return spacing
+    style = page.style() or QApplication.style()
+    pixel_spacing = style.pixelMetric(QStyle.PixelMetric.PM_LayoutHorizontalSpacing, None, page)
+    if pixel_spacing >= 0:
+        return pixel_spacing
+    return 6
 
 
 def _formula_editor_available(owner: Any, editor: QWidget | None) -> bool:

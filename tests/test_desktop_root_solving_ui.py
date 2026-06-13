@@ -11,7 +11,7 @@ pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QFrame, QPushButton, QWidget
 
 from app_desktop.ui_schema_binder import find_unbound_required_widgets
 
@@ -92,6 +92,24 @@ def test_root_solving_page_has_required_widgets(window: Any) -> None:
     assert window.root_detect_unknowns_button.toolTip()
     assert window.root_add_unknown_button.toolTip()
     assert window.root_remove_unknown_button.toolTip()
+
+
+def test_root_panel_uses_workbench_section_card_for_mode_controls(window: Any) -> None:
+    assert window.root_box.objectName() == "root_solving_mode_view"
+    assert window.root_box.property("datalab_view_module") == "app_desktop.views.root_solving"
+    assert window.root_box.property("datalab_workbench_section_host") is True
+
+    card = window.root_box.findChild(QFrame, "root_solving_settings_card")
+
+    assert card is not None
+    assert card.property("datalab_workbench_section_role") == "root_solving"
+    card_children = card.findChildren(QWidget)
+    for widget in (
+        window.root_mode_combo,
+        window.root_uncertainty_group,
+        window.root_uncertainty_method_combo,
+    ):
+        assert widget.parentWidget() is card or widget.parentWidget() in card_children
 
 
 def test_root_controls_have_schema_bindings(window: Any) -> None:

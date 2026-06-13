@@ -102,6 +102,16 @@ def test_screenshot_manifest_includes_common_workbench_panels(tmp_path) -> None:
         if has_variables:
             assert variable_metric["width"] >= 160
             assert variable_metric["height"] >= 48
+            canvas_metric = regions["workbench_workspace_canvas"]
+            visible_variable_height = max(
+                0,
+                min(
+                    variable_metric["y"] + variable_metric["height"],
+                    canvas_metric["y"] + canvas_metric["height"],
+                )
+                - max(variable_metric["y"], canvas_metric["y"]),
+            )
+            assert visible_variable_height >= 160
 
 
 def test_screen_scenario_refreshes_formula_preview_without_waiting_for_debounce(qtbot) -> None:
