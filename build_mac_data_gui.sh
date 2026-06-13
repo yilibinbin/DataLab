@@ -12,6 +12,7 @@ ENTRY_FILE="$PROJECT_ROOT/data_extrapolation_gui.py"
 APP_NAME="DataLab"
 BUILD_ROOT="${DATALAB_MAC_BUILD_ROOT:-$PROJECT_ROOT/build/macos_gui_build}"
 VENV_PATH="$BUILD_ROOT/venv"
+REUSE_MAC_VENV="${DATALAB_REUSE_MAC_VENV:-0}"
 ICON_SOURCE="$PROJECT_ROOT/DataLab.png"
 ICONSET_DIR="$BUILD_ROOT/app_icon.iconset"
 MAC_ICON="$BUILD_ROOT/app_icon.icns"
@@ -22,7 +23,15 @@ export MACOSX_DEPLOYMENT_TARGET="$DEPLOY_TARGET"
 PYTHON_BIN="${PYTHON_BIN_OVERRIDE:-}"
 
 echo "[1/4] Preparing build workspace..."
-rm -rf "$BUILD_ROOT"
+if [[ "$REUSE_MAC_VENV" == "1" ]]; then
+  if [[ ! -x "$VENV_PATH/bin/python" ]]; then
+    echo "[error] DATALAB_REUSE_MAC_VENV=1 but no reusable venv exists at $VENV_PATH"
+    exit 1
+  fi
+  echo "[info] Reusing existing build venv: $VENV_PATH"
+else
+  rm -rf "$BUILD_ROOT"
+fi
 mkdir -p "$BUILD_ROOT"
 
 check_python_target() {
@@ -79,13 +88,32 @@ else
   bootstrap_standalone_python
 fi
 
-"$PYTHON_BIN" -m venv "$VENV_PATH"
+if [[ "$REUSE_MAC_VENV" != "1" ]]; then
+  "$PYTHON_BIN" -m venv "$VENV_PATH"
+fi
 source "$VENV_PATH/bin/activate"
 
-echo "[2/4] Installing Python dependencies..."
-pip install --upgrade pip wheel
-pip install -r "$PROJECT_ROOT/gui_requirements.txt"
-pip install pyinstaller
+if [[ "$REUSE_MAC_VENV" == "1" ]]; then
+  echo "[2/4] Reusing Python dependencies..."
+  python - <<'PY'
+import importlib.util
+import sys
+
+missing = [
+    name
+    for name in ("PyInstaller", "PySide6", "scipy", "matplotlib", "numpy")
+    if importlib.util.find_spec(name) is None
+]
+if missing:
+    raise SystemExit(f"Reusable build venv is missing: {', '.join(missing)}")
+print("Reusable build venv dependency check passed.")
+PY
+else
+  echo "[2/4] Installing Python dependencies..."
+  pip install --upgrade pip wheel
+  pip install -r "$PROJECT_ROOT/gui_requirements.txt"
+  pip install pyinstaller
+fi
 
 ICON_FLAG=()
 if [[ -f "$ICON_SOURCE" ]]; then
