@@ -27,12 +27,14 @@ from fitting import (
 )
 
 from .common import (
+    _core_failure_message,
     _encode_b64,
     _format_number,
     _format_with_precision,
     _generate_csv_from_rows,
     _is_checked,
     _latex_to_plain,
+    _merged_core_warnings,
     _norm_token,
     _parse_int,
 )
@@ -822,10 +824,9 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
         )
         core_result = create_core_session_service().submit(request)
         if core_result.status is not ResultStatus.SUCCEEDED:
-            message = str(core_result.payload.get("message") or "Fitting failed.")
-            raise ValueError(message)
+            raise ValueError(_core_failure_message(core_result.payload, "Fitting failed."))
         fit_res = fitting_payload_to_fit_result(core_result.payload["fit_result"])
-        warnings.extend(core_result.payload.get("warnings") or core_result.warnings)
+        warnings.extend(_merged_core_warnings(core_result.payload, core_result.warnings))
         expression_for_csv = str(core_result.payload.get("expression") or model_expr)
         params = _collect_params(fit_res)
         metrics = _collect_metrics(fit_res)

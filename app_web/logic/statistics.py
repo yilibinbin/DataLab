@@ -19,6 +19,7 @@ from data_extrapolation_latex_latest import (
 from statistics_utils import generate_statistics_latex
 
 from .common import (
+    _core_failure_message,
     _encode_b64,
     _format_number,
     _format_with_precision,
@@ -213,8 +214,7 @@ def _run_statistics(data_text: str, form, lang: str = "zh") -> StatsResultBundle
         except Exception as exc:  # noqa: BLE001 - preserve the web form error boundary.
             raise ValueError(str(exc)) from exc
         if core_result.status is not ResultStatus.SUCCEEDED:
-            message = str(core_result.payload.get("message") or "Statistics failed.")
-            raise ValueError(message)
+            raise ValueError(_core_failure_message(core_result.payload, "Statistics failed."))
         stats_result = statistics_payload_to_compute_result(
             core_result.payload,
             core_result.warnings,

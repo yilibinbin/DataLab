@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 import threading
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from mpmath import mp
@@ -417,6 +419,100 @@ def test_web_fitting_logic_uses_core_request_builder_and_handler(monkeypatch):
     assert result.metrics
     assert result.mp_precision == 80
     assert "\\begin" in result.latex_text
+
+
+def test_web_statistics_core_failure_without_payload_uses_default_message(monkeypatch):
+    from datalab_core.results import ResultStatus
+
+    import app_web.logic.statistics as stats_logic
+
+    class FakeService:
+        def submit(self, request):  # noqa: ARG002 - fake service boundary.
+            return SimpleNamespace(status=ResultStatus.FAILED, payload=None, warnings=())
+
+    monkeypatch.setattr(stats_logic, "create_core_session_service", lambda: FakeService(), raising=False)
+
+    with pytest.raises(ValueError, match=r"^Statistics failed\.$"):
+        stats_logic._run_statistics(
+            "A\n1\n2\n3\n",
+            {
+                "stats_mode": "mean_sample",
+                "stats_mp_precision": "80",
+            },
+            lang="en",
+        )
+
+
+def test_web_extrapolation_core_failure_without_payload_uses_default_message(monkeypatch):
+    from datalab_core.results import ResultStatus
+
+    import app_web.logic.extrapolation as extrap_logic
+
+    class FakeService:
+        def submit(self, request):  # noqa: ARG002 - fake service boundary.
+            return SimpleNamespace(status=ResultStatus.FAILED, payload=None, warnings=())
+
+    monkeypatch.setattr(extrap_logic, "create_core_session_service", lambda: FakeService(), raising=False)
+
+    with pytest.raises(ValueError, match=r"^Extrapolation failed\.$"):
+        extrap_logic._run_extrapolation(
+            "A B C\n1 2 3\n",
+            {
+                "method": "quadratic",
+                "mp_precision": "80",
+            },
+            lang="en",
+        )
+
+
+def test_web_fitting_core_failure_without_payload_uses_default_message(monkeypatch):
+    from datalab_core.results import ResultStatus
+
+    import app_web.logic.fitting as fit_logic
+
+    class FakeService:
+        def submit(self, request):  # noqa: ARG002 - fake service boundary.
+            return SimpleNamespace(status=ResultStatus.FAILED, payload=None, warnings=())
+
+    monkeypatch.setattr(fit_logic, "create_core_session_service", lambda: FakeService(), raising=False)
+
+    with pytest.raises(ValueError, match=r"^Fitting failed\.$"):
+        fit_logic._run_fit(
+            "x y\n0 1\n1 3\n2 5\n3 7\n",
+            {
+                "fit_mode": "polynomial",
+                "fit_poly_degree": "1",
+                "fit_mp_precision": "80",
+            },
+        )
+
+
+def test_web_fitting_merges_payload_and_envelope_warnings(monkeypatch):
+    from datalab_core.fitting import run_fitting as real_run_fitting
+
+    import app_web.logic.fitting as fit_logic
+
+    class FakeService:
+        def submit(self, request):
+            result = real_run_fitting(request)
+            return replace(
+                result,
+                payload={**result.payload, "warnings": ["payload warning"]},
+                warnings=("envelope warning",),
+            )
+
+    monkeypatch.setattr(fit_logic, "create_core_session_service", lambda: FakeService(), raising=False)
+
+    result = fit_logic._run_fit(
+        "x y\n0 1\n1 3\n2 5\n3 7\n",
+        {
+            "fit_mode": "polynomial",
+            "fit_poly_degree": "1",
+            "fit_mp_precision": "80",
+        },
+    )
+
+    assert result.warnings == ["payload warning", "envelope warning"]
 
 
 def test_web_statistics_formats_result_inside_selected_precision_guard(monkeypatch):

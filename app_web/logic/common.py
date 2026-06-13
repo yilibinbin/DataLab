@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Mapping as MappingABC
 from decimal import Decimal, InvalidOperation
 import io
 import re
@@ -12,6 +13,7 @@ from shared.bilingual import _dual_msg
 
 if TYPE_CHECKING:
     import mpmath as mp
+    from collections.abc import Mapping, Sequence
 
 
 def _mp_math():
@@ -248,3 +250,33 @@ def _format_rows(
 
 def _encode_b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
+
+
+def _core_payload_mapping(payload: object) -> Mapping[str, object]:
+    """Return core envelope payload when it is mapping-like, otherwise empty."""
+    if isinstance(payload, MappingABC):
+        return payload
+    return {}
+
+
+def _core_failure_message(payload: object, default: str) -> str:
+    """Extract a core failure message without assuming payload shape."""
+    return str(_core_payload_mapping(payload).get("message") or default)
+
+
+def _merged_core_warnings(
+    payload: object,
+    result_warnings: Sequence[str] | None,
+) -> list[str]:
+    """Merge payload and envelope warnings without dropping either source."""
+    merged: list[str] = []
+    payload_warnings = _core_payload_mapping(payload).get("warnings")
+    if isinstance(payload_warnings, str):
+        merged.append(payload_warnings)
+    else:
+        try:
+            merged.extend(str(item) for item in (payload_warnings or ()))
+        except TypeError:
+            pass
+    merged.extend(str(item) for item in (result_warnings or ()))
+    return merged

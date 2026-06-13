@@ -25,6 +25,7 @@ from extrapolation_methods import PowerLawConfig
 from shared.extrapolation_engine import parse_extrapolation_string
 
 from .common import (
+    _core_failure_message,
     _encode_b64,
     _format_rows,
     _generate_csv_from_rows,
@@ -222,8 +223,7 @@ def _run_extrapolation(data_text: str, form, lang: str = "zh") -> ExtrapolationR
         )
         core_result = create_core_session_service().submit(request)
         if core_result.status is not ResultStatus.SUCCEEDED:
-            message = str(core_result.payload.get("message") or "Extrapolation failed.")
-            raise ValueError(message)
+            raise ValueError(_core_failure_message(core_result.payload, "Extrapolation failed."))
         data_rows = extrapolation_payload_to_rows(core_result.payload)
         raw_results = extrapolation_payload_to_results(core_result.payload)
         warnings = [*options.warnings, *core_result.warnings]
