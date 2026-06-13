@@ -7,15 +7,19 @@ from pathlib import Path
 import mpmath as mp
 
 from .._security_shim import compile_latex_safe, mpmath_synchronized, validate_latex_engine
+from datalab_core.results import ResultStatus
+from datalab_core.service_factory import create_core_session_service
+from datalab_core.statistics import build_statistics_requests, statistics_payload_to_compute_result
 
 from data_extrapolation_latex_latest import (
     _dual_msg,
     _precision_guard,
     format_result_with_uncertainty_latex,
 )
-from statistics_utils import compute_statistics, generate_statistics_latex
+from statistics_utils import generate_statistics_latex
 
 from .common import (
+    _core_failure_message,
     _encode_b64,
     _format_number,
     _format_with_precision,
@@ -61,9 +65,10 @@ def _parse_stats_data(text: str):
                 "Statistics data requires a header and at least one data row.",
             )
         )
-    headers = lines[0].split()
-    if len(headers) < 1:
+    raw_headers = lines[0].split()
+    if len(raw_headers) < 1:
         raise ValueError(_dual_msg("表头至少需要一列。", "Table header must contain at least one column."))
+    headers = [raw_headers[0]]
 
     values: list[mp.mpf] = []
     sigmas: list[mp.mpf | None] = []
@@ -185,15 +190,34 @@ def _run_statistics(data_text: str, form, lang: str = "zh") -> StatsResultBundle
     use_sample = _is_checked(form, "stats_use_sample", default=False)
     use_weighted_variance = _is_checked(form, "stats_use_weighted_variance", default=False)
 
-    headers, values, sigmas, data_rows, sigma_rows = _parse_stats_data(data_text)
     warnings: list[str] = []
-    with _precision_guard(mp_precision):
-        stats_result = compute_statistics(
-            values,
-            sigmas,
-            stats_mode,
-            use_sample=use_sample,
-            use_weighted_variance=use_weighted_variance,
+    with _precision_guard(mp_precision) as applied_precision:
+        headers, values, sigmas, data_rows, sigma_rows = _parse_stats_data(data_text)
+        value_col = headers[0] if headers else "value"
+        try:
+            core_batches = build_statistics_requests(
+                headers=(value_col,),
+                rows=data_rows,
+                sigma_rows=sigma_rows,
+                value_col=value_col,
+                stats_mode=stats_mode,
+                use_sample=use_sample,
+                use_weighted_variance=use_weighted_variance,
+                precision_digits=applied_precision,
+                uncertainty_digits=result_digits,
+                request_id_prefix="web-statistics",
+            )
+        except Exception as exc:  # noqa: BLE001 - preserve the web form error boundary.
+            raise ValueError(str(exc)) from exc
+        try:
+            core_result = create_core_session_service().submit(core_batches[0].request)
+        except Exception as exc:  # noqa: BLE001 - preserve the web form error boundary.
+            raise ValueError(str(exc)) from exc
+        if core_result.status is not ResultStatus.SUCCEEDED:
+            raise ValueError(_core_failure_message(core_result.payload, "Statistics failed."))
+        stats_result = statistics_payload_to_compute_result(
+            core_result.payload,
+            core_result.warnings,
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             tex_path = Path(tmpdir) / "stats.tex"
@@ -211,23 +235,59 @@ def _run_statistics(data_text: str, form, lang: str = "zh") -> StatsResultBundle
             )
             latex_text = tex_path.read_text(encoding="utf-8")
 
-    mean_latex = ""
-    try:
-        mean_val = stats_result.get("mean")
-        std_mean = stats_result.get("std_mean")
-        if mean_val is not None and std_mean is not None:
-            latex = format_result_with_uncertainty_latex(mean_val, std_mean, result_digits)
-            mean_latex = _latex_to_plain(latex) if latex else ""
-    except Exception:
+    with _precision_guard(applied_precision):
         mean_latex = ""
+        try:
+            mean_val = stats_result.get("mean")
+            std_mean = stats_result.get("std_mean")
+            if mean_val is not None and std_mean is not None:
+                latex = format_result_with_uncertainty_latex(mean_val, std_mean, result_digits)
+                mean_latex = _latex_to_plain(latex) if latex else ""
+        except Exception:
+            mean_latex = ""
 
-    display_result: dict[str, object] = {}
-    for key, val in stats_result.items():
-        if isinstance(val, mp.mpf):
-            display_result[key] = _format_number(val, 12)
-        else:
-            display_result[key] = val
-    display_result["mean_latex"] = mean_latex
+        display_result: dict[str, object] = {}
+        for key, val in stats_result.items():
+            if isinstance(val, mp.mpf):
+                display_result[key] = _format_number(val, 12)
+            else:
+                display_result[key] = val
+        display_result["mean_latex"] = mean_latex
+
+        plot_b64 = None
+        if generate_plots and values:
+            plot_bytes = _render_statistics_plot(values, sigmas, stats_result, lang=lang)
+            if plot_bytes:
+                plot_b64 = _encode_b64(plot_bytes)
+
+        csv_data = None
+        stats_rows = _format_statistics_rows(stats_result, len(values), mp_precision)
+        if stats_rows:
+            csv_headers = ["metric", "value", "uncertainty"]
+            csv_data = _generate_csv_from_rows(stats_rows, headers=csv_headers)
+
+        raw_csv_data = None
+        if data_rows and headers:
+            raw_rows = []
+            has_sigma = sigmas and any(sigma_row and any(s is not None for s in sigma_row) for sigma_row in sigma_rows)
+
+            for idx, row in enumerate(data_rows, 1):
+                csv_row: dict[str, object] = {"index": idx}
+                for h_idx, header in enumerate(headers):
+                    if h_idx < len(row):
+                        csv_row[header] = _format_with_precision(row[h_idx], mp_precision)
+                if has_sigma and idx <= len(sigma_rows):
+                    sigma_row = sigma_rows[idx - 1]
+                    for h_idx, header in enumerate(headers):
+                        if sigma_row and h_idx < len(sigma_row) and sigma_row[h_idx] is not None:
+                            csv_row[f"{header}_sigma"] = _format_with_precision(sigma_row[h_idx], mp_precision)
+                raw_rows.append(csv_row)
+
+            if raw_rows:
+                raw_headers = ["index"] + list(headers)
+                if has_sigma:
+                    raw_headers += [f"{h}_sigma" for h in headers]
+                raw_csv_data = _generate_csv_from_rows(raw_rows, headers=raw_headers)
 
     pdf_b64 = None
     if compile_pdf:
@@ -235,41 +295,6 @@ def _run_statistics(data_text: str, form, lang: str = "zh") -> StatsResultBundle
         pdf_bytes = compile_latex_safe(latex_text, validated_engine, warnings, "stats")
         if pdf_bytes:
             pdf_b64 = _encode_b64(pdf_bytes)
-
-    plot_b64 = None
-    if generate_plots and values:
-        plot_bytes = _render_statistics_plot(values, sigmas, stats_result, lang=lang)
-        if plot_bytes:
-            plot_b64 = _encode_b64(plot_bytes)
-
-    csv_data = None
-    stats_rows = _format_statistics_rows(stats_result, len(values), mp_precision)
-    if stats_rows:
-        csv_headers = ["metric", "value", "uncertainty"]
-        csv_data = _generate_csv_from_rows(stats_rows, headers=csv_headers)
-
-    raw_csv_data = None
-    if data_rows and headers:
-        raw_rows = []
-        has_sigma = sigmas and any(sigma_row and any(s is not None for s in sigma_row) for sigma_row in sigma_rows)
-
-        for idx, row in enumerate(data_rows, 1):
-            csv_row: dict[str, object] = {"index": idx}
-            for h_idx, header in enumerate(headers):
-                if h_idx < len(row):
-                    csv_row[header] = _format_with_precision(row[h_idx], mp_precision)
-            if has_sigma and idx <= len(sigma_rows):
-                sigma_row = sigma_rows[idx - 1]
-                for h_idx, header in enumerate(headers):
-                    if sigma_row and h_idx < len(sigma_row) and sigma_row[h_idx] is not None:
-                        csv_row[f"{header}_sigma"] = _format_with_precision(sigma_row[h_idx], mp_precision)
-            raw_rows.append(csv_row)
-
-        if raw_rows:
-            raw_headers = ["index"] + list(headers)
-            if has_sigma:
-                raw_headers += [f"{h}_sigma" for h in headers]
-            raw_csv_data = _generate_csv_from_rows(raw_rows, headers=raw_headers)
 
     if stats_result.get("dropped"):
         dropped = stats_result.get("dropped")

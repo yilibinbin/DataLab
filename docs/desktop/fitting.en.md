@@ -18,6 +18,21 @@ The desktop app provides explicit fitting models:
 
 Model-specific parameters appear dynamically on the left.
 
+## Custom and Self-Consistent/Implicit Models
+
+Custom formulas and self-consistent/implicit models share the workbench formula
+card, parameter table, and constants table. Use the formula preview syntax
+selector to inspect DataLab-compatible, Python-style, or Mathematica-style
+display rendering. This is preview-only and does not change computation. The
+parameter table is still populated from the active formula and can be edited
+manually; disabled constants are not substituted into the fit.
+
+Self-consistent/implicit models cover problems such as `u = g(x, u, parameters)`
+and `y = f(x, u, parameters)`. For each data point, DataLab solves the
+self-consistent variable first and then evaluates the output expression for the
+fit target. Start with stable initial guesses and bounds before adding more
+parameters or increasing precision.
+
 ## Plots and Log Axes
 
 When plots are enabled, the result area can show:

@@ -15,7 +15,7 @@ The desktop app provides five main modules:
 Common capabilities:
 
 - Multiprecision computation via `mpmath`
-- Unified result area: Values / Log / LaTeX / PDF Preview
+- Unified result area: Values / Log / LaTeX / PDF preview
 - CSV export, LaTeX table generation, optional PDF compilation
 - Log axes in fitting plots (`log-x` / `log-y`), with automatic fallback for non-positive data
 

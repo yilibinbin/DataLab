@@ -111,7 +111,7 @@ class WindowStatisticsMixin:
                 ),
             ]
         )
-        self._set_result_text("\n".join(lines))
+        self._set_result_text("\n".join(lines), final_result=True)
         self._append_log(self._tr("统计平均计算完成。", "Statistics completed."))
         if generate_latex and output_path:
             digits = self.latex_input_precision_spin.value() if hasattr(self, "latex_input_precision_spin") else 16
@@ -270,7 +270,7 @@ class WindowStatisticsMixin:
                     f"Notice: {result['dropped']} rows skipped due to missing or non-positive sigma.",
                 )
             )
-        self._set_result_text(text)
+        self._set_result_text(text, final_result=True)
         if csv_rows:
             self._set_csv_data(csv_rows, ["batch", "metric", "value", "uncertainty"], suggestion="statistics_results.csv")
         else:
@@ -308,11 +308,11 @@ class WindowStatisticsMixin:
             self._append_log("\n".join(lines))
         if plot_bytes:
             self._image_mode = "error"
-            self._update_result_plot(plot_bytes)
+            self._update_result_plot(plot_bytes, final_result=True)
 
     def _display_statistics_batches(self, batches: list[dict], value_col: str, render_plots: bool = True):
         if not batches:
-            self._set_result_text("")
+            self._set_result_text("", final_result=True)
             self._image_mode = "stats"
             self._result_plot_base_pixmap = None
             self.result_plot_bytes = None
@@ -370,7 +370,7 @@ class WindowStatisticsMixin:
                     if img_path:
                         figure_paths.append(img_path)
             csv_rows.extend(self._build_stats_csv_rows(entry.get("result", {}), batch_idx=idx, row_count=row_count))
-        self._set_result_text("\n\n".join(block_texts))
+        self._set_result_text("\n\n".join(block_texts), final_result=True)
         if csv_rows:
             self._set_csv_data(csv_rows, ["batch", "metric", "value", "uncertainty"], suggestion="statistics_results.csv")
         else:
@@ -455,4 +455,3 @@ class WindowStatisticsMixin:
             return buf.getvalue()
         except Exception:
             return None
-

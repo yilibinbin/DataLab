@@ -9,12 +9,16 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 
 class WindowImagesMixin:
-    def _update_result_plot(self, image_data: bytes):
+    def _update_result_plot(self, image_data: bytes, *, final_result: bool = False):
         self.result_plot_bytes = image_data
         if not image_data:
             self._result_plot_base_pixmap = None
             self.result_plot_label.setText(self._tr("无法生成拟合图像。", "Unable to render fitting image."))
             self._update_image_status()
+            if final_result:
+                self._mark_workbench_result_complete()
+            if hasattr(self, "refresh_workbench_result_rail"):
+                self.refresh_workbench_result_rail()
             return
         pixmap = QPixmap()
         pixmap.loadFromData(image_data, "PNG")
@@ -22,6 +26,10 @@ class WindowImagesMixin:
         self._image_mode = self._image_mode or "fit"
         self._apply_result_plot_best_fit_zoom()
         self._update_image_status()
+        if final_result:
+            self._clear_workbench_result_state()
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
 
     def _apply_result_plot_zoom(self):
         if not self._result_plot_base_pixmap:
@@ -242,11 +250,18 @@ class WindowImagesMixin:
         self._image_mode = mode
         if figures:
             self._show_image_at(mode, 0)
+            self._clear_workbench_result_state()
         else:
             self._result_plot_base_pixmap = None
             self.result_plot_bytes = None
             self.result_plot_label.setText(self._tr("尚无图片", "No image yet"))
             self._update_image_status()
+            if str(getattr(self, "_last_result_rendered_text", "") or "").strip():
+                self._clear_workbench_result_state()
+            else:
+                self._mark_workbench_result_complete()
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
 
     def _on_image_prev(self):
         mode = self._image_mode or (

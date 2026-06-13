@@ -60,7 +60,8 @@ State variables READ/WRITTEN:
 from __future__ import annotations
 
 from pathlib import Path
-import mpmath as mp
+from typing import TYPE_CHECKING
+import traceback
 
 from PySide6.QtWidgets import QMessageBox
 
@@ -76,6 +77,9 @@ from .workers_core import (
     FitJob,
     FitResultPayload,
 )
+
+if TYPE_CHECKING:
+    import mpmath as mp
 
 
 class WindowFittingResidualsMixin:
@@ -99,7 +103,7 @@ class WindowFittingResidualsMixin:
             else:
                 batch_texts.append(header + "\n" + self._tr("未获得该批次结果。", "No result for this batch."))
         combined = "\n\n".join(batch_texts)
-        self._set_result_text(combined)
+        self._set_result_text(combined, final_result=True)
         if csv_rows:
             self._set_csv_data(
                 csv_rows,
@@ -318,129 +322,158 @@ class WindowFittingResidualsMixin:
 
     def _on_fit_batches_finished(self, entries: list[FitBatchResultEntry]):
         ctx = self._fit_batch_context or {}
-        generate_latex = bool(ctx.get("generate_latex"))
-        output_path = ctx.get("output_path", "")
-        use_dcolumn = bool(ctx.get("use_dcolumn", True))
-        # 清理上一次生成的临时批次图像，避免累积
-        self._cleanup_temp_batch_images()
-        batch_texts: list[str] = []
-        figure_paths: list[Path] = []
-        latex_batches: list[dict] = []
-        csv_rows: list[dict[str, object]] = []
-        for entry in sorted(entries, key=lambda e: e.index):
-            if ctx.get("verbose") and entry.captured_log:
-                self._append_log(entry.captured_log)
-            header = self._tr(f"=== 拟合结果：批次 {entry.index} ===", f"=== Fit Result: Batch {entry.index} ===")
-            if entry.error:
-                batch_texts.append(header + "\n" + self._tr(f"批次 {entry.index} 失败: {entry.error}", f"Batch {entry.index} failed: {entry.error}"))
-                continue
-            if entry.kind == "fit" and entry.fit_payload:
-                payload = entry.fit_payload
-                job = payload.job
-                expression = payload.expression or job.model_expr
-                substituted = self._build_substituted_expression(expression, payload.fit_result.params) if expression else ""
-                summary = self._format_fit_result_text(payload.fit_result, expression, substituted)
-                batch_texts.append(header + "\n" + summary)
-                plot_bytes = self._render_fit_plot_bytes(job, payload.fit_result) if getattr(job, "render_plots", True) else None
-                fig_path = self._save_batch_figure(plot_bytes, output_path, entry.index, "fit") if plot_bytes else None
-                if fig_path:
-                    figure_paths.append(fig_path)
-                latex_batches.append(
-                    {
-                        "index": entry.index,
-                        "headers": job.headers,
-                        "rows": job.data_rows,
-                        "sigma_rows": job.sigma_rows,
-                        "fit_result": payload.fit_result,
-                        "expression": expression or "",
-                        "substituted": substituted or "",
-                        "figure_path": fig_path,
-                    }
-                )
-                csv_rows.extend(
-                    self._build_fit_csv_rows(
-                        payload.fit_result,
-                        expression or "",
-                        batch_idx=entry.index,
+        try:
+            generate_latex = bool(ctx.get("generate_latex"))
+            output_path = ctx.get("output_path", "")
+            use_dcolumn = bool(ctx.get("use_dcolumn", True))
+            # 清理上一次生成的临时批次图像，避免累积
+            self._cleanup_temp_batch_images()
+            batch_texts: list[str] = []
+            figure_paths: list[Path] = []
+            latex_batches: list[dict] = []
+            csv_rows: list[dict[str, object]] = []
+            for entry in sorted(entries, key=lambda e: e.index):
+                if ctx.get("verbose") and entry.captured_log:
+                    self._append_log(entry.captured_log)
+                header = self._tr(f"=== 拟合结果：批次 {entry.index} ===", f"=== Fit Result: Batch {entry.index} ===")
+                if entry.error:
+                    batch_texts.append(header + "\n" + self._tr(f"批次 {entry.index} 失败: {entry.error}", f"Batch {entry.index} failed: {entry.error}"))
+                    continue
+                if entry.kind == "fit" and entry.fit_payload:
+                    payload = entry.fit_payload
+                    job = payload.job
+                    expression = payload.expression or job.model_expr
+                    substituted = self._build_substituted_expression(expression, payload.fit_result.params) if expression else ""
+                    summary = self._format_fit_result_text(payload.fit_result, expression, substituted)
+                    batch_texts.append(header + "\n" + summary)
+                    plot_bytes = self._render_fit_plot_bytes(job, payload.fit_result) if getattr(job, "render_plots", True) else None
+                    fig_path = self._save_batch_figure(plot_bytes, output_path, entry.index, "fit") if plot_bytes else None
+                    if fig_path:
+                        figure_paths.append(fig_path)
+                    latex_batches.append(
+                        {
+                            "index": entry.index,
+                            "headers": job.headers,
+                            "rows": job.data_rows,
+                            "sigma_rows": job.sigma_rows,
+                            "fit_result": payload.fit_result,
+                            "expression": expression or "",
+                            "substituted": substituted or "",
+                            "figure_path": fig_path,
+                        }
                     )
+                    csv_rows.extend(
+                        self._build_fit_csv_rows(
+                            payload.fit_result,
+                            expression or "",
+                            batch_idx=entry.index,
+                        )
+                    )
+                else:
+                    batch_texts.append(header + "\n" + self._tr("未获得该批次结果。", "No result for this batch."))
+            combined = "\n\n".join(batch_texts)
+            self._set_result_text(combined, final_result=True)
+            self._set_image_list("fit", figure_paths)
+            if csv_rows:
+                self._set_csv_data(
+                    csv_rows,
+                    ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error", "note"],
+                    suggestion="fitting_results.csv",
                 )
             else:
-                batch_texts.append(header + "\n" + self._tr("未获得该批次结果。", "No result for this batch."))
-        combined = "\n\n".join(batch_texts)
-        self._set_result_text(combined)
-        self._set_image_list("fit", figure_paths)
-        if csv_rows:
-            self._set_csv_data(
-                csv_rows,
-                ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error", "note"],
-                suggestion="fitting_results.csv",
-            )
-        else:
-            self._reset_csv_data()
-        if generate_latex and output_path and latex_batches:
-            self._write_fitting_latex_batches(
-                latex_batches,
-                output_path,
-                use_dcolumn,
-                latex_group_size=int(ctx.get("latex_group_size", 3) or 3),
-            )
-        self.tabs.setCurrentIndex(self.result_tab_index)
-        QMessageBox.information(self, self._tr("完成", "Done"), self._tr("批量拟合完成。", "Batch fitting completed."))
-        self._remember_last_result("fit_batches", {"entries": entries, "context": ctx})
-        self._fit_batch_context = None
+                self._reset_csv_data()
+        except Exception as exc:  # noqa: BLE001
+            self._mark_workbench_result_failed()
+            self._append_log(traceback.format_exc())
+            localized = self._localize_text(str(exc))
+            QMessageBox.critical(self, self._tr("拟合失败", "Fit failed"), localized)
+            self._fit_batch_context = None
+            return False
+        try:
+            if generate_latex and output_path and latex_batches:
+                self._write_fitting_latex_batches(
+                    latex_batches,
+                    output_path,
+                    use_dcolumn,
+                    latex_group_size=int(ctx.get("latex_group_size", 3) or 3),
+                )
+            self.tabs.setCurrentIndex(self.result_tab_index)
+            QMessageBox.information(self, self._tr("完成", "Done"), self._tr("批量拟合完成。", "Batch fitting completed."))
+            self._remember_last_result("fit_batches", {"entries": entries, "context": ctx})
+        except Exception as exc:  # noqa: BLE001
+            self._append_log(traceback.format_exc())
+            localized = self._localize_text(str(exc))
+            self._append_log(self._tr(f"拟合后处理警告: {localized}", f"Fit post-processing warning: {localized}"))
+        finally:
+            self._fit_batch_context = None
+        return True
 
     def _on_fit_finished(self, payload: FitResultPayload):
-        job = payload.job
-        fit_result = payload.fit_result
-        expression = payload.expression or job.model_expr
-        for entry in payload.logs:
-            self._append_log(entry)
-        for warn in payload.warnings:
-            self._append_log(self._tr(f"警告: {warn}", f"Warning: {warn}"))
-        substituted = self._build_substituted_expression(expression, fit_result.params) if expression else None
-        summary = self._format_fit_result_text(fit_result, expression, substituted)
-        self._set_result_text(summary)
-        csv_rows = self._build_fit_csv_rows(fit_result, expression, batch_idx=1)
-        if csv_rows:
-            self._set_csv_data(
-                csv_rows,
-                ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error", "note"],
-                suggestion="fitting_results.csv",
+        try:
+            job = payload.job
+            fit_result = payload.fit_result
+            expression = payload.expression or job.model_expr
+            for entry in payload.logs:
+                self._append_log(entry)
+            for warn in payload.warnings:
+                self._append_log(self._tr(f"警告: {warn}", f"Warning: {warn}"))
+            substituted = self._build_substituted_expression(expression, fit_result.params) if expression else None
+            summary = self._format_fit_result_text(fit_result, expression, substituted)
+            self._set_result_text(summary, final_result=True)
+            csv_rows = self._build_fit_csv_rows(fit_result, expression, batch_idx=1)
+            if csv_rows:
+                self._set_csv_data(
+                    csv_rows,
+                    ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error", "note"],
+                    suggestion="fitting_results.csv",
+                )
+            else:
+                self._reset_csv_data()
+            warning_detail = fit_result.details.get("boundary_warning")
+            if warning_detail:
+                self._append_log(warning_detail)
+            sys_warning = fit_result.details.get("systematic_warning")
+            if sys_warning:
+                self._append_log(self._tr(f"系统误差警告: {sys_warning}", f"Systematic warning: {sys_warning}"))
+            plot_bytes = self._render_fit_plot_bytes(job, fit_result) if getattr(job, "render_plots", True) else None
+            if plot_bytes is not None:
+                self._image_mode = "fit"
+                self.current_fit_figures = []
+                self.current_fit_index = 0
+                self._update_result_plot(plot_bytes, final_result=True)
+        except Exception as exc:  # noqa: BLE001
+            self._mark_workbench_result_failed()
+            self._append_log(traceback.format_exc())
+            localized = self._localize_text(str(exc))
+            QMessageBox.critical(self, self._tr("拟合失败", "Fit failed"), localized)
+            return False
+        try:
+            if job.generate_latex and job.output_path:
+                self._write_fitting_latex(
+                    job.headers,
+                    job.data_rows,
+                    job.sigma_rows,
+                    fit_result,
+                    expression or "",
+                    substituted or "",
+                    plot_bytes,
+                    job.output_path,
+                    job.use_dcolumn,
+                )
+            self.tabs.setCurrentIndex(self.result_tab_index)
+            self._remember_last_result(
+                "fit_single",
+                {"fit_result": fit_result, "expression": expression, "substituted": substituted, "job": job},
             )
-        else:
-            self._reset_csv_data()
-        warning_detail = fit_result.details.get("boundary_warning")
-        if warning_detail:
-            self._append_log(warning_detail)
-        sys_warning = fit_result.details.get("systematic_warning")
-        if sys_warning:
-            self._append_log(self._tr(f"系统误差警告: {sys_warning}", f"Systematic warning: {sys_warning}"))
-        plot_bytes = self._render_fit_plot_bytes(job, fit_result) if getattr(job, "render_plots", True) else None
-        if plot_bytes is not None:
-            self._image_mode = "fit"
-            self.current_fit_figures = []
-            self.current_fit_index = 0
-            self._update_result_plot(plot_bytes)
-        if job.generate_latex and job.output_path:
-            self._write_fitting_latex(
-                job.headers,
-                job.data_rows,
-                job.sigma_rows,
-                fit_result,
-                expression or "",
-                substituted or "",
-                plot_bytes,
-                job.output_path,
-                job.use_dcolumn,
-            )
-        self.tabs.setCurrentIndex(self.result_tab_index)
-        self._remember_last_result(
-            "fit_single",
-            {"fit_result": fit_result, "expression": expression, "substituted": substituted, "job": job},
-        )
-        QMessageBox.information(self, self._tr("完成", "Done"), self._tr("拟合完成。", "Fit completed."))
+            QMessageBox.information(self, self._tr("完成", "Done"), self._tr("拟合完成。", "Fit completed."))
+        except Exception as exc:  # noqa: BLE001
+            self._append_log(traceback.format_exc())
+            localized = self._localize_text(str(exc))
+            self._append_log(self._tr(f"拟合后处理警告: {localized}", f"Fit post-processing warning: {localized}"))
+        return True
 
     def _on_fit_failed(self, message: str):
+        self._mark_workbench_result_failed()
         localized = self._localize_text(message)
         QMessageBox.critical(self, self._tr("拟合失败", "Fit failed"), localized)
         log_msg = self._tr(f"拟合失败: {localized}", f"Fit failed: {localized}")

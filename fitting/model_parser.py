@@ -5,7 +5,7 @@ used by:
 - extrapolation custom formula
 - error propagation formula
 
-Those implementations live in `data_extrapolation_latex_latest.py` and are the
+Those implementations now live in `shared.expression_engine` and are the
 single source of truth for:
 - allowed functions/constants
 - parser behavior (Mathematica-style function names, [] -> (), ^ -> **)
@@ -20,19 +20,11 @@ from typing import Callable, Sequence
 
 from mpmath import mp
 
-# Import directly from the canonical modules instead of the
-# ``data_extrapolation_latex_latest`` shim. The shim re-exports
-# these names via dynamic ``globals()`` assignment, which mypy
-# can't follow under strict mode (the names appear unresolved
-# at static-analysis time even though they exist at runtime).
-# Pinning the canonical paths here both fixes the type-check
-# errors and documents where the symbols actually live.
-#
 # Note for test authors: to patch this in tests, patch
-# ``fitting.model_parser.safe_eval``, not the canonical module —
+# ``fitting.model_parser.safe_eval``, not the shared module —
 # ``from … import`` creates a fresh local binding here.
-from datalab_latex.derivatives import numerical_partial_derivative
-from datalab_latex.expression_engine import (
+from shared.derivatives import numerical_partial_derivative
+from shared.expression_engine import (
     _ALLOWED_CONSTANTS,
     _ALLOWED_FUNCTIONS,
     safe_eval,

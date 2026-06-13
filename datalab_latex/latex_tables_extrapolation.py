@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional, TypeAlias
+from collections.abc import Sequence
+from typing import TypeAlias
 
-from extrapolation_methods import (
-    PowerLawComputationError,
-    PowerLawConfig,
-    SequenceAcceleratorConfig,
-    SequenceAccelerationError,
-    apply_sequence_accelerator,
-    extrapolate_power_law,
-)
 from shared.bilingual import _dual_msg, _split_dual
-from shared.precision import precision_guard as _precision_guard
+from shared.formula_defaults import DEFAULT_THREE_POINT_FORMULA
+from shared.extrapolation_engine import (
+    ExtrapolationOptions,
+    ExtrapolationResult,
+    compute_extrapolation,
+    compute_extrapolation_decimal,
+    process_data_file as _shared_process_data_file,
+    process_data_lines as _shared_process_data_lines,
+    process_data_string as _shared_process_data_string,
+)
 from mpmath import mp
 
 from .expression_engine import _mp, _normalize_expression, safe_eval
@@ -28,8 +29,6 @@ from .latex_tables_common import (
     _estimate_page_geometry,
     _needs_cjk_support,
     _normalize_header_to_symbol,
-    _normalize_input_lines,
-    _normalize_numeric_token,
     _normalize_table_segments,
     _string_length_hint,
 )
@@ -40,78 +39,6 @@ from .latex_tables_common import (
 # public surface stops looking like a typing escape hatch (``object``) and
 # instead matches what the body actually requires.
 _MpInput: TypeAlias = "mp.mpf | int | float | str"
-
-
-@dataclass
-class ExtrapolationResult:
-    """Wrapper for extrapolated values with optional metadata."""
-
-    value: mp.mpf
-    uncertainty: mp.mpf
-    method: str = "quadratic"
-    details: dict[str, mp.mpf | str] = field(default_factory=dict)
-
-
-@dataclass
-class ExtrapolationOptions:
-    """Runtime controls for extrapolation."""
-
-    method: str = "quadratic"
-    power_law_config: Optional[PowerLawConfig] = None
-    uncertainty_column: Optional[str] = None
-    mp_precision: Optional[int] = None
-    levin_variant: str = "u"
-    custom_formula: Optional[str] = None
-    warnings: list[str] = field(default_factory=list)
-    uncertainty_digits: Optional[int] = None
-
-    # New parameters for method-specific configuration
-    richardson_p: float = 2.0  # Richardson convergence power exponent
-    levin_order: int = 2  # Levin transform order
-    levin_weight: str = "default"  # Levin weight function type
-    levin_beta: float = 1.0  # Levin beta parameter for reciprocal_beta weight
-
-
-def compute_extrapolation(
-    A: float, B: float, C: float
-) -> tuple[float, float]:
-    """
-    Compute extrapolated value V and uncertainty U using three data points.
-
-    This follows the MATLAB function:
-    V = ((C - B)^2) / (B - A) + C
-    U = max([abs(V - A), abs(V - B), abs(V - C)])
-    """
-    if abs(B - A) < 1e-15:
-        V = C
-        U = max(abs(V - A), abs(V - B), abs(V - C))
-        return V, U
-
-    V = ((C - B) ** 2) / (B - A) + C
-    U = max(abs(V - A), abs(V - B), abs(V - C))
-
-    return V, U
-
-
-DEFAULT_THREE_POINT_FORMULA = "((C - B)**2) / (B - A) + C"
-
-
-def compute_extrapolation_decimal(
-    A: _MpInput, B: _MpInput, C: _MpInput
-) -> tuple[mp.mpf, mp.mpf]:
-    """High-precision extrapolation mirroring the MATLAB formula using mpmath."""
-    a_mp = _mp(A)
-    b_mp = _mp(B)
-    c_mp = _mp(C)
-    if mp.fabs(b_mp - a_mp) < mp.mpf("1e-50"):
-        V = c_mp
-        U = max(mp.fabs(V - a_mp), mp.fabs(V - b_mp), mp.fabs(V - c_mp))
-        return V, U
-    diff_CB = c_mp - b_mp
-    diff_BA = b_mp - a_mp
-    V = (diff_CB * diff_CB) / diff_BA + c_mp
-    U = max(mp.fabs(V - a_mp), mp.fabs(V - b_mp), mp.fabs(V - c_mp))
-    return V, U
 
 
 def format_extrapolation_result_with_num(
@@ -329,228 +256,9 @@ def _process_data_lines(
 ) -> tuple[
     list[str],
     list[tuple[mp.mpf, ...]],
-    list[ExtrapolationResult | tuple[mp.mpf, mp.mpf]],
+    list[ExtrapolationResult],
 ]:
-    opts = _ensure_options(options)
-    method = _normalize_method_name(opts.method)
-    with _precision_guard(opts.mp_precision):
-        lines = _normalize_input_lines(lines)
-
-        if len(lines) < 2:
-            raise ValueError("Input must contain at least a header and one data row")
-
-        header_line = lines[0].strip()
-        headers = header_line.split()
-
-        if len(headers) < 3:
-            raise ValueError("Header must contain at least 3 column names")
-
-        _maybe_warn_three_point_limit(opts, headers, method, verbose)
-
-        if method in THREE_POINT_METHODS and len(headers) > 3:
-            headers = headers[:3]
-
-        desired_reference = (opts.uncertainty_column or "").strip()
-        use_auto_max_diff = desired_reference.lower() == AUTO_REFERENCE_MAX_DIFF_KEY
-        reference_index = _resolve_reference_index(headers, None if use_auto_max_diff else desired_reference)
-        fallback_reference_index = min(DEFAULT_REFERENCE_INDEX, len(headers) - 1) if headers else 0
-        accelerator_precision = opts.mp_precision
-        levin_variant = opts.levin_variant or "u"
-        column_count = len(headers)
-
-        if verbose:
-            print("Found headers: {0}".format(headers))
-            print("Processing {0} data rows...".format(len(lines) - 1))
-
-        data_rows: list[tuple[mp.mpf, ...]] = []
-        extrapolated_results: list[
-            ExtrapolationResult | tuple[mp.mpf, mp.mpf]
-        ] = []
-
-        for line_num, line in enumerate(lines[1:], 2):
-            line = line.strip()
-            if not line:
-                continue
-
-            values = [_normalize_numeric_token(part) for part in line.split()]
-
-            if len(values) < column_count:
-                if verbose:
-                    print(
-                        "Warning: Line {0} has fewer than {1} values, skipping".format(
-                            line_num, column_count
-                        )
-                    )
-                continue
-
-            trimmed_values = values[:column_count]
-
-            try:
-                numeric_values = tuple(_mp(token) for token in trimmed_values)
-            except ValueError as e:
-                if verbose:
-                    print("Warning: Cannot parse line {0}: {1}".format(line_num, str(e)))
-                continue
-
-            row_tuple = numeric_values
-            method_values = row_tuple
-            if method in THREE_POINT_METHODS:
-                method_values = method_values[:3]
-            if len(method_values) < 3:
-                if verbose:
-                    print(
-                        "Warning: Line {0} does not have enough values for the selected method".format(
-                            line_num
-                        )
-                    )
-                continue
-
-            try:
-                if method == "power_law":
-                    if not opts.power_law_config:
-                        raise PowerLawComputationError("未提供幂律参数（x1/x2/x3 等），无法计算。")
-                    power_result = extrapolate_power_law(opts.power_law_config, method_values[:3])
-                    ref_idx = min(reference_index, len(row_tuple) - 1)
-                    if use_auto_max_diff:
-                        chosen = _auto_reference_index_max_diff(row_tuple, power_result.value)
-                        if chosen is None:
-                            _append_option_warning(
-                                opts,
-                                _dual_msg(
-                                    "最大差异列：无法自动选择参考列，已回退到默认参考列。",
-                                    "Max-diff column: unable to auto-select a reference column; fell back to the default reference column.",
-                                ),
-                                verbose,
-                            )
-                            ref_idx = min(fallback_reference_index, len(row_tuple) - 1)
-                        else:
-                            ref_idx = chosen
-                    reference_value = row_tuple[ref_idx]
-                    V = power_result.value
-                    U = abs(V - reference_value)
-                    result_entry = ExtrapolationResult(
-                        value=V,
-                        uncertainty=U,
-                        method="power_law",
-                        details={
-                            "reference_column": _reference_label(headers, ref_idx),
-                            "exponent": power_result.exponent,
-                            "amplitude": power_result.amplitude,
-                        },
-                    )
-                elif method in ACCELERATOR_METHODS:
-                    precision = accelerator_precision
-                    if not precision:
-                        raise SequenceAccelerationError("请设置多精度位数以执行该序列加速方法。")
-                    accel_config = SequenceAcceleratorConfig(
-                        precision=precision,
-                        levin_variant=levin_variant,
-                    )
-                    accel_result = apply_sequence_accelerator(method, method_values, accel_config)
-                    ref_idx = min(reference_index, len(row_tuple) - 1)
-                    if use_auto_max_diff:
-                        chosen = _auto_reference_index_max_diff(row_tuple, accel_result.value)
-                        if chosen is None:
-                            _append_option_warning(
-                                opts,
-                                _dual_msg(
-                                    "最大差异列：无法自动选择参考列，已回退到默认参考列。",
-                                    "Max-diff column: unable to auto-select a reference column; fell back to the default reference column.",
-                                ),
-                                verbose,
-                            )
-                            ref_idx = min(fallback_reference_index, len(row_tuple) - 1)
-                        else:
-                            ref_idx = chosen
-                    reference_value = row_tuple[ref_idx]
-                    V = accel_result.value
-                    U = abs(V - reference_value)
-                    result_entry = ExtrapolationResult(
-                        value=V,
-                        uncertainty=U,
-                        method=method,
-                        details={
-                            "reference_column": _reference_label(headers, ref_idx),
-                            **accel_result.metadata,
-                        },
-                    )
-                elif method == "custom":
-                    formula = (opts.custom_formula or "").strip()
-                    if not formula:
-                        raise ValueError("未提供自定义公式。")
-                    value = _evaluate_custom_formula(formula, headers, row_tuple, warnings=opts.warnings)
-                    V = _mp(value)
-                    ref_idx = min(reference_index, len(row_tuple) - 1)
-                    if use_auto_max_diff:
-                        chosen = _auto_reference_index_max_diff(row_tuple, V)
-                        if chosen is None:
-                            _append_option_warning(
-                                opts,
-                                _dual_msg(
-                                    "最大差异列：无法自动选择参考列，已回退到默认参考列。",
-                                    "Max-diff column: unable to auto-select a reference column; fell back to the default reference column.",
-                                ),
-                                verbose,
-                            )
-                            ref_idx = min(fallback_reference_index, len(row_tuple) - 1)
-                        else:
-                            ref_idx = chosen
-                    reference_value = row_tuple[ref_idx]
-                    U = mp.fabs(V - reference_value)
-                    result_entry = ExtrapolationResult(
-                        value=V,
-                        uncertainty=U,
-                        method="custom",
-                        details={
-                            "reference_column": _reference_label(headers, ref_idx),
-                            "formula": formula,
-                        },
-                    )
-                else:
-                    a_val, b_val, c_val = method_values[:3]
-                    V, U = compute_extrapolation_decimal(a_val, b_val, c_val)
-                    result_entry = ExtrapolationResult(value=V, uncertainty=U, method="quadratic")
-            except (PowerLawComputationError, SequenceAccelerationError) as exc:
-                if verbose:
-                    print("Warning: Cannot extrapolate line {0}: {1}".format(line_num, exc))
-                continue
-
-            data_rows.append(row_tuple)
-            extrapolated_results.append(result_entry)
-
-            if verbose:
-                column_states = ", ".join(
-                    f"{_reference_label(headers, idx)}={row_tuple[idx]}" for idx in range(len(row_tuple))
-                )
-                if method == "power_law":
-                    print(
-                        "Row {0}: {1} -> E_inf={2}, Δ={3}, p={4}".format(
-                            line_num - 1,
-                            column_states,
-                            V,
-                            U,
-                            result_entry.details.get("exponent"),
-                        )
-                    )
-                elif method in ACCELERATOR_METHODS:
-                    print(
-                        "Row {0}: {1} -> {2} limit={3}, Δ={4}".format(
-                            line_num - 1,
-                            column_states,
-                            method,
-                            V,
-                            U,
-                        )
-                    )
-                else:
-                    print(
-                        "Row {0}: {1} -> V={2}, U={3}".format(line_num - 1, column_states, V, U)
-                    )
-
-        if verbose:
-            print("Successfully processed {0} data rows".format(len(data_rows)))
-
-        return headers, data_rows, extrapolated_results
+    return _shared_process_data_lines(lines, verbose=verbose, options=options)
 
 
 def process_data_file(
@@ -560,12 +268,10 @@ def process_data_file(
 ) -> tuple[
     list[str],
     list[tuple[mp.mpf, ...]],
-    list[ExtrapolationResult | tuple[mp.mpf, mp.mpf]],
+    list[ExtrapolationResult],
 ]:
     """Process a data file and perform extrapolation on each row."""
-    with open(filename, "r") as f:
-        lines = f.readlines()
-    return _process_data_lines(lines, verbose, options=options)
+    return _shared_process_data_file(filename, verbose=verbose, options=options)
 
 
 def process_data_string(
@@ -575,12 +281,10 @@ def process_data_string(
 ) -> tuple[
     list[str],
     list[tuple[mp.mpf, ...]],
-    list[ExtrapolationResult | tuple[mp.mpf, mp.mpf]],
+    list[ExtrapolationResult],
 ]:
     """Process an in-memory string and perform extrapolation on each row."""
-    if not content or not content.strip():
-        raise ValueError("输入数据为空，无法解析。")
-    return _process_data_lines(content.splitlines(), verbose, options=options)
+    return _shared_process_data_string(content, verbose=verbose, options=options)
 
 
 def _append_extrapolation_table_block(
@@ -634,9 +338,9 @@ def _append_extrapolation_table_block(
 
 
 def generate_latex_table(
-    headers: list[str],
-    data_rows: list[tuple[mp.mpf, ...]],
-    extrapolated_results: list[ExtrapolationResult | tuple[mp.mpf, mp.mpf]],
+    headers: Sequence[str],
+    data_rows: Sequence[tuple[mp.mpf, ...]],
+    extrapolated_results: Sequence[ExtrapolationResult | tuple[mp.mpf, mp.mpf]],
     output_filename: str,
     caption: str | None = None,
     precision: int | None = None,
@@ -647,6 +351,9 @@ def generate_latex_table(
     latex_group_size: int = 3,
 ) -> None:
     """Generate a LaTeX table with the data and extrapolation results."""
+    headers = list(headers)
+    data_rows = list(data_rows)
+    extrapolated_results = list(extrapolated_results)
     latex_content: list[str] = []
 
     column_count = len(headers)

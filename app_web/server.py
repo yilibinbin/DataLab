@@ -21,9 +21,14 @@ if str(ROOT) not in sys.path:
 from flask import Flask, request  # noqa: E402
 
 from app_web._security_shim import configure_app_security, get_csrf_token  # noqa: E402
-from app_web.logic import _generate_fitting_latex  # noqa: E402
 
 __all__ = ["_generate_fitting_latex", "create_app", "create_app_with_socketio"]
+
+
+def _generate_fitting_latex(*args, **kwargs):
+    from app_web.logic.fitting import _generate_fitting_latex as generate
+
+    return generate(*args, **kwargs)
 
 
 def _resolve_secret_key() -> str:

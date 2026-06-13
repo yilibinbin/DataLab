@@ -4,11 +4,13 @@ import logging
 import os
 import sys
 
-from PySide6.QtCore import QLocale, QSize
+from PySide6.QtCore import QObject, QLocale, QSize
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QComboBox, QPushButton, QStyle
 
 from formula_help import get_function_tooltip
+from app_desktop.result_view_titles import result_view_tab_title, result_view_tooltip
+from app_desktop.theme import round_icon_button_style
 
 from .resources import (
     _apply_system_theme,
@@ -20,6 +22,13 @@ from .resources import (
 _LANG_ZH = "zh"
 _LANG_EN = "en"
 _LANG_AUTO = "auto"
+_RESULT_VIEW_ORDER = (
+    "result.numeric",
+    "result.image",
+    "result.log",
+    "result.latex",
+    "result.pdf",
+)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -62,20 +71,7 @@ class WindowI18nMixin:
     def _style_round_icon_button(self, button: QPushButton):
         """Apply a rounded style with subtle hover/pressed feedback."""
         button.setFixedSize(32, 32)
-        button.setStyleSheet(
-            """
-            QPushButton {
-                border-radius: 6px;
-                padding: 4px;
-            }
-            QPushButton:hover {
-                background-color: rgba(0, 0, 0, 0.08);
-            }
-            QPushButton:pressed {
-                background-color: rgba(0, 0, 0, 0.16);
-            }
-            """
-        )
+        button.setStyleSheet(round_icon_button_style())
 
     def _localize_label(self, label: str) -> str:
         mapping = {
@@ -313,6 +309,14 @@ class WindowI18nMixin:
                 getattr(widget, attr)(zh if effective_lang == _LANG_ZH else en)
             except Exception:
                 continue
+        for widget in [self, *self.findChildren(QObject)]:
+            try:
+                zh_tooltip = widget.property("datalab_tooltip_zh")
+                en_tooltip = widget.property("datalab_tooltip_en")
+                if zh_tooltip or en_tooltip:
+                    widget.setToolTip(zh_tooltip if effective_lang == _LANG_ZH else en_tooltip)
+            except Exception:
+                continue
         for combo, items in self._combo_translations:
             current_data = combo.currentData()
             combo.blockSignals(True)
@@ -330,16 +334,17 @@ class WindowI18nMixin:
         self._update_placeholders_language()
         # 更新标签页文字
         try:
-            if self.result_tabs and self.result_tabs.count() >= 2:
-                self.result_tabs.setTabText(0, "数值结果" if effective_lang == _LANG_ZH else "Values")
-                self.result_tabs.setTabText(1, "图片" if effective_lang == _LANG_ZH else "Image")
+            if self.result_tabs:
+                result_indices = getattr(self, "result_tabs_indices", {})
+                for view_key in _RESULT_VIEW_ORDER:
+                    alias = view_key.split(".", 1)[1]
+                    index = result_indices.get(alias)
+                    if index is None or index >= self.result_tabs.count():
+                        continue
+                    self.result_tabs.setTabText(index, result_view_tab_title(view_key, effective_lang))
+                    self.result_tabs.setTabToolTip(index, result_view_tooltip(view_key, effective_lang))
             if hasattr(self, "main_tabs_indices"):
                 self.tabs.setTabText(self.main_tabs_indices["result"], "结果" if effective_lang == _LANG_ZH else "Result")
-                self.tabs.setTabText(self.main_tabs_indices["log"], "日志" if effective_lang == _LANG_ZH else "Log")
-                self.tabs.setTabText(self.main_tabs_indices["latex"], "LaTeX" if effective_lang == _LANG_ZH else "LaTeX")
-                self.tabs.setTabText(
-                    self.main_tabs_indices["pdf"], "PDF 预览" if effective_lang == _LANG_ZH else "PDF Preview"
-                )
             if hasattr(self, "latex_edit"):
                 self.latex_edit.setPlaceholderText(
                     "% LaTeX 内容将在此显示…" if effective_lang == _LANG_ZH else "% LaTeX content will appear here…"
@@ -359,6 +364,16 @@ class WindowI18nMixin:
                 _on_root_uncertainty_method_changed(self)
             except Exception:
                 _LOGGER.exception("Failed to refresh root uncertainty i18n")
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
+        if hasattr(self, "refresh_workbench_formula_panel"):
+            self.refresh_workbench_formula_panel()
+        if hasattr(self, "refresh_workbench_variable_panel"):
+            self.refresh_workbench_variable_panel()
+        if hasattr(self, "refresh_workbench_data_card"):
+            self.refresh_workbench_data_card()
+        if hasattr(self, "refresh_workbench_data_summary"):
+            self.refresh_workbench_data_summary()
         if hasattr(self, "_refresh_main_splitter_left_min_width"):
             self._refresh_main_splitter_left_min_width()
 

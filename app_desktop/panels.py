@@ -9,29 +9,26 @@ size while keeping behavior unchanged.
 
 from __future__ import annotations
 
-import mpmath as mp
+from collections.abc import Callable
+import weakref
 
-from PySide6.QtCore import Qt, QSize, QObject, QEvent
+from PySide6.QtCore import Qt, QObject, QEvent
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
-    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QPlainTextEdit,
     QScrollArea,
     QSpinBox,
     QSizePolicy,
-    QSplitter,
     QStackedWidget,
     QStyle,
     QTableWidget,
@@ -42,35 +39,77 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from data_extrapolation_latex_latest import DEFAULT_THREE_POINT_FORMULA
-from fitting.auto_models import AUTO_MODELS
 from formula_help import (
-    EXTRAPOLATION_METHODS,
     get_function_help,
     get_function_tooltip,
     get_method_description,
     get_method_name,
-    get_method_parameters,
 )
-from app_desktop.constants_editor import ConstantsEditor
-from app_desktop.detected_rows_table import DetectedRowsTable
-from app_desktop.formula_preview import open_formula_preview_dialog
-from app_desktop.formula_preview import update_formula_preview as _render_formula_preview
-from app_desktop.parameter_table import ParameterTable
+from app_desktop.current_page_stack import CurrentPageStack
 from app_desktop.parallel_preferences import (
     ParallelPreferencesStore,
     apply_parallel_config_to_widgets,
     save_current_parallel_config,
 )
+from app_desktop.result_view_titles import result_view_tab_title, result_view_tooltip
+from app_desktop.shell_layout import build_workbench_bar, update_workbench_status
+from app_desktop.theme import (
+    CONTROL_SPACING,
+    SECTION_SPACING,
+    config_card_style,
+    data_input_card_style,
+    is_dark_theme,
+    result_detail_card_style,
+    result_overview_card_style,
+    result_style,
+    result_tab_pane_style,
+    table_style,
+)
+from app_desktop.workbench_layout import (
+    build_workbench_main_splitter,
+    make_status_strip,
+    reparent_widget,
+    scroll_viewport_overhead,
+)
+from app_desktop.workbench_model_bindings import (
+    bind_model_path,
+    model_path_for_formula_schema_key,
+    model_path_for_state_role,
+)
+from app_desktop.workbench_formula_panel import (
+    build_formula_workspace_panel,
+    populate_formula_workspace_panel,
+    refresh_formula_workspace_panel,
+    schedule_formula_workspace_refresh,
+)
+from app_desktop.workbench_results import build_result_overview
+from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS, ModeKey
+from app_desktop.workbench_variable_panel import (
+    build_variable_workspace_panel,
+    populate_variable_workspace_panel,
+    refresh_variable_workspace_panel,
+)
+from app_desktop.workbench_visual_contract import CONFIG_RAIL_MIN_WIDTH
 from app_desktop.ui_schema_binder import bind_choices, bind_field
 from app_desktop.ui_schema_runtime import (
     bind_schema_command_button,
     register_schema_text_refresh,
 )
+from app_desktop.views.error import build_error_mode_view
+from app_desktop.views.extrapolation import build_extrapolation_mode_view
+from app_desktop.views.fitting import build_fitting_mode_view
+from app_desktop.views.root_solving import (
+    build_root_solving_mode_view,
+    on_root_uncertainty_method_changed,
+    refresh_root_field_help,
+)
+from app_desktop.views.statistics import build_statistics_mode_view
+from app_desktop.views import helpers as view_helpers
 from shared.parallel_config import NestedParallelPolicy, ParallelMode
 from shared.ui_schema import ChoiceSpec, FormFieldSpec, LocalizedText
 from shared.ui_specs import (
     CUSTOM_FORMULA_PARAMS,
+    DESKTOP_RESULT_VIEWS,
     EXTRAPOLATION_METHOD_SPECS,
     LEVIN_U_PARAMS,
     METHOD_HELP_BUTTON,
@@ -84,6 +123,28 @@ from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS
 _LANG_ZH = "zh"
 _LANG_EN = "en"
 _LANG_AUTO = "auto"
+_RESULT_VIEW_ORDER = (
+    "result.numeric",
+    "result.image",
+    "result.log",
+    "result.latex",
+    "result.pdf",
+)
+
+
+def _result_view_schema_key(view_key: str) -> str:
+    return view_key.replace("result.", "results.", 1)
+
+
+def _result_view_alias(view_key: str) -> str:
+    return view_key.split(".", 1)[1]
+
+
+def _result_control_field(view_key: str, control_key: str) -> FormFieldSpec:
+    for field in DESKTOP_RESULT_VIEWS[view_key].controls:
+        if field.key == control_key:
+            return field
+    raise KeyError(f"Missing result control spec {control_key!r} for {view_key!r}")
 
 _REFCOL_AUTO_MAX_DIFF_KEY = "auto_max_diff"
 _REFCOL_AUTO_MAX_DIFF_ZH = "最大差异列"
@@ -97,159 +158,43 @@ _REFCOL_AUTO_MAX_DIFF_EN = "Max-diff column"
 _STACK_PAGE_TABLE = 0
 _STACK_PAGE_TEXT = 1
 
+_MODE_VIEW_BUILDERS: dict[ModeKey, tuple[str, Callable[[object], QGroupBox]]] = {
+    "extrapolation": ("extrap_box", build_extrapolation_mode_view),
+    "error": ("error_box", build_error_mode_view),
+    "fitting": ("fit_box", build_fitting_mode_view),
+    "root_solving": ("root_box", build_root_solving_mode_view),
+    "statistics": ("stats_box", build_statistics_mode_view),
+}
+
+
+def _mode_stack_order() -> tuple[ModeKey, ...]:
+    return tuple(
+        mode
+        for mode, _spec in sorted(
+            MODE_WORKBENCH_SPECS.items(),
+            key=lambda item: item[1].mode_stack_index,
+        )
+    )
+
+
+def _build_mode_stack_pages(self) -> None:
+    missing = set(MODE_WORKBENCH_SPECS) - set(_MODE_VIEW_BUILDERS)
+    extra = set(_MODE_VIEW_BUILDERS) - set(MODE_WORKBENCH_SPECS)
+    if missing or extra:
+        raise RuntimeError(
+            "Mode view builders do not match MODE_WORKBENCH_SPECS: "
+            f"missing={sorted(missing)}, extra={sorted(extra)}"
+        )
+    for mode in _mode_stack_order():
+        page_attr, builder = _MODE_VIEW_BUILDERS[mode]
+        page = builder(self)
+        setattr(self, page_attr, page)
+        self.mode_stack.addWidget(page)
+
 
 def _apply_equal_column_stretch(table: QTableWidget) -> None:
-    """Make every column share the table width equally.
+    view_helpers.apply_equal_column_stretch(table)
 
-    ``setStretchLastSection(True)`` only stretches the last column —
-    after the user adds / removes rows or columns, the leading
-    columns retain their default narrow width and the table looks
-    lopsided. ``QHeaderView.Stretch`` resize-mode for *all* sections
-    distributes the available width evenly, which is what users
-    expect from a CSV-style data grid. Re-apply this after any
-    ``setColumnCount`` change because Qt resets the resize mode for
-    new columns to the header default (Interactive).
-    """
-    header = table.horizontalHeader()
-    header.setSectionResizeMode(QHeaderView.Stretch)
-    # Stretch already fills the table width; the legacy
-    # ``setStretchLastSection`` flag is now redundant and would
-    # otherwise interact oddly with Stretch mode.
-    header.setStretchLastSection(False)
-
-# --- Theme-aware stylesheets ---
-
-# Thin overlay scrollbar — fades to near-invisible when idle
-_SCROLLBAR_DARK = """
-QScrollBar:vertical, QScrollBar:horizontal {
-    background: transparent;
-    border: none;
-}
-QScrollBar:vertical { width: 6px; }
-QScrollBar:horizontal { height: 6px; }
-QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-    background: rgba(255, 255, 255, 0.12);
-    border-radius: 3px;
-    min-height: 24px; min-width: 24px;
-}
-QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-    background: rgba(255, 255, 255, 0.25);
-}
-QScrollBar::add-line, QScrollBar::sub-line,
-QScrollBar::add-page, QScrollBar::sub-page {
-    background: transparent;
-    height: 0px; width: 0px;
-}
-"""
-
-_SCROLLBAR_LIGHT = """
-QScrollBar:vertical, QScrollBar:horizontal {
-    background: transparent;
-    border: none;
-}
-QScrollBar:vertical { width: 6px; }
-QScrollBar:horizontal { height: 6px; }
-QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-    background: rgba(0, 0, 0, 0.12);
-    border-radius: 3px;
-    min-height: 24px; min-width: 24px;
-}
-QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-    background: rgba(0, 0, 0, 0.28);
-}
-QScrollBar::add-line, QScrollBar::sub-line,
-QScrollBar::add-page, QScrollBar::sub-page {
-    background: transparent;
-    height: 0px; width: 0px;
-}
-"""
-
-_TABLE_STYLE_DARK = """
-QTableWidget {
-    background-color: #2b2d30;
-    alternate-background-color: #313335;
-    gridline-color: #43454a;
-    color: #dfe1e5;
-    font-family: Menlo, Consolas, monospace;
-    font-size: 13px;
-    selection-background-color: #2d5a88;
-    selection-color: #ffffff;
-    border: none;
-}
-QTableWidget::item { padding: 4px 8px; border-bottom: 1px solid #3c3e42; }
-QTableWidget::item:focus { background-color: #37506b; }
-QHeaderView::section {
-    background-color: #3c3e42; color: #bfc1c5; font-weight: 600;
-    padding: 6px 8px; border: none;
-    border-right: 1px solid #4e5157; border-bottom: 2px solid #4e5157;
-}
-QHeaderView::section:hover { background-color: #454749; }
-QTableCornerButton::section {
-    background-color: #3c3e42; border: none;
-    border-right: 1px solid #4e5157; border-bottom: 2px solid #4e5157;
-}
-"""
-
-_TABLE_STYLE_LIGHT = """
-QTableWidget {
-    background-color: #ffffff;
-    alternate-background-color: #f5f6f8;
-    gridline-color: #e2e4e8;
-    color: #1f2328;
-    font-family: Menlo, Consolas, monospace;
-    font-size: 13px;
-    selection-background-color: #dbeafe;
-    selection-color: #1f2328;
-    border: none;
-}
-QTableWidget::item { padding: 4px 8px; border-bottom: 1px solid #e8eaed; }
-QTableWidget::item:focus { background-color: #e0ecff; }
-QHeaderView::section {
-    background-color: #f0f1f3; color: #57606a; font-weight: 600;
-    padding: 6px 8px; border: none;
-    border-right: 1px solid #e2e4e8; border-bottom: 2px solid #d1d5db;
-}
-QHeaderView::section:hover { background-color: #e8eaed; }
-QTableCornerButton::section {
-    background-color: #f0f1f3; border: none;
-    border-right: 1px solid #e2e4e8; border-bottom: 2px solid #d1d5db;
-}
-"""
-
-_RESULT_STYLE_DARK = """
-QTextBrowser {
-    background-color: #2b2d30; color: #dfe1e5;
-    font-size: 14px; border: none; padding: 10px 12px;
-    selection-background-color: #2d5a88; selection-color: #ffffff;
-}
-"""
-
-_RESULT_STYLE_LIGHT = """
-QTextBrowser {
-    background-color: #ffffff; color: #1f2328;
-    font-size: 14px; border: none; padding: 10px 12px;
-    selection-background-color: #dbeafe; selection-color: #1f2328;
-}
-"""
-
-
-def _is_dark_theme() -> bool:
-    """Detect whether the current system appearance is dark."""
-    app = QApplication.instance()
-    if app is None:
-        return True
-    palette = app.palette()
-    return palette.window().color().lightness() < 128
-
-
-def _get_table_style() -> str:
-    dark = _is_dark_theme()
-    return (_TABLE_STYLE_DARK if dark else _TABLE_STYLE_LIGHT) + (_SCROLLBAR_DARK if dark else _SCROLLBAR_LIGHT)
-
-
-def _get_result_style() -> str:
-    dark = _is_dark_theme()
-    return (_RESULT_STYLE_DARK if dark else _RESULT_STYLE_LIGHT) + (_SCROLLBAR_DARK if dark else _SCROLLBAR_LIGHT)
 
 def build_menu(self):
     menubar = self.menuBar()
@@ -355,34 +300,41 @@ def build_ui(self):
     central = QWidget(self)
     self.setCentralWidget(central)
     layout = QVBoxLayout(central)
-    splitter = QSplitter(Qt.Horizontal, self)
-    splitter.setHandleWidth(8)
-    splitter.setChildrenCollapsible(False)
-    # Expose as an instance attribute so the close handler and the
-    # QSettings restore path in ``main.py`` can reach it. Previously the
-    # splitter was purely local and its geometry was lost on every close.
-    self._main_splitter = splitter
-    layout.addWidget(splitter)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
 
-    left_scroll = QScrollArea()
-    left_scroll.setWidgetResizable(True)
-    self._left_scroll = left_scroll
-    left_container = QWidget()
-    self.left_container = left_container
-    self.left_layout = QVBoxLayout(left_container)
-    self.left_layout.setAlignment(Qt.AlignTop)
-    left_scroll.setWidget(left_container)
-    splitter.addWidget(left_scroll)
+    self.workbench_root = QWidget()
+    self.workbench_root.setObjectName("workbench_root")
+    root_layout = QVBoxLayout(self.workbench_root)
+    root_layout.setContentsMargins(0, 0, 0, 0)
+    root_layout.setSpacing(0)
 
-    right_container = QWidget()
-    right_layout = QVBoxLayout(right_container)
-    splitter.addWidget(right_container)
-    splitter.setStretchFactor(0, 1)
-    splitter.setStretchFactor(1, 1)
-    splitter.setSizes([520, 820])
+    self.workbench_bar = build_workbench_bar(self)
+    root_layout.addWidget(self.workbench_bar)
+    self._main_splitter = build_workbench_main_splitter(self)
+    root_layout.addWidget(self._main_splitter, 1)
+    self.workbench_status_strip, self.workbench_status_layout = make_status_strip(self)
+    update_workbench_status(self)
+    root_layout.addWidget(self.workbench_status_strip)
+    layout.addWidget(self.workbench_root)
+
+    self.left_layout = self.workbench_config_layout
+    self.left_container = self.workbench_config_content
+    self._left_scroll = self.workbench_config_rail
 
     self._build_left_panel()
-    self._build_right_panel(right_layout)
+    reparent_widget(self.workbench_workspace_layout, self.manual_box, stretch=2)
+    self.workbench_formula_panel = build_formula_workspace_panel(self)
+    self.workbench_workspace_layout.addWidget(self.workbench_formula_panel)
+    populate_formula_workspace_panel(self)
+    self.workbench_variable_panel = build_variable_workspace_panel(self)
+    self.workbench_workspace_layout.addWidget(self.workbench_variable_panel)
+    reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
+    populate_variable_workspace_panel(self)
+    self._build_right_panel(self.workbench_result_layout)
+    self._bind_workbench_state_roles()
+    self._bind_workbench_spec_schema_keys()
+    _connect_workbench_formula_editors(self)
     # 初始化手动输入占位示例
     self._update_manual_placeholder(self.mode_combo.currentData())
     # 根据当前模式刷新可见性
@@ -392,7 +344,7 @@ def build_ui(self):
     # Restore persisted splitter geometry so the user's last-chosen
     # left/right proportions survive a restart. See
     # ``shared.settings_store`` for the key naming and on-failure
-    # fallback policy (defaults to the [520, 820] setSizes above).
+    # fallback policy (defaults to the three-zone splitter sizes above).
     # A single SettingsStore instance is cached on ``self`` and reused
     # by closeEvent's save path — avoids double-construction race on
     # Windows registry access and lets tests inject a fake via a
@@ -414,8 +366,9 @@ def build_ui(self):
             # Snapshot pre-restore sizes so we can roll back if the
             # restore succeeds syntactically (returns True) but applies
             # semantically nonsensical sizes — e.g. a blob from an
-            # older app version whose layout had 3 panes instead of 2,
-            # which Qt will happily accept and silently truncate.
+            # older app version whose layout had a different pane count,
+            # which Qt may accept and silently truncate.
+            splitter = self._main_splitter
             pre_restore_sizes = splitter.sizes()
             pre_restore_count = splitter.count()
             # The blob header stores the pane count. Pre-check it
@@ -456,34 +409,183 @@ def build_ui(self):
             "Splitter state restore skipped", exc_info=True
         )
 
+
+def _bind_workbench_state_roles(self) -> None:
+    self.manual_box.setObjectName("manual_box")
+    self.manual_table.setObjectName("manual_table")
+    self.manual_data_edit.setObjectName("manual_data_edit")
+    self.mode_stack.setObjectName("mode_stack")
+    self.tabs.setObjectName("result_tabs")
+    self.custom_params_table.setObjectName("custom_params_table")
+    self.implicit_params_table.setObjectName("implicit_params_table")
+    self.root_unknowns_table.setObjectName("root_unknowns_table")
+    self.error_constants_editor.setObjectName("error_constants_editor")
+    self.custom_constants_editor.setObjectName("custom_constants_editor")
+    self.implicit_constants_editor.setObjectName("implicit_constants_editor")
+    self.root_constants_editor.setObjectName("root_constants_editor")
+
+    self.manual_box.setProperty("datalab_state_role", "manual_data_owner")
+    bind_model_path(self.manual_box, model_path_for_state_role("manual_data_owner"))
+    self.manual_table.setProperty("datalab_state_role", "manual_table_editor")
+    bind_model_path(self.manual_table, model_path_for_state_role("manual_table_editor"))
+    self.manual_data_edit.setProperty("datalab_state_role", "manual_text_editor")
+    bind_model_path(self.manual_data_edit, model_path_for_state_role("manual_text_editor"))
+    self.mode_stack.setProperty("datalab_state_role", "mode_stack_owner")
+    bind_model_path(self.mode_stack, model_path_for_state_role("mode_stack_owner"))
+    self.tabs.setProperty("datalab_state_role", "result_tabs_owner")
+    bind_model_path(self.tabs, model_path_for_state_role("result_tabs_owner"))
+    for spec in MODE_WORKBENCH_SPECS.values():
+        for mount in spec.parameters + spec.constants + spec.tables:
+            widget = getattr(self, mount.widget_attr)
+            widget.setProperty("datalab_state_role", mount.state_role)
+            bind_model_path(
+                widget,
+                model_path_for_state_role(mount.state_role, schema_key=mount.schema_key),
+            )
+
+
+def _bind_workbench_spec_schema_keys(self) -> None:
+    for spec in MODE_WORKBENCH_SPECS.values():
+        for formula in spec.formulas:
+            editor = getattr(self, formula.editor_attr, None)
+            if editor is not None:
+                editor.setProperty("datalab_schema_key", formula.schema_key)
+                bind_model_path(editor, model_path_for_formula_schema_key(formula.schema_key))
+            button = getattr(self, formula.preview_button_attr, None)
+            if button is not None:
+                button.setProperty("datalab_schema_key", formula.schema_key)
+        for mount in spec.parameters + spec.constants + spec.tables:
+            widget = getattr(self, mount.widget_attr, None)
+            if widget is not None:
+                widget.setProperty("datalab_schema_key", mount.schema_key)
+
+
+def _connect_workbench_formula_editors(self) -> None:
+    callbacks = []
+    owner_ref = weakref.ref(self)
+    for spec in MODE_WORKBENCH_SPECS.values():
+        for formula in spec.formulas:
+            editor = getattr(self, formula.editor_attr, None)
+            if editor is not None and hasattr(editor, "textChanged"):
+                def _refresh_formula(*args, _attr=formula.editor_attr) -> None:
+                    owner = owner_ref()
+                    if owner is not None:
+                        schedule_formula_workspace_refresh(owner, _attr)
+
+                callbacks.append(_refresh_formula)
+                editor.textChanged.connect(_refresh_formula)
+    self._workbench_formula_text_changed_callbacks = callbacks
+
+
+def refresh_workbench_formula_panel(self) -> None:
+    refresh_formula_workspace_panel(self)
+
+
+def refresh_workbench_variable_panel(self) -> None:
+    refresh_variable_workspace_panel(self)
+
+
+def refresh_workbench_config_cards(self) -> None:
+    for section in _config_card_sections(self):
+        _style_config_card(section, dark=is_dark_theme())
+
+
+def refresh_workbench_data_card(self) -> None:
+    manual_box = getattr(self, "manual_box", None)
+    if manual_box is not None:
+        manual_box.setStyleSheet(data_input_card_style(dark=is_dark_theme()))
+
+
+def refresh_workbench_data_summary(self) -> None:
+    _update_data_summary(self)
+
+
+def refresh_workbench_result_overview_card(self) -> None:
+    panel = getattr(self, "workbench_result_overview_panel", None)
+    if panel is not None:
+        panel.setStyleSheet(result_overview_card_style(dark=is_dark_theme()))
+
+
+def refresh_workbench_result_details_card(self) -> None:
+    panel = getattr(self, "workbench_result_details_panel", None)
+    if panel is not None:
+        panel.setStyleSheet(result_detail_card_style(dark=is_dark_theme()))
+
+
+def _clamp_workbench_splitter_sizes(sizes: list[int], minimums: list[int], total: int) -> list[int]:
+    if total <= sum(minimums):
+        return list(minimums)
+    clamped = [max(size, minimum) for size, minimum in zip(sizes, minimums, strict=True)]
+    overflow = sum(clamped) - total
+    while overflow > 0:
+        surplus = [size - minimum for size, minimum in zip(clamped, minimums, strict=True)]
+        candidates = [(available, index) for index, available in enumerate(surplus) if available > 0]
+        if not candidates:
+            break
+        total_surplus = sum(available for available, _ in candidates)
+        reductions: list[tuple[int, int]] = []
+        pass_overflow = overflow
+        for available, index in candidates:
+            proportional = int(pass_overflow * (available / total_surplus))
+            reductions.append((index, min(available, proportional)))
+        if not any(reduction for _, reduction in reductions):
+            _, index = max(candidates)
+            reductions = [(index, 1)]
+        for index, reduction in reductions:
+            if overflow <= 0:
+                break
+            reduction = min(reduction, clamped[index] - minimums[index], overflow)
+            if reduction <= 0:
+                continue
+            clamped[index] -= reduction
+            overflow -= reduction
+    return clamped
+
+
 def _refresh_main_splitter_left_min_width(self) -> None:
-    left_container = getattr(self, "left_container", None)
-    left_scroll = getattr(self, "_left_scroll", None)
-    if left_container is None or left_scroll is None:
+    config_content = getattr(self, "workbench_config_content", None)
+    config_scroll = getattr(self, "workbench_config_rail", None)
+    if config_content is not None and config_scroll is not None:
+        _activate_widget_layouts(config_content)
+        _refresh_visible_table_min_widths(config_content)
+        workspace_content = getattr(self, "workbench_workspace_content", None)
+        if workspace_content is not None:
+            _activate_widget_layouts(workspace_content)
+            _refresh_visible_table_min_widths(workspace_content)
+        _activate_widget_layouts(config_content)
+
+        content_min_width = max(
+            CONFIG_RAIL_MIN_WIDTH,
+            config_content.minimumSizeHint().width(),
+        )
+        config_content.setMinimumWidth(content_min_width)
+        left_min_width = content_min_width + scroll_viewport_overhead(config_scroll)
+        self._main_splitter_left_min_width = left_min_width
+        config_scroll.setMinimumWidth(left_min_width)
+
+        splitter = getattr(self, "_main_splitter", None)
+        workspace_scroll = getattr(self, "workbench_workspace_canvas", None)
+        result_rail = getattr(self, "workbench_result_rail", None)
+        if splitter is None or splitter.count() < 3 or workspace_scroll is None or result_rail is None:
+            return
+
+        center_min_width = max(1, workspace_scroll.minimumWidth())
+        right_min_width = max(1, result_rail.minimumWidth())
+        sizes = splitter.sizes()
+        if not sizes or len(sizes) < 3:
+            splitter.setSizes([left_min_width, center_min_width, right_min_width])
+            return
+        pane_sizes = sizes[:3]
+        minimums = [left_min_width, center_min_width, right_min_width]
+        if all(size >= minimum for size, minimum in zip(pane_sizes, minimums, strict=True)):
+            return
+
+        handle_total = splitter.handleWidth() * max(0, splitter.count() - 1)
+        total = sum(pane_sizes) or max(0, splitter.width() - handle_total - sum(sizes[3:]))
+        clamped = _clamp_workbench_splitter_sizes(pane_sizes, minimums, total)
+        if clamped != pane_sizes:
+            splitter.setSizes(clamped + sizes[3:])
         return
-    _activate_widget_layouts(left_container)
-    _refresh_visible_table_min_widths(left_container)
-    _activate_widget_layouts(left_container)
-    viewport_overhead = (
-        left_scroll.frameWidth() * 2
-        + left_scroll.verticalScrollBar().sizeHint().width()
-    )
-    content_min_width = max(
-        left_container.minimumSizeHint().width(),
-        _visible_left_content_min_width(left_container),
-    )
-    left_min_width = max(320, content_min_width) + viewport_overhead
-    self._main_splitter_left_min_width = left_min_width
-    left_scroll.setMinimumWidth(left_min_width)
-    splitter = getattr(self, "_main_splitter", None)
-    if splitter is None or splitter.count() < 2:
-        return
-    sizes = splitter.sizes()
-    if not sizes or sizes[0] >= left_min_width:
-        return
-    total = max(sum(sizes), left_min_width + 1)
-    right_width = max(1, total - left_min_width)
-    splitter.setSizes([left_min_width, right_width])
 
 
 def _activate_widget_layouts(widget: QWidget) -> None:
@@ -530,7 +632,63 @@ def _table_required_min_width(table: QTableWidget) -> int:
     return column_width + vertical_header + scrollbar + frame + 8
 
 
+def _config_card_sections(self) -> tuple[QWidget, ...]:
+    sections: list[QWidget] = []
+    for attr in (
+        "input_section",
+        "mode_section",
+        "output_setup_section",
+        "run_section",
+    ):
+        section = getattr(self, attr, None)
+        if isinstance(section, QWidget):
+            sections.append(section)
+    return tuple(sections)
+
+
+def _style_config_card(section: QWidget, *, dark: bool | None = None) -> None:
+    section.setProperty("datalab_config_card", True)
+    section.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    layout = section.layout()
+    if layout is not None:
+        layout.setContentsMargins(10, 10, 10, 10)
+    section.setStyleSheet(config_card_style(dark=dark))
+    section.style().unpolish(section)
+    section.style().polish(section)
+
+
 def build_left_panel(self):
+    self.input_section = QWidget()
+    self.input_section.setObjectName("input_section")
+    self.input_section_layout = QVBoxLayout(self.input_section)
+    self.input_section_layout.setContentsMargins(0, 0, 0, 0)
+    self.input_section_layout.setSpacing(CONTROL_SPACING)
+
+    self.mode_section = QWidget()
+    self.mode_section.setObjectName("mode_section")
+    self.mode_section_layout = QVBoxLayout(self.mode_section)
+    self.mode_section_layout.setContentsMargins(0, 0, 0, 0)
+    self.mode_section_layout.setSpacing(SECTION_SPACING)
+
+    self.output_setup_section = QWidget()
+    self.output_setup_section.setObjectName("output_setup_section")
+    self.output_setup_section_layout = QVBoxLayout(self.output_setup_section)
+    self.output_setup_section_layout.setContentsMargins(0, 0, 0, 0)
+    self.output_setup_section_layout.setSpacing(SECTION_SPACING)
+
+    self.run_section = QWidget()
+    self.run_section.setObjectName("run_section")
+    self.run_section_layout = QVBoxLayout(self.run_section)
+    self.run_section_layout.setContentsMargins(0, 0, 0, 0)
+    self.run_section_layout.setSpacing(CONTROL_SPACING)
+
+    refresh_workbench_config_cards(self)
+
+    self.left_layout.addWidget(self.input_section)
+    self.left_layout.addWidget(self.mode_section)
+    self.left_layout.addWidget(self.output_setup_section)
+    self.left_layout.addWidget(self.run_section)
+
     # Mode selection
     self.mode_box = QGroupBox("计算模式")
     self._register_title(self.mode_box, "计算模式", "Mode")
@@ -546,9 +704,15 @@ def build_left_panel(self):
     for zh, en, data in mode_items:
         self.mode_combo.addItem(zh, data)
     self._register_combo(self.mode_combo, mode_items)
+    self._register_text(
+        self.mode_combo,
+        "选择当前要执行的计算模块。",
+        "Choose the computation module to use.",
+        "setToolTip",
+    )
     self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
     mode_layout.addWidget(self.mode_combo)
-    self.left_layout.addWidget(self.mode_box)
+    self.mode_section_layout.addWidget(self.mode_box)
 
     # Data file
     self.file_box = QGroupBox("")
@@ -572,19 +736,41 @@ def build_left_panel(self):
     self.use_file_checkbox = QCheckBox("使用数据文件")
     self.use_file_checkbox.setChecked(False)
     self._register_text(self.use_file_checkbox, "使用数据文件", "Use data file")
+    self._register_text(
+        self.use_file_checkbox,
+        "启用后从文件读取数据；关闭后在中间工作区手动输入数据。",
+        "Read data from a file when enabled; otherwise use the manual data input in the center workspace.",
+        "setToolTip",
+    )
     self.use_file_checkbox.toggled.connect(self._on_data_source_toggle)
     source_row = QHBoxLayout()
     source_row.setSpacing(6)
     source_row.addWidget(self.use_file_checkbox)
     source_row.addStretch()
-    self.left_layout.addLayout(source_row)
-    self.left_layout.addWidget(self.file_box)
+    self.input_section_layout.addLayout(source_row)
+    self.input_section_layout.addWidget(self.file_box)
     self.file_box.hide()
 
     # Manual data — table editor + text fallback
     self.manual_box = QGroupBox("")
+    self.manual_box.setProperty("datalab_data_card", True)
+    self.manual_box.setStyleSheet(data_input_card_style(dark=is_dark_theme()))
     manual_layout = QVBoxLayout(self.manual_box)
+    manual_layout.setContentsMargins(10, 8, 10, 10)
     manual_layout.setSpacing(6)
+
+    data_header = QHBoxLayout()
+    data_header.setContentsMargins(0, 0, 0, 0)
+    data_header.setSpacing(6)
+    self.manual_data_title = QLabel("输入数据")
+    self.manual_data_title.setObjectName("manual_data_title")
+    self._register_text(self.manual_data_title, "输入数据", "Data input")
+    data_header.addWidget(self.manual_data_title)
+    data_header.addStretch()
+    self.manual_data_summary = QLabel("")
+    self.manual_data_summary.setObjectName("manual_data_summary")
+    data_header.addWidget(self.manual_data_summary)
+    manual_layout.addLayout(data_header)
 
     # Toolbar
     table_toolbar = QHBoxLayout()
@@ -597,6 +783,12 @@ def build_left_panel(self):
     remove_col_btn.setToolTip(
         self._tr("删除最后一列（含数据）", "Remove the last column (and its data)")
     )
+    self._register_text(
+        remove_col_btn,
+        "删除最后一列（含数据）",
+        "Remove the last column (and its data)",
+        "setToolTip",
+    )
     remove_col_btn.clicked.connect(lambda: _remove_table_column(self))
     add_row_btn = QPushButton("+ 行")
     self._register_text(add_row_btn, "+ 行", "+ Row")
@@ -606,6 +798,12 @@ def build_left_panel(self):
     remove_row_btn.setToolTip(
         self._tr("删除最后一行（含数据）", "Remove the last row (and its data)")
     )
+    self._register_text(
+        remove_row_btn,
+        "删除最后一行（含数据）",
+        "Remove the last row (and its data)",
+        "setToolTip",
+    )
     remove_row_btn.clicked.connect(lambda: _remove_table_row(self))
     clear_btn = QPushButton("清除")
     self._register_text(clear_btn, "清除", "Clear")
@@ -613,6 +811,16 @@ def build_left_panel(self):
     self._data_view_toggle = QPushButton("文本视图")
     self._register_text(self._data_view_toggle, "文本视图", "Text View")
     self._data_view_toggle.clicked.connect(lambda: _toggle_data_view(self))
+    self.manual_data_toolbar_buttons = (
+        add_col_btn,
+        remove_col_btn,
+        add_row_btn,
+        remove_row_btn,
+        clear_btn,
+        self._data_view_toggle,
+    )
+    for toolbar_button in self.manual_data_toolbar_buttons:
+        toolbar_button.setProperty("datalab_data_toolbar_button", True)
     table_toolbar.addWidget(add_col_btn)
     table_toolbar.addWidget(remove_col_btn)
     table_toolbar.addWidget(add_row_btn)
@@ -630,9 +838,10 @@ def build_left_panel(self):
     self.manual_table.verticalHeader().setVisible(True)
     _apply_equal_column_stretch(self.manual_table)
     self.manual_table.setAlternatingRowColors(True)
-    self.manual_table.setStyleSheet(_get_table_style())
+    self.manual_table.setStyleSheet(view_helpers.get_table_style())
     self.manual_table.setMinimumHeight(180)
     self.manual_table.installEventFilter(_TablePasteFilter(self.manual_table, self))
+    self.manual_table.itemChanged.connect(lambda *_args: _update_data_summary(self))
     self._data_stack.addWidget(self.manual_table)
 
     self.manual_data_edit = QPlainTextEdit()
@@ -640,997 +849,12 @@ def build_left_panel(self):
 
     self._data_stack.setCurrentIndex(_STACK_PAGE_TABLE)  # table view by default
     manual_layout.addWidget(self._data_stack)
-    self.left_layout.addWidget(self.manual_box)
+    self.input_section_layout.addWidget(self.manual_box)
+    _update_data_summary(self)
 
-    # Extrapolation settings
-    self.extrap_box = QGroupBox("外推设置")
-    self._register_title(self.extrap_box, "外推设置", "Extrapolation")
-    extrap_layout = QVBoxLayout(self.extrap_box)
-    method_layout = QHBoxLayout()
-    method_label = QLabel("外推方法：")
-    self._register_text(method_label, "外推方法：", "Method:")
-    self.method_combo = QComboBox()
-    # Use shared specs instead of hardcoded _candidate_methods
-    method_options_zh = get_method_options("zh")
-    method_options_en = get_method_options("en")
-    # Build combo items
-    combo_items = []
-    for (name_zh, key), (name_en, _) in zip(method_options_zh, method_options_en):
-        self.method_combo.addItem(name_zh, key)
-        combo_items.append((name_zh, name_en, key))
-    self._register_combo(self.method_combo, combo_items)
-    self.method_combo.currentIndexChanged.connect(self._update_method_state)
-    method_layout.addWidget(method_label)
-    method_layout.addWidget(self.method_combo)
-    # Add help button for extrapolation method
-    method_help_btn = QPushButton("?")
-    method_help_btn.setFlat(True)
-    method_help_btn.setFocusPolicy(Qt.NoFocus)
-    method_help_btn.setMaximumWidth(30)
-    method_help_btn.clicked.connect(self._show_method_help)
-    method_help_btn.setToolTip(self._tr(
-        "点击查看当前外推方法的详细说明、适用场景和参数解释",
-        "Click to view detailed description, applicable scenarios, and parameter explanations for the current method"
-    ))
-    self._register_text(method_help_btn, "?", "?")
-    self.method_help_btn = method_help_btn
-    method_layout.addWidget(method_help_btn)
-    method_layout.addStretch()
-    extrap_layout.addLayout(method_layout)
-
-    self.custom_formula_widget = QWidget()
-    custom_layout = QVBoxLayout(self.custom_formula_widget)
-    lbl_custom = QLabel("自定义公式：")
-    self._register_text(lbl_custom, "自定义公式：", "Custom formula:")
-    custom_title_row = QHBoxLayout()
-    custom_title_row.addWidget(lbl_custom)
-    custom_title_row.addStretch()
-    self.custom_formula_preview_button = _make_formula_preview_button(
-        self,
-        self.custom_formula_edit if hasattr(self, "custom_formula_edit") else None,
-        title="Preview formula",
-    )
-    custom_title_row.addWidget(self.custom_formula_preview_button)
-    custom_layout.addLayout(custom_title_row)
-    self.custom_formula_edit = QPlainTextEdit("(C - B)^2/(B - A) + C")
-    self.custom_formula_edit.setPlaceholderText(
-        self._tr(
-            "示例: (C - B)^2/(B - A) + C 或 Exp[-x1]*Sin[x2]",
-            "Example: (C - B)^2/(B - A) + C or Exp[-x1]*Sin[x2]",
-        )
-    )
-    # Allow the editor to resize with window, but set a reasonable minimum height
-    self.custom_formula_edit.setMinimumHeight(80)
-    self.custom_formula_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-    custom_layout.addWidget(self.custom_formula_edit, stretch=1)
-    self.custom_formula_preview_button.clicked.connect(
-        lambda: _open_formula_preview(self, self.custom_formula_edit, lhs=None)
-    )
-    custom_hint_row = QHBoxLayout()
-    custom_hint_row.setContentsMargins(0, 0, 0, 0)
-    custom_hint_row.setSpacing(6)
-    func_btn = QPushButton("函数支持")
-    func_btn.setFlat(True)
-    func_btn.setFocusPolicy(Qt.NoFocus)
-    func_btn.clicked.connect(self._show_error_functions)
-    self._register_text(func_btn, "函数支持", "Functions")
-    self.custom_formula_function_button = func_btn
-    custom_hint_row.addWidget(func_btn)
-    hint_lbl = QLabel(
-        self._tr(
-            "支持 Sin[x], Cos[x], Log[x], Exp[x], Sqrt[x]，可用 A/B/C、列名或 x1/x2。",
-            "Supports Sin[x], Cos[x], Log[x], Exp[x], Sqrt[x]; use A/B/C, headers, or x1/x2.",
-        )
-    )
-    hint_lbl.setWordWrap(True)
-    hint_lbl.setStyleSheet("color:#666;")
-    custom_hint_row.addWidget(hint_lbl)
-    custom_hint_row.addStretch()
-    custom_layout.addLayout(custom_hint_row)
-    extrap_layout.addWidget(self.custom_formula_widget)
-
-    # Power law parameters
-    self.power_box = QGroupBox("幂律参数")
-    self._register_title(self.power_box, "幂律参数", "Power-law parameters")
-    power_layout = QFormLayout(self.power_box)
-    self.power_x_edits: list[QLineEdit] = []
-    power_x_labels: list[QLabel] = []
-    for idx, default in enumerate((10, 20, 40), start=1):
-        edit = QLineEdit(str(default))
-        self.power_x_edits.append(edit)
-        lbl_x = QLabel(f"x{idx}：")
-        self._register_text(lbl_x, f"x{idx}：", f"x{idx}:")
-        power_x_labels.append(lbl_x)
-        power_layout.addRow(lbl_x, edit)
-    self.power_p_edit = QLineEdit()
-    self.power_p_edit.setPlaceholderText(self._tr("留空则自动求解 p", "Leave blank to solve p automatically"))
-    lbl_p = QLabel("自定义 p（可选）：")
-    self._register_text(lbl_p, "自定义 p（可选）：", "Custom p (optional):")
-    power_layout.addRow(lbl_p, self.power_p_edit)
-    self.power_seed_guesses_edit = QLineEdit()
-    self.power_seed_guesses_edit.setPlaceholderText(
-        self._tr("如 0.5, 1, 2, -1", "e.g. 0.5, 1, 2, -1")
-    )
-    lbl_seed = QLabel("p 种子列表（可选）：")
-    self._register_text(lbl_seed, "p 种子列表（可选）：", "p seed list (optional):")
-    power_layout.addRow(lbl_seed, self.power_seed_guesses_edit)
-    extrap_layout.addWidget(self.power_box)
-
-    # Levin u-transform parameters
-    self.levin_box = QGroupBox("Levin u 变换参数")
-    self._register_title(self.levin_box, "Levin u 变换参数", "Levin u-transform parameters")
-    levin_layout = QFormLayout(self.levin_box)
-
-    # Variant selection
-    lbl_variant = QLabel("变换类型：")
-    self._register_text(lbl_variant, "变换类型：", "Variant:")
-    self.levin_variant_combo = QComboBox()
-    self.levin_variant_combo.addItem("u (最常用)", "u")
-    self.levin_variant_combo.addItem("t (级数)", "t")
-    self.levin_variant_combo.addItem("v (积分)", "v")
-    self._register_combo(self.levin_variant_combo, [
-        ("u (最常用)", "u (most common)", "u"),
-        ("t (级数)", "t (series)", "t"),
-        ("v (积分)", "v (integrals)", "v"),
-    ])
-    levin_layout.addRow(lbl_variant, self.levin_variant_combo)
-
-    # Order/terms
-    lbl_order = QLabel("变换阶数：")
-    self._register_text(lbl_order, "变换阶数：", "Transform order:")
-    self.levin_order_spin = QSpinBox()
-    self.levin_order_spin.setRange(1, 10)
-    self.levin_order_spin.setValue(2)
-    self.levin_order_spin.setToolTip(self._tr(
-        "变换阶数（越高越精确但需要更多项，至少需要 2N+1 项数据）",
-        "Transform order (higher = more accurate but needs more terms, requires at least 2N+1 data points)"
-    ))
-    levin_layout.addRow(lbl_order, self.levin_order_spin)
-
-    # Weight function / omega
-    lbl_weight = QLabel("权重函数：")
-    self._register_text(lbl_weight, "权重函数：", "Weight function:")
-    self.levin_weight_combo = QComboBox()
-    self.levin_weight_combo.addItem("默认 (1)", "default")
-    self.levin_weight_combo.addItem("1/(n+1)", "reciprocal")
-    self.levin_weight_combo.addItem("1/(n+β)", "reciprocal_beta")
-    self._register_combo(self.levin_weight_combo, [
-        ("默认 (1)", "Default (1)", "default"),
-        ("1/(n+1)", "1/(n+1)", "reciprocal"),
-        ("1/(n+β)", "1/(n+β)", "reciprocal_beta"),
-    ])
-    self.levin_weight_combo.currentIndexChanged.connect(self._update_levin_weight_state)
-    levin_layout.addRow(lbl_weight, self.levin_weight_combo)
-
-    # Beta parameter (shown only when weight = 1/(n+β))
-    lbl_beta = QLabel("β 参数：")
-    self._register_text(lbl_beta, "β 参数：", "β parameter:")
-    self.levin_beta_spin = QDoubleSpinBox()
-    self.levin_beta_spin.setRange(0.01, 100.0)
-    self.levin_beta_spin.setValue(1.0)
-    self.levin_beta_spin.setSingleStep(0.1)
-    self.levin_beta_spin.setDecimals(2)
-    self.levin_beta_spin.setToolTip(self._tr(
-        "权重函数 ω(n) = 1/(n+β) 中的 β 参数",
-        "β parameter in weight function ω(n) = 1/(n+β)"
-    ))
-    levin_layout.addRow(lbl_beta, self.levin_beta_spin)
-    # Initially hide beta (shown only when weight type is reciprocal_beta)
-    lbl_beta.setVisible(False)
-    self.levin_beta_spin.setVisible(False)
-    # Store label reference for show/hide
-    self.levin_beta_label = lbl_beta
-
-    extrap_layout.addWidget(self.levin_box)
-
-    # Richardson sequence acceleration parameters
-    self.richardson_box = QGroupBox("Richardson 序列加速参数")
-    self._register_title(self.richardson_box, "Richardson 序列加速参数", "Richardson acceleration parameters")
-    richardson_layout = QFormLayout(self.richardson_box)
-
-    # Power exponent p
-    lbl_richardson_p = QLabel("收敛幂指数 p：")
-    self._register_text(lbl_richardson_p, "收敛幂指数 p：", "Convergence power p:")
-    self.richardson_p_spin = QDoubleSpinBox()
-    self.richardson_p_spin.setRange(0.1, 10.0)
-    self.richardson_p_spin.setValue(2.0)
-    self.richardson_p_spin.setSingleStep(0.1)
-    self.richardson_p_spin.setDecimals(2)
-    self.richardson_p_spin.setToolTip(self._tr(
-        "误差展开的幂指数（f(h) ≈ f∞ + c·h^p），常见值 p=2（二阶方法）",
-        "Power exponent in error expansion (f(h) ≈ f∞ + c·h^p), common value p=2 (second-order method)"
-    ))
-    richardson_layout.addRow(lbl_richardson_p, self.richardson_p_spin)
-
-    extrap_layout.addWidget(self.richardson_box)
-
-    # Uncertainty selector
-    uncert_layout = QHBoxLayout()
-    lbl_uncert = QLabel("不确定度参考列：")
-    self._register_text(lbl_uncert, "不确定度参考列：", "Uncertainty ref column:")
-    uncert_layout.addWidget(lbl_uncert)
-    self.uncertainty_combo = QComboBox()
-    self._refresh_uncertainty_selector(["A", "B", "C"])
-    uncert_layout.addWidget(self.uncertainty_combo)
-    refresh_uncert_btn = QPushButton("刷新")
-    refresh_uncert_btn.setToolTip(self._tr("重新扫描数据以列出可选的不确定度参考列。", "Rescan data to list available uncertainty columns."))
-    self._register_text(refresh_uncert_btn, "刷新", "Refresh")
-    refresh_uncert_btn.clicked.connect(self._refresh_uncertainty_from_source)
-    self.uncertainty_refresh_btn = refresh_uncert_btn
-    uncert_layout.addWidget(refresh_uncert_btn)
-    extrap_layout.addLayout(uncert_layout)
-    _bind_extrapolation_schema_fields(
-        self,
-        method_label=method_label,
-        lbl_custom=lbl_custom,
-        power_x_labels=power_x_labels,
-        lbl_p=lbl_p,
-        lbl_seed=lbl_seed,
-        lbl_variant=lbl_variant,
-        lbl_order=lbl_order,
-        lbl_weight=lbl_weight,
-        lbl_beta=lbl_beta,
-        lbl_richardson_p=lbl_richardson_p,
-        lbl_uncert=lbl_uncert,
-        combo_items=combo_items,
-    )
-    self.left_layout.addWidget(self.extrap_box)
-
-    # Error propagation settings
-    self.error_box = QGroupBox("误差传递设置")
-    self._register_title(self.error_box, "误差传递设置", "Error propagation")
-    error_layout = QVBoxLayout(self.error_box)
-    error_formula_row = QHBoxLayout()
-    lbl_error_formula = QLabel("公式：")
-    self._register_text(lbl_error_formula, "公式：", "Formula:")
-    error_formula_row.addWidget(lbl_error_formula)
-    error_formula_row.addStretch()
-    self.error_formula_preview_button = _make_formula_preview_button(
-        self,
-        None,
-        title="Preview formula",
-    )
-    error_formula_row.addWidget(self.error_formula_preview_button)
-    error_layout.addLayout(error_formula_row)
-    self.formula_edit = QPlainTextEdit()
-    self.formula_edit.setPlaceholderText(
-        self._tr("公式（使用列名或 x1, x2 …）", "Formula (use column names or x1, x2 …)")
-    )
-    error_layout.addWidget(self.formula_edit)
-    self.error_formula_preview_button.clicked.connect(
-        lambda: _open_formula_preview(self, self.formula_edit, lhs=None)
-    )
-
-    func_btn_row = QHBoxLayout()
-    error_layout.setSpacing(4)
-    func_btn_row.addStretch()
-    func_help_btn = QPushButton("函数支持")
-    func_help_btn.setFlat(True)
-    func_help_btn.setFocusPolicy(Qt.NoFocus)
-    func_help_btn.setToolTip("")  # will be set in _update_placeholders_language
-    func_help_btn.clicked.connect(self._show_error_functions)
-    self._register_text(func_help_btn, "函数支持", "Functions")
-    self.func_help_btn = func_help_btn
-    func_btn_row.addWidget(func_help_btn)
-    error_layout.addLayout(func_btn_row)
-
-    self.constants_widget = QWidget()
-    const_wrapper_layout = QVBoxLayout(self.constants_widget)
-    const_wrapper_layout.setSpacing(6)
-    self.use_constants_file_checkbox = QCheckBox("使用常数文件")
-    self.use_constants_file_checkbox.setChecked(False)
-    self._register_text(self.use_constants_file_checkbox, "使用常数文件", "Use constants file")
-    self.use_constants_file_checkbox.toggled.connect(self._on_constants_source_toggle)
-    const_wrapper_layout.addWidget(self.use_constants_file_checkbox)
-
-    const_row = QHBoxLayout()
-    const_row.setContentsMargins(0, 0, 0, 0)
-    const_row.setSpacing(2)
-    self.constants_file_edit = QLineEdit()
-    const_row.addWidget(self.constants_file_edit)
-    const_btn = QPushButton("常数文件…")
-    const_btn.clicked.connect(self.browse_constants_file)
-    self._register_text(const_btn, "常数文件…", "Constants file…")
-    const_row.addWidget(const_btn)
-    self.constants_hint_btn = QPushButton("?")
-    self.constants_hint_btn.setFlat(True)
-    self.constants_hint_btn.setFixedWidth(22)
-    self.constants_hint_btn.setFocusPolicy(Qt.NoFocus)
-    self.constants_hint_btn.setToolTip("")
-    self.constants_hint_btn.clicked.connect(self._show_constants_file_hint)
-    self.constants_hint_btn.hide()
-    const_row.addWidget(self.constants_hint_btn)
-    self.constants_file_row = QWidget()
-    self.constants_file_row.setLayout(const_row)
-    self.constants_file_row.setVisible(False)
-    const_wrapper_layout.addWidget(self.constants_file_row)
-
-    self.error_constants_editor = ConstantsEditor(min_rows=4, checked=False)
-    self._register_text(self.error_constants_editor.checkbox, "启用常数设置", "Enable constants")
-    _apply_equal_column_stretch(self.error_constants_editor.table_view)
-    self.error_constants_editor.table_view.setStyleSheet(_get_table_style())
-    self.error_constants_editor.table_view.setMinimumHeight(160)
-    self.error_constants_editor.text_view.setMinimumHeight(160)
-    const_wrapper_layout.addWidget(self.error_constants_editor)
-    error_layout.addWidget(self.constants_widget)
-
-    # Error propagation method (Taylor vs Monte Carlo)
-    method_row = QHBoxLayout()
-    lbl_err_method = QLabel("方法：")
-    self._register_text(lbl_err_method, "方法：", "Method:")
-    self.error_method_combo = QComboBox()
-    error_method_items = [
-        ("Taylor（偏导）", "Taylor (derivative)", "taylor"),
-        ("Monte Carlo", "Monte Carlo", "monte_carlo"),
-    ]
-    for zh, _en, data in error_method_items:
-        self.error_method_combo.addItem(zh, data)
-    self._register_combo(self.error_method_combo, error_method_items)
-    self.error_method_combo.currentIndexChanged.connect(self._update_error_propagation_controls)
-    method_row.addWidget(lbl_err_method)
-    method_row.addWidget(self.error_method_combo)
-    method_row.addStretch()
-    error_layout.addLayout(method_row)
-
-    self.error_taylor_widget = QWidget()
-    taylor_layout = QHBoxLayout(self.error_taylor_widget)
-    taylor_layout.setContentsMargins(0, 0, 0, 0)
-    taylor_layout.setSpacing(6)
-    lbl_err_order = QLabel("阶数：")
-    self._register_text(lbl_err_order, "阶数：", "Order:")
-    self.error_order_spin = QSpinBox()
-    self.error_order_spin.setRange(1, 2)
-    self.error_order_spin.setValue(1)
-    self.error_order_spin.setToolTip(
-        self._tr(
-            "1 阶：线性误差估计；2 阶：包含 Hessian（二阶偏导）贡献。",
-            "Order 1: linear propagation; order 2: includes Hessian (second-derivative) contributions.",
-        )
-    )
-    taylor_layout.addWidget(lbl_err_order)
-    taylor_layout.addWidget(self.error_order_spin)
-    taylor_layout.addStretch()
-    error_layout.addWidget(self.error_taylor_widget)
-
-    self.error_mc_widget = QWidget()
-    mc_layout = QFormLayout(self.error_mc_widget)
-    mc_layout.setContentsMargins(0, 0, 0, 0)
-    mc_layout.setSpacing(6)
-    lbl_mc_samples = QLabel("MC 样本数：")
-    self._register_text(lbl_mc_samples, "MC 样本数：", "MC samples:")
-    self.error_mc_samples_spin = QSpinBox()
-    self.error_mc_samples_spin.setRange(100, 200000)
-    self.error_mc_samples_spin.setSingleStep(100)
-    self.error_mc_samples_spin.setValue(5000)
-    self.error_mc_samples_spin.setToolTip(
-        self._tr(
-            "Monte Carlo 样本数（越大越稳定，但耗时更长），至少 100。",
-            "Monte Carlo sample count (larger is more stable but slower), minimum 100.",
-        )
-    )
-    mc_layout.addRow(lbl_mc_samples, self.error_mc_samples_spin)
-    lbl_mc_seed = QLabel("随机种子（可选）：")
-    self._register_text(lbl_mc_seed, "随机种子（可选）：", "Seed (optional):")
-    self.error_mc_seed_edit = QLineEdit()
-    self.error_mc_seed_edit.setPlaceholderText(self._tr("留空=随机", "blank=random"))
-    self.error_mc_seed_edit.setToolTip(
-        self._tr(
-            "留空表示每次随机；填写整数可复现实验结果。",
-            "Leave blank for random each run; set an integer for reproducibility.",
-        )
-    )
-    mc_layout.addRow(lbl_mc_seed, self.error_mc_seed_edit)
-    error_layout.addWidget(self.error_mc_widget)
-    self.error_mc_widget.hide()
-    _bind_error_schema_fields(
-        self,
-        lbl_error_formula=lbl_error_formula,
-        lbl_error_method=lbl_err_method,
-        error_method_items=error_method_items,
-        lbl_error_order=lbl_err_order,
-        lbl_mc_samples=lbl_mc_samples,
-        lbl_mc_seed=lbl_mc_seed,
-    )
-
-    self.left_layout.addWidget(self.error_box)
-    self._on_constants_source_toggle(self.use_constants_file_checkbox.isChecked())
-    self._update_error_propagation_controls()
-
-    # Fitting module
-    # --- Statistics box (new) ---
-    self.stats_box = QGroupBox("统计平均设置")
-    self._register_title(self.stats_box, "统计平均设置", "Statistics")
-    stats_layout = QFormLayout(self.stats_box)
-    self.stats_value_column_edit = QLineEdit("A")
-    lbl_stats_value = QLabel("数值列：")
-    self._register_text(lbl_stats_value, "数值列：", "Value column:")
-    stats_layout.addRow(lbl_stats_value, self.stats_value_column_edit)
-    self.stats_sigma_column_edit = QLineEdit("")
-    lbl_stats_sigma = QLabel("不确定度列（可选）：")
-    self._register_text(lbl_stats_sigma, "不确定度列（可选）：", "Sigma column (optional):")
-    stats_layout.addRow(lbl_stats_sigma, self.stats_sigma_column_edit)
-    self.stats_mode_combo = QComboBox()
-    stats_items = [
-        ("算术平均", "Arithmetic mean", "mean"),
-        ("加权平均（σ 加权）", "Weighted mean (σ)", "weighted_sigma"),
-    ]
-    for zh, en, data in stats_items:
-        self.stats_mode_combo.addItem(zh, data)
-    self._register_combo(self.stats_mode_combo, stats_items)
-    lbl_stats_type = QLabel("统计类型：")
-    self._register_text(lbl_stats_type, "统计类型：", "Statistics type:")
-    stats_layout.addRow(lbl_stats_type, self.stats_mode_combo)
-    self.stats_weight_variance_checkbox = QCheckBox("对方差/标准误差使用权重")
-    self.stats_weight_variance_checkbox.setChecked(False)
-    self._register_text(self.stats_weight_variance_checkbox, "对方差/标准误差使用权重", "Use weights for variance/SE")
-    lbl_weight_var = QLabel("方差/标准误差：")
-    self._register_text(lbl_weight_var, "方差/标准误差：", "Variance/SE:")
-    self.stats_weight_variance_label = lbl_weight_var
-    stats_layout.addRow(lbl_weight_var, self.stats_weight_variance_checkbox)
-    self.stats_sample_checkbox = QCheckBox("样本模式 (n-1)")
-    self.stats_sample_checkbox.setChecked(False)
-    self._register_text(self.stats_sample_checkbox, "样本模式 (n-1)", "Sample mode (n-1)")
-    lbl_stats_sample = QLabel("样本/总体：")
-    self._register_text(lbl_stats_sample, "样本/总体：", "Sample/Population:")
-    stats_layout.addRow(lbl_stats_sample, self.stats_sample_checkbox)
-    _bind_statistics_schema_fields(
-        self,
-        lbl_stats_value=lbl_stats_value,
-        lbl_stats_sigma=lbl_stats_sigma,
-        lbl_stats_type=lbl_stats_type,
-        lbl_weight_var=lbl_weight_var,
-        lbl_stats_sample=lbl_stats_sample,
-        stats_items=stats_items,
-    )
-    self.left_layout.addWidget(self.stats_box)
-    self.stats_box.hide()
-    self.stats_mode_combo.currentIndexChanged.connect(self._on_stats_mode_change)
-    self._on_stats_mode_change()
-
-    # Fitting module
-    self.fit_box = QGroupBox("拟合模块")
-    self._register_title(self.fit_box, "拟合模块", "Fitting")
-    fit_layout = QVBoxLayout(self.fit_box)
-    model_row = QHBoxLayout()
-    lbl_model = QLabel("拟合模型：")
-    self._register_text(lbl_model, "拟合模型：", "Model:")
-    model_row.addWidget(lbl_model)
-    self.fit_model_combo = QComboBox()
-    self.fit_model_combo.addItem("自定义模型（非线性）", "custom")
-    self.fit_model_combo.addItem("自洽隐式模型", "self_consistent")
-    self.fit_model_combo.addItem("多项式拟合", "polynomial")
-    self.fit_model_combo.addItem("1/x^p 展开", "inverse_power")
-    self.fit_model_combo.addItem("Padé 拟合", "pade")
-    self.fit_model_combo.addItem("幂律极限拟合", "power_limit")
-    fit_items = [
-        ("自定义模型（非线性）", "Custom (nonlinear)", "custom"),
-        ("自洽隐式模型", "Self-consistent / implicit", "self_consistent"),
-        ("多项式拟合", "Polynomial", "polynomial"),
-        ("1/x^p 展开", "1/x^p series", "inverse_power"),
-        ("Padé 拟合", "Padé", "pade"),
-        ("幂律极限拟合", "Power limit", "power_limit"),
-    ]
-    self._register_combo(self.fit_model_combo, fit_items)
-    self.fit_model_combo.currentIndexChanged.connect(self._on_model_type_changed)
-    model_row.addWidget(self.fit_model_combo)
-    fit_layout.addLayout(model_row)
-
-    # MCMC refinement opt-in (Phase 3 #12). Placed in the fit panel
-    # so users discover it when selecting a model — not buried in
-    # a menu. Disabled with an explanatory tooltip when emcee is
-    # missing, so the feature is discoverable but un-breakable.
-    self.fit_mcmc_refine = QCheckBox(self._tr(
-        "MCMC 精炼（拟合后运行）",
-        "Refine with MCMC (after fit)",
-    ))
-    self._register_text(
-        self.fit_mcmc_refine,
-        "MCMC 精炼（拟合后运行）",
-        "Refine with MCMC (after fit)",
-    )
-    self.fit_mcmc_refine.setChecked(False)
-    try:
-        from fitting.mcmc_fitter import HAS_EMCEE as _mcmc_has_emcee
-    except ImportError:
-        # Only ImportError is caught — any other error (SyntaxError,
-        # NameError from a bad refactor, etc.) should propagate so
-        # the maintainer sees the real bug instead of a mysteriously
-        # disabled checkbox.
-        self.fit_mcmc_refine.setEnabled(False)
-        self.fit_mcmc_refine.setToolTip(self._tr(
-            "MCMC 精炼不可用（fitting.mcmc_fitter 未安装）。"
-            "pip install emcee numpy corner",
-            "MCMC refinement unavailable — fitting.mcmc_fitter "
-            "is not importable. pip install emcee numpy corner",
-        ))
-    else:
-        if not _mcmc_has_emcee:
-            self.fit_mcmc_refine.setEnabled(False)
-            self.fit_mcmc_refine.setToolTip(self._tr(
-                "需要安装 emcee 包才能启用 MCMC 精炼。"
-                "pip install emcee numpy corner",
-                "Install the 'emcee' package to enable MCMC "
-                "refinement. pip install emcee numpy corner",
-            ))
-        else:
-            self.fit_mcmc_refine.setToolTip(self._tr(
-                "对最佳 AIC 模型的参数后验分布做 MCMC 采样，"
-                "给出更可靠的置信区间（可能耗时 10–60 秒）。",
-                "Run emcee MCMC on the best-AIC model to produce "
-                "robust credible intervals (may take 10–60 s).",
-            ))
-    fit_layout.addWidget(self.fit_mcmc_refine)
-
-    self.fit_model_hint = QLabel("")
-    self.fit_model_hint.setStyleSheet("color:#aa5500;")
-    self.fit_model_hint.setWordWrap(True)
-    self.fit_model_hint.hide()
-    fit_layout.addWidget(self.fit_model_hint)
-
-    self.inverse_power_widget = QWidget()
-    inverse_layout = QHBoxLayout(self.inverse_power_widget)
-    inverse_layout.setContentsMargins(0, 0, 0, 0)
-    lbl_inv_min = QLabel("min p：")
-    self._register_text(lbl_inv_min, "min p：", "min p:")
-    inverse_layout.addWidget(lbl_inv_min)
-    self.inverse_min_spin = QSpinBox()
-    self.inverse_min_spin.setRange(0, 12)
-    self.inverse_min_spin.setValue(1)
-    inverse_layout.addWidget(self.inverse_min_spin)
-    lbl_inv_max = QLabel("max p：")
-    self._register_text(lbl_inv_max, "max p：", "max p:")
-    inverse_layout.addWidget(lbl_inv_max)
-    self.inverse_max_spin = QSpinBox()
-    self.inverse_max_spin.setRange(0, 18)
-    self.inverse_max_spin.setValue(3)
-    inverse_layout.addWidget(self.inverse_max_spin)
-    inverse_layout.addStretch()
-    fit_layout.addWidget(self.inverse_power_widget)
-    self.inverse_power_widget.hide()
-
-    self.pade_widget = QWidget()
-    pade_layout = QHBoxLayout(self.pade_widget)
-    pade_layout.setContentsMargins(0, 0, 0, 0)
-    lbl_pade_m = QLabel("Padé m：")
-    self._register_text(lbl_pade_m, "Padé m：", "Padé m:")
-    pade_layout.addWidget(lbl_pade_m)
-    self.pade_m_spin = QSpinBox()
-    self.pade_m_spin.setRange(0, 6)
-    self.pade_m_spin.setValue(1)
-    pade_layout.addWidget(self.pade_m_spin)
-    lbl_pade_n = QLabel("n：")
-    self._register_text(lbl_pade_n, "n：", "n:")
-    pade_layout.addWidget(lbl_pade_n)
-    self.pade_n_spin = QSpinBox()
-    self.pade_n_spin.setRange(0, 6)
-    self.pade_n_spin.setValue(1)
-    pade_layout.addWidget(self.pade_n_spin)
-    pade_layout.addStretch()
-    fit_layout.addWidget(self.pade_widget)
-    self.pade_widget.hide()
-
-    self.poly_degree_widget = QWidget()
-    poly_layout = QHBoxLayout(self.poly_degree_widget)
-    poly_layout.setContentsMargins(0, 0, 0, 0)
-    lbl_poly_deg = QLabel("多项式最高阶：")
-    self._register_text(lbl_poly_deg, "多项式最高阶：", "Polynomial degree:")
-    poly_layout.addWidget(lbl_poly_deg)
-    self.poly_degree_spin = QSpinBox()
-    self.poly_degree_spin.setRange(1, 18)
-    self.poly_degree_spin.setValue(max(3, self._baseline_poly_degree))
-    poly_layout.addWidget(self.poly_degree_spin)
-    poly_layout.addStretch()
-    fit_layout.addWidget(self.poly_degree_widget)
-    self.poly_degree_widget.hide()
-
-    fit_expr_title_row = QHBoxLayout()
-    lbl_fit_expr = QLabel("模型表达式：")
-    self._register_text(lbl_fit_expr, "模型表达式：", "Model expression:")
-    fit_expr_title_row.addWidget(lbl_fit_expr)
-    fit_expr_title_row.addStretch()
-    self.fit_formula_preview_button = _make_formula_preview_button(self, None, lhs="y", title="Preview formula")
-    fit_expr_title_row.addWidget(self.fit_formula_preview_button)
-    fit_layout.addLayout(fit_expr_title_row)
-    self.fit_expr_edit = QPlainTextEdit("")
-    self.fit_expr_edit.setPlaceholderText("自定义模型表达式，例如 A*x**(-p) + C / Custom model expression")
-    fit_layout.addWidget(self.fit_expr_edit)
-    self.fit_formula_preview_button.clicked.connect(
-        lambda: _open_formula_preview(self, self.fit_expr_edit, lhs="y")
-    )
-    fit_expr_hint_row = QHBoxLayout()
-    fit_expr_hint_row.setContentsMargins(0, 0, 0, 0)
-    fit_expr_hint_row.setSpacing(6)
-    self.fit_func_help_btn = QPushButton("函数支持")
-    self.fit_func_help_btn.setFlat(True)
-    self.fit_func_help_btn.setFocusPolicy(Qt.NoFocus)
-    self.fit_func_help_btn.setToolTip("")  # will be set in _update_placeholders_language
-    self.fit_func_help_btn.clicked.connect(self._show_error_functions)
-    self._register_text(self.fit_func_help_btn, "函数支持", "Functions")
-    fit_expr_hint_row.addWidget(self.fit_func_help_btn)
-    fit_expr_hint_row.addStretch()
-    fit_layout.addLayout(fit_expr_hint_row)
-    self.custom_constants_editor = ConstantsEditor(min_rows=3, checked=False, numeric_mode="mpmath")
-    self._register_text(self.custom_constants_editor.checkbox, "启用常数设置", "Enable constants")
-    _apply_equal_column_stretch(self.custom_constants_editor.table_view)
-    self.custom_constants_editor.table_view.setStyleSheet(_get_table_style())
-    self.custom_constants_editor.table_view.setMinimumHeight(120)
-    custom_param_header = QHBoxLayout()
-    lbl_custom_params = QLabel("参数列表：")
-    self._register_text(lbl_custom_params, "参数列表：", "Parameters:")
-    custom_param_header.addWidget(lbl_custom_params)
-    custom_param_header.addStretch()
-    self.custom_param_refresh_btn = QPushButton("识别参数")
-    self._register_text(self.custom_param_refresh_btn, "识别参数", "Detect")
-    self.custom_param_refresh_btn.clicked.connect(self._refresh_custom_parameter_rows)
-    custom_param_header.addWidget(self.custom_param_refresh_btn)
-    self.custom_param_add_btn = QPushButton("+ 行")
-    self._register_text(self.custom_param_add_btn, "+ 行", "+ Row")
-    self.custom_param_add_btn.clicked.connect(lambda: _add_parameter_table_row(self, "custom_params_table"))
-    custom_param_header.addWidget(self.custom_param_add_btn)
-    self.custom_param_remove_btn = QPushButton("- 行")
-    self._register_text(self.custom_param_remove_btn, "- 行", "- Row")
-    self.custom_param_remove_btn.clicked.connect(lambda: _remove_parameter_table_rows(self, "custom_params_table"))
-    custom_param_header.addWidget(self.custom_param_remove_btn)
-    custom_param_header_widget = QWidget()
-    custom_param_header_widget.setLayout(custom_param_header)
-    self.custom_param_header_widget = custom_param_header_widget
-    fit_layout.addWidget(custom_param_header_widget)
-    self.custom_constraints_checkbox = QCheckBox("启用参数约束")
-    self.custom_constraints_checkbox.setChecked(False)
-    self._register_text(self.custom_constraints_checkbox, "启用参数约束", "Enable parameter constraints")
-    fit_layout.addWidget(self.custom_constraints_checkbox)
-    self.custom_params_table = ParameterTable()
-    self.custom_params_table.table_view.setMinimumHeight(150)
-    self.custom_params_table.table_view.setStyleSheet(_get_table_style())
-    _apply_equal_column_stretch(self.custom_params_table.table_view)
-    self.custom_constraints_checkbox.toggled.connect(self.custom_params_table.set_constraints_enabled)
-    fit_layout.addWidget(self.custom_params_table)
-    fit_layout.addWidget(self.custom_constants_editor)
-
-    self.implicit_model_widget = QGroupBox("自洽隐式模型")
-    self._register_title(self.implicit_model_widget, "自洽隐式模型", "Self-consistent / implicit")
-    implicit_layout = QVBoxLayout(self.implicit_model_widget)
-
-    self.implicit_equation_edit = QPlainTextEdit("")
-    self.implicit_equation_edit.setMinimumHeight(84)
-    self.implicit_equation_edit.setPlaceholderText("示例：a + b*Cos[u] + c*x / Example: a + b*Cos[u] + c*x")
-    lbl_implicit_eq = QLabel("自洽方程：")
-    self._register_text(lbl_implicit_eq, "自洽方程：", "Self-consistent equation:")
-    implicit_equation_title_row = QHBoxLayout()
-    implicit_equation_title_row.addWidget(lbl_implicit_eq)
-    implicit_equation_title_row.addStretch()
-    self.implicit_equation_preview_button = _make_formula_preview_button(
-        self,
-        self.implicit_equation_edit,
-        lhs=lambda: self.implicit_variable_edit.text(),
-        title="Preview equation",
-        object_name="implicit_equation_preview_button",
-        tooltip_zh="预览方程",
-    )
-    implicit_equation_title_row.addWidget(self.implicit_equation_preview_button)
-    implicit_layout.addLayout(implicit_equation_title_row)
-    implicit_layout.addWidget(self.implicit_equation_edit)
-
-    self.implicit_output_edit = QPlainTextEdit("")
-    self.implicit_output_edit.setMinimumHeight(84)
-    self.implicit_output_edit.setPlaceholderText("示例：u / Example: u")
-    lbl_implicit_output = QLabel("输出表达式：")
-    self._register_text(lbl_implicit_output, "输出表达式：", "Output expression:")
-    implicit_output_title_row = QHBoxLayout()
-    implicit_output_title_row.addWidget(lbl_implicit_output)
-    implicit_output_title_row.addStretch()
-    self.implicit_output_preview_button = _make_formula_preview_button(
-        self,
-        self.implicit_output_edit,
-        lhs="y",
-        title="Preview output",
-        object_name="implicit_output_preview_button",
-        tooltip_zh="预览输出",
-    )
-    implicit_output_title_row.addWidget(self.implicit_output_preview_button)
-    implicit_layout.addLayout(implicit_output_title_row)
-    implicit_layout.addWidget(self.implicit_output_edit)
-
-    implicit_param_header = QHBoxLayout()
-    lbl_implicit_params = QLabel("参数列表：")
-    self._register_text(lbl_implicit_params, "参数列表：", "Parameters:")
-    implicit_param_header.addWidget(lbl_implicit_params)
-    implicit_param_header.addStretch()
-    self.implicit_param_refresh_btn = QPushButton("识别参数")
-    self._register_text(self.implicit_param_refresh_btn, "识别参数", "Detect")
-    self.implicit_param_refresh_btn.clicked.connect(self._refresh_implicit_parameter_rows)
-    implicit_param_header.addWidget(self.implicit_param_refresh_btn)
-    self.implicit_param_add_btn = QPushButton("+ 行")
-    self._register_text(self.implicit_param_add_btn, "+ 行", "+ Row")
-    self.implicit_param_add_btn.clicked.connect(lambda: _add_parameter_table_row(self, "implicit_params_table"))
-    implicit_param_header.addWidget(self.implicit_param_add_btn)
-    self.implicit_param_remove_btn = QPushButton("- 行")
-    self._register_text(self.implicit_param_remove_btn, "- 行", "- Row")
-    self.implicit_param_remove_btn.clicked.connect(lambda: _remove_parameter_table_rows(self, "implicit_params_table"))
-    implicit_param_header.addWidget(self.implicit_param_remove_btn)
-    implicit_layout.addLayout(implicit_param_header)
-
-    self.implicit_params_table = ParameterTable()
-    self.implicit_params_table.table_view.setMinimumHeight(150)
-    self.implicit_params_table.table_view.setStyleSheet(_get_table_style())
-    _apply_equal_column_stretch(self.implicit_params_table.table_view)
-    implicit_layout.addWidget(self.implicit_params_table)
-
-    self.implicit_constraints_checkbox = QCheckBox("启用参数约束")
-    self.implicit_constraints_checkbox.setChecked(False)
-    self._register_text(self.implicit_constraints_checkbox, "启用参数约束", "Enable parameter constraints")
-    self.implicit_constraints_checkbox.toggled.connect(self.implicit_params_table.set_constraints_enabled)
-    implicit_layout.addWidget(self.implicit_constraints_checkbox)
-
-    self.implicit_constants_editor = ConstantsEditor(min_rows=3, checked=True, numeric_mode="mpmath")
-    self._register_text(self.implicit_constants_editor.checkbox, "启用常数设置", "Enable constants")
-    _apply_equal_column_stretch(self.implicit_constants_editor.table_view)
-    self.implicit_constants_editor.table_view.setStyleSheet(_get_table_style())
-    self.implicit_constants_editor.table_view.setMinimumHeight(120)
-    implicit_layout.addWidget(self.implicit_constants_editor)
-
-    implicit_basic_layout = QFormLayout()
-    self.implicit_variable_edit = QLineEdit("u")
-    lbl_implicit_var = QLabel("隐式变量：")
-    self._register_text(lbl_implicit_var, "隐式变量：", "Implicit variable:")
-    implicit_basic_layout.addRow(lbl_implicit_var, self.implicit_variable_edit)
-    implicit_layout.addLayout(implicit_basic_layout)
-
-    implicit_solver_layout = QFormLayout()
-    self.implicit_initial_edit = QLineEdit("0.3")
-    lbl_implicit_initial = QLabel("初始值：")
-    self._register_text(lbl_implicit_initial, "初始值：", "Initial:")
-    implicit_solver_layout.addRow(lbl_implicit_initial, self.implicit_initial_edit)
-    self.implicit_tolerance_edit = QLineEdit("1e-30")
-    lbl_implicit_tol = QLabel("求解容差：")
-    self._register_text(lbl_implicit_tol, "求解容差：", "Tolerance:")
-    implicit_solver_layout.addRow(lbl_implicit_tol, self.implicit_tolerance_edit)
-    self.implicit_max_iterations_spin = QSpinBox()
-    self.implicit_max_iterations_spin.setRange(1, 10000)
-    self.implicit_max_iterations_spin.setValue(80)
-    lbl_implicit_iter = QLabel("最大迭代：")
-    self._register_text(lbl_implicit_iter, "最大迭代：", "Max iterations:")
-    implicit_solver_layout.addRow(lbl_implicit_iter, self.implicit_max_iterations_spin)
-    self.implicit_method_combo = QComboBox()
-    implicit_method_items = [
-        ("固定点", "Fixed point", "fixed_point"),
-        ("求根", "Root", "root"),
-    ]
-    for zh, en, data in implicit_method_items:
-        self.implicit_method_combo.addItem(zh, data)
-    self._register_combo(self.implicit_method_combo, implicit_method_items)
-    lbl_implicit_method = QLabel("求解方法：")
-    self._register_text(lbl_implicit_method, "求解方法：", "Method:")
-    implicit_solver_layout.addRow(lbl_implicit_method, self.implicit_method_combo)
-    self.implicit_timeout_spin = QSpinBox()
-    self.implicit_timeout_spin.setRange(0, 86400)
-    self.implicit_timeout_spin.setValue(300)
-    self.implicit_timeout_spin.setToolTip(self._tr("0 表示不自动超时，只能手动停止。", "0 disables automatic timeout; use Stop to cancel."))
-    lbl_implicit_timeout = QLabel("最长运行秒数：")
-    self._register_text(lbl_implicit_timeout, "最长运行秒数：", "Max runtime (s):")
-    implicit_solver_layout.addRow(lbl_implicit_timeout, self.implicit_timeout_spin)
-    implicit_layout.addLayout(implicit_solver_layout)
-    fit_layout.addWidget(self.implicit_model_widget)
-    self.implicit_model_widget.hide()
-    _bind_fitting_schema_fields(
-        self,
-        lbl_model=lbl_model,
-        fit_items=fit_items,
-        lbl_fit_expr=lbl_fit_expr,
-        lbl_implicit_eq=lbl_implicit_eq,
-        lbl_implicit_output=lbl_implicit_output,
-        lbl_implicit_var=lbl_implicit_var,
-        lbl_implicit_initial=lbl_implicit_initial,
-        lbl_implicit_tol=lbl_implicit_tol,
-        lbl_implicit_iter=lbl_implicit_iter,
-        lbl_implicit_method=lbl_implicit_method,
-        implicit_method_items=implicit_method_items,
-        lbl_implicit_timeout=lbl_implicit_timeout,
-        lbl_custom_params=lbl_custom_params,
-        lbl_implicit_params=lbl_implicit_params,
-    )
-
-    var_header = QHBoxLayout()
-    lbl_varmap = QLabel("变量映射：")
-    self._register_text(lbl_varmap, "变量映射：", "Variable mapping:")
-    var_header.addWidget(lbl_varmap)
-    var_header.addStretch()
-    self.add_variable_btn = QPushButton("+")
-    self.add_variable_btn.setFixedWidth(28)
-    self.add_variable_btn.setToolTip(self._tr("添加变量映射", "Add variable mapping"))
-    self.add_variable_btn.clicked.connect(self._add_variable_row)
-    var_header.addWidget(self.add_variable_btn)
-    self.remove_variable_btn = QPushButton("-")
-    self.remove_variable_btn.setFixedWidth(28)
-    self.remove_variable_btn.setToolTip(self._tr("删除最后一个变量映射", "Remove last variable mapping"))
-    self.remove_variable_btn.clicked.connect(self._remove_variable_row)
-    var_header.addWidget(self.remove_variable_btn)
-    fit_layout.addLayout(var_header)
-
-    self.variable_rows: list[tuple[QLineEdit, QLineEdit, QWidget]] = []
-    self.variable_name_pool = ["x", "y", "z", "u", "v", "w"]
-    self.variable_rows_layout = QVBoxLayout()
-    fit_layout.addLayout(self.variable_rows_layout)
-    self._reset_variable_rows(default_var="x", default_column="A")
-
-    target_row = QHBoxLayout()
-    lbl_target = QLabel("目标列：")
-    self._register_text(lbl_target, "目标列：", "Target column:")
-    target_row.addWidget(lbl_target)
-    self.fit_target_edit = QLineEdit("B")
-    target_row.addWidget(self.fit_target_edit)
-    fit_layout.addLayout(target_row)
-
-    weight_row = QHBoxLayout()
-    lbl_weight_mode = QLabel("统计/系统：")
-    self._register_text(lbl_weight_mode, "统计/系统：", "Stat./System:")
-    weight_row.addWidget(lbl_weight_mode)
-    self.fit_weighted_checkbox = QCheckBox("统计误差加权")
-    self._register_text(self.fit_weighted_checkbox, "统计误差加权", "Statistical weighting (sigma)")
-    weight_row.addWidget(self.fit_weighted_checkbox)
-    fit_layout.addLayout(weight_row)
-
-    self.left_layout.addWidget(self.fit_box)
-    self.fit_box.hide()
-    self.inverse_min_spin.valueChanged.connect(self._on_model_settings_changed)
-    self.inverse_max_spin.valueChanged.connect(self._on_model_settings_changed)
-    self.pade_m_spin.valueChanged.connect(self._on_model_settings_changed)
-    self.pade_n_spin.valueChanged.connect(self._on_model_settings_changed)
-    self.poly_degree_spin.valueChanged.connect(self._on_model_settings_changed)
-
-    # Root-solving module
-    self.root_box = QGroupBox("求根")
-    self._register_title(self.root_box, "求根", "Root solving")
-    root_layout = QVBoxLayout(self.root_box)
-
-    root_equation_title_row = QHBoxLayout()
-    lbl_root_equations = QLabel("方程：")
-    self._register_text(lbl_root_equations, "方程：", "Equations:")
-    root_equation_title_row.addWidget(lbl_root_equations)
-    self.root_equations_help_button = _make_small_help_button()
-    root_equation_title_row.addWidget(self.root_equations_help_button)
-    root_equation_title_row.addStretch()
-    self.root_formula_preview_button = _make_formula_preview_button(
-        self,
-        None,
-        title="Preview equations",
-        object_name="root_formula_preview_button",
-        tooltip_zh="预览方程",
-    )
-    self.root_formula_preview_button.clicked.connect(lambda: _open_root_formula_preview(self))
-    root_equation_title_row.addWidget(self.root_formula_preview_button)
-    root_layout.addLayout(root_equation_title_row)
-
-    self.root_equations_edit = QPlainTextEdit()
-    self.root_equations_edit.setMinimumHeight(96)
-    self.root_equations_edit.setPlaceholderText(
-        "每行一个方程，按 F_i(...)=0 求解；示例：x^2 - A / One equation per line as F_i(...)=0; example: x^2 - A"
-    )
-    root_layout.addWidget(self.root_equations_edit)
-
-    root_mode_layout = QFormLayout()
-    self.root_mode_combo = QComboBox()
-    root_mode_items = [
-        ("标量", "Scalar", "scalar"),
-        ("扫描多根", "Scan multiple roots", "scan_multiple"),
-        ("多项式", "Polynomial", "polynomial"),
-        ("方程组", "System", "system"),
-    ]
-    for zh, _en, data in root_mode_items:
-        self.root_mode_combo.addItem(zh, data)
-    self._register_combo(self.root_mode_combo, root_mode_items)
-    lbl_root_mode = QLabel("求解模式：")
-    self._register_text(lbl_root_mode, "求解模式：", "Solve mode:")
-    root_mode_row = QHBoxLayout()
-    root_mode_row.addWidget(self.root_mode_combo)
-    self.root_mode_help_button = _make_small_help_button()
-    root_mode_row.addWidget(self.root_mode_help_button)
-    root_mode_row.addStretch()
-    root_mode_layout.addRow(lbl_root_mode, root_mode_row)
-    root_layout.addLayout(root_mode_layout)
-
-    root_unknown_header = QHBoxLayout()
-    lbl_root_unknowns = QLabel("未知量：")
-    self._register_text(lbl_root_unknowns, "未知量：", "Unknowns:")
-    root_unknown_header.addWidget(lbl_root_unknowns)
-    self.root_unknowns_help_button = _make_small_help_button()
-    root_unknown_header.addWidget(self.root_unknowns_help_button)
-    root_unknown_header.addStretch()
-    self.root_detect_unknowns_button = QPushButton("识别未知量")
-    self._register_text(self.root_detect_unknowns_button, "识别未知量", "Detect")
-    self.root_detect_unknowns_button.setToolTip(self._tr("从方程中识别未知量", "Detect unknowns from equations"))
-    self.root_detect_unknowns_button.clicked.connect(self._refresh_root_unknown_rows)
-    root_unknown_header.addWidget(self.root_detect_unknowns_button)
-    self.root_add_unknown_button = QPushButton("+ 行")
-    self._register_text(self.root_add_unknown_button, "+ 行", "+ Row")
-    self.root_add_unknown_button.setToolTip(self._tr("手动添加未知量行", "Add an unknown row"))
-    self.root_add_unknown_button.clicked.connect(lambda: _add_detected_rows_table_row(self, "root_unknowns_table"))
-    root_unknown_header.addWidget(self.root_add_unknown_button)
-    self.root_remove_unknown_button = QPushButton("- 行")
-    self._register_text(self.root_remove_unknown_button, "- 行", "- Row")
-    self.root_remove_unknown_button.setToolTip(self._tr("删除选中的未知量行", "Remove selected unknown rows"))
-    self.root_remove_unknown_button.clicked.connect(lambda: _remove_detected_rows_table_rows(self, "root_unknowns_table"))
-    root_unknown_header.addWidget(self.root_remove_unknown_button)
-    root_layout.addLayout(root_unknown_header)
-
-    self.root_unknowns_table = DetectedRowsTable(
-        columns=("name", "initial", "lower", "upper"),
-        headers=("名称", "初始值", "下界", "上界"),
-        min_rows=2,
-    )
-    self.root_unknowns_table.table_view.setMinimumHeight(140)
-    self.root_unknowns_table.table_view.setStyleSheet(_get_table_style())
-    _apply_equal_column_stretch(self.root_unknowns_table.table_view)
-    root_layout.addWidget(self.root_unknowns_table)
-
-    self.root_constants_editor = ConstantsEditor(min_rows=3, checked=False, numeric_mode="uncertainty")
-    self._register_text(self.root_constants_editor.checkbox, "启用常数设置", "Enable constants")
-    _apply_equal_column_stretch(self.root_constants_editor.table_view)
-    self.root_constants_editor.table_view.setStyleSheet(_get_table_style())
-    self.root_constants_editor.table_view.setMinimumHeight(120)
-    root_layout.addWidget(self.root_constants_editor)
-    _bind_root_schema_fields(self, lbl_root_equations, lbl_root_mode, lbl_root_unknowns, root_mode_items)
-    _refresh_root_field_help(self)
-
-    self.root_uncertainty_group = QGroupBox("根的不确定度传播")
-    self._register_title(self.root_uncertainty_group, "根的不确定度传播", "Root uncertainty propagation")
-    root_uncertainty_layout = QFormLayout(self.root_uncertainty_group)
-    self.root_uncertainty_method_combo = QComboBox()
-    root_uncertainty_method_items = [
-        ("Taylor（偏导）", "Taylor (derivative)", "taylor"),
-        ("Monte Carlo", "Monte Carlo", "monte_carlo"),
-        ("关闭", "Off", "off"),
-    ]
-    for zh, _en, data in root_uncertainty_method_items:
-        self.root_uncertainty_method_combo.addItem(zh, data)
-    self._register_combo(self.root_uncertainty_method_combo, root_uncertainty_method_items)
-    lbl_root_uncertainty_method = QLabel("方法：")
-    self._register_text(lbl_root_uncertainty_method, "方法：", "Method:")
-    root_uncertainty_layout.addRow(lbl_root_uncertainty_method, self.root_uncertainty_method_combo)
-
-    self.root_uncertainty_taylor_widget = QWidget()
-    root_taylor_layout = QHBoxLayout(self.root_uncertainty_taylor_widget)
-    root_taylor_layout.setContentsMargins(0, 0, 0, 0)
-    root_taylor_layout.setSpacing(6)
-    self.root_uncertainty_order_label = QLabel("阶数：")
-    self._register_text(self.root_uncertainty_order_label, "阶数：", "Order:")
-    self.root_uncertainty_order_spin = QSpinBox()
-    self.root_uncertainty_order_spin.setRange(1, 2)
-    self.root_uncertainty_order_spin.setValue(1)
-    self.root_uncertainty_order_spin.setToolTip(
-        self._tr(
-            "1 阶：隐函数线性传播；2 阶：对标量实根使用二阶有限差分传播。",
-            "Order 1: linear implicit propagation; order 2: scalar second-order finite-difference propagation.",
-        )
-    )
-    root_taylor_layout.addWidget(self.root_uncertainty_order_label)
-    root_taylor_layout.addWidget(self.root_uncertainty_order_spin)
-    root_taylor_layout.addStretch()
-    root_uncertainty_layout.addRow("", self.root_uncertainty_taylor_widget)
-
-    self.root_monte_carlo_samples_label = QLabel("样本数：")
-    self._register_text(self.root_monte_carlo_samples_label, "样本数：", "Samples:")
-    self.root_monte_carlo_samples_spin = QSpinBox()
-    self.root_monte_carlo_samples_spin.setRange(100, 50000)
-    self.root_monte_carlo_samples_spin.setValue(2000)
-    root_uncertainty_layout.addRow(self.root_monte_carlo_samples_label, self.root_monte_carlo_samples_spin)
-
-    self.root_monte_carlo_seed_label = QLabel("随机种子：")
-    self._register_text(self.root_monte_carlo_seed_label, "随机种子：", "Seed:")
-    self.root_monte_carlo_seed_edit = QLineEdit()
-    root_uncertainty_layout.addRow(self.root_monte_carlo_seed_label, self.root_monte_carlo_seed_edit)
-
-    self.root_uncertainty_method_help_label = QLabel()
-    self.root_uncertainty_method_help_label.setWordWrap(True)
-    root_uncertainty_layout.addRow(self.root_uncertainty_method_help_label)
-    self.root_uncertainty_method_combo.currentIndexChanged.connect(
-        lambda _index: _on_root_uncertainty_method_changed(self)
-    )
-    root_layout.addWidget(self.root_uncertainty_group)
-    _on_root_uncertainty_method_changed(self)
-
-    self.left_layout.addWidget(self.root_box)
-    self.root_box.hide()
+    self.mode_stack = CurrentPageStack()
+    self.mode_stack.setObjectName("mode_stack")
+    _build_mode_stack_pages(self)
 
     # Options
     options_box = QGroupBox("选项")
@@ -1839,33 +1063,79 @@ def build_left_panel(self):
     # (window_latex_pdf_mixin.compile_latex_to_pdf) keep working
     # unchanged — they reference ``self.latex_engine_combo``.
 
-    self.left_layout.addWidget(options_box)
+    self.output_setup_section_layout.addWidget(options_box)
 
     self.run_button = QPushButton("开始执行")
+    self.run_button.setObjectName("run_button")
+    self.run_button.setProperty("datalab_primary_run_button", True)
+    self.run_button.setProperty("datalab_run_state", "run")
     self._register_text(self.run_button, "开始执行", "Run")
-    self.run_button.clicked.connect(self.run_calculation)
-    self.left_layout.addWidget(self.run_button)
+    self.run_button.clicked.connect(lambda _checked=False: self.run_calculation())
+    self.run_section_layout.addWidget(self.run_button)
     self._update_model_controls()
 
 def build_right_panel(self, layout: QVBoxLayout):
+    self.workbench_result_overview_panel = build_result_overview(self)
+    layout.addWidget(self.workbench_result_overview_panel)
+
+    self.workbench_result_details_panel = QWidget()
+    self.workbench_result_details_panel.setObjectName("workbench_result_details_panel")
+    self.workbench_result_details_panel.setProperty("datalab_result_detail_card", True)
+    self.workbench_result_details_panel.setStyleSheet(result_detail_card_style(dark=is_dark_theme()))
+    details_layout = QVBoxLayout(self.workbench_result_details_panel)
+    details_layout.setContentsMargins(10, 8, 10, 10)
+    details_layout.setSpacing(6)
+    self.workbench_result_details_title = QLabel(self._tr("结果详情", "Result details"))
+    self.workbench_result_details_title.setObjectName("workbench_result_details_title")
+    self._register_text(self.workbench_result_details_title, "结果详情", "Result details")
+    details_layout.addWidget(self.workbench_result_details_title)
+    self.workbench_result_details_empty_label = QLabel(self._tr("暂无结果详情", "No result details"))
+    self.workbench_result_details_empty_label.setObjectName("workbench_result_details_empty_label")
+    self.workbench_result_details_empty_label.setWordWrap(True)
+    details_layout.addWidget(self.workbench_result_details_empty_label)
+
     self.tabs = QTabWidget()
     self.tabs.setProperty("datalab_schema_key", "main.result_tabs")
-    layout.addWidget(self.tabs)
+    self.tabs.setDocumentMode(True)
+    self.tabs.tabBar().hide()
+    self.tabs.setStyleSheet(result_tab_pane_style())
+    details_layout.addWidget(self.tabs, 1)
+    layout.addWidget(self.workbench_result_details_panel, 1)
 
     # Result tab
     result_widget = QWidget()
     result_layout = QVBoxLayout(result_widget)
+    result_layout.setContentsMargins(0, 0, 0, 0)
+    result_layout.setSpacing(8)
     self.result_tabs = QTabWidget()
+    self.result_tabs.setObjectName("result_detail_tabs")
+    self.result_tabs.setDocumentMode(True)
+    self.result_tabs.tabBar().setUsesScrollButtons(False)
     result_layout.addWidget(self.result_tabs)
     self.result_tabs.setProperty("datalab_schema_key", "results.tabs")
+    result_view_specs = {
+        _result_view_alias(view_key): {
+            "schema_key": _result_view_schema_key(spec.key),
+            "attachment_key": spec.attachment_key,
+            "raw_columns": tuple(spec.raw_columns),
+            "display_columns": tuple(spec.display_columns),
+            "controls": tuple(field.key for field in spec.controls),
+        }
+        for view_key, spec in DESKTOP_RESULT_VIEWS.items()
+        if view_key in _RESULT_VIEW_ORDER
+    }
     self.result_tabs.setProperty(
         "datalab_schema_tabs",
         {
-            "numeric": "results.numeric",
-            "image": "results.image",
+            _result_view_alias(view_key): _result_view_schema_key(DESKTOP_RESULT_VIEWS[view_key].key)
+            for view_key in _RESULT_VIEW_ORDER
         },
     )
-    self.result_tab_titles = {"numeric": "数值结果", "image": "图片"}
+    self.result_tabs.setProperty("datalab_result_view_specs", result_view_specs)
+    self.result_tab_titles = {
+        _result_view_alias(view_key): result_view_tab_title(view_key, _LANG_ZH)
+        for view_key in _RESULT_VIEW_ORDER
+    }
 
     numeric_tab = QWidget()
     numeric_layout = QVBoxLayout(numeric_tab)
@@ -1874,7 +1144,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.fit_result_edit = self.result_edit
     self.result_edit.setReadOnly(True)
     self.result_edit.setOpenExternalLinks(False)
-    self.result_edit.setStyleSheet(_get_result_style())
+    self.result_edit.setStyleSheet(result_style())
     self._add_font_control_row(numeric_layout, self.result_edit, "字体大小：")
 
     # Display formatting controls shared by all result types (number only; LaTeX unaffected)
@@ -1905,7 +1175,9 @@ def build_right_panel(self, layout: QVBoxLayout):
     export_row.addStretch()
     numeric_layout.addLayout(export_row)
     numeric_layout.addWidget(self.result_edit)
-    self.result_tabs.addTab(numeric_tab, "数值结果")
+    numeric_spec = DESKTOP_RESULT_VIEWS["result.numeric"]
+    numeric_index = self.result_tabs.addTab(numeric_tab, result_view_tab_title(numeric_spec.key, _LANG_ZH))
+    self.result_tabs.setTabToolTip(numeric_index, result_view_tooltip(numeric_spec.key, _LANG_ZH))
     self._reset_csv_data()
 
     image_tab = QWidget()
@@ -1945,6 +1217,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     self._register_text(self.zoom_percent_spin, "", "", "setToolTip")
     self.zoom_percent_spin.setSuffix("%")
     self.zoom_percent_spin.valueChanged.connect(self._on_zoom_percent_changed)
+    self.result_plot_zoom_spin = self.zoom_percent_spin
     controls_layout.addWidget(self.result_zoom_in_btn)
     controls_layout.addWidget(self.result_zoom_out_btn)
     controls_layout.addWidget(self.zoom_percent_spin)
@@ -1966,6 +1239,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.image_page_spin.setFixedWidth(70)
     self._register_text(self.image_page_spin, "", "", "setToolTip")
     self.image_page_spin.valueChanged.connect(self._on_image_page_changed)
+    self.result_plot_page_spin = self.image_page_spin
     self.image_next_btn = QPushButton()
     self.image_next_btn.setIcon(self.style().standardIcon(QStyle.SP_ArrowRight))
     self._register_text(self.image_next_btn, "", "", "setText")
@@ -1991,19 +1265,18 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.result_plot_label.setMinimumHeight(320)
     self.result_plot_scroll.setWidget(self.result_plot_label)
     image_layout.addWidget(self.result_plot_scroll)
-    self.result_tabs.addTab(image_tab, "图片")
+    image_spec = DESKTOP_RESULT_VIEWS["result.image"]
+    image_index = self.result_tabs.addTab(image_tab, result_view_tab_title(image_spec.key, _LANG_ZH))
+    self.result_tabs.setTabToolTip(image_index, result_view_tooltip(image_spec.key, _LANG_ZH))
 
     self.result_tab_index = self.tabs.addTab(result_widget, "结果")
     self.main_tab_titles = {
         "result": "结果",
-        "log": "日志",
-        "latex": "LaTeX",
-        "pdf": "PDF 预览",
     }
     # Tab texts handled via QTabWidget defaults
     self._update_log_scale_visibility()
 
-    # Log tab
+    # Log result view
     log_widget = QWidget()
     log_layout = QVBoxLayout(log_widget)
     self.log_edit = QPlainTextEdit()
@@ -2011,9 +1284,11 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.log_edit.setReadOnly(True)
     self._add_font_control_row(log_layout, self.log_edit, "字体大小：")
     log_layout.addWidget(self.log_edit)
-    self.log_tab_index = self.tabs.addTab(log_widget, "日志")
+    log_spec = DESKTOP_RESULT_VIEWS["result.log"]
+    self.log_tab_index = self.result_tabs.addTab(log_widget, result_view_tab_title(log_spec.key, _LANG_ZH))
+    self.result_tabs.setTabToolTip(self.log_tab_index, result_view_tooltip(log_spec.key, _LANG_ZH))
 
-    # LaTeX tab
+    # LaTeX result view
     latex_widget = QWidget()
     latex_layout = QVBoxLayout(latex_widget)
     toolbar = QHBoxLayout()
@@ -2069,11 +1344,29 @@ def build_right_panel(self, layout: QVBoxLayout):
     latex_controls_row = QHBoxLayout()
     lbl_font = QLabel("字体大小：")
     self._register_text(lbl_font, "字体大小：", "Font size:")
+    self._register_text(
+        lbl_font,
+        "调整 LaTeX 源码视图的显示字体大小。",
+        "Adjust the display font size for the LaTeX source view.",
+        "setToolTip",
+    )
     latex_controls_row.addWidget(lbl_font)
     latex_font_spin = QSpinBox()
     latex_font_spin.setRange(8, 32)
     _default_size = self.latex_edit.font().pointSize()
     latex_font_spin.setValue(max(8, _default_size if _default_size > 0 else 12))
+    latex_font_spin.setToolTip(
+        self._tr(
+            "调整 LaTeX 源码视图的显示字体大小。",
+            "Adjust the display font size for the LaTeX source view.",
+        )
+    )
+    self._register_text(
+        latex_font_spin,
+        "调整 LaTeX 源码视图的显示字体大小。",
+        "Adjust the display font size for the LaTeX source view.",
+        "setToolTip",
+    )
     latex_font_spin.valueChanged.connect(
         lambda value, target=self.latex_edit: self._apply_editor_font_size(target, value)
     )
@@ -2106,9 +1399,11 @@ def build_right_panel(self, layout: QVBoxLayout):
     latex_layout.addLayout(latex_controls_row)
 
     latex_layout.addWidget(self.latex_edit)
-    self.tabs.addTab(latex_widget, "LaTeX")
+    latex_spec = DESKTOP_RESULT_VIEWS["result.latex"]
+    latex_index = self.result_tabs.addTab(latex_widget, result_view_tab_title(latex_spec.key, _LANG_ZH))
+    self.result_tabs.setTabToolTip(latex_index, result_view_tooltip(latex_spec.key, _LANG_ZH))
 
-    # PDF tab
+    # PDF result view
     pdf_widget = QWidget()
     pdf_layout = QVBoxLayout(pdf_widget)
     pdf_toolbar = QHBoxLayout()
@@ -2155,7 +1450,9 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.pdf_container_layout.setAlignment(Qt.AlignTop)
     self.pdf_scroll.setWidget(self.pdf_container)
     pdf_layout.addWidget(self.pdf_scroll)
-    self.tabs.addTab(pdf_widget, "PDF 预览")
+    pdf_spec = DESKTOP_RESULT_VIEWS["result.pdf"]
+    pdf_index = self.result_tabs.addTab(pdf_widget, result_view_tab_title(pdf_spec.key, _LANG_ZH))
+    self.result_tabs.setTabToolTip(pdf_index, result_view_tooltip(pdf_spec.key, _LANG_ZH))
     _bind_result_latex_pdf_schema_fields(
         self,
         lbl_digits=lbl_digits,
@@ -2164,23 +1461,17 @@ def build_right_panel(self, layout: QVBoxLayout):
     )
     # record tab indexes for translation
     self.result_tabs_indices = {
-        "numeric": 0,
-        "image": 1,
+        _result_view_alias(view_key): index
+        for index, view_key in enumerate(_RESULT_VIEW_ORDER)
     }
     _bind_result_area_schema_fields(self)
     self.main_tabs_indices = {
         "result": self.tabs.indexOf(result_widget),
-        "log": self.tabs.indexOf(log_widget),
-        "latex": self.tabs.indexOf(latex_widget),
-        "pdf": self.tabs.indexOf(pdf_widget),
     }
     self.tabs.setProperty(
         "datalab_schema_tabs",
         {
             "result": "results.overview",
-            "log": "results.log",
-            "latex": "results.latex",
-            "pdf": "results.pdf",
         },
     )
     self._update_image_status()
@@ -2202,12 +1493,14 @@ def _add_table_column(self):
     # without this the new column shows up at narrow default width
     # and the visible columns become uneven.
     _apply_equal_column_stretch(table)
+    _update_data_summary(self)
 
 
 def _add_table_row(self):
     """Append a new row to the manual data table."""
     table = self.manual_table
     table.setRowCount(table.rowCount() + 1)
+    _update_data_summary(self)
 
 
 def _remove_table_row(self):
@@ -2221,6 +1514,7 @@ def _remove_table_row(self):
     current = table.rowCount()
     if current > 1:
         table.setRowCount(current - 1)
+    _update_data_summary(self)
 
 
 def _remove_table_column(self):
@@ -2238,6 +1532,7 @@ def _remove_table_column(self):
         # remaining columns share the freed width unevenly without
         # an explicit re-apply. Cheap to call regardless.
         _apply_equal_column_stretch(table)
+    _update_data_summary(self)
 
 
 def _view_toggle_label(self, current_index: int) -> str:
@@ -2264,6 +1559,7 @@ def _toggle_data_view(self):
         _load_text_into_table(self, self.manual_data_edit.toPlainText())
         stack.setCurrentIndex(_STACK_PAGE_TABLE)
     self._data_view_toggle.setText(_view_toggle_label(self, stack.currentIndex()))
+    _update_data_summary(self)
 
 
 def _serialize_table(self) -> str:
@@ -2349,21 +1645,14 @@ def _load_text_into_table(self, text: str):
             else:
                 cell_text = repr(val)  # round-trip safe float repr
             table.setItem(r, c, QTableWidgetItem(cell_text))
-
-
-def _toggle_data_collapse(self):
-    """Toggle the data table between collapsed (summary) and expanded."""
-    self._data_expanded = not self._data_expanded
-    self._data_content.setVisible(self._data_expanded)
-    if self._data_expanded:
-        self._data_expand_btn.setText(self._tr("▼ 收起", "▼ Collapse"))
-    else:
-        self._data_expand_btn.setText(self._tr("▶ 展开编辑", "▶ Expand"))
     _update_data_summary(self)
 
 
 def _update_data_summary(self):
     """Update the data summary label with row × col count."""
+    summary_label = getattr(self, "manual_data_summary", None)
+    if summary_label is None:
+        return
     table = self.manual_table
     data_rows = 0
     for r in range(table.rowCount()):
@@ -2376,574 +1665,13 @@ def _update_data_summary(self):
         if has:
             data_rows += 1
     cols = table.columnCount()
-    self._data_summary_label.setText(f"{data_rows} × {cols}")
-
-
-def _update_formula_preview(self, edit_widget, label_widget, lhs=None):
-    """Update the formula preview label through the shared renderer."""
-    if hasattr(edit_widget, "toPlainText"):
-        text = edit_widget.toPlainText().strip()
-    else:
-        text = edit_widget.text().strip()
-    left_hand_side = lhs() if callable(lhs) else lhs
-    _render_formula_preview(label_widget, text, lhs=left_hand_side)
-
-
-def _make_formula_preview_button(
-    self,
-    edit_widget=None,
-    lhs=None,
-    title: str = "Preview formula",
-    *,
-    object_name: str = "",
-    tooltip_zh: str = "预览公式",
-):
-    button = QPushButton("Preview")
-    if object_name:
-        button.setObjectName(object_name)
-    button.setFocusPolicy(Qt.NoFocus)
-    button.setToolTip(title)
-    self._register_text(button, "预览", "Preview")
-    self._register_text(button, tooltip_zh, title, "setToolTip")
-    if edit_widget is not None:
-        button.clicked.connect(lambda: _open_formula_preview(self, edit_widget, lhs=lhs))
-    return button
-
-
-def _make_small_help_button() -> QPushButton:
-    button = QPushButton("?")
-    button.setFlat(True)
-    button.setFocusPolicy(Qt.NoFocus)
-    button.setFixedWidth(24)
-    return button
-
-
-def _bind_extrapolation_schema_fields(
-    self,
-    *,
-    method_label: QLabel,
-    lbl_custom: QLabel,
-    power_x_labels: list[QLabel],
-    lbl_p: QLabel,
-    lbl_seed: QLabel,
-    lbl_variant: QLabel,
-    lbl_order: QLabel,
-    lbl_weight: QLabel,
-    lbl_beta: QLabel,
-    lbl_richardson_p: QLabel,
-    lbl_uncert: QLabel,
-    combo_items: list[tuple[str, str, str]],
-) -> None:
-    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
-    method_field = FormFieldSpec(
-        key="extrapolation.method",
-        widget_kind="select",
-        label=LocalizedText("外推方法：", "Method:"),
-        tooltip=LocalizedText(
-            "选择外推算法。不同方法会显示对应的参数设置。",
-            "Choose the extrapolation algorithm. Different methods show their relevant parameter settings.",
-        ),
-        required=True,
-        choices=[
-            ChoiceSpec(value=data, label=LocalizedText(zh, en))
-            for zh, en, data in combo_items
-        ],
-    )
-    method_help_field = FormFieldSpec(
-        key="extrapolation.method",
-        widget_kind="button",
-        label=LocalizedText("外推方法帮助", "Extrapolation method help"),
-        tooltip=LocalizedText(
-            "点击查看当前外推方法的详细说明、适用场景和参数解释。",
-            "Click to view detailed description, applicable scenarios, and parameter explanations for the current method.",
-        ),
-        required=False,
-    )
-    custom_formula_field = FormFieldSpec(
-        key="extrapolation.custom.formula",
-        widget_kind="textarea",
-        label=LocalizedText("自定义公式：", "Custom formula:"),
-        placeholder=LocalizedText(
-            "示例: (C - B)^2/(B - A) + C 或 Exp[-x1]*Sin[x2]",
-            "Example: (C - B)^2/(B - A) + C or Exp[-x1]*Sin[x2]",
-        ),
-        tooltip=LocalizedText(
-            "输入自定义三点外推公式。可使用 A/B/C、列名或 x1/x2/x3，并支持数学函数。",
-            "Enter a custom three-point extrapolation formula. Use A/B/C, column names, or x1/x2/x3; math functions are supported.",
-        ),
-        required=True,
-    )
-    custom_formula_preview_field = FormFieldSpec(
-        key="extrapolation.custom.formula",
-        widget_kind="button",
-        label=LocalizedText("预览公式", "Preview formula"),
-        tooltip=LocalizedText(
-            "打开渲染后的自定义外推公式预览。",
-            "Open a rendered preview of the custom extrapolation formula.",
-        ),
-        required=False,
-    )
-    custom_functions_field = FormFieldSpec(
-        key="extrapolation.custom.functions",
-        widget_kind="button",
-        label=LocalizedText("函数支持", "Functions"),
-        tooltip=LocalizedText(
-            "查看自定义外推公式支持的函数和表达式语法。",
-            "View supported functions and expression syntax for custom extrapolation formulas.",
-        ),
-        required=False,
-    )
-    power_x_fields = [
-        FormFieldSpec(
-            key=f"extrapolation.power_law.x{idx}",
-            widget_kind="text",
-            label=LocalizedText(f"x{idx}：", f"x{idx}:"),
-            tooltip=LocalizedText(
-                f"幂律三点外推的第 {idx} 个自变量值。",
-                f"Input x value {idx} for three-point power-law extrapolation.",
-            ),
-            required=True,
+    summary_label.setText(
+        self._tr(
+            f"{data_rows} 行 · {cols} 列",
+            f"{data_rows} rows · {cols} columns",
         )
-        for idx in range(1, 4)
-    ]
-    power_p_field = FormFieldSpec(
-        key="extrapolation.power_law.p",
-        widget_kind="text",
-        label=LocalizedText("自定义 p（可选）：", "Custom p (optional):"),
-        placeholder=LocalizedText("留空则自动求解 p", "Leave blank to solve p automatically"),
-        tooltip=LocalizedText(
-            "可选幂指数。留空时由程序根据数据自动求解。",
-            "Optional power exponent. Leave blank for automatic solving from the data.",
-        ),
-        required=False,
-    )
-    power_seed_field = FormFieldSpec(
-        key="extrapolation.power_law.seed_guesses",
-        widget_kind="text",
-        label=LocalizedText("p 种子列表（可选）：", "p seed list (optional):"),
-        placeholder=LocalizedText("如 0.5, 1, 2, -1", "e.g. 0.5, 1, 2, -1"),
-        tooltip=LocalizedText(
-            "用于自动求解 p 的候选初值，多个值用逗号分隔。",
-            "Candidate initial guesses for solving p automatically, separated by commas.",
-        ),
-        required=False,
-    )
-    levin_variant_field = FormFieldSpec(
-        key="extrapolation.levin.variant",
-        widget_kind="select",
-        label=LocalizedText("变换类型：", "Variant:"),
-        tooltip=LocalizedText(
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[0].tooltip_zh,
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[0].tooltip_en,
-        ),
-        required=True,
-        choices=[
-            ChoiceSpec(value="u", label=LocalizedText("u (最常用)", "u (most common)")),
-            ChoiceSpec(value="t", label=LocalizedText("t (级数)", "t (series)")),
-            ChoiceSpec(value="v", label=LocalizedText("v (积分)", "v (integrals)")),
-        ],
-    )
-    levin_order_field = FormFieldSpec(
-        key="extrapolation.levin.order",
-        widget_kind="number",
-        label=LocalizedText("变换阶数：", "Transform order:"),
-        tooltip=LocalizedText(
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[1].tooltip_zh,
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[1].tooltip_en,
-        ),
-        required=True,
-    )
-    levin_weight_field = FormFieldSpec(
-        key="extrapolation.levin.weight",
-        widget_kind="select",
-        label=LocalizedText("权重函数：", "Weight function:"),
-        tooltip=LocalizedText(
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[2].tooltip_zh,
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[2].tooltip_en,
-        ),
-        required=True,
-        choices=[
-            ChoiceSpec(value="default", label=LocalizedText("默认 (1)", "Default (1)")),
-            ChoiceSpec(value="reciprocal", label=LocalizedText("1/(n+1)", "1/(n+1)")),
-            ChoiceSpec(value="reciprocal_beta", label=LocalizedText("1/(n+β)", "1/(n+β)")),
-        ],
-    )
-    levin_beta_field = FormFieldSpec(
-        key="extrapolation.levin.beta",
-        widget_kind="number",
-        label=LocalizedText("β 参数：", "β parameter:"),
-        tooltip=LocalizedText(
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[3].tooltip_zh,
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[3].tooltip_en,
-        ),
-        required=False,
-    )
-    richardson_p_field = FormFieldSpec(
-        key="extrapolation.richardson.p",
-        widget_kind="number",
-        label=LocalizedText("收敛幂指数 p：", "Convergence power p:"),
-        tooltip=LocalizedText(
-            EXTRAPOLATION_METHOD_SPECS["richardson"].parameter_groups[0].parameters[0].tooltip_zh,
-            EXTRAPOLATION_METHOD_SPECS["richardson"].parameter_groups[0].parameters[0].tooltip_en,
-        ),
-        required=True,
-    )
-    uncertainty_field = FormFieldSpec(
-        key="extrapolation.uncertainty.reference_column",
-        widget_kind="select",
-        label=LocalizedText("不确定度参考列：", "Uncertainty ref column:"),
-        tooltip=LocalizedText(
-            "重新扫描数据以列出可选的不确定度参考列。",
-            "Rescan data to list available uncertainty columns.",
-        ),
-        required=False,
-    )
-    uncertainty_refresh_field = FormFieldSpec(
-        key="extrapolation.uncertainty.reference_column",
-        widget_kind="button",
-        label=LocalizedText("刷新不确定度列", "Refresh uncertainty columns"),
-        tooltip=LocalizedText(
-            "重新扫描数据以列出可选的不确定度参考列。",
-            "Rescan data to list available uncertainty columns.",
-        ),
-        required=False,
     )
 
-    bind_field(field=method_field, label=method_label, widget=self.method_combo, lang=lang)
-    bind_choices(self.method_combo, method_field.choices, lang=lang)
-    register_schema_text_refresh(self, method_field, widget=self.method_combo)
-    bind_field(field=method_help_field, help_button=self.method_help_btn, lang=lang)
-    register_schema_text_refresh(self, method_help_field, help_button=self.method_help_btn)
-    bind_field(
-        field=custom_formula_field,
-        label=lbl_custom,
-        widget=self.custom_formula_edit,
-        lang=lang,
-    )
-    register_schema_text_refresh(
-        self,
-        custom_formula_field,
-        widget=self.custom_formula_edit,
-    )
-    bind_schema_command_button(
-        self,
-        self.custom_formula_preview_button,
-        field=custom_formula_preview_field,
-        accessible_name=LocalizedText("预览公式", "Preview formula"),
-        lang=lang,
-    )
-    bind_field(field=custom_functions_field, widget=self.custom_formula_function_button, lang=lang)
-    register_schema_text_refresh(self, custom_functions_field, widget=self.custom_formula_function_button)
-    for field, label, edit in zip(power_x_fields, power_x_labels, self.power_x_edits, strict=True):
-        bind_field(field=field, label=label, widget=edit, lang=lang)
-        register_schema_text_refresh(self, field, widget=edit)
-    bind_field(field=power_p_field, label=lbl_p, widget=self.power_p_edit, lang=lang)
-    register_schema_text_refresh(self, power_p_field, widget=self.power_p_edit)
-    bind_field(field=power_seed_field, label=lbl_seed, widget=self.power_seed_guesses_edit, lang=lang)
-    register_schema_text_refresh(self, power_seed_field, widget=self.power_seed_guesses_edit)
-    bind_field(field=levin_variant_field, label=lbl_variant, widget=self.levin_variant_combo, lang=lang)
-    bind_choices(self.levin_variant_combo, levin_variant_field.choices, lang=lang)
-    register_schema_text_refresh(self, levin_variant_field, widget=self.levin_variant_combo)
-    bind_field(field=levin_order_field, label=lbl_order, widget=self.levin_order_spin, lang=lang)
-    register_schema_text_refresh(self, levin_order_field, widget=self.levin_order_spin)
-    bind_field(field=levin_weight_field, label=lbl_weight, widget=self.levin_weight_combo, lang=lang)
-    bind_choices(self.levin_weight_combo, levin_weight_field.choices, lang=lang)
-    register_schema_text_refresh(self, levin_weight_field, widget=self.levin_weight_combo)
-    bind_field(field=levin_beta_field, label=lbl_beta, widget=self.levin_beta_spin, lang=lang)
-    register_schema_text_refresh(self, levin_beta_field, widget=self.levin_beta_spin)
-    bind_field(field=richardson_p_field, label=lbl_richardson_p, widget=self.richardson_p_spin, lang=lang)
-    register_schema_text_refresh(self, richardson_p_field, widget=self.richardson_p_spin)
-    bind_field(
-        field=uncertainty_field,
-        label=lbl_uncert,
-        widget=self.uncertainty_combo,
-        lang=lang,
-    )
-    register_schema_text_refresh(self, uncertainty_field, widget=self.uncertainty_combo)
-    bind_schema_command_button(
-        self,
-        self.uncertainty_refresh_btn,
-        field=uncertainty_refresh_field,
-        accessible_name=LocalizedText("刷新不确定度列", "Refresh uncertainty columns"),
-        lang=lang,
-    )
-
-
-def _bind_statistics_schema_fields(
-    self,
-    *,
-    lbl_stats_value: QLabel,
-    lbl_stats_sigma: QLabel,
-    lbl_stats_type: QLabel,
-    lbl_weight_var: QLabel,
-    lbl_stats_sample: QLabel,
-    stats_items: list[tuple[str, str, str]],
-) -> None:
-    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
-    value_field = FormFieldSpec(
-        key="statistics.value_column",
-        widget_kind="text",
-        label=LocalizedText("数值列：", "Value column:"),
-        tooltip=LocalizedText(
-            "数值数据所在列，例如 A 或列名。",
-            "Column containing measured values, for example A or a header name.",
-        ),
-        required=True,
-    )
-    sigma_field = FormFieldSpec(
-        key="statistics.sigma_column",
-        widget_kind="text",
-        label=LocalizedText("不确定度列（可选）：", "Sigma column (optional):"),
-        placeholder=LocalizedText("留空则不使用不确定度列", "Leave blank to ignore sigma values"),
-        tooltip=LocalizedText(
-            "可选的不确定度列。加权平均模式会使用该列作为 σ。",
-            "Optional uncertainty column. Weighted mean mode uses this column as sigma.",
-        ),
-        required=False,
-    )
-    mode_field = FormFieldSpec(
-        key="statistics.mode",
-        widget_kind="select",
-        label=LocalizedText("统计类型：", "Statistics type:"),
-        tooltip=LocalizedText(
-            "选择算术平均或使用 σ 值作为权重的加权平均。",
-            "Choose arithmetic mean or weighted mean. Use sigma values as weights for weighted statistics.",
-        ),
-        required=True,
-        choices=[
-            ChoiceSpec(value=data, label=LocalizedText(zh, en))
-            for zh, en, data in stats_items
-        ],
-    )
-    weight_variance_field = FormFieldSpec(
-        key="statistics.weight_variance",
-        widget_kind="checkbox",
-        label=LocalizedText("方差/标准误差：", "Variance/SE:"),
-        tooltip=LocalizedText(
-            "启用后，方差和标准误差也按权重计算。",
-            "When enabled, variance and standard error are also computed with weights.",
-        ),
-        required=False,
-    )
-    sample_field = FormFieldSpec(
-        key="statistics.sample_mode",
-        widget_kind="checkbox",
-        label=LocalizedText("样本/总体：", "Sample/Population:"),
-        tooltip=LocalizedText(
-            "启用样本模式时使用 n-1 自由度；关闭时使用总体模式。",
-            "Sample mode uses n-1 degrees of freedom; otherwise population mode is used.",
-        ),
-        required=False,
-    )
-
-    bind_field(field=value_field, label=lbl_stats_value, widget=self.stats_value_column_edit, lang=lang)
-    register_schema_text_refresh(self, value_field, widget=self.stats_value_column_edit)
-    bind_field(field=sigma_field, label=lbl_stats_sigma, widget=self.stats_sigma_column_edit, lang=lang)
-    register_schema_text_refresh(self, sigma_field, widget=self.stats_sigma_column_edit)
-    bind_field(field=mode_field, label=lbl_stats_type, widget=self.stats_mode_combo, lang=lang)
-    bind_choices(self.stats_mode_combo, mode_field.choices, lang=lang)
-    register_schema_text_refresh(self, mode_field, widget=self.stats_mode_combo)
-    bind_field(
-        field=weight_variance_field,
-        label=lbl_weight_var,
-        widget=self.stats_weight_variance_checkbox,
-        lang=lang,
-    )
-    register_schema_text_refresh(self, weight_variance_field, widget=self.stats_weight_variance_checkbox)
-    bind_field(field=sample_field, label=lbl_stats_sample, widget=self.stats_sample_checkbox, lang=lang)
-    register_schema_text_refresh(self, sample_field, widget=self.stats_sample_checkbox)
-
-
-def _bind_fitting_schema_fields(
-    self,
-    *,
-    lbl_model: QLabel,
-    fit_items: list[tuple[str, str, str]],
-    lbl_fit_expr: QLabel,
-    lbl_implicit_eq: QLabel,
-    lbl_implicit_output: QLabel,
-    lbl_implicit_var: QLabel,
-    lbl_implicit_initial: QLabel,
-    lbl_implicit_tol: QLabel,
-    lbl_implicit_iter: QLabel,
-    lbl_implicit_method: QLabel,
-    implicit_method_items: list[tuple[str, str, str]],
-    lbl_implicit_timeout: QLabel,
-    lbl_custom_params: QLabel,
-    lbl_implicit_params: QLabel,
-) -> None:
-    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
-    fit_model_field = FormFieldSpec(
-        key="fitting.model",
-        widget_kind="select",
-        label=LocalizedText("拟合模型：", "Model:"),
-        tooltip=LocalizedText(
-            "选择拟合模型。自定义模型允许编辑表达式；其他模型会显示只读预览。",
-            "Choose the fitting model. Custom models allow expression editing; other models show read-only previews.",
-        ),
-        required=True,
-        choices=[ChoiceSpec(value=data, label=LocalizedText(zh, en)) for zh, en, data in fit_items],
-    )
-    custom_expression_field = FormFieldSpec(
-        key="fitting.custom.expression",
-        widget_kind="textarea",
-        label=LocalizedText("模型表达式：", "Model expression:"),
-        placeholder=LocalizedText("示例：A*x**(-p) + C", "Example: A*x**(-p) + C"),
-        tooltip=LocalizedText(
-            "输入自定义拟合表达式。留空不会使用示例；示例只显示在背景提示中。",
-            "Enter the custom fitting expression. Leaving it blank does not use the example; the example is only placeholder text.",
-        ),
-        required=True,
-    )
-    custom_constants_field = FormFieldSpec(
-        key="fitting.custom.constants",
-        widget_kind="table",
-        label=LocalizedText("常数设置", "Constants"),
-        tooltip=LocalizedText(
-            "可选常数表。启用后，常数名会从参数识别和拟合参数中排除。",
-            "Optional constants table. When enabled, constant names are excluded from parameter detection and fit parameters.",
-        ),
-        required=False,
-    )
-    custom_params_field = FormFieldSpec(
-        key="fitting.custom.parameters",
-        widget_kind="table",
-        label=LocalizedText("参数列表：", "Parameters:"),
-        tooltip=LocalizedText(
-            "自定义模型参数及初值、固定值和约束。",
-            "Custom model parameters with initial values, fixed values, and constraints.",
-        ),
-        required=False,
-    )
-    implicit_equation_field = FormFieldSpec(
-        key="fitting.implicit.equation",
-        widget_kind="textarea",
-        label=LocalizedText("自洽方程：", "Self-consistent equation:"),
-        placeholder=LocalizedText("示例：a + b*Cos[u] + c*x", "Example: a + b*Cos[u] + c*x"),
-        tooltip=LocalizedText(
-            "输入自洽方程。留空不会使用示例；示例只显示在背景提示中。",
-            "Enter the self-consistent equation. Leaving it blank does not use the example; the example is only placeholder text.",
-        ),
-        required=True,
-    )
-    implicit_output_field = FormFieldSpec(
-        key="fitting.implicit.output_expression",
-        widget_kind="textarea",
-        label=LocalizedText("输出表达式：", "Output expression:"),
-        placeholder=LocalizedText("示例：u", "Example: u"),
-        tooltip=LocalizedText(
-            "输入由隐式变量和输入变量计算目标列的输出表达式。",
-            "Enter the output expression that maps the implicit and input variables to the target column.",
-        ),
-        required=True,
-    )
-    implicit_variable_field = FormFieldSpec(
-        key="fitting.implicit.variable",
-        widget_kind="text",
-        label=LocalizedText("隐式变量：", "Implicit variable:"),
-        tooltip=LocalizedText("自洽方程中要求解的变量名。", "Variable solved by the self-consistent equation."),
-        required=True,
-    )
-    implicit_initial_field = FormFieldSpec(
-        key="fitting.implicit.initial",
-        widget_kind="text",
-        label=LocalizedText("初始值：", "Initial:"),
-        tooltip=LocalizedText("隐式变量求解初值。", "Initial value for solving the implicit variable."),
-        required=True,
-    )
-    implicit_tolerance_field = FormFieldSpec(
-        key="fitting.implicit.tolerance",
-        widget_kind="text",
-        label=LocalizedText("求解容差：", "Tolerance:"),
-        tooltip=LocalizedText("隐式变量求解容差。", "Tolerance for solving the implicit variable."),
-        required=True,
-    )
-    implicit_iterations_field = FormFieldSpec(
-        key="fitting.implicit.max_iterations",
-        widget_kind="number",
-        label=LocalizedText("最大迭代：", "Max iterations:"),
-        tooltip=LocalizedText("每次隐式变量求解允许的最大迭代次数。", "Maximum iterations allowed for each implicit solve."),
-        required=True,
-    )
-    implicit_method_field = FormFieldSpec(
-        key="fitting.implicit.method",
-        widget_kind="select",
-        label=LocalizedText("求解方法：", "Method:"),
-        tooltip=LocalizedText(
-            "固定点用于 u=g(...) 形式；求根用于 F(...)=0 形式。",
-            "Fixed point is for u=g(...) forms; Root is for F(...)=0 forms.",
-        ),
-        required=True,
-        choices=[
-            ChoiceSpec(value=data, label=LocalizedText(zh, en))
-            for zh, en, data in implicit_method_items
-        ],
-    )
-    implicit_timeout_field = FormFieldSpec(
-        key="fitting.implicit.timeout_seconds",
-        widget_kind="number",
-        label=LocalizedText("最长运行秒数：", "Max runtime (s):"),
-        tooltip=LocalizedText(
-            "0 表示不自动超时，只能手动停止。",
-            "0 disables automatic timeout; use Stop to cancel.",
-        ),
-        required=True,
-    )
-    implicit_constants_field = FormFieldSpec(
-        key="fitting.implicit.constants",
-        widget_kind="table",
-        label=LocalizedText("常数设置", "Constants"),
-        tooltip=LocalizedText(
-            "可选常数表。启用后，常数名会从隐式参数识别和拟合参数中排除。",
-            "Optional constants table. When enabled, constant names are excluded from implicit parameter detection and fit parameters.",
-        ),
-        required=False,
-    )
-    implicit_params_field = FormFieldSpec(
-        key="fitting.implicit.parameters",
-        widget_kind="table",
-        label=LocalizedText("参数列表：", "Parameters:"),
-        tooltip=LocalizedText(
-            "自洽隐式模型参数及初值、固定值和约束。",
-            "Self-consistent implicit model parameters with initial values, fixed values, and constraints.",
-        ),
-        required=False,
-    )
-
-    bind_field(field=fit_model_field, label=lbl_model, widget=self.fit_model_combo, lang=lang)
-    bind_choices(self.fit_model_combo, fit_model_field.choices, lang=lang)
-    bind_field(
-        field=custom_expression_field,
-        label=lbl_fit_expr,
-        widget=self.fit_expr_edit,
-        help_button=self.fit_formula_preview_button,
-        lang=lang,
-    )
-    bind_field(field=custom_constants_field, widget=self.custom_constants_editor, lang=lang)
-    bind_field(field=custom_params_field, label=lbl_custom_params, widget=self.custom_params_table, lang=lang)
-    bind_field(
-        field=implicit_equation_field,
-        label=lbl_implicit_eq,
-        widget=self.implicit_equation_edit,
-        help_button=self.implicit_equation_preview_button,
-        lang=lang,
-    )
-    bind_field(
-        field=implicit_output_field,
-        label=lbl_implicit_output,
-        widget=self.implicit_output_edit,
-        help_button=self.implicit_output_preview_button,
-        lang=lang,
-    )
-    bind_field(field=implicit_variable_field, label=lbl_implicit_var, widget=self.implicit_variable_edit, lang=lang)
-    bind_field(field=implicit_initial_field, label=lbl_implicit_initial, widget=self.implicit_initial_edit, lang=lang)
-    bind_field(field=implicit_tolerance_field, label=lbl_implicit_tol, widget=self.implicit_tolerance_edit, lang=lang)
-    bind_field(field=implicit_iterations_field, label=lbl_implicit_iter, widget=self.implicit_max_iterations_spin, lang=lang)
-    bind_field(field=implicit_method_field, label=lbl_implicit_method, widget=self.implicit_method_combo, lang=lang)
-    bind_choices(self.implicit_method_combo, implicit_method_field.choices, lang=lang)
-    bind_field(field=implicit_timeout_field, label=lbl_implicit_timeout, widget=self.implicit_timeout_spin, lang=lang)
-    bind_field(field=implicit_constants_field, widget=self.implicit_constants_editor, lang=lang)
-    bind_field(field=implicit_params_field, label=lbl_implicit_params, widget=self.implicit_params_table, lang=lang)
 
 def _mark_schema_choices(combo: QComboBox) -> None:
     combo.setProperty("datalab_schema_choices", True)
@@ -3152,97 +1880,19 @@ def _bind_result_latex_pdf_schema_fields(
     lbl_zoom: QLabel,
 ) -> None:
     lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
-    display_scientific_field = FormFieldSpec(
-        key="results.display.scientific",
-        widget_kind="checkbox",
-        label=LocalizedText("使用科学计数法显示结果", "Display results in scientific notation"),
-        tooltip=LocalizedText("切换数值结果是否使用科学计数法显示。", "Toggle scientific notation for numeric result display."),
-        required=False,
-    )
-    display_digits_field = FormFieldSpec(
-        key="results.display.decimal_places",
-        widget_kind="number",
-        label=LocalizedText("小数位数：", "Decimal places:"),
-        tooltip=LocalizedText("控制数值结果显示的小数位数。", "Controls decimal places shown in numeric results."),
-        required=False,
-    )
-    image_zoom_field = FormFieldSpec(
-        key="results.image.zoom_percent",
-        widget_kind="number",
-        label=LocalizedText("图片缩放", "Image zoom"),
-        tooltip=LocalizedText("结果图片缩放百分比。", "Result image zoom percentage."),
-        required=False,
-    )
-    log_x_field = FormFieldSpec(
-        key="results.image.log_x",
-        widget_kind="checkbox",
-        label=LocalizedText("x 轴", "log x"),
-        tooltip=LocalizedText("使用 x 轴对数坐标。", "Use logarithmic x axis."),
-        required=False,
-    )
-    log_y_field = FormFieldSpec(
-        key="results.image.log_y",
-        widget_kind="checkbox",
-        label=LocalizedText("y 轴", "log y"),
-        tooltip=LocalizedText("使用 y 轴对数坐标。", "Use logarithmic y axis."),
-        required=False,
-    )
-    latex_compile_field = FormFieldSpec(
-        key="latex.compile",
-        widget_kind="button",
-        label=LocalizedText("编译 PDF", "Compile PDF"),
-        tooltip=LocalizedText("将当前 LaTeX 内容编译为 PDF。", "Compile the current LaTeX content into a PDF."),
-        required=False,
-    )
-    latex_view_field = FormFieldSpec(
-        key="latex.view_pdf",
-        widget_kind="button",
-        label=LocalizedText("查看 PDF", "View PDF"),
-        tooltip=LocalizedText("打开已编译的 PDF 文件。", "Open the compiled PDF file."),
-        required=False,
-    )
-    latex_engine_field = FormFieldSpec(
-        key="latex.engine",
-        widget_kind="select",
-        label=LocalizedText("LaTeX 引擎：", "LaTeX engine:"),
-        tooltip=LocalizedText("选择用于编译 PDF 的 LaTeX 引擎。", "Choose the LaTeX engine used to compile PDF output."),
-        required=False,
-    )
-    latex_engine_path_field = FormFieldSpec(
-        key="latex.engine_path",
-        widget_kind="button",
-        label=LocalizedText("选择引擎路径", "Select engine path"),
-        tooltip=LocalizedText("手动选择 LaTeX 引擎可执行文件路径。", "Manually select the LaTeX engine executable path."),
-        required=False,
-    )
-    pdf_zoom_field = FormFieldSpec(
-        key="pdf.zoom_percent",
-        widget_kind="number",
-        label=LocalizedText("缩放%：", "Zoom %:"),
-        tooltip=LocalizedText("PDF 预览缩放百分比。", "PDF preview zoom percentage."),
-        required=False,
-    )
-    pdf_zoom_in_field = FormFieldSpec(
-        key="pdf.zoom_in",
-        widget_kind="button",
-        label=LocalizedText("放大 PDF", "Zoom PDF in"),
-        tooltip=LocalizedText("放大 PDF 预览。", "Zoom PDF preview in."),
-        required=False,
-    )
-    pdf_zoom_out_field = FormFieldSpec(
-        key="pdf.zoom_out",
-        widget_kind="button",
-        label=LocalizedText("缩小 PDF", "Zoom PDF out"),
-        tooltip=LocalizedText("缩小 PDF 预览。", "Zoom PDF preview out."),
-        required=False,
-    )
-    pdf_zoom_reset_field = FormFieldSpec(
-        key="pdf.zoom_reset",
-        widget_kind="button",
-        label=LocalizedText("重置 PDF 缩放", "Reset PDF zoom"),
-        tooltip=LocalizedText("重置 PDF 预览缩放。", "Reset PDF preview zoom."),
-        required=False,
-    )
+    display_scientific_field = _result_control_field("result.numeric", "results.display.scientific")
+    display_digits_field = _result_control_field("result.numeric", "results.display.decimal_places")
+    image_zoom_field = _result_control_field("result.image", "results.image.zoom_percent")
+    log_x_field = _result_control_field("result.image", "results.image.log_x")
+    log_y_field = _result_control_field("result.image", "results.image.log_y")
+    latex_compile_field = _result_control_field("result.latex", "latex.compile")
+    latex_view_field = _result_control_field("result.latex", "latex.view_pdf")
+    latex_engine_field = _result_control_field("result.latex", "latex.engine")
+    latex_engine_path_field = _result_control_field("result.latex", "latex.engine_path")
+    pdf_zoom_field = _result_control_field("result.pdf", "pdf.zoom_percent")
+    pdf_zoom_in_field = _result_control_field("result.pdf", "pdf.zoom_in")
+    pdf_zoom_out_field = _result_control_field("result.pdf", "pdf.zoom_out")
+    pdf_zoom_reset_field = _result_control_field("result.pdf", "pdf.zoom_reset")
 
     for field, label, widget in [
         (display_digits_field, lbl_digits, self.display_digits_spin),
@@ -3263,12 +1913,12 @@ def _bind_result_latex_pdf_schema_fields(
         register_schema_text_refresh(self, field, widget=widget)
 
     for field, button, accessible_name in [
-        (latex_compile_field, self.latex_compile_button, LocalizedText("编译 PDF", "Compile PDF")),
-        (latex_view_field, self.latex_view_pdf_button, LocalizedText("查看 PDF", "View PDF")),
-        (latex_engine_path_field, self.latex_engine_path_button, LocalizedText("选择引擎路径", "Select engine path")),
-        (pdf_zoom_in_field, self.pdf_zoom_in_button, LocalizedText("放大 PDF", "Zoom PDF in")),
-        (pdf_zoom_out_field, self.pdf_zoom_out_button, LocalizedText("缩小 PDF", "Zoom PDF out")),
-        (pdf_zoom_reset_field, self.pdf_zoom_reset_button, LocalizedText("重置 PDF 缩放", "Reset PDF zoom")),
+        (latex_compile_field, self.latex_compile_button, latex_compile_field.label),
+        (latex_view_field, self.latex_view_pdf_button, latex_view_field.label),
+        (latex_engine_path_field, self.latex_engine_path_button, latex_engine_path_field.label),
+        (pdf_zoom_in_field, self.pdf_zoom_in_button, pdf_zoom_in_field.label),
+        (pdf_zoom_out_field, self.pdf_zoom_out_button, pdf_zoom_out_field.label),
+        (pdf_zoom_reset_field, self.pdf_zoom_reset_button, pdf_zoom_reset_field.label),
     ]:
         bind_schema_command_button(
             self,
@@ -3288,13 +1938,14 @@ def _bind_result_area_schema_fields(self) -> None:
         tooltip=LocalizedText("显示当前计算的数值结果和摘要。", "Shows numeric results and summaries for the current calculation."),
         required=False,
     )
-    csv_export_field = FormFieldSpec(
-        key="results.export.csv",
-        widget_kind="button",
-        label=LocalizedText("导出 CSV", "Export CSV"),
-        tooltip=LocalizedText("导出当前结果表格为 CSV 文件。", "Export the current result table as a CSV file."),
-        required=False,
-    )
+    csv_export_field = _result_control_field("result.numeric", "results.export.csv")
+    image_zoom_in_field = _result_control_field("result.image", "results.image.zoom_in")
+    image_zoom_out_field = _result_control_field("result.image", "results.image.zoom_out")
+    image_zoom_reset_field = _result_control_field("result.image", "results.image.zoom_reset")
+    image_export_field = _result_control_field("result.image", "results.image.export")
+    image_page_field = _result_control_field("result.image", "results.image.page")
+    image_prev_field = _result_control_field("result.image", "results.image.previous")
+    image_next_field = _result_control_field("result.image", "results.image.next")
     image_preview_field = FormFieldSpec(
         key="results.image.preview",
         widget_kind="image",
@@ -3307,55 +1958,6 @@ def _bind_result_area_schema_fields(self) -> None:
         widget_kind="text",
         label=LocalizedText("图片状态", "Image status"),
         tooltip=LocalizedText("当前图片页和加载状态。", "Current image page and loading status."),
-        required=False,
-    )
-    image_zoom_in_field = FormFieldSpec(
-        key="results.image.zoom_in",
-        widget_kind="button",
-        label=LocalizedText("放大图片", "Zoom image in"),
-        tooltip=LocalizedText("放大结果图片。", "Zoom result image in."),
-        required=False,
-    )
-    image_zoom_out_field = FormFieldSpec(
-        key="results.image.zoom_out",
-        widget_kind="button",
-        label=LocalizedText("缩小图片", "Zoom image out"),
-        tooltip=LocalizedText("缩小结果图片。", "Zoom result image out."),
-        required=False,
-    )
-    image_zoom_reset_field = FormFieldSpec(
-        key="results.image.zoom_reset",
-        widget_kind="button",
-        label=LocalizedText("重置图片缩放", "Reset image zoom"),
-        tooltip=LocalizedText("重置结果图片缩放。", "Reset result image zoom."),
-        required=False,
-    )
-    image_export_field = FormFieldSpec(
-        key="results.image.export",
-        widget_kind="button",
-        label=LocalizedText("导出图片", "Export image"),
-        tooltip=LocalizedText("导出当前结果图片。", "Export the current result image."),
-        required=False,
-    )
-    image_page_field = FormFieldSpec(
-        key="results.image.page",
-        widget_kind="number",
-        label=LocalizedText("图片页", "Image page"),
-        tooltip=LocalizedText("选择要查看的结果图片页。", "Image page to view."),
-        required=False,
-    )
-    image_prev_field = FormFieldSpec(
-        key="results.image.previous",
-        widget_kind="button",
-        label=LocalizedText("上一张图片", "Previous image"),
-        tooltip=LocalizedText("查看上一张结果图片。", "View the previous result image."),
-        required=False,
-    )
-    image_next_field = FormFieldSpec(
-        key="results.image.next",
-        widget_kind="button",
-        label=LocalizedText("下一张图片", "Next image"),
-        tooltip=LocalizedText("查看下一张结果图片。", "View the next result image."),
         required=False,
     )
     log_field = FormFieldSpec(
@@ -3379,27 +1981,9 @@ def _bind_result_area_schema_fields(self) -> None:
         tooltip=LocalizedText("当前 LaTeX 文件加载和保存状态。", "Current LaTeX file load/save status."),
         required=False,
     )
-    latex_open_field = FormFieldSpec(
-        key="results.latex.open",
-        widget_kind="button",
-        label=LocalizedText("打开 LaTeX 文件", "Open LaTeX file"),
-        tooltip=LocalizedText("打开已有 LaTeX 文件到编辑器。", "Open an existing LaTeX file in the editor."),
-        required=False,
-    )
-    latex_save_field = FormFieldSpec(
-        key="results.latex.save",
-        widget_kind="button",
-        label=LocalizedText("保存 LaTeX 文件", "Save LaTeX file"),
-        tooltip=LocalizedText("保存当前 LaTeX 编辑器内容。", "Save the current LaTeX editor content."),
-        required=False,
-    )
-    latex_reload_field = FormFieldSpec(
-        key="results.latex.reload",
-        widget_kind="button",
-        label=LocalizedText("重新载入 LaTeX 文件", "Reload LaTeX file"),
-        tooltip=LocalizedText("从磁盘重新载入当前 LaTeX 文件。", "Reload the current LaTeX file from disk."),
-        required=False,
-    )
+    latex_open_field = _result_control_field("result.latex", "results.latex.open")
+    latex_save_field = _result_control_field("result.latex", "results.latex.save")
+    latex_reload_field = _result_control_field("result.latex", "results.latex.reload")
     pdf_status_field = FormFieldSpec(
         key="results.pdf.status",
         widget_kind="text",
@@ -3443,404 +2027,12 @@ def _bind_result_area_schema_fields(self) -> None:
         )
 
 
-def _bind_error_schema_fields(
-    self,
-    *,
-    lbl_error_formula: QLabel,
-    lbl_error_method: QLabel,
-    error_method_items: list[tuple[str, str, str]],
-    lbl_error_order: QLabel,
-    lbl_mc_samples: QLabel,
-    lbl_mc_seed: QLabel,
-) -> None:
-    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
-    formula_field = FormFieldSpec(
-        key="error.formula",
-        widget_kind="textarea",
-        label=LocalizedText("公式：", "Formula:"),
-        placeholder=LocalizedText(
-            "公式（使用列名或 x1, x2 …）",
-            "Formula (use column names or x1, x2 …)",
-        ),
-        tooltip=LocalizedText(
-            "输入要传播不确定度的公式，可使用数据列名或 x1、x2 等变量。",
-            "Enter the formula whose uncertainty should be propagated; use column names or variables such as x1 and x2.",
-        ),
-        required=True,
-    )
-    function_help_field = FormFieldSpec(
-        key="error.functions",
-        widget_kind="button",
-        label=LocalizedText("函数支持", "Functions"),
-        tooltip=LocalizedText(
-            "查看公式中支持的函数和表达式语法。",
-            "View supported functions and expression syntax for formulas.",
-        ),
-        required=False,
-    )
-    constants_use_file_field = FormFieldSpec(
-        key="error.constants.use_file",
-        widget_kind="checkbox",
-        label=LocalizedText("使用常数文件", "Use constants file"),
-        tooltip=LocalizedText(
-            "启用后从外部常数文件读取固定量；关闭时使用下方常数表。",
-            "When enabled, fixed values are read from an external constants file; otherwise the constants table below is used.",
-        ),
-        required=False,
-    )
-    constants_file_field = FormFieldSpec(
-        key="error.constants.file_path",
-        widget_kind="file",
-        label=LocalizedText("常数文件…", "Constants file…"),
-        placeholder=LocalizedText("选择常数文件", "Choose a constants file"),
-        tooltip=LocalizedText(
-            "常数文件每行填写名称和值，例如 ALPHA 7.2973525693(11)[-3]。",
-            "Constants files use one name and value per line, for example ALPHA 7.2973525693(11)[-3].",
-        ),
-        required=False,
-    )
-    constants_field = FormFieldSpec(
-        key="error.constants",
-        widget_kind="table",
-        label=LocalizedText("常数设置", "Constants"),
-        tooltip=LocalizedText(
-            "可选常数设置，支持表格和文本视图；关闭时不会向误差传递公式代入这些常数。",
-            "Optional constants for table or text entry; when disabled they are not substituted into the error propagation formula.",
-        ),
-        required=False,
-    )
-    method_field = FormFieldSpec(
-        key="error.method",
-        widget_kind="select",
-        label=LocalizedText("方法：", "Method:"),
-        tooltip=LocalizedText(
-            "Taylor 使用偏导传播不确定度；Monte Carlo 通过随机采样估计不确定度。",
-            "Taylor propagates uncertainty with derivatives; Monte Carlo estimates uncertainty by random sampling.",
-        ),
-        required=True,
-        choices=[ChoiceSpec(value=data, label=LocalizedText(zh, en)) for zh, en, data in error_method_items],
-    )
-    order_field = FormFieldSpec(
-        key="error.taylor.order",
-        widget_kind="number",
-        label=LocalizedText("阶数：", "Order:"),
-        tooltip=LocalizedText(
-            "1 阶：线性误差估计；2 阶：包含 Hessian（二阶偏导）贡献。",
-            "Order 1: linear propagation; order 2: includes Hessian (second-derivative) contributions.",
-        ),
-        required=False,
-    )
-    mc_samples_field = FormFieldSpec(
-        key="error.monte_carlo.samples",
-        widget_kind="number",
-        label=LocalizedText("MC 样本数：", "MC samples:"),
-        tooltip=LocalizedText(
-            "Monte Carlo 样本数（越大越稳定，但耗时更长），至少 100。",
-            "Monte Carlo sample count (larger is more stable but slower), minimum 100.",
-        ),
-        required=False,
-    )
-    mc_seed_field = FormFieldSpec(
-        key="error.monte_carlo.seed",
-        widget_kind="text",
-        label=LocalizedText("随机种子（可选）：", "Seed (optional):"),
-        placeholder=LocalizedText("留空=随机", "blank=random"),
-        tooltip=LocalizedText(
-            "留空表示每次随机；填写整数可复现实验结果。",
-            "Leave blank for random each run; set an integer for reproducibility.",
-        ),
-        required=False,
-    )
-
-    bind_field(
-        field=formula_field,
-        label=lbl_error_formula,
-        widget=self.formula_edit,
-        help_button=self.error_formula_preview_button,
-        lang=lang,
-    )
-    register_schema_text_refresh(self, formula_field, widget=self.formula_edit, help_button=self.error_formula_preview_button)
-    bind_field(field=function_help_field, widget=self.func_help_btn, lang=lang)
-    register_schema_text_refresh(self, function_help_field, widget=self.func_help_btn)
-    bind_field(field=constants_use_file_field, widget=self.use_constants_file_checkbox, lang=lang)
-    register_schema_text_refresh(self, constants_use_file_field, widget=self.use_constants_file_checkbox)
-    bind_field(
-        field=constants_file_field,
-        widget=self.constants_file_edit,
-        help_button=self.constants_hint_btn,
-        lang=lang,
-    )
-    register_schema_text_refresh(self, constants_file_field, widget=self.constants_file_edit)
-    bind_field(
-        field=constants_field,
-        widget=self.error_constants_editor,
-        help_button=self.error_constants_editor.help_button,
-        lang=lang,
-    )
-    register_schema_text_refresh(self, constants_field, widget=self.error_constants_editor, help_button=self.error_constants_editor.help_button)
-    register_schema_text_refresh(self, constants_field, widget=self.error_constants_editor.checkbox)
-    bind_field(field=method_field, label=lbl_error_method, widget=self.error_method_combo, lang=lang)
-    bind_choices(self.error_method_combo, method_field.choices, lang=lang)
-    register_schema_text_refresh(self, method_field, widget=self.error_method_combo)
-    bind_field(field=order_field, label=lbl_error_order, widget=self.error_order_spin, lang=lang)
-    register_schema_text_refresh(self, order_field, widget=self.error_order_spin)
-    bind_field(field=mc_samples_field, label=lbl_mc_samples, widget=self.error_mc_samples_spin, lang=lang)
-    register_schema_text_refresh(self, mc_samples_field, widget=self.error_mc_samples_spin)
-    bind_field(field=mc_seed_field, label=lbl_mc_seed, widget=self.error_mc_seed_edit, lang=lang)
-    register_schema_text_refresh(self, mc_seed_field, widget=self.error_mc_seed_edit)
-
-
-def _bind_root_schema_fields(
-    self,
-    lbl_root_equations: QLabel,
-    lbl_root_mode: QLabel,
-    lbl_root_unknowns: QLabel,
-    root_mode_items: list[tuple[str, str, object]],
-) -> None:
-    lang = "en" if bool(getattr(self, "_is_en", lambda: False)()) else "zh"
-    root_equations_field = FormFieldSpec(
-        key="root.equations",
-        widget_kind="textarea",
-        label=LocalizedText("方程：", "Equations:"),
-        placeholder=LocalizedText(
-            "每行一个方程，按 F_i(...)=0 求解；示例：x^2 - A",
-            "One equation per line as F_i(...)=0; example: x^2 - A",
-        ),
-        tooltip=LocalizedText(
-            "输入要求解的方程。留空不会使用示例；示例只显示在背景提示中。",
-            "Enter equations to solve. Leaving it blank does not use the example; the example is only placeholder text.",
-        ),
-        required=True,
-    )
-    root_mode_field = FormFieldSpec(
-        key="root.mode",
-        widget_kind="select",
-        label=LocalizedText("求解模式：", "Solve mode:"),
-        tooltip=LocalizedText(
-            "标量：单未知量单根；扫描多根：从区间/采样查找多个根；多项式：一元多项式根；方程组：多个未知量联立求解。",
-            "Scalar: one unknown and one root; Scan multiple: search multiple roots by interval/sampling; Polynomial: univariate polynomial roots; System: solve coupled equations.",
-        ),
-        required=True,
-        choices=[
-            ChoiceSpec(value=data, label=LocalizedText(zh, en))
-            for zh, en, data in root_mode_items
-        ],
-    )
-    root_unknowns_field = FormFieldSpec(
-        key="root.unknowns",
-        widget_kind="table",
-        label=LocalizedText("未知量：", "Unknowns:"),
-        tooltip=LocalizedText(
-            "不同模式需要的列不同：标量通常填名称和初始值；扫描多根还可填下界/上界；多项式可只填名称；方程组每个未知量一行。",
-            "Columns depend on mode: scalar usually needs name and initial; scan can use lower/upper; polynomial can use only name; system uses one row per unknown.",
-        ),
-        required=True,
-    )
-    root_constants_field = FormFieldSpec(
-        key="root.constants",
-        widget_kind="table",
-        label=LocalizedText("常数设置", "Constants"),
-        tooltip=LocalizedText(
-            "常数设置：填写方程中的固定量，支持 1.23(4) 和 1.23(4)[-5] 这类不确定度写法。关闭时不会代入常数表。",
-            "Constants: fixed quantities used by equations; accepts uncertainty notation such as 1.23(4) and 1.23(4)[-5]. When disabled, constants are not substituted.",
-        ),
-        required=False,
-    )
-
-    bind_field(
-        field=root_equations_field,
-        label=lbl_root_equations,
-        widget=self.root_equations_edit,
-        help_button=self.root_equations_help_button,
-        lang=lang,
-    )
-    bind_field(
-        field=root_mode_field,
-        label=lbl_root_mode,
-        widget=self.root_mode_combo,
-        help_button=self.root_mode_help_button,
-        lang=lang,
-    )
-    bind_choices(self.root_mode_combo, root_mode_field.choices, lang=lang)
-    bind_field(
-        field=root_unknowns_field,
-        label=lbl_root_unknowns,
-        widget=self.root_unknowns_table,
-        help_button=self.root_unknowns_help_button,
-        lang=lang,
-    )
-    bind_field(field=root_constants_field, widget=self.root_constants_editor, lang=lang)
-
-
 def _refresh_root_field_help(self) -> None:
-    is_en = bool(getattr(self, "_is_en", lambda: False)())
-    unknown_headers = (
-        ("Name", "Initial", "Lower", "Upper")
-        if is_en
-        else ("名称", "初始值", "下界", "上界")
-    )
-    constants_headers = ("Name", "Value") if is_en else ("名称", "值")
-    unknowns_table = getattr(self, "root_unknowns_table", None)
-    if unknowns_table is not None:
-        unknowns_table.set_headers(unknown_headers)
-        unknowns_table.setToolTip(
-            self._tr(
-                "未知量表：名称为要求解的变量；初始值用于数值迭代；下界/上界可选，仅部分求解器使用。不同模式可只填写需要的列。",
-                "Unknowns table: Name is the variable to solve; Initial seeds numeric iteration; Lower/Upper are optional and used only by supported solvers. Fill only the columns needed by the selected mode.",
-            )
-        )
-    constants_editor = getattr(self, "root_constants_editor", None)
-    if constants_editor is not None:
-        constants_editor.set_table_headers(*constants_headers)
-        constants_tooltip = self._tr(
-            "常数设置：填写方程中的固定量，支持 1.23(4) 和 1.23(4)[-5] 这类不确定度写法。关闭时不会代入常数表。",
-            "Constants: fixed quantities used by equations; accepts uncertainty notation such as 1.23(4) and 1.23(4)[-5]. When disabled, constants are not substituted.",
-        )
-        constants_editor.setToolTip(constants_tooltip)
-        if hasattr(constants_editor, "help_button"):
-            constants_editor.help_button.setToolTip(constants_tooltip)
-        if hasattr(constants_editor, "checkbox"):
-            constants_editor.checkbox.setToolTip(constants_tooltip)
-    tooltip_pairs = (
-        (
-            "root_equations_help_button",
-            "方程按 F(...)=0 求解；可写多行方程组。示例：x^2 - A。",
-            "Equations are solved as F(...)=0; use multiple lines for a system. Example: x^2 - A.",
-        ),
-        (
-            "root_mode_help_button",
-            "标量：单未知量单根；扫描多根：从区间/采样查找多个根；多项式：一元多项式根；方程组：多个未知量联立求解。",
-            "Scalar: one unknown and one root; Scan multiple: search multiple roots by interval/sampling; Polynomial: univariate polynomial roots; System: solve coupled equations.",
-        ),
-        (
-            "root_unknowns_help_button",
-            "不同模式需要的列不同：标量通常填名称和初始值；扫描多根还可填下界/上界；多项式可只填名称；方程组每个未知量一行。",
-            "Columns depend on mode: scalar usually needs name and initial; scan can use lower/upper; polynomial can use only name; system uses one row per unknown.",
-        ),
-    )
-    for attr, zh, en in tooltip_pairs:
-        widget = getattr(self, attr, None)
-        if widget is not None:
-            widget.setToolTip(self._tr(zh, en))
-    if hasattr(self, "root_equations_edit"):
-        self.root_equations_edit.setToolTip(
-            self._tr(
-                "输入要求解的方程。留空不会使用示例；示例只显示在背景提示中。",
-                "Enter equations to solve. Leaving it blank does not use the example; the example is only placeholder text.",
-            )
-        )
-    if hasattr(self, "root_mode_combo"):
-        self.root_mode_combo.setToolTip(getattr(self, "root_mode_help_button", self.root_mode_combo).toolTip())
-    button_tooltips = {
-        "root_detect_unknowns_button": (
-            "按当前方程、数据列和常数重新识别未知量；已删除的已识别行会被移除。",
-            "Detect unknowns from the current equations, data columns, and constants; removed detected symbols are removed from the table.",
-        ),
-        "root_add_unknown_button": (
-            "手动添加未知量行，用于补充或覆盖自动识别。",
-            "Add an unknown row manually to supplement or override detection.",
-        ),
-        "root_remove_unknown_button": (
-            "删除选中的未知量行。",
-            "Remove selected unknown rows.",
-        ),
-    }
-    for attr, (zh, en) in button_tooltips.items():
-        widget = getattr(self, attr, None)
-        if widget is not None:
-            widget.setToolTip(self._tr(zh, en))
-
-
-def _open_formula_preview(self, edit_widget, lhs=None) -> None:
-    if hasattr(edit_widget, "toPlainText"):
-        text = edit_widget.toPlainText().strip()
-    else:
-        text = edit_widget.text().strip()
-    left_hand_side = lhs() if callable(lhs) else lhs
-    open_formula_preview_dialog(self, text, left_hand_side)
-
-
-def _open_root_formula_preview(self) -> None:
-    lines = [
-        line.strip()
-        for line in self.root_equations_edit.toPlainText().splitlines()
-        if line.strip()
-    ]
-    if not lines:
-        expression = ""
-        lhs = "F"
-    elif len(lines) == 1:
-        expression = lines[0]
-        lhs = "F"
-    else:
-        expression = "\n".join(lines)
-        lhs = "F_i"
-    open_formula_preview_dialog(self, expression, lhs)
+    refresh_root_field_help(self)
 
 
 def _on_root_uncertainty_method_changed(self) -> None:
-    method = str(self.root_uncertainty_method_combo.currentData() or "taylor")
-    show_monte_carlo = method == "monte_carlo"
-    show_taylor = method == "taylor"
-    taylor_widget = getattr(self, "root_uncertainty_taylor_widget", None)
-    if taylor_widget is not None:
-        taylor_widget.setVisible(show_taylor)
-    for widget_name in (
-        "root_monte_carlo_samples_label",
-        "root_monte_carlo_samples_spin",
-        "root_monte_carlo_seed_label",
-        "root_monte_carlo_seed_edit",
-    ):
-        widget = getattr(self, widget_name, None)
-        if widget is not None:
-            widget.setVisible(show_monte_carlo)
-
-    help_text = {
-        "off": self._tr("不传播输入不确定度。", "Input uncertainty is not propagated."),
-        "taylor": self._tr("使用 Taylor 传播；阶数由阶数控件设置。", "Uses Taylor propagation; order is set by the order control."),
-        "monte_carlo": self._tr("对输入不确定度抽样后重新求根。", "Resolves roots from sampled uncertain inputs."),
-    }.get(method, "")
-    self.root_uncertainty_method_help_label.setText(help_text)
-
-
-def _add_detected_rows_table_row(self, table_name: str) -> None:
-    table = getattr(self, table_name, None)
-    if table is None:
-        return
-    table.add_row()
-
-
-def _remove_detected_rows_table_rows(self, table_name: str) -> None:
-    table = getattr(self, table_name, None)
-    if table is None:
-        return
-    selected_rows = {index.row() for index in table.table_view.selectedIndexes()}
-    if not selected_rows and table.table_view.rowCount() > 0:
-        last_row = table.table_view.rowCount() - 1
-        if not table.is_row_empty(last_row):
-            return
-        selected_rows = {last_row}
-    table.delete_rows(selected_rows)
-
-
-def _add_parameter_table_row(self, table_name: str) -> None:
-    table = getattr(self, table_name, None)
-    if table is None:
-        return
-    table.add_parameter_row()
-
-
-def _remove_parameter_table_rows(self, table_name: str) -> None:
-    table = getattr(self, table_name, None)
-    if table is None:
-        return
-    selected_rows = {index.row() for index in table.table_view.selectedIndexes()}
-    if not selected_rows and table.table_view.rowCount() > 0:
-        last_row = table.table_view.rowCount() - 1
-        if not table.is_row_empty(last_row):
-            return
-        selected_rows = {last_row}
-    table.delete_rows(selected_rows)
+    on_root_uncertainty_method_changed(self)
 
 
 def _clear_table(self):

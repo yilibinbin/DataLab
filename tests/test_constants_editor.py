@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -36,6 +38,51 @@ def test_constants_editor_round_trips_table_rows(qtbot):
     assert editor.constants_dict(validate=True) == {"K": "1.23", "R": "3.0"}
 
 
+def test_constants_editor_standalone_card_style_is_default(qtbot):
+    editor = ConstantsEditor()
+    qtbot.addWidget(editor)
+
+    assert editor.property("datalab_constants_embedded") in {None, False}
+    assert editor.layout().contentsMargins().left() == 8
+    assert "border: 1px solid" in editor.styleSheet()
+
+
+def test_constants_editor_can_use_embedded_workbench_style(qtbot):
+    editor = ConstantsEditor()
+    qtbot.addWidget(editor)
+
+    editor.set_embedded_in_workbench(True)
+
+    assert editor.property("datalab_constants_embedded") is True
+    assert editor.layout().contentsMargins().left() == 0
+    assert "border: none" in editor.styleSheet()
+
+
+def test_constants_editor_style_is_owned_by_theme() -> None:
+    from app_desktop.theme import constants_editor_style
+
+    standalone = constants_editor_style(embedded=False, dark=False)
+    embedded = constants_editor_style(embedded=True, dark=False)
+
+    assert "datalab_constants_card" in standalone
+    assert "border: 1px solid" in standalone
+    assert "background: transparent" in embedded
+    assert "border: none" in embedded
+
+
+def test_constants_editor_module_no_longer_defines_local_style_helper() -> None:
+    path = Path(__file__).resolve().parents[1] / "app_desktop" / "constants_editor.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+
+    function_names = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert "_constants_editor_style" not in function_names
+
+
 def test_constants_editor_help_button_only_shows_when_tooltip_is_present(qtbot):
     editor = ConstantsEditor()
     qtbot.addWidget(editor)
@@ -48,6 +95,22 @@ def test_constants_editor_help_button_only_shows_when_tooltip_is_present(qtbot):
     QApplication.processEvents()
 
     assert editor.help_button.isVisible() is True
+
+
+def test_constants_editor_tooltip_updates_accessible_descriptions(qtbot):
+    editor = ConstantsEditor()
+    qtbot.addWidget(editor)
+
+    editor.setToolTip("Constants help")
+
+    for widget in (
+        editor,
+        editor.checkbox,
+        editor.help_button,
+        editor.table_view,
+        editor.text_view,
+    ):
+        assert widget.accessibleDescription() == "Constants help"
 
 
 def test_constants_editor_text_view_round_trip(qtbot):
@@ -220,6 +283,8 @@ def test_enabled_custom_constants_are_excluded_and_injected_into_fit_job(qtbot):
 
 
 def test_prepare_fit_job_uses_normalized_weighted_custom_inputs(qtbot):
+    from datalab_core.jobs import JobMode
+
     win = _prepare_custom_fit_window(qtbot, constants_enabled=True, constant_value="1")
     win.fit_weighted_checkbox.setChecked(True)
     dataset = (
@@ -241,6 +306,16 @@ def test_prepare_fit_job_uses_normalized_weighted_custom_inputs(qtbot):
     assert job.weights == [mp.mpf("4"), mp.mpf("16"), mp.mpf("64")]
     assert job.custom_constants == {"K": "1"}
     assert job.parameter_config == {"A": {"initial": "1"}}
+    assert job.core_request is not None
+    assert job.core_request.mode is JobMode.FITTING
+    assert job.core_request.inputs["model_type"] == "custom"
+    assert job.core_request.inputs["variable_map"] == {"x": "x"}
+    assert job.core_request.inputs["target_column"] == "y"
+    assert job.core_request.inputs["target_series"] == ["1.0", "3.0", "5.0"]
+    assert job.core_request.inputs["sigma_series"] == ["0.5", "0.25", "0.125"]
+    assert job.core_request.inputs["weights"] == ["4.0", "16.0", "64.0"]
+    assert job.core_request.inputs["custom_constants"] == {"K": "1"}
+    assert job.core_request.inputs["parameter_config"] == {"A": {"initial": "1"}}
 
 
 def test_custom_constants_accept_uncertainty_notation_nominal_values(qtbot):

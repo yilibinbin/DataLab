@@ -62,7 +62,8 @@ class WindowFittingMixin(
     """
 
     def _on_fit_finished(self, payload):
-        super()._on_fit_finished(payload)
+        if super()._on_fit_finished(payload) is False:
+            return
         details = getattr(payload.fit_result, "details", {}) or {}
         if details.get("fallback_history"):
             self.statusBar().showMessage(

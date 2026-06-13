@@ -24,7 +24,7 @@ Enable “Generate LaTeX” to produce LaTeX content:
 If PDF compilation is enabled:
 
 - A TeX engine must be installed (e.g., `pdflatex` or `xelatex`)
-- After a successful build, the “PDF Preview” tab shows preview images
+- After a successful build, the “PDF preview” tab shows preview images
 
 If compilation fails:
 
@@ -34,4 +34,3 @@ If compilation fails:
 ## `dcolumn` Alignment
 
 Enable alignment only if your LaTeX template includes `dcolumn` (or you plan to add it). Otherwise compilation may fail; disable it or add the package.
-

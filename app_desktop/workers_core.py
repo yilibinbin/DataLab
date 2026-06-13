@@ -15,6 +15,27 @@ from typing import Any, Callable, cast
 
 import mpmath as mp
 
+from datalab_core.extrapolation import (
+    build_extrapolation_request,
+    extrapolation_payload_to_results,
+    extrapolation_payload_to_rows,
+)
+from datalab_core.fitting import fitting_payload_to_fit_result
+from datalab_core.jobs import ComputeJobRequest, JobMode, JobOptions
+from datalab_core.results import ResultStatus
+from datalab_core.root_solving import root_batch_payload_to_result
+from datalab_core.service_factory import create_core_session_service
+from datalab_core.statistics import build_statistics_requests, statistics_payload_to_compute_result
+from datalab_core.table_payload import normalize_segments
+from datalab_core.uncertainty import build_uncertainty_request, uncertainty_payload_to_results
+from shared.integer_validation import strict_int
+from shared.extrapolation_engine import parse_extrapolation_string
+from shared.fitting_engine import (
+    DirectFitInput,
+    deserialize_fit_result as _shared_deserialize_fit_result,
+    execute_direct_fit,
+    serialize_fit_result as _shared_serialize_fit_result,
+)
 from shared.parallel_backend import KillableProcessTaskRunner
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 from shared.parallel_config import NestedParallelPolicy, ParallelConfig, ParallelMode
@@ -34,24 +55,18 @@ from data_extrapolation_latex_latest import (
     process_uncertainty_string,
 )
 
-from statistics_utils import compute_statistics, generate_statistics_latex_batches
+from statistics_utils import generate_statistics_latex_batches
 
 from fitting import (
     ImplicitModelDefinition,
     ImplicitSolveOptions,
     build_implicit_model_specification,
-    build_model_specification,
     build_parameter_state,
     FitRunner,
     ModelProblem,
     fit_custom_model,
 )
 from fitting import implicit_model as _implicit_model
-from fitting.auto_models import (
-    build_inverse_series_definition,
-    build_polynomial_definition,
-    fit_linear_model,
-)
 from fitting.hp_fitter import FitResult
 from root_solving.batch import solve_root_batch
 from root_solving.formatting import render_root_batch_result
@@ -488,6 +503,94 @@ def _render_extrapolation_plot_bytes(
         return None
 
 
+def _safe_extrapolation_core_request(
+    *,
+    headers: list[str],
+    data_rows: list[tuple[mp.mpf, ...]],
+    options: ExtrapolationOptions,
+    table_segments: list[tuple[int, int]],
+    precision_digits: int,
+    uncertainty_digits: int,
+) -> ComputeJobRequest | None:
+    try:
+        return build_extrapolation_request(
+            headers=headers,
+            rows=data_rows,
+            method=str(getattr(options, "method", "") or "quadratic"),
+            method_options=_extrapolation_method_options(options),
+            precision_digits=precision_digits,
+            uncertainty_digits=uncertainty_digits,
+            segments=tuple(table_segments),
+            request_id="desktop-worker-extrapolation",
+        )
+    except Exception:
+        return None
+
+
+def _extrapolation_method_options(options: ExtrapolationOptions) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for attr in ("uncertainty_column", "levin_variant", "custom_formula", "levin_weight"):
+        value = getattr(options, attr, None)
+        if value is not None and str(value).strip():
+            payload[attr] = str(value)
+    for attr in ("richardson_p", "levin_beta"):
+        value = getattr(options, attr, None)
+        if value is not None:
+            payload[attr] = str(value)
+    levin_order = getattr(options, "levin_order", None)
+    if levin_order is not None:
+        payload["levin_order"] = strict_int(levin_order, field_name="levin_order")
+    power_config = getattr(options, "power_law_config", None)
+    if power_config is not None:
+        power_payload: dict[str, object] = {}
+        x_values = getattr(power_config, "x_values", None)
+        if x_values is not None:
+            power_payload["x_values"] = [str(value) for value in x_values]
+        for attr in ("precision", "initial_guess", "exponent_override"):
+            value = getattr(power_config, attr, None)
+            if value is not None:
+                power_payload[attr] = str(value)
+        seed_guesses = getattr(power_config, "seed_guesses", None)
+        if seed_guesses:
+            power_payload["seed_guesses"] = [str(value) for value in seed_guesses]
+        if power_payload:
+            payload["power_law_config"] = power_payload
+    return payload
+
+
+def _safe_uncertainty_core_request(
+    *,
+    headers: list[str],
+    parsed_data: list[list[object]],
+    constants: dict[str, object],
+    formula: str,
+    propagation_method: str,
+    propagation_order: int,
+    mc_samples: int | None,
+    mc_seed: int | None,
+    precision_digits: int,
+    uncertainty_digits: int,
+    table_segments: list[tuple[int, int]],
+) -> ComputeJobRequest | None:
+    try:
+        return build_uncertainty_request(
+            headers=headers,
+            rows=parsed_data,
+            formula=formula,
+            constants=constants,
+            propagation_method=propagation_method,
+            propagation_order=propagation_order,
+            mc_samples=mc_samples,
+            mc_seed=mc_seed,
+            precision_digits=precision_digits,
+            uncertainty_digits=uncertainty_digits,
+            segments=tuple(table_segments),
+            request_id="desktop-worker-uncertainty",
+        )
+    except Exception:
+        return None
+
+
 
 @dataclass
 class CalcJob:
@@ -521,6 +624,7 @@ class CalcJob:
     latex_group_size: int = 3
     segments: list[tuple[int, int]] | None = None
     uncertainty_digits: int = 3
+    core_request: ComputeJobRequest | None = None
 
 
 @dataclass
@@ -632,6 +736,15 @@ def _execute_calc_job(
         if stop_checker:
             stop_checker()
 
+    def _service_cancel_requested() -> bool:
+        if stop_checker is None:
+            return False
+        try:
+            stop_checker()
+        except Exception:
+            return True
+        return False
+
     def _v(message: str):
         if job.verbose:
             logs.append(message)
@@ -717,18 +830,19 @@ def _execute_calc_job(
             results: list[object] = []
             plot_bytes_list: list[bytes | None] = []
             seg_lengths: list[int] = []
+            input_sources: list[str] = []
             if job.data_path:
                 _check_cancelled()
                 text = _safe_read_text(job.data_path)
-                h, rows, res = process_data_string(text, job.verbose, options=options)
+                h, rows = parse_extrapolation_string(text, job.verbose, options=options)
                 headers = h
                 data_rows.extend(rows)
-                results.extend(res)
                 seg_lengths.extend(_segment_lengths_from_text(text, len(rows)))
+                input_sources.append(text)
                 logs.append(f"Loaded file data: {job.data_path}")
             if job.manual_content:
                 _check_cancelled()
-                h, rows, res = process_data_string(job.manual_content, job.verbose, options=options)
+                h, rows = parse_extrapolation_string(job.manual_content, job.verbose, options=options)
                 if headers is None:
                     headers = h
                 elif headers != h:
@@ -739,8 +853,8 @@ def _execute_calc_job(
                         )
                     )
                 data_rows.extend(rows)
-                results.extend(res)
                 seg_lengths.extend(_segment_lengths_from_text(job.manual_content, len(rows)))
+                input_sources.append(job.manual_content)
                 logs.append("Manual input data used.")
             if not headers or not data_rows:
                 raise ValueError(
@@ -751,6 +865,55 @@ def _execute_calc_job(
                 )
             _v(f"[extrapolation] rows={len(data_rows)} headers={headers}")
             table_segments = _table_segments_from_lengths(len(data_rows), seg_lengths)
+            core_request = _safe_extrapolation_core_request(
+                headers=headers,
+                data_rows=data_rows,
+                options=options,
+                table_segments=table_segments,
+                precision_digits=applied_precision,
+                uncertainty_digits=job.uncertainty_digits,
+            )
+            if core_request is not None:
+                extrapolation_service = create_core_session_service(
+                    cancellation_checker=_service_cancel_requested,
+                )
+                envelope = extrapolation_service.submit(core_request)
+                if envelope.status is not ResultStatus.SUCCEEDED:
+                    payload_map = envelope.payload if isinstance(envelope.payload, Mapping) else {}
+                    message_text = str(payload_map.get("message") or "Extrapolation failed.")
+                    raise ValueError(message_text)
+                if options.warnings is not None:
+                    options.warnings.extend(str(item) for item in envelope.warnings)
+                data_rows = extrapolation_payload_to_rows(envelope.payload)
+                results = extrapolation_payload_to_results(envelope.payload)
+                headers = [str(item) for item in envelope.payload.get("headers", headers)]
+            else:
+                headers = None
+                data_rows = []
+                results = []
+                seg_lengths = []
+                for text in input_sources:
+                    h, rows, res = process_data_string(text, job.verbose, options=options)
+                    if headers is None:
+                        headers = h
+                    elif headers != h:
+                        raise ValueError(
+                            _dual_msg(
+                                "文件与手动输入的表头不一致。",
+                                "File headers do not match the manual header.",
+                            )
+                        )
+                    data_rows.extend(rows)
+                    results.extend(res)
+                    seg_lengths.extend(_segment_lengths_from_text(text, len(rows)))
+                if not headers or not data_rows:
+                    raise ValueError(
+                        _dual_msg(
+                            "没有可用于外推的有效数据。",
+                            "No valid data available for extrapolation.",
+                        )
+                    )
+                table_segments = _table_segments_from_lengths(len(data_rows), seg_lengths)
             if job.generate_latex:
                 _check_cancelled()
                 generate_latex_table(
@@ -783,6 +946,8 @@ def _execute_calc_job(
                 "precision_used": applied_precision,
                 "render_plots": job.render_plots,
             }
+            if core_request is not None:
+                payload["core_request"] = core_request
             if plot_bytes_list:
                 payload["plots"] = plot_bytes_list
         elif job.mode == "error":
@@ -866,20 +1031,46 @@ def _execute_calc_job(
             table_segments = _table_segments_from_lengths(len(parsed_data), seg_lengths)
             used_headers, used_constants = detect_used_error_propagation_inputs(headers, constants, job.formula or "")
             constants_used = {name: constants[name] for name in used_constants if name in constants}
-            _check_cancelled()
-            results = apply_formula_to_data(
-                headers,
-                parsed_data,
-                constants_used,
-                job.formula,
-                job.verbose,
-                warnings=options.warnings,
-                return_components=True,
+            core_request = _safe_uncertainty_core_request(
+                headers=headers,
+                parsed_data=parsed_data,
+                constants=constants_used,
+                formula=job.formula or "",
                 propagation_method=job.error_propagation_method,
                 propagation_order=job.error_propagation_order,
                 mc_samples=job.error_mc_samples,
                 mc_seed=job.error_mc_seed,
+                precision_digits=applied_precision,
+                uncertainty_digits=job.uncertainty_digits,
+                table_segments=table_segments,
             )
+            _check_cancelled()
+            if core_request is not None:
+                uncertainty_service = create_core_session_service(
+                    cancellation_checker=_service_cancel_requested,
+                )
+                envelope = uncertainty_service.submit(core_request)
+                if envelope.status is not ResultStatus.SUCCEEDED:
+                    payload_map = envelope.payload if isinstance(envelope.payload, Mapping) else {}
+                    message_text = str(payload_map.get("message") or "Uncertainty propagation failed.")
+                    raise ValueError(message_text)
+                if options.warnings is not None:
+                    options.warnings.extend(str(item) for item in envelope.warnings)
+                results = uncertainty_payload_to_results(envelope.payload)
+            else:
+                results = apply_formula_to_data(
+                    headers,
+                    parsed_data,
+                    constants_used,
+                    job.formula,
+                    job.verbose,
+                    warnings=options.warnings,
+                    return_components=True,
+                    propagation_method=job.error_propagation_method,
+                    propagation_order=job.error_propagation_order,
+                    mc_samples=job.error_mc_samples,
+                    mc_seed=job.error_mc_seed,
+                )
             row_plot_bytes: list[bytes | None] = []
             if job.render_plots:
                 for idx_row, res in enumerate(results, 1):
@@ -914,6 +1105,8 @@ def _execute_calc_job(
                 "formula": job.formula or "",
                 "precision_used": applied_precision,
             }
+            if core_request is not None:
+                payload["core_request"] = core_request
             has_row_plots = any(plot for plot in row_plot_bytes)
             if contrib_summary:
                 payload["contribution_breakdown"] = contrib_summary
@@ -979,7 +1172,10 @@ def _execute_calc_job(
                 sigma_idx = headers.index(sigma_col)
             segments = job.segments or [(0, len(rows))]
             batches: list[dict[str, object]] = []
-            normalized_segments = segments if segments else [(0, len(rows))]
+            normalized_segments = [
+                (start, end) for start, end in normalize_segments(segments, row_count=len(rows))
+            ]
+            non_empty_segments = normalized_segments
             _v(f"[statistics] rows={len(rows)} value_col={value_col} batches={len(normalized_segments)}")
             if job.verbose:
                 print(
@@ -991,66 +1187,78 @@ def _execute_calc_job(
                     f"[statistics] value_col={value_col} sigma_cols={'yes' if sigma_rows else 'no'} "
                     f"total_rows={len(rows)} batches={len(normalized_segments)}"
                 )
-            for batch_idx, (start, end) in enumerate(normalized_segments, 1):
+            try:
+                core_batches = build_statistics_requests(
+                    headers=headers,
+                    rows=rows,
+                    sigma_rows=sigma_rows,
+                    value_col=value_col,
+                    sigma_col=sigma_col or None,
+                    stats_mode=job.stats_mode or "mean",
+                    use_sample=job.stats_sample,
+                    use_weighted_variance=job.stats_weighted_variance,
+                    precision_digits=applied_precision,
+                    uncertainty_digits=job.uncertainty_digits,
+                    segments=normalized_segments,
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(str(exc)) from exc
+            statistics_service = create_core_session_service(
+                cancellation_checker=_service_cancel_requested,
+            )
+            for core_batch, (start, end) in zip(core_batches, non_empty_segments, strict=True):
                 _check_cancelled()
-                start = max(0, start)
-                end = min(len(rows), max(start, end))
                 batch_rows = rows[start:end]
                 if not batch_rows:
                     continue
                 batch_sigmas = sigma_rows[start:end] if sigma_rows else []
-                values = [row[val_idx] for row in batch_rows]
-                sigmas: list[mp.mpf | None] = []
+                request_sigmas = list(core_batch.request.inputs["sigmas"])
+                values = [
+                    row[val_idx] if isinstance(row[val_idx], mp.mpf) else mp.mpf(str(row[val_idx]))
+                    for row in batch_rows
+                ]
+                sigmas = [None if sigma is None else mp.mpf(str(sigma)) for sigma in request_sigmas]
                 if sigma_idx is not None:
-                    for row in batch_rows:
-                        entry_val = None
-                        if sigma_idx < len(row):
-                            try:
-                                entry_val = mp.mpf(row[sigma_idx])
-                            except Exception:
-                                entry_val = None
-                        sigmas.append(mp.fabs(entry_val) if entry_val is not None else None)
-                else:
-                    for sigma_row in batch_sigmas:
-                        entry = sigma_row[val_idx] if val_idx < len(sigma_row) else None
-                        if entry is None:
-                            sigmas.append(None)
-                            continue
-                        if hasattr(entry, "uncertainty"):
-                            entry_val = getattr(entry, "uncertainty", None)
-                        else:
-                            entry_val = entry
-                        try:
-                            sigmas.append(mp.mpf(entry_val) if entry_val is not None else None)
-                        except Exception:
-                            sigmas.append(None)
+                    latex_sigmas: list[tuple[mp.mpf | None, ...]] = []
+                    for sigma in sigmas:
+                        sigma_cells: list[mp.mpf | None] = [None] * len(headers)
+                        sigma_cells[val_idx] = sigma
+                        latex_sigmas.append(tuple(sigma_cells))
+                    batch_sigmas = latex_sigmas
                 if job.verbose:
                     print(
-                        f"[statistics] batch {batch_idx} size={len(values)} use_sample={job.stats_sample} use_weighted_variance={job.stats_weighted_variance}"
+                        f"[statistics] batch {core_batch.index} size={len(values)} use_sample={job.stats_sample} use_weighted_variance={job.stats_weighted_variance}"
                     )
                     for i, (v, s) in enumerate(zip(values, sigmas), 1):
-                        print(f"[statistics] batch {batch_idx} point {i}: value={v} sigma={s}")
+                        print(f"[statistics] batch {core_batch.index} point {i}: value={v} sigma={s}")
                 try:
-                    result = compute_statistics(
-                        values,
-                        sigmas,
-                        job.stats_mode or "mean",
-                        use_sample=job.stats_sample,
-                        use_weighted_variance=job.stats_weighted_variance,
+                    envelope = statistics_service.submit(core_batch.request)
+                except Exception as exc:  # noqa: BLE001 - preserve per-batch worker context.
+                    message = _loc(f"批次 {core_batch.index} 统计失败: {exc}", f"Batch {core_batch.index} failed: {exc}")
+                    raise ValueError(message) from exc
+                if envelope.status is not ResultStatus.SUCCEEDED:
+                    payload = envelope.payload if isinstance(envelope.payload, Mapping) else {}
+                    message_text = str(payload.get("message") or "Statistics failed.")
+                    message = _loc(
+                        f"批次 {core_batch.index} 统计失败: {message_text}",
+                        f"Batch {core_batch.index} failed: {message_text}",
                     )
-                except Exception as exc:  # noqa: BLE001
-                    message = _loc(f"批次 {batch_idx} 统计失败: {exc}", f"Batch {batch_idx} failed: {exc}")
+                    raise ValueError(message)
+                try:
+                    result = statistics_payload_to_compute_result(envelope.payload, envelope.warnings)
+                except Exception as exc:  # noqa: BLE001 - preserve per-batch worker context.
+                    message = _loc(f"批次 {core_batch.index} 统计失败: {exc}", f"Batch {core_batch.index} failed: {exc}")
                     raise ValueError(message) from exc
                 if job.verbose:
                     print(
-                        f"[statistics] batch {batch_idx} mean={result.get('mean')} "
+                        f"[statistics] batch {core_batch.index} mean={result.get('mean')} "
                         f"std={result.get('std')} std_mean={result.get('std_mean')} "
                         f"v_min={result.get('v_min')} v_max={result.get('v_max')} "
                         f"n_eff={result.get('effective_n')}"
                     )
                 batches.append(
                     {
-                        "index": batch_idx,
+                        "index": core_batch.index,
                         "headers": headers,
                         "value_col": value_col,
                         "rows": batch_rows,
@@ -1139,6 +1347,7 @@ class FitJob:
     timeout_seconds: float | None = None
     custom_constants: dict[str, str] | None = None
     parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
+    core_request: ComputeJobRequest | None = None
 
 
 @dataclass(frozen=True)
@@ -1167,6 +1376,7 @@ class RootSolvingJob:
     latex_include_dcolumn: bool = False
     latex_language: str = "en"
     render_plots: bool = False
+    core_request: ComputeJobRequest | None = None
 
 
 @dataclass
@@ -1231,6 +1441,7 @@ def _serialize_root_solving_job(job: RootSolvingJob) -> dict[str, Any]:
         "latex_include_dcolumn": bool(job.latex_include_dcolumn),
         "latex_language": str(job.latex_language),
         "render_plots": bool(job.render_plots),
+        "core_request": _serialize_core_request(job.core_request),
     }
 
 
@@ -1264,26 +1475,69 @@ def _deserialize_root_solving_job(payload: Mapping[str, Any]) -> RootSolvingJob:
         ),
         data_headers=data_headers,
         data_rows=data_rows,
-        constants_enabled=bool(payload.get("constants_enabled", False)),
+        constants_enabled=_payload_bool(payload, "constants_enabled", False, namespace="root_solving_job"),
         constants_rows=tuple(_dict_string_row(row) for row in _row_sequence(payload.get("constants_rows", ()))),
         constants_view=str(payload.get("constants_view", "table")),
         constants_text=str(payload.get("constants_text", "")),
         mode=str(payload.get("mode", "auto")),
         scan_config=_deserialize_scan_config(payload.get("scan_config", {})),
         uncertainty_options=_normalize_root_uncertainty_payload(payload.get("uncertainty_options", {})),
-        precision=int(payload.get("precision", 16)),
-        display_digits=int(payload.get("display_digits", 10)),
-        uncertainty_digits=int(payload.get("uncertainty_digits", 1)),
+        precision=_payload_int(payload, "precision", 16, namespace="root_solving_job"),
+        display_digits=_payload_int(payload, "display_digits", 10, namespace="root_solving_job"),
+        uncertainty_digits=_payload_int(payload, "uncertainty_digits", 1, namespace="root_solving_job"),
         language=_deserialize_language(payload.get("language", "en")),
         parallel_config=_deserialize_parallel_config(cast(dict[str, Any] | None, payload.get("parallel_config"))),
-        generate_latex=bool(payload.get("generate_latex", False)),
+        generate_latex=_payload_bool(payload, "generate_latex", False, namespace="root_solving_job"),
         output_path=str(payload.get("output_path", "")),
         latex_caption=str(payload.get("latex_caption", "")),
-        latex_digits=int(payload.get("latex_digits", 16)),
-        latex_group_size=int(payload.get("latex_group_size", 3)),
-        latex_include_dcolumn=bool(payload.get("latex_include_dcolumn", False)),
+        latex_digits=_payload_int(payload, "latex_digits", 16, namespace="root_solving_job"),
+        latex_group_size=_payload_int(payload, "latex_group_size", 3, namespace="root_solving_job"),
+        latex_include_dcolumn=_payload_bool(
+            payload,
+            "latex_include_dcolumn",
+            False,
+            namespace="root_solving_job",
+        ),
         latex_language=_deserialize_language(payload.get("latex_language", payload.get("language", "en"))),
-        render_plots=bool(payload.get("render_plots", False)),
+        render_plots=_payload_bool(payload, "render_plots", False, namespace="root_solving_job"),
+        core_request=_deserialize_core_request(payload.get("core_request")),
+    )
+
+
+def _serialize_core_request(request: ComputeJobRequest | None) -> dict[str, object] | None:
+    if request is None:
+        return None
+    return {
+        "mode": request.mode.value,
+        "inputs": dict(request.inputs),
+        "options": {
+            "precision_digits": request.options.precision_digits,
+            "uncertainty_digits": request.options.uncertainty_digits,
+            "parallel": dict(request.options.parallel),
+        },
+        "request_id": request.request_id,
+    }
+
+
+def _deserialize_core_request(value: Any) -> ComputeJobRequest | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("core_request must be an object when present")
+    options_payload = value.get("options", {})
+    if options_payload is None:
+        options_payload = {}
+    if not isinstance(options_payload, Mapping):
+        raise ValueError("core_request.options must be an object")
+    return ComputeJobRequest(
+        mode=JobMode(str(value.get("mode", ""))),
+        inputs=cast(Mapping[str, Any], value.get("inputs", {})),
+        options=JobOptions(
+            precision_digits=options_payload.get("precision_digits"),
+            uncertainty_digits=options_payload.get("uncertainty_digits"),
+            parallel=cast(Mapping[str, Any], options_payload.get("parallel", {})),
+        ),
+        request_id=str(value.get("request_id", "")),
     )
 
 
@@ -1357,7 +1611,19 @@ def _dict_string_row(row: Mapping[str, Any]) -> dict[str, str]:
     return {str(key): "" if value is None else str(value) for key, value in row.items()}
 
 
-def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
+def _execute_root_solving_job_payload(
+    job: RootSolvingJob,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict[str, object]:
+    def _service_cancel_requested() -> bool:
+        if should_cancel is None:
+            return False
+        try:
+            return bool(should_cancel())
+        except Exception:
+            return True
+
     constants_state = normalize_constants_state(
         enabled=job.constants_enabled,
         rows=job.constants_rows,
@@ -1365,25 +1631,33 @@ def _execute_root_solving_job_payload(job: RootSolvingJob) -> dict[str, object]:
         text=job.constants_text,
         numeric_mode="uncertainty",
     )
-    with precision_guard(job.precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
-        data_rows = tuple(
-            tuple(parse_uncertainty_format(cell, precision=job.precision) for cell in row)
-            for row in job.data_rows
+    if job.core_request is not None:
+        root_service = create_core_session_service(cancellation_checker=_service_cancel_requested)
+        envelope = root_service.submit(job.core_request)
+        if envelope.status is not ResultStatus.SUCCEEDED:
+            message = str(envelope.payload.get("message") or envelope.payload.get("error_code") or "Root solving failed.")
+            raise ValueError(message)
+        batch = root_batch_payload_to_result(envelope.payload["batch"])
+    else:
+        with precision_guard(job.precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+            data_rows = tuple(
+                tuple(parse_uncertainty_format(cell, precision=job.precision) for cell in row)
+                for row in job.data_rows
+            )
+        unknowns = tuple(RootUnknown(**row) for row in job.unknown_rows if row.get("name", "").strip())
+        batch = solve_root_batch(
+            equations=job.equations,
+            unknowns=unknowns,
+            data_headers=job.data_headers,
+            data_rows=data_rows,
+            constants_state=constants_state,
+            mode=job.mode,
+            precision=job.precision,
+            scan_config=job.scan_config,
+            data_text_rows=job.data_rows,
+            uncertainty_options=job.uncertainty_options,
+            parallel_config=job.parallel_config,
         )
-    unknowns = tuple(RootUnknown(**row) for row in job.unknown_rows if row.get("name", "").strip())
-    batch = solve_root_batch(
-        equations=job.equations,
-        unknowns=unknowns,
-        data_headers=job.data_headers,
-        data_rows=data_rows,
-        constants_state=constants_state,
-        mode=job.mode,
-        precision=job.precision,
-        scan_config=job.scan_config,
-        data_text_rows=job.data_rows,
-        uncertainty_options=job.uncertainty_options,
-        parallel_config=job.parallel_config,
-    )
     plot_selection = None
     if job.render_plots and _root_batch_has_successful_roots(batch):
         plot_problem = normalize_root_problem_from_context(
@@ -1581,15 +1855,44 @@ def _deserialize_parallel_config(payload: dict[str, Any] | None) -> ParallelConf
         raise ValueError(f"Unsupported process_start_method: {process_start_method}")
     return ParallelConfig(
         mode=ParallelMode(payload.get("mode", ParallelMode.AUTO)),
-        max_workers=payload.get("max_workers"),
-        reserve_cores=int(payload.get("reserve_cores", 1)),
-        default_worker_cap=int(payload.get("default_worker_cap", 16)),
-        min_process_tasks=int(payload.get("min_process_tasks", 4)),
+        max_workers=_optional_parallel_int(payload, "max_workers"),
+        reserve_cores=_parallel_int(payload, "reserve_cores", 1),
+        default_worker_cap=_parallel_int(payload, "default_worker_cap", 16),
+        min_process_tasks=_parallel_int(payload, "min_process_tasks", 4),
         nested_policy=NestedParallelPolicy(
             payload.get("nested_policy", NestedParallelPolicy.SERIAL_WHEN_NESTED)
         ),
         process_start_method=process_start_method,
     )
+
+
+def _optional_parallel_int(payload: Mapping[str, Any], key: str) -> int | None:
+    return _optional_payload_int(payload, key, namespace="parallel_config")
+
+
+def _parallel_int(payload: Mapping[str, Any], key: str, default: int) -> int:
+    return _payload_int(payload, key, default, namespace="parallel_config")
+
+
+def _optional_payload_int(payload: Mapping[str, Any], key: str, *, namespace: str) -> int | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    return _payload_int(payload, key, 0, namespace=namespace)
+
+
+def _payload_int(payload: Mapping[str, Any], key: str, default: int, *, namespace: str) -> int:
+    value = payload.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{namespace}.{key} must be an integer")
+    return value
+
+
+def _payload_bool(payload: Mapping[str, Any], key: str, default: bool, *, namespace: str) -> bool:
+    value = payload.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{namespace}.{key} must be a boolean")
+    return value
 
 
 def _mp_to_string(value: Any, keep_digits: int) -> str:
@@ -1795,7 +2098,7 @@ def _serialize_fit_job(job: FitJob) -> dict[str, Any]:
 
 
 def _deserialize_fit_job(payload: dict[str, Any]) -> FitJob:
-    precision = int(payload.get("precision", 80))
+    precision = _payload_int(payload, "precision", 80, namespace="fit_job")
     with _mp_precision_guard(precision):
         return FitJob(
             model_type=payload["model_type"],
@@ -1821,23 +2124,23 @@ def _deserialize_fit_job(payload: dict[str, Any]) -> FitJob:
             parameter_names=list(payload["parameter_names"]),
             template_expr=payload.get("template_expr"),
             template_params=payload.get("template_params"),
-            poly_degree=int(payload.get("poly_degree", 0)),
-            inverse_min=int(payload.get("inverse_min", 1)),
-            inverse_max=int(payload.get("inverse_max", 3)),
-            pade_m=int(payload.get("pade_m", 1)),
-            pade_n=int(payload.get("pade_n", 1)),
+            poly_degree=_payload_int(payload, "poly_degree", 0, namespace="fit_job"),
+            inverse_min=_payload_int(payload, "inverse_min", 1, namespace="fit_job"),
+            inverse_max=_payload_int(payload, "inverse_max", 3, namespace="fit_job"),
+            pade_m=_payload_int(payload, "pade_m", 1, namespace="fit_job"),
+            pade_n=_payload_int(payload, "pade_n", 1, namespace="fit_job"),
             auto_identifier=payload.get("auto_identifier"),
             precision=precision,
-            generate_latex=bool(payload.get("generate_latex", False)),
+            generate_latex=_payload_bool(payload, "generate_latex", False, namespace="fit_job"),
             output_path=str(payload.get("output_path", "")),
-            use_dcolumn=bool(payload.get("use_dcolumn", True)),
+            use_dcolumn=_payload_bool(payload, "use_dcolumn", True, namespace="fit_job"),
             caption=payload.get("caption"),
-            verbose=bool(payload.get("verbose", False)),
-            render_plots=bool(payload.get("render_plots", True)),
-            latex_digits=int(payload.get("latex_digits", 16)),
-            weighted=bool(payload.get("weighted", False)),
+            verbose=_payload_bool(payload, "verbose", False, namespace="fit_job"),
+            render_plots=_payload_bool(payload, "render_plots", True, namespace="fit_job"),
+            latex_digits=_payload_int(payload, "latex_digits", 16, namespace="fit_job"),
+            weighted=_payload_bool(payload, "weighted", False, namespace="fit_job"),
             label=str(payload.get("label", "")),
-            is_multidim=bool(payload.get("is_multidim", False)),
+            is_multidim=_payload_bool(payload, "is_multidim", False, namespace="fit_job"),
             implicit_definition=_deserialize_implicit_definition(payload.get("implicit_definition")),
             timeout_seconds=payload.get("timeout_seconds"),
             custom_constants=dict(payload.get("custom_constants") or {}),
@@ -1846,61 +2149,11 @@ def _deserialize_fit_job(payload: dict[str, Any]) -> FitJob:
 
 
 def _serialize_fit_result(result: FitResult, keep_digits: int) -> dict[str, Any]:
-    return {
-        "params": {key: _mp_to_string(value, keep_digits) for key, value in result.params.items()},
-        "param_errors": {key: _mp_to_string(value, keep_digits) for key, value in result.param_errors.items()},
-        "chi2": _mp_to_string(result.chi2, keep_digits),
-        "reduced_chi2": _mp_to_string(result.reduced_chi2, keep_digits),
-        "aic": _mp_to_string(result.aic, keep_digits),
-        "bic": _mp_to_string(result.bic, keep_digits),
-        "r2": _mp_to_string(result.r2, keep_digits),
-        "rmse": _mp_to_string(result.rmse, keep_digits),
-        "residuals": [_mp_to_string(value, keep_digits) for value in result.residuals],
-        "fitted_curve": [_mp_to_string(value, keep_digits) for value in result.fitted_curve],
-        "covariance": [
-            [_mp_to_string(value, keep_digits) for value in row]
-            for row in result.covariance
-        ],
-        "param_errors_stat": {
-            key: _mp_to_string(value, keep_digits)
-            for key, value in result.param_errors_stat.items()
-        },
-        "param_errors_sys": {
-            key: _mp_to_string(value, keep_digits)
-            for key, value in result.param_errors_sys.items()
-        },
-        "param_errors_total": {
-            key: _mp_to_string(value, keep_digits)
-            for key, value in result.param_errors_total.items()
-        },
-        "details": _serialize_mp_tree(result.details, keep_digits),
-    }
+    return _shared_serialize_fit_result(result, keep_digits)
 
 
 def _deserialize_fit_result(payload: dict[str, Any]) -> FitResult:
-    return FitResult(
-        params={key: mp.mpf(value) for key, value in payload["params"].items()},
-        param_errors={key: mp.mpf(value) for key, value in payload["param_errors"].items()},
-        chi2=mp.mpf(payload["chi2"]),
-        reduced_chi2=mp.mpf(payload["reduced_chi2"]),
-        aic=mp.mpf(payload["aic"]),
-        bic=mp.mpf(payload["bic"]),
-        r2=mp.mpf(payload["r2"]),
-        rmse=mp.mpf(payload["rmse"]),
-        residuals=[mp.mpf(value) for value in payload["residuals"]],
-        fitted_curve=[mp.mpf(value) for value in payload["fitted_curve"]],
-        covariance=[[mp.mpf(value) for value in row] for row in payload["covariance"]],
-        param_errors_stat={
-            key: mp.mpf(value) for key, value in payload["param_errors_stat"].items()
-        },
-        param_errors_sys={
-            key: mp.mpf(value) for key, value in payload["param_errors_sys"].items()
-        },
-        param_errors_total={
-            key: mp.mpf(value) for key, value in payload["param_errors_total"].items()
-        },
-        details=dict(payload.get("details") or {}),
-    )
+    return _shared_deserialize_fit_result(payload)
 
 
 def _serialize_fit_result_payload(payload: FitResultPayload) -> dict[str, Any]:
@@ -1915,10 +2168,11 @@ def _serialize_fit_result_payload(payload: FitResultPayload) -> dict[str, Any]:
 
 
 def _deserialize_fit_result_payload(payload: dict[str, Any]) -> FitResultPayload:
-    precision = int(payload["job"].get("precision", 80))
+    job_payload = payload["job"]
+    precision = _payload_int(job_payload, "precision", 80, namespace="fit_job")
     with _mp_precision_guard(precision):
         return FitResultPayload(
-            job=_deserialize_fit_job(payload["job"]),
+            job=_deserialize_fit_job(job_payload),
             fit_result=_deserialize_fit_result(payload["fit_result"]),
             expression=str(payload["expression"]),
             logs=list(payload.get("logs") or []),
@@ -1927,7 +2181,8 @@ def _deserialize_fit_result_payload(payload: dict[str, Any]) -> FitResultPayload
 
 
 def _fit_job_subprocess_entry(job_payload: dict[str, Any]) -> dict[str, Any]:
-    with _mp_precision_guard(int(job_payload["precision"])):
+    precision = _payload_int(job_payload, "precision", 80, namespace="fit_job")
+    with _mp_precision_guard(precision):
         job = _deserialize_fit_job(job_payload)
         payload = _execute_fit_job_payload(job)
         return _serialize_fit_result_payload(payload)
@@ -2126,9 +2381,43 @@ def _fit_self_consistent_with_legacy_hooks(job: FitJob) -> FitResult:
     return fit_result
 
 
-def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
+def _execute_fit_job_payload(job: FitJob, *, should_cancel=None) -> FitResultPayload:
+    def _service_cancel_requested() -> bool:
+        if should_cancel is None:
+            return False
+        try:
+            return bool(should_cancel())
+        except Exception:
+            return True
+
+    if job.model_type != "self_consistent" and job.core_request is not None:
+        service = create_core_session_service(cancellation_checker=_service_cancel_requested)
+        envelope = service.submit(job.core_request)
+        if envelope.status is not ResultStatus.SUCCEEDED:
+            message = str(envelope.payload.get("message") or envelope.payload.get("error_code") or "Fitting failed.")
+            raise ValueError(message)
+        fit_result = fitting_payload_to_fit_result(envelope.payload["fit_result"])
+        return FitResultPayload(
+            job=job,
+            fit_result=fit_result,
+            expression=str(envelope.payload.get("expression") or job.model_expr),
+            logs=list(envelope.payload.get("logs") or envelope.logs),
+            warnings=list(envelope.payload.get("warnings") or envelope.warnings),
+        )
+
     logs: list[str] = []
     warnings: list[str] = []
+    model_type = job.model_type
+    if model_type != "self_consistent":
+        output = execute_direct_fit(_direct_fit_input_from_job(job), verbose=job.verbose)
+        return FitResultPayload(
+            job=job,
+            fit_result=output.fit_result,
+            expression=output.expression,
+            logs=list(output.logs),
+            warnings=list(output.warnings),
+        )
+
     with _mp_precision_guard(job.precision):
         if job.verbose:
             try:
@@ -2143,25 +2432,9 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
                     print(f"[fit] initial_params={job.parameter_config}")
             except Exception:
                 pass
-        model_type = job.model_type
         fit_result: FitResult | None = None
         expression = job.model_expr
-        if model_type in {"polynomial", "inverse_power"}:
-            if model_type == "polynomial":
-                definition = build_polynomial_definition(job.poly_degree)
-            else:
-                definition = build_inverse_series_definition(job.inverse_min, job.inverse_max)
-            fit_result = fit_linear_model(
-                definition,
-                job.x_series,
-                job.y_series,
-                precision=job.precision,
-                weights=job.weights,
-                data_sigmas=job.sigma_series,
-            )
-            expression = fit_result.details.get("expression", expression)
-            logs.append(f"{definition.label} 完成。")
-        elif model_type == "self_consistent":
+        if model_type == "self_consistent":
             if job.implicit_definition is None:
                 raise ValueError(
                     _dual_msg(
@@ -2195,57 +2468,6 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
             fit_result.details["output_expression"] = job.implicit_definition.output_expression
             expression = job.implicit_definition.output_expression
             logs.append("self_consistent 拟合完成。")
-        elif model_type in {"power_limit", "pade", "custom"}:
-            expr = job.template_expr if model_type in {"power_limit", "pade"} else job.model_expr
-            params = job.template_params if model_type in {"power_limit", "pade"} else job.parameter_config
-            var_names = list(job.variable_map.keys()) or ["x"]
-            param_keys = list(params.keys()) if params else []
-            parameter_names: list[str] = []
-            seen: set[str] = set()
-            for name in param_keys + list(job.parameter_names):
-                if name in seen:
-                    continue
-                parameter_names.append(name)
-                seen.add(name)
-            if not parameter_names:
-                parameter_names = param_keys
-            if model_type == "custom":
-                problem = ModelProblem(
-                    model_type="custom",
-                    expression=expr,
-                    variables=tuple(var_names),
-                    target_name=job.target_column,
-                    parameter_config={name: (params or {}).get(name, {}) for name in parameter_names},
-                    constants=job.custom_constants or {},
-                    constants_enabled=True,
-                )
-                fit_result = FitRunner().fit(
-                    problem,
-                    job.variable_data,
-                    job.target_series,
-                    precision=job.precision,
-                    weights=job.weights,
-                    data_sigmas=job.sigma_series,
-                )
-            else:
-                spec = build_model_specification(
-                    expr,
-                    var_names,
-                    parameter_names,
-                    None,
-                )
-                state = build_parameter_state(params or {}, parameter_names)
-                fit_result = fit_custom_model(
-                    spec,
-                    state,
-                    job.variable_data,
-                    job.target_series,
-                    precision=job.precision,
-                    weights=job.weights,
-                    data_sigmas=job.sigma_series,
-                )
-            expression = expr
-            logs.append(f"{model_type} 拟合完成。")
         else:
             raise ValueError(
                 _dual_msg(
@@ -2265,6 +2487,34 @@ def _execute_fit_job_payload(job: FitJob) -> FitResultPayload:
             except Exception:
                 pass
     return FitResultPayload(job=job, fit_result=fit_result, expression=expression, logs=logs, warnings=warnings)
+
+
+def _direct_fit_input_from_job(job: FitJob) -> DirectFitInput:
+    return DirectFitInput(
+        model_type=job.model_type,
+        x_series=job.x_series,
+        y_series=job.y_series,
+        sigma_series=job.sigma_series,
+        weights=job.weights,
+        variable_map=job.variable_map,
+        variable_data=job.variable_data,
+        target_series=job.target_series,
+        target_column=job.target_column,
+        model_expr=job.model_expr,
+        parameter_config=job.parameter_config,
+        parameter_names=job.parameter_names,
+        template_expr=job.template_expr,
+        template_params=job.template_params,
+        poly_degree=job.poly_degree,
+        inverse_min=job.inverse_min,
+        inverse_max=job.inverse_max,
+        pade_m=job.pade_m,
+        pade_n=job.pade_n,
+        precision=job.precision,
+        weighted=job.weighted,
+        label=job.label,
+        custom_constants=job.custom_constants,
+    )
 
 
 __all__ = [

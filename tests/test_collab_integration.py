@@ -7,6 +7,10 @@ and broadcast state updates reach other clients.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 import pytest
 
 # These tests require flask-socketio; skip the whole module when absent.
@@ -56,6 +60,53 @@ def test_create_app_with_socketio_returns_pair(_app_and_sio):
     # health checks.
     assert "socketio" in app.extensions
     assert app.extensions["socketio"] is sio
+
+
+def test_create_app_with_socketio_does_not_eagerly_import_desktop_or_compute_stack():
+    script = """
+import sys
+
+from app_web.server import create_app_with_socketio
+
+app, socketio = create_app_with_socketio()
+if app is None or socketio is None:
+    raise SystemExit("create_app_with_socketio returned an empty pair")
+if app.extensions.get("socketio") is not socketio:
+    raise SystemExit("socketio extension was not registered")
+
+forbidden_prefixes = (
+    "app_desktop",
+    "PySide6",
+    "matplotlib.pyplot",
+    "app_web.logic.error_propagation",
+    "app_web.logic.extrapolation",
+    "app_web.logic.fitting",
+    "app_web.logic.root_solving",
+    "app_web.logic.statistics",
+    "fitting",
+)
+forbidden = sorted(
+    name
+    for name in sys.modules
+    if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden_prefixes)
+)
+if forbidden:
+    raise SystemExit("forbidden imports: " + ", ".join(forbidden))
+print("ok")
+"""
+    env = dict(os.environ)
+    env["DATALAB_WEB_SECRET"] = "collab-startup-import-test-secret"
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    assert completed.stdout.strip() == "ok"
 
 
 def test_collab_session_endpoint_is_registered(_app_and_sio):

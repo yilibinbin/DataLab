@@ -69,6 +69,7 @@ import mpmath as mp
 
 from PySide6.QtWidgets import QMessageBox
 
+from datalab_core.fitting import build_fitting_request
 from data_extrapolation_latex_latest import _dual_msg
 from fitting import (
     ImplicitModelDefinition,
@@ -253,7 +254,7 @@ class WindowFittingModelsMixin:
             fit_result.details["expression"] = model_expr
             fit_result.details["substituted_expression"] = substituted
             summary = self._format_fit_result_text(fit_result, model_expr, substituted)
-            self._set_result_text(summary)
+            self._set_result_text(summary, final_result=True)
             tag = f"{batch_tag} " if batch_tag else ""
             self._append_log(tag + "自定义拟合完成。")
             warning_detail = fit_result.details.get("boundary_warning")
@@ -301,7 +302,7 @@ class WindowFittingModelsMixin:
             self._image_mode = "fit"
             self.current_fit_figures = []
             self.current_fit_index = 0
-            self._update_result_plot(plot_data)
+            self._update_result_plot(plot_data, final_result=True)
             plot_job = SimpleNamespace(
                 model_type="custom",
                 poly_degree=0,
@@ -372,7 +373,7 @@ class WindowFittingModelsMixin:
             else None
         )
         summary = self._format_fit_result_text(fit_result, expression, substituted)
-        self._set_result_text(summary)
+        self._set_result_text(summary, final_result=True)
         self._append_log(f"{definition.label} 拟合完成。")
         warning_detail = fit_result.details.get("boundary_warning")
         if warning_detail:
@@ -412,7 +413,7 @@ class WindowFittingModelsMixin:
         self._image_mode = "fit"
         self.current_fit_figures = []
         self.current_fit_index = 0
-        self._update_result_plot(plot_data)
+        self._update_result_plot(plot_data, final_result=True)
         plot_job = SimpleNamespace(
             model_type="auto",
             poly_degree=0,
@@ -556,7 +557,7 @@ class WindowFittingModelsMixin:
             fit_result.details["expression"] = expr
             fit_result.details["substituted_expression"] = substituted
             summary = self._format_fit_result_text(fit_result, expr, substituted)
-            self._set_result_text(summary)
+            self._set_result_text(summary, final_result=True)
             tag = f"{batch_tag} " if batch_tag else ""
             self._append_log(f"{tag}{label} 拟合完成。")
             warning_detail = fit_result.details.get("boundary_warning")
@@ -593,7 +594,7 @@ class WindowFittingModelsMixin:
             self._image_mode = "fit"
             self.current_fit_figures = []
             self.current_fit_index = 0
-            self._update_result_plot(plot_data)
+            self._update_result_plot(plot_data, final_result=True)
             plot_job = SimpleNamespace(
                 model_type="custom",
                 poly_degree=0,
@@ -690,6 +691,7 @@ class WindowFittingModelsMixin:
         inverse_max = 3
         pade_m = 1
         pade_n = 1
+        model_type_text = str(model_type or "")
         if model_type == "custom":
             custom_config = self._collect_custom_fit_config(
                 validate_parameters=True,
@@ -744,6 +746,45 @@ class WindowFittingModelsMixin:
             custom_constants = custom_config["constants"]
             parameter_config = custom_config["parameter_config"]
             parameter_names = custom_config["parameter_names"]
+        parallel_config = self._current_parallel_config()
+        core_request = build_fitting_request(
+            model_type=model_type_text,
+            headers=headers,
+            data_rows=data_rows,
+            sigma_rows=sigma_rows,
+            sigma_series=(sigma_series if len(sigma_series) == len(data_rows) else None),
+            variable_map=variable_map,
+            target_column=target_column,
+            model_expr=model_expr,
+            parameter_config=parameter_config,
+            parameter_names=parameter_names,
+            template_expr=template_expr,
+            template_params=template_params,
+            poly_degree=poly_degree,
+            inverse_min=inverse_min,
+            inverse_max=inverse_max,
+            pade_m=pade_m,
+            pade_n=pade_n,
+            auto_identifier=None,
+            weighted=self.fit_weighted_checkbox.isChecked(),
+            label=label,
+            is_multidim=is_multidim,
+            implicit_definition=implicit_definition,
+            timeout_seconds=(None if timeout_seconds is None else str(timeout_seconds)),
+            custom_constants=custom_constants,
+            weights=weights,
+            precision_digits=precision,
+            parallel={
+                "mode": parallel_config.mode,
+                "max_workers": parallel_config.max_workers,
+                "reserve_cores": parallel_config.reserve_cores,
+                "default_worker_cap": parallel_config.default_worker_cap,
+                "min_process_tasks": parallel_config.min_process_tasks,
+                "nested_policy": parallel_config.nested_policy,
+                "process_start_method": parallel_config.process_start_method,
+            },
+            request_id="desktop-fit",
+        )
         return FitJob(
             model_type=model_type,
             headers=headers,
@@ -781,7 +822,8 @@ class WindowFittingModelsMixin:
             implicit_definition=implicit_definition,
             timeout_seconds=timeout_seconds,
             custom_constants=custom_constants,
-            parallel_config=self._current_parallel_config(),
+            parallel_config=parallel_config,
+            core_request=core_request,
         )
 
     def _execute_fit_async(self, job: FitJob):
@@ -796,8 +838,7 @@ class WindowFittingModelsMixin:
         if getattr(job, "verbose", False):
             worker.log_ready.connect(self._append_log)
         self._fit_worker = worker
-        self._set_button_to_stop_mode()
-        worker.start()
+        self._start_worker_with_workbench_result_state(worker)
         self._append_log(self._tr("拟合已在后台运行…", "Fit running in background…"))
 
     def _run_fitting_mode(self, generate_latex: bool, output_path: str, verbose: bool, render_plots: bool = True) -> bool:
@@ -832,7 +873,6 @@ class WindowFittingModelsMixin:
             "mode": mode,
             "verbose": verbose,
         }
-        self._set_button_to_stop_mode()
-        worker.start()
+        self._start_worker_with_workbench_result_state(worker)
         self._append_log(self._tr("批量拟合已在后台运行…", "Batch fitting running in background…"))
         return True

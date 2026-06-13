@@ -35,6 +35,7 @@ def _select_model(win, model_type: str) -> None:
 def test_implicit_controls_exist_and_method_options(window) -> None:
     _select_model(window, "self_consistent")
 
+    assert window.fit_box.property("datalab_view_module") == "app_desktop.views.fitting"
     assert window.fit_model_combo.currentData() == "self_consistent"
     assert window.implicit_variable_edit.text() == "u"
     assert window.implicit_equation_edit.toPlainText() == ""
@@ -215,6 +216,8 @@ def test_implicit_validation_rejects_blank_expressions_and_bad_variable(window) 
 
 
 def test_prepare_fit_job_passes_implicit_definition(window) -> None:
+    from datalab_core.jobs import JobMode
+
     _select_model(window, "self_consistent")
     window._apply_quantum_defect_preset()
     window._reset_implicit_param_rows(
@@ -249,6 +252,27 @@ def test_prepare_fit_job_passes_implicit_definition(window) -> None:
     assert job.implicit_definition.parameters == ("d0", "d2", "d4", "En")
     assert job.implicit_definition.constants == {"R": "10973731.568160", "c": "299792458"}
     assert job.implicit_definition.solve_options.method == "fixed_point"
+    assert job.core_request is not None
+    assert job.core_request.mode is JobMode.FITTING
+    assert job.core_request.inputs["model_type"] == "self_consistent"
+    assert job.core_request.inputs["model_expr"] == "En - R*c/(n-delta)^2"
+    assert job.core_request.inputs["target_column"] == "B"
+    assert job.core_request.inputs["target_series"] == ["0.75", "0.9"]
+    assert job.core_request.inputs["timeout_seconds"] == "300.0"
+    assert job.core_request.inputs["implicit_definition"] == {
+        "x_variables": ["n"],
+        "implicit_variable": "delta",
+        "equation": "d0 + d2/(n-delta)^2 + d4/(n-delta)^4",
+        "output_expression": "En - R*c/(n-delta)^2",
+        "parameters": ["d0", "d2", "d4", "En"],
+        "constants": {"R": "10973731.568160", "c": "299792458"},
+        "solve_options": {
+            "method": "fixed_point",
+            "initial": "0",
+            "tolerance": "1e-30",
+            "max_iterations": 80,
+        },
+    }
 
 
 def test_implicit_parameter_table_supplies_initial_values_without_constraints(window) -> None:
@@ -321,9 +345,21 @@ def test_implicit_constraints_checkbox_is_above_constants(window) -> None:
     window.show()
     _select_model(window, "self_consistent")
 
-    implicit_layout = window.implicit_model_widget.layout()
-    constraint_index = implicit_layout.indexOf(window.implicit_constraints_checkbox)
-    constants_index = implicit_layout.indexOf(window.implicit_constants_editor)
+    page_layout = window.workbench_variable_stack.currentWidget().layout()
+    sections = [
+        page_layout.itemAt(index).widget()
+        for index in range(page_layout.count())
+        if page_layout.itemAt(index).widget() is not None
+    ]
+    constraint_section = window.implicit_constraints_checkbox.parentWidget()
+    while constraint_section is not None and not constraint_section.property("datalab_variable_section_card"):
+        constraint_section = constraint_section.parentWidget()
+    constants_section = window.implicit_constants_editor.parentWidget()
+    while constants_section is not None and not constants_section.property("datalab_variable_section_card"):
+        constants_section = constants_section.parentWidget()
+
+    constraint_index = sections.index(constraint_section) if constraint_section in sections else -1
+    constants_index = sections.index(constants_section) if constants_section in sections else -1
 
     assert constraint_index >= 0
     assert constants_index >= 0

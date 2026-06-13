@@ -9,6 +9,8 @@ from root_solving.expression import RootExpressionSystem, build_root_expression_
 from root_solving.models import (
     RootBatchResult,
     RootBatchRowResult,
+    RootBackend,
+    RootMode,
     RootProblem,
     RootResult,
     RootScanConfig,
@@ -45,7 +47,7 @@ class _RootBatchTask:
     scan_config: RootScanConfig
     precision: int
     system: RootExpressionSystem
-    mode: str
+    mode: RootMode
     uncertainty_options: Mapping[str, object] | RootUncertaintyOptions | None
 
 
@@ -260,8 +262,8 @@ def _deserialize_result_from_task(payload: Mapping[str, object]) -> RootResult:
             for root_payload in roots_payload
             if isinstance(root_payload, Mapping)
         ),
-        backend=str(backend_value if backend_value is not None else "mpmath"),
-        mode=str(mode_value if mode_value is not None else "scalar"),
+        backend=_root_backend(backend_value),
+        mode=_root_mode(mode_value),
         residual_norm=payload.get("residual_norm"),
         jacobian_condition=payload.get("jacobian_condition"),
         warnings=tuple(str(warning) for warning in warnings_payload),
@@ -273,6 +275,26 @@ def _mapping_dict(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
     return {str(key): item for key, item in value.items()}
+
+
+def _root_backend(value: object) -> RootBackend:
+    text = str(value if value is not None else "mpmath")
+    if text == "scipy":
+        return "scipy"
+    return "mpmath"
+
+
+def _root_mode(value: object) -> RootMode:
+    text = str(value if value is not None else "scalar")
+    if text == "auto":
+        return "auto"
+    if text == "polynomial":
+        return "polynomial"
+    if text == "system":
+        return "system"
+    if text == "scan_multiple":
+        return "scan_multiple"
+    return "scalar"
 
 
 def _inner_root_parallel_config(config: ParallelConfig | None) -> ParallelConfig:

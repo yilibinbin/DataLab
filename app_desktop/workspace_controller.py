@@ -12,9 +12,20 @@ from app_desktop.fitting_input_normalization import (
     normalize_constants_state,
     normalize_parameter_rows,
 )
+from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
 from app_desktop.workers_core import _READ_FALLBACK_ENCODINGS
+from datalab_core.workbench_model import FORMULA_PREVIEW_LANGUAGES, WorkbenchModel
 from shared.update_checker import current_version
-from shared.workspace_schema import compute_workspace_hash, sha256_bytes
+from shared.workspace_schema import sha256_bytes
+
+
+_DURABLE_RESULT_OVERVIEW_STATES = {"complete", "failed"}
+_WORKSPACE_PREVIEW_LANGUAGES = FORMULA_PREVIEW_LANGUAGES
+_WORKSPACE_PREVIEW_SCHEMA_KEYS = frozenset(
+    formula.schema_key
+    for spec in MODE_WORKBENCH_SPECS.values()
+    for formula in spec.formulas
+)
 
 
 @dataclass(frozen=True)
@@ -77,6 +88,18 @@ def _set_text(obj: Any, value: str) -> None:
         obj.setPlainText(value)
     elif hasattr(obj, "setText"):
         obj.setText(value)
+
+
+def _set_value(obj: Any, value: Any) -> None:
+    if obj is None or value is None or not hasattr(obj, "setValue"):
+        return
+    try:
+        obj.setValue(value)
+    except (TypeError, ValueError):
+        try:
+            obj.setValue(type(obj.value())(value))
+        except (AttributeError, TypeError, ValueError):
+            pass
 
 
 def _checked(obj: Any, default: bool = False) -> bool:
@@ -621,6 +644,58 @@ def _restore_root_config(window: Any, config: Any) -> None:
     _restore_root_uncertainty_options(window, config.get("uncertainty_options"))
 
 
+def _restore_extrapolation_config(window: Any, config: Any) -> None:
+    if not isinstance(config, dict):
+        return
+    method = str(config.get("method") or "")
+    if method:
+        _set_combo_data(getattr(window, "method_combo", None), method)
+    _set_text(getattr(window, "custom_formula_edit", None), str(config.get("custom_formula") or ""))
+    power_law = config.get("power_law") or {}
+    if isinstance(power_law, dict):
+        x_values = str(power_law.get("x_values") or "").split(",")
+        for edit, value in zip(getattr(window, "power_x_edits", []) or [], x_values):
+            _set_text(edit, value.strip())
+        _set_text(getattr(window, "power_p_edit", None), str(power_law.get("custom_p") or ""))
+        _set_text(getattr(window, "power_seed_guesses_edit", None), str(power_law.get("seed_guesses") or ""))
+    levin = config.get("levin") or {}
+    if isinstance(levin, dict):
+        _set_combo_data(getattr(window, "levin_variant_combo", None), str(levin.get("variant") or "u"))
+        _set_value(getattr(window, "levin_order_spin", None), levin.get("order"))
+        _set_combo_data(getattr(window, "levin_weight_combo", None), str(levin.get("weight") or "default"))
+        _set_value(getattr(window, "levin_beta_spin", None), levin.get("beta"))
+    richardson = config.get("richardson") or {}
+    if isinstance(richardson, dict):
+        _set_value(getattr(window, "richardson_p_spin", None), richardson.get("p"))
+    uncertainty_column = str(config.get("uncertainty_column") or "")
+    if uncertainty_column:
+        _set_combo_data(getattr(window, "uncertainty_combo", None), uncertainty_column)
+
+
+def _restore_error_config(window: Any, config: Any) -> None:
+    if not isinstance(config, dict):
+        return
+    _set_text(getattr(window, "formula_edit", None), str(config.get("formula") or ""))
+    _set_combo_data(getattr(window, "error_method_combo", None), str(config.get("method") or "taylor"))
+    _set_value(getattr(window, "error_order_spin", None), config.get("order"))
+    _set_value(getattr(window, "error_mc_samples_spin", None), config.get("mc_samples"))
+    _set_text(getattr(window, "error_mc_seed_edit", None), str(config.get("mc_seed") or ""))
+
+
+def _restore_statistics_config(window: Any, config: Any) -> None:
+    if not isinstance(config, dict):
+        return
+    _set_text(getattr(window, "stats_value_column_edit", None), str(config.get("value_column") or "A"))
+    _set_text(getattr(window, "stats_sigma_column_edit", None), str(config.get("sigma_column") or ""))
+    _set_combo_data(getattr(window, "stats_mode_combo", None), str(config.get("mode") or "mean"))
+    checkbox = getattr(window, "stats_sample_checkbox", None)
+    if checkbox is not None and hasattr(checkbox, "setChecked"):
+        checkbox.setChecked(bool(config.get("sample")))
+    checkbox = getattr(window, "stats_weight_variance_checkbox", None)
+    if checkbox is not None and hasattr(checkbox, "setChecked"):
+        checkbox.setChecked(bool(config.get("weighted_variance")))
+
+
 def _restore_root_uncertainty_options(window: Any, options: Any) -> None:
     if not isinstance(options, dict):
         options = {}
@@ -773,6 +848,18 @@ def _workspace_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _model_from_v1_workspace(workspace: dict[str, Any]) -> WorkbenchModel:
+    return WorkbenchModel.from_v1_workspace(workspace)
+
+
+def _workspace_from_model_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    return WorkbenchModel.from_v1_workspace(
+        _workspace_from_manifest(manifest),
+        allow_legacy_floats=True,
+        lenient_ui=True,
+    ).to_v1_workspace()
+
+
 def _degrade_obsolete_auto_fit_config(window: Any, fitting: dict[str, Any]) -> bool:
     has_obsolete_auto = fitting.get("model") == "auto" or "auto_fit" in fitting
     if not has_obsolete_auto:
@@ -795,7 +882,7 @@ def _capture_ui(window: Any) -> dict[str, Any]:
     cursor = window.latex_edit.textCursor() if hasattr(window, "latex_edit") else None
     tabs = getattr(window, "tabs", None)
     result_tabs = getattr(window, "result_tabs", None)
-    return {
+    ui = {
         "main_tab": tabs.currentIndex() if tabs is not None else 0,
         "result_subtab": result_tabs.currentIndex() if result_tabs is not None else 0,
         "selected_plot_index": max(0, _value(getattr(window, "image_page_spin", None), 1) - 1),
@@ -806,6 +893,89 @@ def _capture_ui(window: Any) -> dict[str, Any]:
             "cursor_column": cursor.positionInBlock() + 1 if cursor is not None else 1,
         },
     }
+    formula_preview = _capture_formula_preview_ui(window)
+    if formula_preview:
+        ui["formula_preview"] = formula_preview
+    return ui
+
+
+def _capture_formula_preview_ui(window: Any) -> dict[str, str]:
+    state = getattr(window, "_workbench_formula_preview_languages", None)
+    if state is not None and not isinstance(state, dict):
+        raise TypeError("Formula preview UI state must be a dictionary")
+    if isinstance(state, dict) and not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in state.items()
+    ):
+        raise TypeError("Formula preview UI state keys and values must be strings")
+    return _sanitize_formula_preview_ui(state)
+
+
+def _restore_ui_state(window: Any, ui: dict[str, Any]) -> None:
+    if not isinstance(ui, dict):
+        return
+    window._workbench_formula_preview_languages = _restore_formula_preview_ui(
+        ui.get("formula_preview")
+    )
+
+    def _bounded_index(value: object, count: int) -> int | None:
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return None
+        if 0 <= index < count:
+            return index
+        return None
+
+    result_tabs = getattr(window, "result_tabs", None)
+    if result_tabs is not None:
+        result_index = _bounded_index(ui.get("result_subtab"), result_tabs.count())
+        if result_index is not None:
+            result_tabs.setCurrentIndex(result_index)
+
+    image_page_spin = getattr(window, "image_page_spin", None)
+    if image_page_spin is not None:
+        plot_index = _bounded_index(ui.get("selected_plot_index"), image_page_spin.maximum())
+        if plot_index is not None:
+            image_page_spin.setValue(plot_index + 1)
+
+    try:
+        plot_zoom = float(ui.get("plot_zoom"))
+    except (TypeError, ValueError):
+        plot_zoom = 0.0
+    if plot_zoom > 0 and hasattr(window, "_on_zoom_percent_changed") and hasattr(window, "zoom_percent_spin"):
+        percent = int(round(plot_zoom * 100))
+        percent = max(window.zoom_percent_spin.minimum(), min(window.zoom_percent_spin.maximum(), percent))
+        window.zoom_percent_spin.setValue(percent)
+
+    tabs = getattr(window, "tabs", None)
+    if tabs is not None:
+        main_index = _bounded_index(ui.get("main_tab"), tabs.count())
+        if main_index is not None:
+            tabs.setCurrentIndex(main_index)
+
+
+def _restore_formula_preview_ui(raw_state: object) -> dict[str, str]:
+    # Workspace restore is reader-first: malformed or future UI-only preview
+    # metadata is ignored instead of blocking the workspace from opening.
+    return _sanitize_formula_preview_ui(raw_state)
+
+
+def _sanitize_formula_preview_ui(raw_state: object) -> dict[str, str]:
+    if not isinstance(raw_state, dict):
+        return {}
+    restored: dict[str, str] = {}
+    for key, value in raw_state.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        schema_key = key.strip()
+        language = value.strip()
+        if (
+            schema_key
+            and schema_key in _WORKSPACE_PREVIEW_SCHEMA_KEYS
+            and language in _WORKSPACE_PREVIEW_LANGUAGES
+        ):
+            restored[schema_key] = language
+    return restored
 
 
 def _capture_result_snapshot(window: Any, workspace_hash: str, attachments: dict[str, bytes]) -> dict[str, Any]:
@@ -821,7 +991,9 @@ def _capture_result_snapshot(window: Any, workspace_hash: str, attachments: dict
     csv_headers = list(getattr(window, "_csv_headers", []) or [])
     latex_source = _text(getattr(window, "latex_edit", None))
     plot_bytes = getattr(window, "result_plot_bytes", None)
-    present = bool(markdown or log_text or csv_rows or latex_source or plot_bytes)
+    overview_state = str(getattr(window, "_workbench_result_state", "none") or "none")
+    durable_overview_state = overview_state if overview_state in _DURABLE_RESULT_OVERVIEW_STATES else "none"
+    present = bool(markdown or log_text or csv_rows or csv_headers or latex_source or plot_bytes or durable_overview_state != "none")
     if not present:
         return {"present": False}
     plots = []
@@ -844,6 +1016,7 @@ def _capture_result_snapshot(window: Any, workspace_hash: str, attachments: dict
         "result_of_hash": workspace_hash,
         "snapshot_only": True,
         "stale": False,
+        "overview_state": durable_overview_state,
         "markdown": markdown,
         "markdown_format": markdown_format,
         "log": log_text,
@@ -867,7 +1040,9 @@ def capture_workspace(window: Any, *, title: str = "Untitled") -> WorkspaceBundl
         "result_snapshot": {"present": False},
     }
     attachments = {**data_attachments, **constants_attachments}
-    workspace_hash = compute_workspace_hash(workspace)
+    model = _model_from_v1_workspace(workspace)
+    workspace = model.to_v1_workspace()
+    workspace_hash = model.compute_hash()
     workspace["result_snapshot"] = _capture_result_snapshot(window, workspace_hash, attachments)
     now = _utc_now()
     return WorkspaceBundle(
@@ -931,12 +1106,28 @@ def _restore_data_section(window: Any, section: dict[str, Any], *, constants: bo
 
 
 def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[str, bytes]) -> None:
-    workspace = _workspace_from_manifest(manifest)
+    previous_restoring = bool(getattr(window, "_workspace_restoring", False))
+    window._workspace_restoring = True
+    try:
+        _restore_workspace_contents(window, manifest, attachments)
+    except Exception:
+        window._workspace_dirty = True
+        window._workspace_degraded = True
+        raise
+    finally:
+        window._workspace_restoring = previous_restoring
+
+
+def _restore_workspace_contents(window: Any, manifest: dict[str, Any], attachments: dict[str, bytes]) -> None:
+    workspace = _workspace_from_model_manifest(manifest)
     _set_combo_data(getattr(window, "mode_combo", None), str(workspace.get("current_mode") or "fitting"))
     _restore_data_section(window, workspace.get("data") or {}, constants=False)
     _restore_data_section(window, workspace.get("constants") or {}, constants=True)
 
     config = workspace.get("config") or {}
+    _restore_extrapolation_config(window, config.get("extrapolation"))
+    _restore_error_config(window, config.get("error"))
+    _restore_statistics_config(window, config.get("statistics"))
     fitting = config.get("fitting") or {}
     degraded = _degrade_obsolete_auto_fit_config(window, fitting)
     fitting["model"] = _normalize_fitting_model(fitting.get("model") or "custom")
@@ -963,6 +1154,8 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
     _restore_root_config(window, config.get("root_solving"))
 
     snapshot = workspace.get("result_snapshot") or {"present": False}
+    if hasattr(window, "_reset_csv_data"):
+        window._reset_csv_data(clear_non_tabular_result=True, refresh_result_rail=False)
     if snapshot.get("present"):
         result_text = str(snapshot.get("markdown") or "")
         if snapshot.get("markdown_format") == "markdown" and hasattr(window, "_set_result_text"):
@@ -981,18 +1174,32 @@ def restore_workspace(window: Any, manifest: dict[str, Any], attachments: dict[s
             first_path = plots[0].get("path")
             if first_path in attachments:
                 window._update_result_plot(attachments[first_path])
+        overview_state = str(snapshot.get("overview_state") or "none")
+        if overview_state in _DURABLE_RESULT_OVERVIEW_STATES:
+            window._workbench_result_state = overview_state
     else:
         window.result_edit.clear()
         window.log_edit.clear()
         window.latex_edit.clear()
-        window._reset_csv_data()
         window._last_result_text = ""
         window._last_result_text_format = "plain"
         window._last_result_rendered_text = ""
     window._last_result_kind = None
     window._last_result_payloads = {}
+    _restore_ui_state(window, workspace.get("ui") or {})
     window._workspace_snapshot_only = bool(snapshot.get("present"))
-    window._workspace_dirty = False
+    if hasattr(window, "refresh_workbench_result_rail"):
+        previous_autoselect_suppression = bool(getattr(window, "_suppress_result_log_autoselect", False))
+        window._suppress_result_log_autoselect = True
+        try:
+            window.refresh_workbench_result_rail()
+        finally:
+            window._suppress_result_log_autoselect = previous_autoselect_suppression
     window._workspace_degraded = degraded
     if hasattr(window, "_set_snapshot_controls_enabled"):
         window._set_snapshot_controls_enabled(not window._workspace_snapshot_only)
+    if hasattr(window, "refresh_workbench_formula_panel"):
+        window.refresh_workbench_formula_panel()
+    if hasattr(window, "refresh_workbench_variable_panel"):
+        window.refresh_workbench_variable_panel()
+    window._workspace_dirty = False

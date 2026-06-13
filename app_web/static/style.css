@@ -859,6 +859,10 @@ tbody tr:hover td {
   font-size: 18px;
   overflow-x: auto;
 }
+.formula-preview .formula-preview-placeholder {
+  color: var(--muted);
+  font-size: 13px;
+}
 .formula-preview .katex-error { color: #ff7b72; font-size: 13px; }
 
 @media (max-width: 720px) {

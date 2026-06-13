@@ -22,6 +22,20 @@ def test_richardson_requires_at_least_four_terms():
             apply_sequence_accelerator("richardson", seq, SequenceAcceleratorConfig(precision=80))
 
 
+@pytest.mark.parametrize("precision", [80.0, True, "80"])
+def test_sequence_accelerator_rejects_non_integer_precision(
+    precision: object,
+) -> None:
+    seq = [mp.mpf("1"), mp.mpf("0.5"), mp.mpf("0.25")]
+
+    with pytest.raises(TypeError, match="precision must be an integer"):
+        apply_sequence_accelerator(
+            "shanks",
+            seq,
+            SequenceAcceleratorConfig(precision=precision),  # type: ignore[arg-type]
+        )
+
+
 def test_richardson_extrapolation_converges_with_more_terms():
     # Use a smooth 1/n^2 tail so Richardson can extrapolate meaningfully with >= 4 terms.
     with mp.workdps(80):
@@ -71,4 +85,3 @@ def test_levin_variants_run_and_converge(variant: str):
         assert results
         res = results[0]
         assert mp.fabs(res.value - limit) < mp.mpf("1e-2")
-

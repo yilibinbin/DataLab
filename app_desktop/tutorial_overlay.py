@@ -37,6 +37,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .theme import (
+    tutorial_overlay_body_style,
+    tutorial_overlay_style,
+    tutorial_overlay_title_style,
+)
+
 __all__ = [
     "KEY_TUTORIAL_SEEN",
     "TUTORIAL_STEPS",
@@ -184,15 +190,7 @@ class TutorialOverlay(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setStyleSheet("""
-            TutorialOverlay {
-                background: rgba(0, 0, 0, 120);
-            }
-            QWidget#card {
-                background: white;
-                border-radius: 10px;
-            }
-        """)
+        self.setStyleSheet(tutorial_overlay_style())
 
         self._card = QWidget(self)
         self._card.setObjectName("card")
@@ -205,12 +203,12 @@ class TutorialOverlay(QWidget):
 
         self._title = QLabel()
         self._title.setWordWrap(True)
-        self._title.setStyleSheet("font-size: 16pt; font-weight: 600;")
+        self._title.setStyleSheet(tutorial_overlay_title_style())
         card_layout.addWidget(self._title)
 
         self._body = QLabel()
         self._body.setWordWrap(True)
-        self._body.setStyleSheet("font-size: 11pt; color: #333;")
+        self._body.setStyleSheet(tutorial_overlay_body_style())
         self._body.setMinimumWidth(420)
         card_layout.addWidget(self._body)
 

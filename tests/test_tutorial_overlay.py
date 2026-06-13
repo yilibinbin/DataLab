@@ -10,7 +10,9 @@ Pins:
 
 from __future__ import annotations
 
+import ast
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -194,3 +196,28 @@ def test_back_button_disabled_on_first_step(_app):
     assert overlay._prev_btn.isEnabled() is False
     overlay._next_step()
     assert overlay._prev_btn.isEnabled() is True
+
+
+def test_tutorial_overlay_does_not_embed_targeted_qss() -> None:
+    path = Path(__file__).resolve().parents[1] / "app_desktop" / "tutorial_overlay.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    forbidden_snippets = {
+        """
+            TutorialOverlay {
+                background: rgba(0, 0, 0, 120);
+            }
+            QWidget#card {
+                background: white;
+                border-radius: 10px;
+            }
+        """,
+        "font-size: 16pt; font-weight: 600;",
+        "font-size: 11pt; color: #333;",
+    }
+    literals = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
+    assert literals.isdisjoint(forbidden_snippets)

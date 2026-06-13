@@ -8,6 +8,8 @@ from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QVBoxLayout, QWidg
 
 from app_desktop.detected_rows_table import DetectedRowsController, SOURCE_DETECTED
 from app_desktop.fitting_input_normalization import ParameterRowsState, normalize_parameter_rows
+from app_desktop.theme import table_style
+from app_desktop.widget_hints import set_accessible_description
 
 _COLUMNS = ("name", "initial", "fixed", "min", "max")
 _HEADERS = ("Name", "Init", "Fixed", "Min", "Max")
@@ -40,6 +42,13 @@ class ParameterTable(QWidget):
         )
         self.set_constraints_enabled(False)
 
+    def set_embedded_in_workbench(self, embedded: bool) -> None:
+        self.setProperty("datalab_parameter_table_embedded", bool(embedded))
+        self.table_view.setProperty("datalab_workbench_embedded_table", bool(embedded))
+        self.table_view.setStyleSheet(table_style())
+        self.style().unpolish(self)
+        self.style().polish(self)
+
     def set_constraints_enabled(self, enabled: bool) -> None:
         self._constraints_enabled = bool(enabled)
         for column in range(2, len(_COLUMNS)):
@@ -48,6 +57,15 @@ class ParameterTable(QWidget):
 
     def constraints_enabled(self) -> bool:
         return self._constraints_enabled
+
+    def set_headers(self, headers: Sequence[str]) -> None:
+        self.table_view.setHorizontalHeaderLabels(list(headers))
+
+    def setToolTip(self, text: str) -> None:  # noqa: N802 - Qt API override
+        super().setToolTip(text)
+        set_accessible_description(self, text)
+        self.table_view.setToolTip(text)
+        set_accessible_description(self.table_view, text)
 
     def rows(self) -> list[dict[str, str]]:
         rows: list[dict[str, str]] = []

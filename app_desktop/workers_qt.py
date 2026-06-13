@@ -394,7 +394,10 @@ class FitWorker(QThread):
                 timeout_seconds=self.job.timeout_seconds,
                 should_cancel=lambda: self._stop_requested,
             )
-        return workers_core._execute_fit_job_payload(self.job)
+        return workers_core._execute_fit_job_payload(
+            self.job,
+            should_cancel=lambda: self._stop_requested,
+        )
 
 
 class RootSolvingWorker(QThread):
@@ -546,7 +549,10 @@ class FitBatchWorker(QThread):
                 timeout_seconds=job.timeout_seconds,
                 should_cancel=lambda: self._stop_requested,
             )
-        return workers_core._execute_fit_job_payload(job)
+        return workers_core._execute_fit_job_payload(
+            job,
+            should_cancel=lambda: self._stop_requested,
+        )
 
 
 __all__ = [

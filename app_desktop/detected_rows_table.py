@@ -6,6 +6,9 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
+from app_desktop.theme import table_style
+from app_desktop.widget_hints import set_accessible_description
+
 SOURCE_DETECTED = "detected"
 SOURCE_MANUAL = "manual"
 
@@ -203,11 +206,24 @@ class DetectedRowsTable(QWidget):
             on_changed=self._emit_changed,
         )
 
+    def set_embedded_in_workbench(self, embedded: bool) -> None:
+        self.setProperty("datalab_detected_rows_table_embedded", bool(embedded))
+        self.table_view.setProperty("datalab_workbench_embedded_table", bool(embedded))
+        self.table_view.setStyleSheet(table_style())
+        self.style().unpolish(self)
+        self.style().polish(self)
+
     def rows(self) -> list[dict[str, str]]:
         return self.detected_rows_controller.rows()
 
     def set_headers(self, headers: Sequence[str]) -> None:
         self.table_view.setHorizontalHeaderLabels(list(headers))
+
+    def setToolTip(self, text: str) -> None:  # noqa: N802 - Qt API override
+        super().setToolTip(text)
+        set_accessible_description(self, text)
+        self.table_view.setToolTip(text)
+        set_accessible_description(self.table_view, text)
 
     def set_rows(self, rows: Iterable[dict[str, Any]] | None) -> None:
         self._syncing = True

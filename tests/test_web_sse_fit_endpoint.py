@@ -198,6 +198,22 @@ def test_fit_stream_rejects_removed_public_models(_client, model):
     assert "removed" in errors[0]["data"]["message"].lower()
 
 
+@pytest.mark.parametrize("model", ["quadratic", "cubic"])
+def test_fit_stream_rejects_polynomial_degree_aliases_without_linear_fallback(
+    _client, model
+):
+    resp = _client.get(
+        f"/api/fit/stream?x=1,2,3,4,5&y=1,4,9,16,25&model={model}"
+    )
+    assert resp.status_code == 200
+    events = _parse_sse_stream(resp.data)
+    assert not any(e["event"] == "result" for e in events)
+    errors = [e for e in events if e["event"] == "error"]
+    assert errors, f"expected BadRequest event for model {model!r}"
+    assert errors[0]["data"]["error"] == "BadRequest"
+    assert "unsupported model" in errors[0]["data"]["message"].lower()
+
+
 @pytest.mark.parametrize("model", ["pade", "power_limit", "custom"])
 def test_fit_stream_recognizes_non_linear_explicit_models_without_fitting(
     _client, model

@@ -43,3 +43,11 @@ subdirectory contains `.datalab` templates with full configuration snapshots.
   rows without an uncertainty fall back to unit weight.
 - The constants file uses the same `ALPHA value` pair-per-line format
   the error-propagation form parses.
+- The fitting and self-consistent quantum-defect workspaces are good places to
+  inspect formula preview syntax. Switch the formula card between DataLab,
+  Python, and Mathematica preview modes to compare rendering; this does not
+  change the saved calculation.
+- The enlarged formula preview dialog includes an optional 高保真 LaTeX /
+  High-fidelity LaTeX preview path for display-only inspection. It uses only
+  already-installed or cached TeX resources and falls back safely when those
+  resources are unavailable.

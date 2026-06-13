@@ -2,19 +2,40 @@
 
 This page describes the desktop GUI workflow, organized by the desktop window layout.
 
-## Window Layout
+## Workbench Layout
 
-The main window is typically split into:
+The desktop window uses a three-zone scientific workbench:
 
-- Left: inputs and parameters (mode selection, data input, options)
-- Right: result area (tabs to view outputs)
+- Top workbench bar: New/Open/Save, Examples, Run/Stop, workspace status, Docs, and Updates
+- Left configuration rail: calculation mode, data source, and output settings
+- Center workspace: data editor, formula/model editor, parameters, and constants
+- Right result rail: an always-visible result summary/status panel above tabs for Numeric results, Image results, Run log, LaTeX source, and PDF preview
 
-The result area includes:
+The splitter keeps required controls visible at supported desktop sizes. Formula
+preview buttons open a rendered preview dialog without changing the formula text.
+Hidden modes keep their drafts, so switching between modules does not erase
+partially prepared formulas, parameters, constants, or root-solving settings.
 
-- Values: human-readable summary
-- Log: detailed steps and warnings (check this first when something fails)
-- LaTeX: generated LaTeX text (editable before compiling)
-- PDF Preview: preview images after successful PDF compilation
+### Shared workbench
+
+The center workspace keeps the active data editor together with the formula
+preview, parameter table, and constants table when the active mode provides
+those inputs. Formula previews are display-only; calculation still uses the
+source expression in the editor.
+
+### Result overview
+
+The right rail summarizes the real result state. If a calculation produces
+plots or text without tabular rows, the overview reports that no tabular data is
+available instead of treating the run as missing.
+
+The result rail includes:
+
+- Numeric results: human-readable summary and tables
+- Image results: generated plots with zoom/export controls
+- Run log: detailed steps and warnings (check this first when something fails)
+- LaTeX source: generated LaTeX text (editable before compiling)
+- PDF preview: preview images after successful PDF compilation
 
 ## Data Input
 
@@ -35,6 +56,47 @@ Common uncertainty formats:
 3. Configure required parameters for the selected mode
 4. Click Run/Start
 5. Review results and export CSV or generate LaTeX/PDF if needed
+
+## Formula Editors and Tables
+
+Formula editors use placeholder examples only as hints; an empty formula field is
+not silently replaced by the example. Use the preview button beside formula
+fields to inspect the rendered expression, and use the Functions button for the
+supported expression syntax.
+
+### Formula Preview Syntax
+
+The formula card's Preview syntax selector controls how the preview interprets
+the current text: DataLab compatible, Python style, or Mathematica style. It does
+not rewrite the formula editor and does not change computation input, fitting
+model configuration, or workspace compute hashes. Calculations still use the raw
+expression in the editor through the active module's safe expression engine. The
+preview syntax is saved as workspace UI preference, so changing it may mark the
+workspace as unsaved, but reopening the workspace restores the same preview
+setting.
+
+The enlarged preview dialog also offers an optional High-fidelity LaTeX render
+path for display-only inspection of constructs such as `cases` and matrices. It
+uses only TeX engines and packages already installed or cached on the machine;
+the preview path does not install or download TeX packages. If unavailable, the
+dialog keeps the existing math preview and shows an error message, with a
+source-text message when needed.
+
+Parameter and constants tables share the same interaction model across fitting,
+self-consistent/implicit models, error propagation, and root solving:
+
+- Detect buttons refresh automatically inferred names from the current formula
+- `+ Row` and `- Row` allow manual edits when automatic detection is not enough
+- Constants can be entered in table view or text view, including uncertainty
+  notation such as `1.23(4)[-5]`
+- Disabled constants are not substituted into the calculation
+
+## Example Workspaces
+
+Use the Examples button in the workbench bar or the Examples menu to open a
+bundled `.datalab` workspace. Examples are opened as templates: editing them does
+not modify the bundled copy, and saving requires choosing a user path. This makes
+examples safe to use as starting points for your own calculations.
 
 ## Display Formatting (Decimal Places / Significant Digits)
 

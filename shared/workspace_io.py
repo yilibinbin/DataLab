@@ -106,18 +106,34 @@ def _load_and_validate(path: Path) -> WorkspaceReadResult:
                 manifest = json.loads(manifest_bytes.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise WorkspaceValidationError("manifest must be valid UTF-8 JSON") from exc
-            validate_manifest(manifest)
-            expected_paths = collect_manifest_attachment_paths(manifest)
+            manifest, expected_paths, hash_validator = _validated_manifest_dispatch(manifest)
             attachments: dict[str, bytes] = {}
             for archive_name in expected_paths:
                 normalized = _normalize_archive_name(archive_name)
                 if normalized not in members:
                     raise WorkspaceValidationError(f"missing attachment: {normalized}")
                 attachments[normalized] = zf.read(members[normalized])
-            validate_manifest_attachment_hashes(manifest, attachments)
+            hash_validator(manifest, attachments)
             return WorkspaceReadResult(manifest=manifest, attachments=attachments)
     except zipfile.BadZipFile as exc:
         raise WorkspaceValidationError("workspace is not a valid ZIP file") from exc
+
+
+def _validated_manifest_dispatch(
+    manifest: dict[str, Any],
+) -> tuple[dict[str, Any], set[str], Any]:
+    if manifest.get("schema") == "datalab.workspace.v2" or manifest.get("schema_version") == 2:
+        from datalab_core import workspace_v2
+
+        try:
+            workspace_v2.validate_manifest(manifest)
+            compatible = workspace_v2.to_compatible_manifest(manifest)
+        except TypeError as exc:
+            raise WorkspaceValidationError(str(exc)) from exc
+        return compatible, collect_manifest_attachment_paths(compatible), validate_manifest_attachment_hashes
+
+    validate_manifest(manifest)
+    return manifest, collect_manifest_attachment_paths(manifest), validate_manifest_attachment_hashes
 
 
 def read_workspace(path: str | Path) -> WorkspaceReadResult:

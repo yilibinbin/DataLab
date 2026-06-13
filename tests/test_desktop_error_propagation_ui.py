@@ -30,6 +30,7 @@ def _combo_data(combo: Any) -> list[object]:
 
 
 def test_error_formula_and_help_controls_have_schema_metadata(window: Any) -> None:
+    assert window.error_box.property("datalab_view_module") == "app_desktop.views.error"
     assert window.formula_edit.property("datalab_schema_key") == "error.formula"
     assert window.formula_edit.property("datalab_schema_required") is True
     assert window.error_formula_preview_button.property("datalab_schema_key") == "error.formula"

@@ -31,10 +31,11 @@ from examples.catalog import EXAMPLE_NAMES as CATALOG_EXAMPLE_NAMES
 from examples.catalog import example_index_payload
 from app_desktop.fitting_input_normalization import normalize_fitting_input_from_widgets
 from app_desktop.update_controller import UpdateController
+from datalab_core.root_solving import build_root_solving_request
 from shared.computation_inputs import extract_expression_symbols
 from shared.update_checker import REPOSITORY_URL
 
-from PySide6.QtCore import Qt, QSize, QTimer, QLocale, Signal, QObject, QThread, QUrl
+from PySide6.QtCore import Qt, QSize, QTimer, QLocale, Signal, QObject, QThread, QUrl, QEvent
 from PySide6.QtGui import (
     QPixmap,
     QImage,
@@ -73,6 +74,7 @@ from PySide6.QtWidgets import (
     QTextBrowser,
     QListWidget,
     QListWidgetItem,
+    QTableWidget,
     QTableWidgetItem,
 )
 
@@ -545,6 +547,75 @@ class ExtrapolationWindow(
         from . import panels as _panels
         _panels._refresh_main_splitter_left_min_width(self)
 
+    def _bind_workbench_spec_schema_keys(self) -> None:
+        from . import panels as _panels
+        _panels._bind_workbench_spec_schema_keys(self)
+
+    def _bind_workbench_state_roles(self) -> None:
+        from . import panels as _panels
+        _panels._bind_workbench_state_roles(self)
+
+    def refresh_workbench_formula_panel(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_formula_panel(self)
+
+    def refresh_workbench_variable_panel(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_variable_panel(self)
+
+    def refresh_workbench_config_cards(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_config_cards(self)
+
+    def refresh_workbench_data_card(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_data_card(self)
+
+    def refresh_workbench_data_summary(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_data_summary(self)
+
+    def refresh_workbench_result_overview_card(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_result_overview_card(self)
+
+    def refresh_workbench_result_details_card(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_result_details_card(self)
+
+    def _refresh_workbench_status(self) -> None:
+        from .shell_layout import update_workbench_status
+
+        update_workbench_status(self)
+
+    def _apply_language(self, lang: str):
+        WindowI18nMixin._apply_language(self, lang)
+        try:
+            self._refresh_workbench_status()
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "Failed to refresh workbench status i18n"
+            )
+
+    def _set_button_to_stop_mode(self):
+        WindowExtrapolationMixin._set_button_to_stop_mode(self)
+        from .shell_layout import set_workbench_job_status
+
+        set_workbench_job_status(self, running=True)
+
+    def _set_button_to_run_mode(self):
+        WindowExtrapolationMixin._set_button_to_run_mode(self)
+        self._refresh_workbench_status()
+
     def _workspace_title(self) -> str:
         if self._workspace_path is None:
             if self._workspace_template_source is not None:
@@ -555,6 +626,14 @@ class ExtrapolationWindow(
     def _update_workspace_window_title(self) -> None:
         suffix = " *" if self._workspace_dirty else ""
         self.setWindowTitle(f"DataLab - {self._workspace_title()}{suffix}")
+        try:
+            self._refresh_workbench_status()
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "Workbench status refresh skipped", exc_info=True
+            )
 
     def _mark_workspace_dirty(self, *_args) -> None:
         if getattr(self, "_workspace_restoring", False):
@@ -730,9 +809,7 @@ class ExtrapolationWindow(
             self.result_edit.clear()
             self.log_edit.clear()
             self.latex_edit.clear()
-            self._reset_csv_data()
-            self.result_plot_bytes = None
-            self._result_plot_base_pixmap = None
+            self._reset_csv_data(clear_non_tabular_result=True)
             if hasattr(self, "result_plot_label"):
                 self.result_plot_label.setText(self._tr("尚无图片", "No image yet"))
             self._last_result_kind = None
@@ -884,6 +961,10 @@ class ExtrapolationWindow(
                 restore_workspace(self, loaded.manifest, loaded.attachments)
             finally:
                 self._workspace_restoring = False
+            if as_template and getattr(self, "_workspace_snapshot_only", False):
+                self._workspace_snapshot_only = False
+                self._workspace_snapshot_stale = False
+                self._set_snapshot_controls_enabled(True)
         except Exception as exc:  # noqa: BLE001
             self._workspace_restoring = False
             QMessageBox.critical(self, self._tr("打开失败", "Open failed"), str(exc))
@@ -924,6 +1005,16 @@ class ExtrapolationWindow(
         col_edit = QLineEdit(default_column)
         lbl_var = QLabel(self._tr("变量", "Var"))
         lbl_col = QLabel(self._tr("列名", "Column"))
+        variable_tooltip_zh = "表达式中的自变量名称，例如 x。"
+        variable_tooltip_en = "Independent variable name used in the expression, for example x."
+        column_tooltip_zh = "数据表中映射到该变量的列名，例如 A。"
+        column_tooltip_en = "Data-table column mapped to this variable, for example A."
+        self._register_text(lbl_var, "变量", "Var")
+        self._register_text(lbl_var, variable_tooltip_zh, variable_tooltip_en, "setToolTip")
+        self._register_text(var_edit, variable_tooltip_zh, variable_tooltip_en, "setToolTip")
+        self._register_text(lbl_col, "列名", "Column")
+        self._register_text(lbl_col, column_tooltip_zh, column_tooltip_en, "setToolTip")
+        self._register_text(col_edit, column_tooltip_zh, column_tooltip_en, "setToolTip")
         row_layout.addWidget(lbl_var)
         row_layout.addWidget(var_edit)
         row_layout.addWidget(lbl_col)
@@ -1006,7 +1097,7 @@ class ExtrapolationWindow(
                 "2. Select extrapolation, error propagation, fitting, or statistics on the left; set power/constant options as needed.\n"
                 "3. In fitting mode, choose polynomial, Padé, 1/x^p, power-limit, custom, or self-consistent; related controls appear below for expression/model settings.\n"
                 "4. In fitting, the Stat./System row controls statistical weighting: when enabled, data sigmas are used as weights (stat only); when disabled but sigmas exist, they are treated as systematic only (no double counting). Uncertainties are auto-parsed (1.23(4)[-5] or sigma-like headers), no extra sigma field needed.\n"
-                "5. Enable “Generate LaTeX” to export tables/images; you can edit/compile in the LaTeX tab; right tabs show results, logs, LaTeX, and PDF preview."
+                "5. Enable “Generate LaTeX” to export tables/images; the Result tab contains numeric results, plots, logs, LaTeX source editing/compilation, and PDF preview views."
             )
         else:
             title = "帮助"
@@ -1015,7 +1106,7 @@ class ExtrapolationWindow(
                 "2. 在左侧选择外推、误差传递、拟合或统计模式，并根据需要设置幂律/常数等参数。\n"
                 "3. 拟合模式使用下拉框选择多项式、Padé、1/x^p、power-limit、自定义或自洽隐式模型，相关参数控件会在下方即时显示，可写入表达式或模型设置。\n"
                 "4. 拟合模块的“统计/系统”一行控制统计加权：勾选“统计误差加权”则数据 σ 作为统计权重；不勾选时若检测到 σ，则只作为系统误差来源（避免双计）。不再需要单独输入 σ 列，程序会自动解析 1.23(4)[-5] 或包含 sigma/err 的列，日志会提示 χ²、边界警告等。\n"
-                "5. 勾选“生成 LaTeX 文件”即可导出表格/图像，并可在 LaTeX 标签页编辑或编译；右侧标签页展示数值结果、日志、LaTeX 内容和 PDF 预览。"
+                "5. 勾选“生成 LaTeX 文件”即可导出表格/图像；右侧“结果”标签页内包含数值结果、图片、日志、LaTeX 源码编辑/编译和 PDF 预览视图。"
             )
         QMessageBox.information(self, title, message)
 
@@ -1147,6 +1238,18 @@ class ExtrapolationWindow(
             self.pade_widget.setVisible(mode == "pade")
         if hasattr(self, "implicit_model_widget"):
             self.implicit_model_widget.setVisible(mode == "self_consistent")
+        show_implicit = mode == "self_consistent"
+        for name in (
+            "implicit_equation_edit",
+            "implicit_output_edit",
+            "implicit_param_header_widget",
+            "implicit_params_table",
+            "implicit_constraints_checkbox",
+            "implicit_constants_editor",
+        ):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setVisible(show_implicit)
         show_expr = mode != "self_consistent"
         if hasattr(self, "fit_expr_title_widget"):
             self.fit_expr_title_widget.setVisible(show_expr)
@@ -1170,6 +1273,12 @@ class ExtrapolationWindow(
             self.remove_variable_btn.setVisible(mode in {"custom", "self_consistent"})
             if mode not in {"custom", "self_consistent"}:
                 self._reset_variable_rows(default_var="x", default_column="A")
+
+        if hasattr(self, "refresh_workbench_formula_panel"):
+            self.refresh_workbench_formula_panel()
+        if hasattr(self, "refresh_workbench_variable_panel"):
+            self.refresh_workbench_variable_panel()
+
     def _refresh_mode_expression(self, mode: str | None = None):
         mode = mode or (self.fit_model_combo.currentData() if hasattr(self, "fit_model_combo") else None)
         if mode and mode != "custom" and hasattr(self, "fit_expr_edit"):
@@ -1501,6 +1610,55 @@ class ExtrapolationWindow(
             data_path=data_path,
             manual_content=manual_content,
         )
+        precision = int(self._read_precision())
+        uncertainty_digits = int(self._uncertainty_digits_value())
+        uncertainty_options = {
+            "method": str(
+                getattr(getattr(self, "root_uncertainty_method_combo", None), "currentData", lambda: "taylor")()
+                or "taylor"
+            ),
+            "taylor_order": int(
+                getattr(getattr(self, "root_uncertainty_order_spin", None), "value", lambda: 1)()
+                or 1
+            ),
+            "monte_carlo_samples": int(
+                getattr(getattr(self, "root_monte_carlo_samples_spin", None), "value", lambda: 2000)()
+                or 2000
+            ),
+            "monte_carlo_seed": str(
+                getattr(getattr(self, "root_monte_carlo_seed_edit", None), "text", lambda: "")()
+                or ""
+            ),
+        }
+        parallel_config = self._current_parallel_config()
+        mode = str(self.root_mode_combo.currentData() or "scalar")
+        display_digits = int(self._display_digits_limit())
+        core_request = build_root_solving_request(
+            equations=equations,
+            unknown_rows=tuple(dict(row) for row in self.root_unknowns_table.rows()),
+            data_headers=data_headers,
+            data_rows=data_rows,
+            constants_enabled=constants_enabled,
+            constants_rows=constants_rows,
+            constants_view=constants_view,
+            constants_text=constants_text,
+            mode=mode,
+            scan_config={},
+            uncertainty_options=uncertainty_options,
+            precision_digits=precision,
+            display_digits=display_digits,
+            uncertainty_digits=uncertainty_digits,
+            parallel={
+                "mode": parallel_config.mode,
+                "max_workers": parallel_config.max_workers,
+                "reserve_cores": parallel_config.reserve_cores,
+                "default_worker_cap": parallel_config.default_worker_cap,
+                "min_process_tasks": parallel_config.min_process_tasks,
+                "nested_policy": parallel_config.nested_policy,
+                "process_start_method": parallel_config.process_start_method,
+            },
+            request_id="desktop-root-solving",
+        )
         return RootSolvingJob(
             equations=equations,
             unknown_rows=tuple(dict(row) for row in self.root_unknowns_table.rows()),
@@ -1510,31 +1668,14 @@ class ExtrapolationWindow(
             constants_rows=constants_rows,
             constants_view=constants_view,
             constants_text=constants_text,
-            mode=str(self.root_mode_combo.currentData() or "scalar"),
+            mode=mode,
             scan_config={},
-            precision=int(self._read_precision()),
-            display_digits=int(self._display_digits_limit()),
-            uncertainty_digits=int(self._uncertainty_digits_value()),
-            uncertainty_options={
-                "method": str(
-                    getattr(getattr(self, "root_uncertainty_method_combo", None), "currentData", lambda: "taylor")()
-                    or "taylor"
-                ),
-                "taylor_order": int(
-                    getattr(getattr(self, "root_uncertainty_order_spin", None), "value", lambda: 1)()
-                    or 1
-                ),
-                "monte_carlo_samples": int(
-                    getattr(getattr(self, "root_monte_carlo_samples_spin", None), "value", lambda: 2000)()
-                    or 2000
-                ),
-                "monte_carlo_seed": str(
-                    getattr(getattr(self, "root_monte_carlo_seed_edit", None), "text", lambda: "")()
-                    or ""
-                ),
-            },
+            precision=precision,
+            display_digits=display_digits,
+            uncertainty_digits=uncertainty_digits,
+            uncertainty_options=uncertainty_options,
             language=self._current_output_language(),
-            parallel_config=self._current_parallel_config(),
+            parallel_config=parallel_config,
             generate_latex=generate_latex,
             output_path=output_path,
             latex_caption=self._caption_value(require=False) if generate_latex else "",
@@ -1546,6 +1687,7 @@ class ExtrapolationWindow(
                 getattr(self, "generate_plots_checkbox", None)
                 and self.generate_plots_checkbox.isChecked()
             ),
+            core_request=core_request,
         )
 
     def _current_output_language(self) -> str:
@@ -1721,59 +1863,74 @@ class ExtrapolationWindow(
             entries.append((f"Padé({m}|{n})", spec, state))
         return entries
 
-    def _update_theme_from_palette(self, *args):
-        from app_desktop.panels import _is_dark_theme, _get_table_style, _get_result_style
-        new_dark = _is_dark_theme()
+    def changeEvent(self, event):  # noqa: N802 - Qt API
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.PaletteChange:
+            self._apply_desktop_theme()
+
+    def _apply_desktop_theme(self) -> None:
+        from app_desktop.theme import (
+            is_dark_theme,
+            result_style,
+            table_style,
+            workbench_region_style,
+            workbench_toolbar_style,
+        )
+
+        new_dark = is_dark_theme()
         if new_dark != self.pdf_dark_mode:
             self.pdf_dark_mode = new_dark
             self._display_pdf_images()
-        # Update table and result browser styles to match new theme
-        if hasattr(self, "manual_table"):
-            self.manual_table.setStyleSheet(_get_table_style())
+        table_qss = table_style(dark=new_dark)
+        for table in self.findChildren(QTableWidget):
+            table.setStyleSheet(table_qss)
         if hasattr(self, "result_edit"):
-            self.result_edit.setStyleSheet(_get_result_style())
+            self.result_edit.setStyleSheet(result_style(dark=new_dark))
+        if hasattr(self, "_latex_highlighter"):
+            self._latex_highlighter.refresh_theme()
+        toolbar_qss = workbench_toolbar_style(dark=new_dark)
+        region_qss = workbench_region_style(dark=new_dark)
+        if hasattr(self, "workbench_root"):
+            self.workbench_root.setStyleSheet(region_qss)
+        if hasattr(self, "workbench_bar"):
+            self.workbench_bar.setStyleSheet(toolbar_qss)
+        if hasattr(self, "refresh_workbench_config_cards"):
+            self.refresh_workbench_config_cards()
+        if hasattr(self, "refresh_workbench_data_card"):
+            self.refresh_workbench_data_card()
+        if hasattr(self, "refresh_workbench_result_overview_card"):
+            self.refresh_workbench_result_overview_card()
+        if hasattr(self, "refresh_workbench_result_details_card"):
+            self.refresh_workbench_result_details_card()
+        if hasattr(self, "refresh_workbench_variable_panel"):
+            self.refresh_workbench_variable_panel()
+        if hasattr(self, "_refresh_main_splitter_left_min_width"):
+            self._refresh_main_splitter_left_min_width()
+
+    def _update_theme_from_palette(self, *args):
+        self._apply_desktop_theme()
 
     def _on_mode_change(self):
         mode = self.mode_combo.currentData()
         self._sync_manual_table_columns_for_mode(mode)
-        if mode == "extrapolation":
-            self.extrap_box.show()
-            self.error_box.hide()
-            self.fit_box.hide()
-            self.stats_box.hide()
-            if hasattr(self, "root_box"):
-                self.root_box.hide()
-        elif mode == "error":
-            self.extrap_box.hide()
-            self.error_box.show()
-            self.fit_box.hide()
-            self.stats_box.hide()
-            if hasattr(self, "root_box"):
-                self.root_box.hide()
-        elif mode == "statistics":
-            self.extrap_box.hide()
-            self.error_box.hide()
-            self.fit_box.hide()
-            self.stats_box.show()
-            if hasattr(self, "root_box"):
-                self.root_box.hide()
+        mode_indices = {
+            "extrapolation": 0,
+            "error": 1,
+            "fitting": 2,
+            "root_solving": 3,
+            "statistics": 4,
+        }
+        mode_stack = getattr(self, "mode_stack", None)
+        if mode_stack is not None:
+            mode_stack.setCurrentIndex(mode_indices.get(str(mode), mode_indices["fitting"]))
+        if mode == "statistics":
             self._on_stats_mode_change()
-        elif mode == "root_solving":
-            self.extrap_box.hide()
-            self.error_box.hide()
-            self.fit_box.hide()
-            self.stats_box.hide()
-            if hasattr(self, "root_box"):
-                self.root_box.show()
-        else:
-            self.extrap_box.hide()
-            self.error_box.hide()
-            self.fit_box.show()
-            self.stats_box.hide()
-            if hasattr(self, "root_box"):
-                self.root_box.hide()
         self._update_manual_placeholder(mode)
         self._update_log_scale_visibility()
+        if hasattr(self, "refresh_workbench_formula_panel"):
+            self.refresh_workbench_formula_panel()
+        if hasattr(self, "refresh_workbench_variable_panel"):
+            self.refresh_workbench_variable_panel()
         if hasattr(self, "_refresh_main_splitter_left_min_width"):
             self._refresh_main_splitter_left_min_width()
 
@@ -1803,20 +1960,23 @@ class ExtrapolationWindow(
 
     def _update_method_state(self):
         method = self.method_combo.currentData()
-        show_power = method == "power_law"
-        show_levin = method == "levin_u"
-        show_richardson = method == "richardson"
-        show_custom = method == "custom"
-
-        self.power_box.setVisible(show_power)
-        if hasattr(self, "levin_box"):
-            self.levin_box.setVisible(show_levin)
-        if hasattr(self, "richardson_box"):
-            self.richardson_box.setVisible(show_richardson)
-        self.custom_formula_widget.setVisible(show_custom)
+        method_indices = {
+            "power_law": 0,
+            "levin_u": 1,
+            "richardson": 2,
+            "custom": 3,
+        }
+        method_stack = getattr(self, "extrap_method_stack", None)
+        if method_stack is not None:
+            method_stack.setCurrentIndex(method_indices.get(str(method), 0))
+            method_stack.setVisible(method in method_indices)
+        if hasattr(self, "custom_formula_edit"):
+            self.custom_formula_edit.setVisible(method == "custom")
 
         if hasattr(self, "mpmath_precision_spin"):
             self.mpmath_precision_spin.setEnabled(True)
+        if hasattr(self, "refresh_workbench_formula_panel"):
+            self.refresh_workbench_formula_panel()
 
     def _update_levin_weight_state(self):
         """Show/hide Levin beta parameter based on weight function selection."""
@@ -1983,7 +2143,7 @@ class ExtrapolationWindow(
         QMessageBox.information(self, title, msg)
 
     # ------------------------------------------------------------- Logging --
-    def _set_result_text(self, text: str):
+    def _set_result_text(self, text: str, *, final_result: bool = False):
         """Display result text and cache the rendered source for workspace snapshots."""
         if hasattr(self.result_edit, 'setMarkdown'):
             self.result_edit.setMarkdown(text)
@@ -1994,16 +2154,41 @@ class ExtrapolationWindow(
         self._last_result_text = text
         self._last_result_text_format = text_format
         self._last_result_rendered_text = self.result_edit.toPlainText()
+        if final_result:
+            if self._last_result_rendered_text.strip():
+                self._clear_workbench_result_state()
+            else:
+                self._mark_workbench_result_complete()
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
 
     def _add_font_control_row(self, parent_layout: QVBoxLayout, editor, label: str):
         control_layout = QHBoxLayout()
         lbl = QLabel(label)
         self._register_text(lbl, "字体大小：", "Font size:")
+        self._register_text(
+            lbl,
+            "调整当前结果视图的显示字体大小。",
+            "Adjust the display font size for the current result view.",
+            "setToolTip",
+        )
         control_layout.addWidget(lbl)
         spin = QSpinBox()
         spin.setRange(8, 32)
         default_size = editor.font().pointSize()
         spin.setValue(max(8, default_size if default_size > 0 else 12))
+        spin.setToolTip(
+            self._tr(
+                "调整当前结果视图的显示字体大小。",
+                "Adjust the display font size for the current result view.",
+            )
+        )
+        self._register_text(
+            spin,
+            "调整当前结果视图的显示字体大小。",
+            "Adjust the display font size for the current result view.",
+            "setToolTip",
+        )
         spin.valueChanged.connect(lambda value, target=editor: self._apply_editor_font_size(target, value))
         control_layout.addWidget(spin)
         control_layout.addStretch()
@@ -2175,15 +2360,102 @@ class ExtrapolationWindow(
         """Re-render the latest fit plot using the selected log-scale (display-only)."""
         self._refresh_fit_plot_log_scale()
 
-    def _reset_csv_data(self):
+    def _mark_workbench_result_running(self) -> None:
+        self._workbench_result_state = "running"
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
+
+    def _mark_workbench_result_failed(self) -> None:
+        self._workbench_result_state = "failed"
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
+
+    def _mark_workbench_result_complete(self) -> None:
+        self._workbench_result_state = "complete"
+
+    def _clear_workbench_result_state(self) -> None:
+        self._workbench_result_state = "none"
+
+    def _start_worker_with_workbench_result_state(self, worker) -> None:
+        try:
+            self._reset_csv_data(clear_non_tabular_result=True, refresh_result_rail=False)
+            self._mark_workbench_result_running()
+            self._set_button_to_stop_mode()
+            self._install_workbench_worker_failure_guard(worker)
+            worker.start()
+        except Exception:
+            self._mark_workbench_result_failed()
+            self._set_button_to_run_mode()
+            raise
+
+    def _install_workbench_worker_failure_guard(self, worker) -> None:
+        failed_signal = getattr(worker, "failed", None)
+        connect = getattr(failed_signal, "connect", None)
+        if not callable(connect):
+            return
+
+        def mark_failed(*_args: object) -> None:
+            self._mark_workbench_result_failed()
+
+        try:
+            connect(mark_failed)
+        except (RuntimeError, TypeError):
+            return
+        setattr(worker, "_datalab_workbench_failed_guard", mark_failed)
+
+    def _reset_csv_data(
+        self,
+        *,
+        preserve_workbench_running: bool = False,
+        clear_non_tabular_result: bool = False,
+        refresh_result_rail: bool = True,
+    ):
         """Clear cached CSV rows and disable export control."""
+        if preserve_workbench_running and clear_non_tabular_result:
+            raise ValueError("preserve_workbench_running cannot be combined with clear_non_tabular_result")
         self._csv_rows: list[dict[str, object]] = []
         self._csv_headers: list[str] = []
         self._csv_suggest_name = "results.csv"
         if hasattr(self, "export_csv_btn"):
             self.export_csv_btn.setEnabled(False)
+        if clear_non_tabular_result:
+            self._last_result_text = ""
+            self._last_result_text_format = "plain"
+            self._last_result_rendered_text = ""
+            self._last_result_kind = None
+            self._last_result_payloads = {}
+            self.result_plot_bytes = None
+            self._result_plot_base_pixmap = None
+            self._image_mode = None
+            self.current_fit_figures = []
+            self.current_stats_figures = []
+            self.current_error_figures = []
+            self.current_extrap_figures = []
+            self.current_fit_index = 0
+            self.current_stats_index = 0
+            self.current_error_index = 0
+            self.current_extrap_index = 0
+            if hasattr(self, "result_edit"):
+                self.result_edit.clear()
+            if hasattr(self, "result_plot_label"):
+                self.result_plot_label.clear()
+                self.result_plot_label.setText(self._tr("尚无图片", "No image yet"))
+            if hasattr(self, "_update_image_status"):
+                self._update_image_status()
+            self._clear_workbench_result_state()
+        elif not preserve_workbench_running and getattr(self, "_workbench_result_state", "none") == "running":
+            self._clear_workbench_result_state()
+        if refresh_result_rail and hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
 
-    def _set_csv_data(self, rows: list[dict[str, object]] | None, headers: list[str] | None = None, suggestion: str | None = None):
+    def _set_csv_data(
+        self,
+        rows: list[dict[str, object]] | None,
+        headers: list[str] | None = None,
+        suggestion: str | None = None,
+        *,
+        final_result: bool = True,
+    ):
         """Cache the latest tabular results for CSV export."""
         self._csv_rows = rows or []
         if headers:
@@ -2198,6 +2470,16 @@ class ExtrapolationWindow(
             self.export_csv_btn.setEnabled(bool(self._csv_rows))
         if hasattr(self, "_workspace_dirty") and not getattr(self, "_workspace_restoring", False):
             self._mark_workspace_dirty()
+        if final_result and (self._csv_rows or self._csv_headers):
+            self._clear_workbench_result_state()
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
+
+    def refresh_workbench_result_rail(self) -> None:
+        from app_desktop.workbench_results import refresh_result_overview
+
+        if hasattr(self, "workbench_result_overview"):
+            refresh_result_overview(self)
 
     def _export_csv_data(self):
         if not getattr(self, "_csv_rows", None):

@@ -14,6 +14,16 @@ from PySide6.QtWidgets import QTableWidgetItem  # noqa: E402
 from app_desktop.parameter_table import ParameterTable  # noqa: E402
 
 
+def test_parameter_table_tooltip_updates_accessible_descriptions(qtbot):
+    table = ParameterTable()
+    qtbot.addWidget(table)
+
+    table.setToolTip("Parameter table help")
+
+    assert table.accessibleDescription() == "Parameter table help"
+    assert table.table_view.accessibleDescription() == "Parameter table help"
+
+
 @pytest.mark.parametrize("constraints_enabled", [False, True])
 def test_parameter_table_detect_preserves_matching_rows_and_marks_orphans(qtbot, constraints_enabled):
     table = ParameterTable()

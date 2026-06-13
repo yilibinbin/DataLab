@@ -7,7 +7,7 @@ from typing import Any
 from mpmath import mp
 import sympy as sp
 
-from datalab_latex.expression_engine import safe_eval
+from shared.expression_engine import safe_eval
 from root_solving.models import RootProblem
 from shared.computation_inputs import SymbolCategories, classify_expression_symbols, validate_symbol_classification
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard

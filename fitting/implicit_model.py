@@ -10,12 +10,13 @@ from typing import Any, Callable, Sequence, cast
 
 from mpmath import mp
 
-from datalab_latex.expression_engine import safe_eval
+from shared.expression_engine import safe_eval
 from shared.numerics import noise_floor
 from fitting.model_parser import ModelSpecification, MpfCallable
 from fitting.constraints import ParameterState
 from fitting.hp_fitter import FitResult, combine_error_components
 from shared.bilingual import _dual_msg
+from shared.precision import precision_guard
 from shared.uncertainty import parse_numeric_value
 
 
@@ -237,7 +238,7 @@ def fit_observed_implicit_variable_linear_model(
             )
         )
 
-    with mp.workdps(precision):
+    with precision_guard(precision):
         targets = [mp.mpf(value) for value in target_data]
         if not targets:
             raise ValueError(
