@@ -150,6 +150,37 @@ def test_python_formula_preview_handles_nested_calls_and_function_exponents() ->
     assert r"c^{\sqrt{A}}" in result.latex
 
 
+def test_formula_preview_supports_abs_and_extended_trig_functions() -> None:
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula_metadata,
+    )
+
+    python = render_formula_metadata(
+        RenderRequest(
+            source="abs(x) + sinh(x) + cosh(x) + tanh(x) + asin(x) + acos(x) + atan(x)",
+            language=InputLanguage.PYTHON,
+        )
+    )
+    mathematica = render_formula_metadata(
+        RenderRequest(
+            source="Abs[x] + Sinh[x] + Cosh[x] + Tanh[x] + ArcSin[x] + ArcCos[x] + ArcTan[x]",
+            language=InputLanguage.MATHEMATICA,
+        )
+    )
+
+    for result in (python, mathematica):
+        assert result.ok
+        assert r"\left|x\right|" in result.latex
+        assert r"\sinh\left(x\right)" in result.latex
+        assert r"\cosh\left(x\right)" in result.latex
+        assert r"\tanh\left(x\right)" in result.latex
+        assert r"\arcsin\left(x\right)" in result.latex
+        assert r"\arccos\left(x\right)" in result.latex
+        assert r"\arctan\left(x\right)" in result.latex
+
+
 def test_formula_preview_preserves_uppercase_greek_identifiers() -> None:
     from datalab_latex.formula_render_service import RenderRequest, render_formula_metadata
 

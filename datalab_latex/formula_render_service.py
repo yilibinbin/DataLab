@@ -54,6 +54,15 @@ _FUNCTION_NAMES: Final = {
     "sin": r"\sin",
     "cos": r"\cos",
     "tan": r"\tan",
+    "sinh": r"\sinh",
+    "cosh": r"\cosh",
+    "tanh": r"\tanh",
+    "asin": r"\arcsin",
+    "acos": r"\arccos",
+    "atan": r"\arctan",
+    "arcsin": r"\arcsin",
+    "arccos": r"\arccos",
+    "arctan": r"\arctan",
     "log": r"\ln",
     "ln": r"\ln",
     "exp": r"\exp",
@@ -362,7 +371,7 @@ def _convert_python_functions(text: str, *, allow_mathematica: bool = True) -> s
         while j < len(text) and text[j].isspace():
             j += 1
 
-        if lower_name in _FUNCTION_NAMES and lower_name != "abs" and j < len(text) and text[j] == "(":
+        if lower_name in _FUNCTION_NAMES and j < len(text) and text[j] == "(":
             end = _find_matching_delimiter(text, j, open_char="(", close_char=")")
             if end != -1:
                 body = _convert_expression(
@@ -373,6 +382,8 @@ def _convert_python_functions(text: str, *, allow_mathematica: bool = True) -> s
                 command = _FUNCTION_NAMES[lower_name]
                 if lower_name == "sqrt":
                     out.append(rf"{command}{{{body}}}")
+                elif lower_name == "abs":
+                    out.append(rf"\left|{body}\right|")
                 else:
                     out.append(rf"{command}\left({body}\right)")
                 i = end + 1
