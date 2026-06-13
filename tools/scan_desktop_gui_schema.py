@@ -510,9 +510,20 @@ def _horizontal_scrollbar_issues(window: Any, scenarios: list[ScreenScenario]) -
         kind = "workbench_config_horizontal_scrollbar"
         widget = "workbench_config_rail"
         if scroll is None:
-            scroll = window._left_scroll
+            scroll = getattr(window, "_left_scroll", None)
             kind = "horizontal_scrollbar"
             widget = "_left_scroll"
+        if scroll is None:
+            issues.append(
+                _issue(
+                    "missing_scroll_widget",
+                    scenario,
+                    "workbench_config_rail",
+                    "neither workbench_config_rail nor _left_scroll found on window",
+                    attempted_widgets=["workbench_config_rail", "_left_scroll"],
+                )
+            )
+            continue
         bar = scroll.horizontalScrollBar()
         content = scroll.widget()
         content_width = content.minimumSizeHint().width() if content is not None else 0

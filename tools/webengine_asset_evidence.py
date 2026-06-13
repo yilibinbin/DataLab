@@ -19,7 +19,7 @@ from app_desktop.webengine_spike_assets import (  # noqa: E402
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Create DataLab WebEngine offline asset evidence JSON.")
-    parser.add_argument("--repo-root", type=Path, default=Path.cwd(), help="Repository root.")
+    parser.add_argument("--repo-root", type=Path, default=REPO_ROOT, help="Repository root.")
     parser.add_argument("--template", action="store_true", help="Write a missing-assets template instead of hashing files.")
     parser.add_argument("--generated-at", help="Timestamp to use in output.")
     parser.add_argument("--out", type=Path, help="Optional JSON output path.")

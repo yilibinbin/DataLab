@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 from typing import Any
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -100,6 +101,35 @@ def test_config_horizontal_scrollbar_gate_detects_overflow(qapp: Any) -> None:
         assert config_issues[0]["details"]["content_width"] > config_issues[0]["details"]["target_width"]
     finally:
         window.deleteLater()
+
+
+def test_config_horizontal_scrollbar_gate_reports_missing_scroll_widget(
+    qapp: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tools.scan_desktop_gui_schema as scanner
+
+    monkeypatch.setattr(scanner, "_apply_screen_scenario", lambda *_args: None)
+    monkeypatch.setattr(scanner, "_force_smallest_left_splitter", lambda *_args: None)
+
+    window = SimpleNamespace(findChild=lambda *_args: None)
+    issues = scanner._horizontal_scrollbar_issues(
+        window,
+        [scanner.ScreenScenario(key="zh:statistics", language="zh", mode="statistics")],
+    )
+
+    assert issues == [
+        {
+            "kind": "missing_scroll_widget",
+            "scenario": "zh:statistics",
+            "language": "zh",
+            "widget": "workbench_config_rail",
+            "message": "neither workbench_config_rail nor _left_scroll found on window",
+            "details": {
+                "attempted_widgets": ["workbench_config_rail", "_left_scroll"],
+            },
+        }
+    ]
 
 
 def test_visual_contract_scan_attributes_issue_to_scenario(qapp: Any, monkeypatch: pytest.MonkeyPatch) -> None:

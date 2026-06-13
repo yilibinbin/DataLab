@@ -188,6 +188,11 @@ def capture_desktop_gui_screens(
                 window.resize(width, height)
                 QApplication.processEvents()
                 image = window.grab()
+                if image.size() != QSize(width, height):
+                    raise RuntimeError(
+                        f"screenshot size mismatch for {scenario.key}: "
+                        f"expected {width}x{height}, got {image.width()}x{image.height()}"
+                    )
             filename = f"{scenario.key.replace(':', '-')}.png"
             target = out / filename
             if not image.save(str(target), "PNG"):

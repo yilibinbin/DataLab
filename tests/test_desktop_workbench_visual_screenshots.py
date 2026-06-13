@@ -249,6 +249,58 @@ def test_screenshot_report_issue_status_controls_cli_exit() -> None:
     assert report_has_issues({"screenshots": [{"issue_count": 0}, {"issue_count": 1}]}) is True
 
 
+def test_screenshot_capture_rejects_persistent_size_mismatch(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PySide6.QtCore import QSize
+
+    import tools.capture_desktop_gui_screens as capture_tool
+    from tools.scan_desktop_gui_schema import ScreenScenario
+
+    class WrongSizeImage:
+        def size(self) -> QSize:
+            return QSize(1439, 900)
+
+        def width(self) -> int:
+            return 1439
+
+        def height(self) -> int:
+            return 900
+
+    class FakeWindow:
+        def resize(self, *_args: object) -> None:
+            pass
+
+        def show(self) -> None:
+            pass
+
+        def grab(self) -> WrongSizeImage:
+            return WrongSizeImage()
+
+        def deleteLater(self) -> None:
+            pass
+
+    monkeypatch.setattr(capture_tool, "_create_window", FakeWindow)
+    monkeypatch.setattr(
+        capture_tool,
+        "_capture_scenarios",
+        lambda **_: [
+            ScreenScenario(
+                key="en:statistics",
+                language="en",
+                mode="statistics",
+                width=1440,
+                height=900,
+            )
+        ],
+    )
+    monkeypatch.setattr(capture_tool, "_prepare_screenshot_scenario", lambda *_args: None)
+
+    with pytest.raises(RuntimeError, match="screenshot size mismatch for en:statistics"):
+        capture_tool.capture_desktop_gui_screens(out=tmp_path, width=1440, height=900)
+
+
 def test_screenshot_cli_returns_failure_when_manifest_has_issues(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
