@@ -824,9 +824,9 @@ def generate_error_propagation_table(
         print("Total rows: {0}".format(len(parsed_data)))
 
 
-globals()["apply_formula_to_data"] = _shared_apply_formula_to_data
-globals()["detect_used_error_propagation_inputs"] = _shared_detect_used_error_propagation_inputs
-globals()["error_propagation"] = _shared_error_propagation
+apply_formula_to_data = _shared_apply_formula_to_data  # noqa: F811
+detect_used_error_propagation_inputs = _shared_detect_used_error_propagation_inputs  # noqa: F811
+error_propagation = _shared_error_propagation  # noqa: F811
 
 
 __all__ = [
