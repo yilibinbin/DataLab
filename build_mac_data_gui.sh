@@ -58,6 +58,20 @@ PY
   [[ "$verdict" == "ok" ]]
 }
 
+clear_macos_metadata() {
+  local target="$1"
+  if [[ ! -e "$target" ]]; then
+    return 0
+  fi
+  if command -v xattr >/dev/null 2>&1; then
+    xattr -cr "$target" || true
+    find "$target" -exec xattr -c {} \; 2>/dev/null || true
+    for attr in com.apple.FinderInfo "com.apple.fileprovider.fpfs#P" com.apple.ResourceFork com.apple.provenance; do
+      find "$target" -exec xattr -d "$attr" {} \; 2>/dev/null || true
+    done
+  fi
+}
+
 bootstrap_standalone_python() {
   local url="${STANDALONE_PYTHON_URL:-https://github.com/astral-sh/python-build-standalone/releases/download/20251031/cpython-3.10.19+20251031-aarch64-apple-darwin-install_only_stripped.tar.gz}"
   local tarball="$BUILD_ROOT/python-standalone.tar.gz"
@@ -373,15 +387,13 @@ echo "[4/4] Cleaning extended attributes and signing..."
 if [[ -d "$APP_BUNDLE" ]]; then
   rm -rf "$STAGED_APP"
   cp -R "$APP_BUNDLE" "$STAGED_APP"
-  if command -v xattr >/dev/null 2>&1; then
-    xattr -cr "$STAGED_APP" || true
-  fi
+  clear_macos_metadata "$STAGED_APP"
   if command -v codesign >/dev/null 2>&1; then
     if codesign --force --deep --sign - "$STAGED_APP"; then
       echo "[info] Ad-hoc signature applied."
       rm -rf "$APP_BUNDLE"
       ditto --norsrc "$STAGED_APP" "$APP_BUNDLE"
-      xattr -cr "$APP_BUNDLE" || true
+      clear_macos_metadata "$APP_BUNDLE"
     else
       echo "[warn] codesign failed; bundle remains unsigned."
     fi
@@ -418,7 +430,7 @@ if [[ "${DATALAB_BUILD_PKG:-0}" == "1" ]]; then
   rm -rf "$PKG_ROOT" "$PKG_COMPONENT" "$PKG_COMPONENT_PLIST" "$PKG_OUTPUT"
   mkdir -p "$PKG_ROOT"
   ditto --norsrc "$APP_BUNDLE" "$PKG_ROOT/${APP_NAME}.app"
-  xattr -cr "$PKG_ROOT/${APP_NAME}.app" || true
+  clear_macos_metadata "$PKG_ROOT/${APP_NAME}.app"
   cat > "$PKG_COMPONENT_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

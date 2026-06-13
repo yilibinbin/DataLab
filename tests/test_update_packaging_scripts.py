@@ -46,7 +46,14 @@ def test_mac_build_script_does_not_preserve_resource_forks_in_release_payload() 
 
     assert 'ditto --norsrc "$STAGED_APP" "$APP_BUNDLE"' in text
     assert 'ditto --norsrc "$APP_BUNDLE" "$PKG_ROOT/${APP_NAME}.app"' in text
-    assert 'xattr -cr "$PKG_ROOT/${APP_NAME}.app"' in text
+    assert "clear_macos_metadata()" in text
+    assert 'clear_macos_metadata "$STAGED_APP"' in text
+    assert 'clear_macos_metadata "$APP_BUNDLE"' in text
+    assert 'clear_macos_metadata "$PKG_ROOT/${APP_NAME}.app"' in text
+    assert "find \"$target\" -exec xattr -c {} \\;" in text
+    assert "com.apple.FinderInfo" in text
+    assert "com.apple.fileprovider.fpfs#P" in text
+    assert "com.apple.ResourceFork" in text
 
 
 def test_windows_build_script_has_inno_packaging_hook() -> None:
