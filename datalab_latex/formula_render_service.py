@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
-import io
 import re
 from typing import Final
+
+from shared.formula_mathtext_png import render_mathtext_png as _render_mathtext_png
 
 
 class InputLanguage(str, Enum):
@@ -109,11 +110,6 @@ def format_formula_latex(source: str) -> str:
         return _format_latex_formula_sympy(text)
     except Exception:
         return _format_latex_formula_manual(text)
-
-
-def sanitize_formula_latex_source(source: str) -> str:
-    """Sanitize display-only LaTeX before any high-fidelity preview path."""
-    return _sanitize_latex_source(source or "")
 
 
 def render_formula(request: RenderRequest) -> RenderResult:
@@ -302,7 +298,7 @@ def _convert_expression(
     allow_python: bool = True,
 ) -> str:
     text = expression
-    text = re.sub(r"\bPi\b", r"\\pi", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?<!\\)\bPi\b", r"\\pi", text, flags=re.IGNORECASE)
     if allow_mathematica:
         text = _convert_mathematica_functions(text, allow_python=allow_python)
     if allow_python:
@@ -516,22 +512,6 @@ def _is_identifier(value: str) -> bool:
     return bool(_IDENTIFIER_RE.fullmatch((value or "").strip()))
 
 
-def _render_mathtext_png(mathtext: str, *, dpi: int, color: str) -> bytes:
-    import matplotlib
-
-    matplotlib.use("Agg", force=False)
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
-    from matplotlib.figure import Figure
-
-    figure = Figure(figsize=(0.01, 0.01), dpi=dpi)
-    figure.patch.set_alpha(0.0)
-    FigureCanvasAgg(figure)
-    figure.text(0.0, 0.5, mathtext, fontsize=21, va="center", ha="left", color=color)
-    buffer = io.BytesIO()
-    figure.savefig(buffer, format="png", bbox_inches="tight", pad_inches=0.06)
-    return buffer.getvalue()
-
-
 def _format_latex_formula_sympy(formula_str: str) -> str:
     """Primary LaTeX formatter for compute formulas.
 
@@ -652,7 +632,7 @@ def _format_latex_formula_manual(formula_str: str) -> str:
 
     latex_str = formula_str.replace("**", "^")
     latex_str = latex_str.replace("*", " \\cdot ")
-    latex_str = re.sub(r"\bpi\b", r"\\pi", latex_str, flags=re.IGNORECASE)
+    latex_str = re.sub(r"(?<!\\)\bpi\b", r"\\pi", latex_str, flags=re.IGNORECASE)
     latex_str = re.sub(r"\be\b", "e", latex_str)
     latex_str = _wrap_calls(latex_str)
     latex_str = re.sub(r"\^(\w+)", r"^{\1}", latex_str)

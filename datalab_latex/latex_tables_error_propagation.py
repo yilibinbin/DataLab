@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from shared.error_propagation_engine import (
     apply_formula_to_data,
     detect_used_error_propagation_inputs,
@@ -151,6 +153,41 @@ def _error_table_row_strings(
     return rows
 
 
+_LATEX_TEXT_ESCAPES = str.maketrans(
+    {
+        "\\": r"\textbackslash{}",
+        "$": r"\$",
+        "%": r"\%",
+        "#": r"\#",
+        "&": r"\&",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "^": r"\textasciicircum{}",
+        "~": r"\textasciitilde{}",
+    }
+)
+
+
+def _escape_latex_text(value: object) -> str:
+    return str(value or "").translate(_LATEX_TEXT_ESCAPES)
+
+
+def _header_label_latex(label: str) -> str:
+    text = str(label)
+    if len(text) >= 2 and text.startswith("$") and text.endswith("$"):
+        return text
+    return text.replace("$", "")
+
+
+def _header_with_unit(label: str, unit: str | None) -> str:
+    clean_label = _header_label_latex(label)
+    unit_text = str(unit or "").strip()
+    if not unit_text:
+        return clean_label
+    return f"{clean_label}~[\\texttt{{{_escape_latex_text(unit_text)}}}]"
+
+
 def generate_error_propagation_table(
     headers: list[str],
     parsed_data: list[list[UncertainValue]],
@@ -166,6 +203,8 @@ def generate_error_propagation_table(
     result_uncertainty_digits: int | None = None,
     used_columns: list[str] | None = None,
     latex_group_size: int = 3,
+    input_units: Mapping[str, str] | None = None,
+    result_unit: str | None = None,
 ) -> None:
     """Generate a LaTeX table for error propagation results."""
     if used_columns is None:
@@ -210,7 +249,13 @@ def generate_error_propagation_table(
         formatted_result_column.append(result_formatted)
         column_lengths[-1] = max(column_lengths[-1], _string_length_hint(result_formatted))
     page_w, _ = _estimate_page_geometry(column_lengths, len(parsed_data) + 6)
-    cjk_segments = [caption if caption else "", " ".join(headers), formula_str or ""]
+    cjk_segments = [
+        caption if caption else "",
+        " ".join(headers),
+        " ".join((input_units or {}).values()),
+        str(result_unit or ""),
+        formula_str or "",
+    ]
     if constants:
         cjk_segments.append(" ".join(constants.keys()))
     needs_cjk = _needs_cjk_support(*cjk_segments)
@@ -224,9 +269,9 @@ def generate_error_propagation_table(
     header_cols = ["$n$"]
     for src_idx in header_indices:
         h = headers[src_idx]
-        clean_header = h.replace("$", "")
-        header_cols.append(f"\\multicolumn{{1}}{{c}}{{{clean_header}}}")
-    header_cols.append("\\multicolumn{1}{c}{Result}")
+        unit = (input_units or {}).get(h)
+        header_cols.append(f"\\multicolumn{{1}}{{c}}{{{_header_with_unit(h, unit)}}}")
+    header_cols.append(f"\\multicolumn{{1}}{{c}}{{{_header_with_unit('Result', result_unit)}}}")
     header_row = "\t\t\t" + " & ".join(header_cols) + " \\\\"
 
     segments = _normalize_table_segments(len(parsed_data), table_segments)
