@@ -26,15 +26,15 @@ def _window(qtbot: Any) -> Any:
     return window
 
 
-def test_variable_panel_mounts_existing_parameter_and_constant_widgets(qtbot: Any) -> None:
+def test_variable_panel_mounts_existing_parameter_widgets_and_shared_input_constants(qtbot: Any) -> None:
     window = _window(qtbot)
     panel = window.findChild(QWidget, "workbench_variable_panel")
 
     assert panel is not None
     assert window.custom_params_table in panel.findChildren(type(window.custom_params_table))
-    assert window.custom_constants_editor in panel.findChildren(type(window.custom_constants_editor))
     assert window.custom_params_table.property("datalab_state_role") == "custom_parameters_owner"
-    assert window.custom_constants_editor.property("datalab_state_role") == "custom_constants_owner"
+    assert window.input_constants_editor is not None
+    assert window.input_constants_editor not in panel.findChildren(type(window.input_constants_editor))
 
 
 def test_variable_panel_wraps_mounts_in_section_cards(qtbot: Any) -> None:
@@ -51,13 +51,11 @@ def test_variable_panel_wraps_mounts_in_section_cards(qtbot: Any) -> None:
         and page.layout().itemAt(index).widget().isVisibleTo(page)
     ]
 
-    assert [section.property("datalab_variable_section_role") for section in sections[:2]] == [
+    assert [section.property("datalab_variable_section_role") for section in sections] == [
         "parameters",
-        "constants",
     ]
     assert window.custom_param_header_widget.parentWidget() in sections[0].findChildren(QWidget)
     assert window.custom_params_table.parentWidget() in sections[0].findChildren(QWidget)
-    assert window.custom_constants_editor.parentWidget() in sections[1].findChildren(QWidget)
 
 
 def test_variable_panel_preserves_parameter_table_behavior(qtbot: Any) -> None:
@@ -79,12 +77,14 @@ def test_variable_panel_preserves_constants_text_view(qtbot: Any) -> None:
     assert window.custom_constants_editor.constants_dict(validate=True)["CR"].startswith("3.289")
 
 
-def test_variable_panel_constants_editor_is_visible_card(qtbot: Any) -> None:
+def test_shared_constants_editor_is_input_card_not_variable_panel_card(qtbot: Any) -> None:
     window = _window(qtbot)
     editor = window.custom_constants_editor
+    panel = window.findChild(QWidget, "workbench_variable_panel")
 
     assert editor.property("datalab_constants_card") is True
     assert editor.property("datalab_constants_embedded") is True
+    assert editor not in panel.findChildren(type(editor))
     assert editor.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
     assert editor.minimumHeight() >= 52
     assert editor.layout().contentsMargins().left() == 0
@@ -102,10 +102,10 @@ def test_variable_panel_summary_tracks_visible_parameter_and_constant_rows(qtbot
     QApplication.processEvents()
 
     window._apply_language("en")
-    assert window.workbench_variable_summary.text() == "1 parameter / 1 constant"
+    assert window.workbench_variable_summary.text() == "1 parameter"
 
     window._apply_language("zh")
-    assert window.workbench_variable_summary.text() == "1 个参数 / 1 个常数"
+    assert window.workbench_variable_summary.text() == "1 个参数"
 
 
 def test_variable_panel_summary_ignores_hidden_fitting_submode_rows(qtbot: Any) -> None:
@@ -121,7 +121,6 @@ def test_variable_panel_summary_ignores_hidden_fitting_submode_rows(qtbot: Any) 
     window._apply_language("en")
 
     assert window.workbench_variable_summary.text() == "1 parameter"
-    assert "constant" not in window.workbench_variable_summary.text()
 
 
 def test_variable_panel_title_tracks_visible_root_sections(qtbot: Any) -> None:
@@ -131,7 +130,7 @@ def test_variable_panel_title_tracks_visible_root_sections(qtbot: Any) -> None:
 
     window._apply_language("en")
 
-    assert window.workbench_variable_title.text() == "Unknowns and constants"
+    assert window.workbench_variable_title.text() == "Unknowns"
 
 
 def test_variable_panel_summary_updates_when_rows_change(qtbot: Any) -> None:
@@ -231,12 +230,10 @@ def test_variable_panel_tracks_fitting_submode_visibility(qtbot: Any) -> None:
     assert window.custom_params_table.isVisible()
     assert window.custom_constants_editor.isVisible()
     assert not window.implicit_params_table.isVisible()
-    assert not window.implicit_constants_editor.isVisible()
 
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("self_consistent"))
     QApplication.processEvents()
     assert not window.custom_params_table.isVisible()
-    assert not window.custom_constants_editor.isVisible()
     assert window.implicit_params_table.isVisible()
     assert window.implicit_constants_editor.isVisible()
 
@@ -255,7 +252,6 @@ def test_variable_panel_tracks_fitting_submode_visibility(qtbot: Any) -> None:
     assert not window.custom_params_table.isVisible()
     assert not window.custom_constants_editor.isVisible()
     assert not window.implicit_params_table.isVisible()
-    assert not window.implicit_constants_editor.isVisible()
     assert not window.workbench_variable_panel.isVisible()
 
 
@@ -272,9 +268,8 @@ def test_root_variable_panel_orders_unknowns_before_constants(qtbot: Any) -> Non
         and page.layout().itemAt(index).widget().isVisibleTo(page)
     ]
 
-    assert [section.property("datalab_variable_section_role") for section in sections[:2]] == [
+    assert [section.property("datalab_variable_section_role") for section in sections] == [
         "unknowns",
-        "constants",
     ]
 
 
@@ -292,10 +287,10 @@ def test_root_variable_panel_summary_counts_unknowns_and_constants(qtbot: Any) -
     QApplication.processEvents()
 
     window._apply_language("en")
-    assert window.workbench_variable_summary.text() == "2 unknowns / 1 constant"
+    assert window.workbench_variable_summary.text() == "2 unknowns"
 
     window._apply_language("zh")
-    assert window.workbench_variable_summary.text() == "2 个未知量 / 1 个常数"
+    assert window.workbench_variable_summary.text() == "2 个未知量"
 
 
 def test_fitting_variable_panel_orders_constraints_after_parameter_table(qtbot: Any) -> None:
@@ -317,7 +312,6 @@ def test_fitting_variable_panel_orders_constraints_after_parameter_table(qtbot: 
         if isinstance(page.layout().itemAt(index).widget(), QFrame)
         and page.layout().itemAt(index).widget().isVisibleTo(page)
     ]
-    assert [section.property("datalab_variable_section_role") for section in sections[:2]] == [
+    assert [section.property("datalab_variable_section_role") for section in sections[:1]] == [
         "parameters",
-        "constants",
     ]

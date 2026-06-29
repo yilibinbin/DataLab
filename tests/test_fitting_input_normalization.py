@@ -10,7 +10,9 @@ from app_desktop import constants_editor, parameter_table
 from app_desktop import window as desktop_window
 from app_desktop import window_fitting_models_mixin
 from app_desktop.fitting_input_normalization import (
+    ConstantsState,
     ConstantsInput,
+    FitUncertaintyState,
     ParameterInput,
     WorkerInputRequest,
     constants_rows_to_text,
@@ -25,6 +27,8 @@ from app_desktop.workers_core import FitJob, _deserialize_fit_job, _serialize_fi
 from app_web.logic import fitting as web_fitting
 from app_web.logic import statistics as web_statistics
 from datalab_latex.latex_tables_error_propagation import parse_uncertainty_format as latex_parse_uncertainty
+from shared import fitting_uncertainty as shared_fitting_uncertainty
+from shared import input_normalization as shared_input_normalization
 from shared.uncertainty import parse_uncertainty_format as shared_parse_uncertainty
 
 
@@ -111,7 +115,7 @@ def test_constants_text_and_rows_share_parser() -> None:
     assert constants_rows_to_text(rows) == "CR 3.2\nM 7294\nlonely\n3"
 
 
-def test_constants_normalization_disabled_preserves_draft_but_computes_empty() -> None:
+def test_constants_normalization_disabled_preserves_and_computes_complete_rows() -> None:
     state = normalize_constants_state(
         enabled=False,
         rows=[{"name": "CR", "value": "3.2898419602500(36)[+9]"}],
@@ -119,7 +123,7 @@ def test_constants_normalization_disabled_preserves_draft_but_computes_empty() -
     )
 
     assert state.persisted_rows() == [{"name": "CR", "value": "3.2898419602500(36)[+9]"}]
-    assert state.compute_dict(validate=True) == {}
+    assert state.compute_dict(validate=True) == {"CR": "3.2898419602500(36)[+9]"}
 
 
 def test_constants_normalization_uses_shared_uncertainty_parser() -> None:
@@ -180,6 +184,15 @@ def test_constants_normalization_prefers_explicit_rows_over_text_when_both_prese
 
     assert state.persisted_rows() == [{"name": "K", "value": "1"}]
     assert state.compute_dict(validate=True) == {"K": "1"}
+
+
+def test_desktop_constants_helpers_reexport_shared_implementations() -> None:
+    assert ConstantsState is shared_input_normalization.ConstantsState
+    assert constants_rows_to_text is shared_input_normalization.constants_rows_to_text
+    assert FitUncertaintyState is shared_fitting_uncertainty.FitUncertaintyState
+    assert fit_uncertainty_policy is shared_fitting_uncertainty.fit_uncertainty_policy
+    assert normalize_constants_state is shared_input_normalization.normalize_constants_state
+    assert parse_constants_text is shared_input_normalization.parse_constants_text
 
 
 def test_uncertainty_policy_preserves_weighted_and_unweighted_semantics() -> None:
@@ -248,6 +261,14 @@ def test_data_uncertainty_normalization_uses_explicit_sigma_column_first() -> No
         target_column="y",
         sigma_column="manual_sigma",
     ) == [mp.mpf("0.7"), mp.mpf("0.8")]
+    assert normalize_data_uncertainty(
+        headers=headers,
+        rows=rows,
+        sigma_rows=sigma_rows,
+        target_column="y",
+        sigma_column="manual_sigma",
+        absolute=False,
+    ) == [mp.mpf("-0.7"), mp.mpf("0.8")]
 
 
 def test_data_uncertainty_normalization_explicit_sigma_column_rejects_short_rows() -> None:

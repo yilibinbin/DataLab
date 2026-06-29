@@ -32,6 +32,7 @@ def test_docs_and_example_workspaces_resolve_under_pyinstaller_meipass(
     resource_root = tmp_path / "meipass"
     shutil.copytree(Path("docs") / "desktop", resource_root / "docs" / "desktop")
     shutil.copytree(Path("examples") / "workspaces", resource_root / "examples" / "workspaces")
+    shutil.copytree(Path("examples") / "recipes", resource_root / "examples" / "recipes")
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(resource_root), raising=False)
@@ -47,8 +48,15 @@ def test_docs_and_example_workspaces_resolve_under_pyinstaller_meipass(
     assert [path.name for path in list_example_workspaces()] == list(EXAMPLE_NAMES)
     assert [entry.filename for entry in list_example_menu_entries()] == list(EXAMPLE_NAMES)
 
+    from app_desktop.resources import resolve_resource_path
+    from datalab_core.recipes import loads_recipe_json
 
-def test_formula_preview_docs_explain_syntax_modes_and_high_fidelity_preview() -> None:
+    recipe = resolve_resource_path("examples/recipes/statistics-mean-basic.json")
+    assert recipe is not None
+    assert loads_recipe_json(recipe.read_text(encoding="utf-8"))["id"] == "statistics-mean-basic"
+
+
+def test_formula_preview_docs_explain_single_rendered_preview() -> None:
     from desktop_doc_loader import load_desktop_doc
 
     guide_zh = load_desktop_doc("guide", "zh")
@@ -57,17 +65,49 @@ def test_formula_preview_docs_explain_syntax_modes_and_high_fidelity_preview() -
     fitting_en = load_desktop_doc("fitting", "en")
     examples_readme = (ROOT / "examples" / "README.md").read_text(encoding="utf-8")
 
-    assert "预览语法" in guide_zh
-    assert "Preview syntax" in guide_en
-    assert "高保真 LaTeX" in guide_zh
-    assert "High-fidelity LaTeX" in guide_en
-    assert "不会改变计算" in guide_zh
-    assert "does not change computation" in guide_en
+    assert "公式预览" in guide_zh
+    assert "Formula Preview" in guide_en
+    assert "DataLab/Mathematica 兼容语法" in guide_zh
+    assert "DataLab/Mathematica-compatible syntax" in guide_en
+    assert "渲染为 LaTeX 风格的数学公式" in guide_zh
+    assert "renders the current expression as\nLaTeX-style math" in guide_en
+    assert "不会\n改变计算配置" in guide_zh
+    assert "does not change computation input" in guide_en
+    assert "预览语法" not in guide_zh
+    assert "Preview syntax" not in guide_en
+    assert "高保真 LaTeX" not in guide_zh
+    assert "High-fidelity LaTeX" not in guide_en
 
     assert "自洽隐式模型" in fitting_zh
     assert "self-consistent/implicit models" in fitting_en
-    assert "预览语法" in fitting_zh
-    assert "preview syntax" in fitting_en
+    assert "预览按钮" in fitting_zh
+    assert "preview syntax" not in fitting_en
 
-    assert "formula preview syntax" in examples_readme
-    assert "高保真 LaTeX" in examples_readme
+    assert "formula rendering" in examples_readme
+    assert "High-fidelity LaTeX" not in examples_readme
+
+
+def test_input_docs_explain_content_driven_sectioned_constants() -> None:
+    from desktop_doc_loader import load_desktop_doc
+
+    guide_zh = load_desktop_doc("guide", "zh")
+    guide_en = load_desktop_doc("guide", "en")
+    root_zh = load_desktop_doc("root-solving", "zh")
+    root_en = load_desktop_doc("root-solving", "en")
+    examples_readme = (ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+
+    for content in (guide_zh, root_zh, examples_readme):
+        assert "[data]" in content
+        assert "[constants]" in content
+    assert "非空常数会" in guide_zh
+    assert "空白常数会被忽略" in root_zh
+    assert "关闭常数设置" not in guide_zh
+    assert "默认关闭" not in root_zh
+
+    for content in (guide_en, root_en, examples_readme):
+        assert "[data]" in content
+        assert "[constants]" in content
+    assert "Non-empty constants" in guide_en
+    assert "blank constants are ignored" in root_en
+    assert "Disabled constants" not in guide_en
+    assert "disabled by default" not in root_en

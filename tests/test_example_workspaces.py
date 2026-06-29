@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 
@@ -38,6 +39,10 @@ def _source_paths(manifest: dict) -> set[str]:
         if source_path:
             paths.add(source_path)
     return paths
+
+
+def _recipe_paths(manifest: dict) -> set[str]:
+    return set(manifest.get("examples", {}).get("recipe_files", []))
 
 
 def test_canonical_example_workspaces_exist_and_open():
@@ -100,6 +105,9 @@ def test_checked_in_example_catalog_matches_generator() -> None:
 
     assert checked_in == example_index_payload()
     assert [item["filename"] for item in checked_in["examples"]] == list(EXAMPLE_NAMES)
+    for item in checked_in["examples"]:
+        for recipe_file in item["recipe_files"]:
+            assert Path(recipe_file).is_file(), recipe_file
 
 
 def test_example_generator_records_checked_in_source_files():
@@ -112,12 +120,34 @@ def test_example_generator_records_checked_in_source_files():
         "examples/error_propagation.txt",
         "examples/constants.txt",
     }
+    assert _source_paths(manifests["error-propagation-units.datalab"]) == set()
     assert _source_paths(manifests["statistics.datalab"]) == {"examples/statistics_weighted.txt"}
+    assert _source_paths(manifests["statistics-bootstrap.datalab"]) == set()
+    assert _source_paths(manifests["statistics-hypothesis.datalab"]) == set()
+    assert _source_paths(manifests["statistics-matrix.datalab"]) == set()
+    assert _source_paths(manifests["statistics-grouped.datalab"]) == set()
+    assert _source_paths(manifests["statistics-time-series-rolling.datalab"]) == set()
+    assert _source_paths(manifests["statistics-time-series-ewma.datalab"]) == set()
     assert _source_paths(manifests["fitting.datalab"]) == {"examples/fitting_powerlaw.txt"}
     assert _source_paths(manifests["quantum-defect-implicit.datalab"]) == set()
     assert _source_paths(manifests["root-scalar-with-uncertainty.datalab"]) == set()
     assert _source_paths(manifests["root-monte-carlo-uncertainty.datalab"]) == set()
     assert _source_paths(manifests["root-batch-quadratic.datalab"]) == set()
+
+
+def test_example_generator_records_checked_in_recipe_files():
+    from tools.generate_example_workspaces import build_examples
+
+    manifests = build_examples()
+    expected = {
+        "error-propagation.datalab": {"examples/recipes/error-product-basic.json"},
+        "statistics.datalab": {"examples/recipes/statistics-mean-basic.json"},
+        "fitting.datalab": {"examples/recipes/fitting-custom-powerlaw.json"},
+        "root-batch-quadratic.datalab": {"examples/recipes/root-batch-quadratic.json"},
+    }
+
+    for name, manifest in manifests.items():
+        assert _recipe_paths(manifest) == expected.get(name, set())
 
 
 def test_root_uncertainty_example_workspaces_load() -> None:
@@ -133,6 +163,26 @@ def test_root_uncertainty_example_workspaces_load() -> None:
         workspace = loaded.manifest["workspace"]
         assert workspace["current_mode"] == "root_solving"
         assert "root_solving" in workspace["config"]
+
+
+def test_error_propagation_units_example_is_display_only_and_validation_ready() -> None:
+    from shared.workspace_io import read_workspace
+
+    loaded = read_workspace(Path("examples/workspaces/error-propagation-units.datalab"))
+    workspace = loaded.manifest["workspace"]
+    units = workspace["config"]["error"]["units"]
+    variants = loaded.manifest.get("examples", {}).get("variants", [])
+
+    assert workspace["current_mode"] == "error"
+    assert workspace["config"]["error"]["formula"] == "Distance / Time"
+    assert units["enabled"] is True
+    assert units["mode"] == "display_only"
+    assert units["inputs"] == {
+        "Distance": {"unit": "m"},
+        "Time": {"unit": "s"},
+    }
+    assert units["outputs"] == {"result": {"unit": "m/s"}}
+    assert {"units", "display_only", "validation_ready"} <= set(variants)
 
 
 def test_root_uncertainty_examples_store_expected_options() -> None:
@@ -295,6 +345,281 @@ def test_quantum_defect_example_configuration_runs_weighted_output_space_fit():
         mp.almosteq(residual, fit - target, rel_eps=mp.mpf("1e-30"), abs_eps=mp.mpf("1e-15"))
         for residual, fit, target in zip(result.residuals, result.fitted_curve, targets, strict=True)
     )
+
+
+def test_statistics_bootstrap_example_configuration_runs_seeded_bootstrap() -> None:
+    from datalab_core.jobs import ComputeJobRequest, JobMode, JobOptions
+    from datalab_core.service_factory import create_core_session_service
+    from datalab_core.session import ResultStatus
+    from datalab_core.statistics import build_statistics_requests
+    from shared.workspace_io import read_workspace
+
+    loaded = read_workspace(Path("examples/workspaces/statistics-bootstrap.datalab"))
+    workspace = loaded.manifest["workspace"]
+    statistics = workspace["config"]["statistics"]
+    table = workspace["data"]["canonical_table"]
+
+    assert statistics["workflow_mode"] == "bootstrap_confidence_intervals"
+    assert statistics["bootstrap"] == {
+        "target_statistic": "mean",
+        "confidence_level": "0.95",
+        "resample_count": 100,
+        "seed": "12345",
+    }
+
+    requests = build_statistics_requests(
+        headers=tuple(table["headers"]),
+        rows=tuple(tuple(row) for row in table["rows"]),
+        value_col=statistics["value_column"],
+        precision_digits=int(workspace["config"]["common"]["mpmath_precision"]),
+        request_id_prefix="example-statistics-bootstrap",
+    )
+    request = requests[0].request
+    bootstrap_options = dict(statistics["bootstrap"])
+    bootstrap_request = ComputeJobRequest(
+        mode=JobMode.STATISTICS,
+        inputs={
+            "workflow_mode": statistics["workflow_mode"],
+            "values": tuple(request.inputs["values"]),
+            "source_row_ids": tuple(requests[0].source_row_ids),
+            "value_column": requests[0].value_col,
+            "column_index": 1,
+            "target_statistic": bootstrap_options["target_statistic"],
+            "confidence_level": bootstrap_options["confidence_level"],
+            "resample_count": bootstrap_options["resample_count"],
+            "sample_mode": "sample" if statistics["sample"] else "population",
+            "seed": bootstrap_options["seed"],
+        },
+        options=JobOptions(precision_digits=request.options.precision_digits),
+        request_id=request.request_id,
+    )
+
+    service = create_core_session_service()
+    envelope = service.submit(bootstrap_request)
+
+    assert envelope.status is ResultStatus.SUCCEEDED
+    payload = envelope.payload
+    assert isinstance(payload, Mapping)
+    assert payload["workflow_mode"] == "bootstrap_confidence_intervals"
+    assert payload["resample_count"] == 100
+    assert payload["seed"] == 12345
+    assert payload["columns"][0]["value_column"] == "Value"
+
+
+def test_statistics_hypothesis_example_configuration_runs_one_sample_t() -> None:
+    from datalab_core.jobs import ComputeJobRequest, JobMode, JobOptions
+    from datalab_core.service_factory import create_core_session_service
+    from datalab_core.session import ResultStatus
+    from datalab_core.statistics import build_statistics_requests
+    from shared.workspace_io import read_workspace
+
+    loaded = read_workspace(Path("examples/workspaces/statistics-hypothesis.datalab"))
+    workspace = loaded.manifest["workspace"]
+    statistics = workspace["config"]["statistics"]
+    table = workspace["data"]["canonical_table"]
+    hypothesis = statistics["hypothesis"]
+
+    assert statistics["workflow_mode"] == "hypothesis_tests"
+    assert hypothesis["test_kind"] == "one_sample_t"
+    assert hypothesis["null_parameter"] == "3"
+
+    requests = build_statistics_requests(
+        headers=tuple(table["headers"]),
+        rows=tuple(tuple(row) for row in table["rows"]),
+        value_col=statistics["value_column"],
+        precision_digits=int(workspace["config"]["common"]["mpmath_precision"]),
+        request_id_prefix="example-statistics-hypothesis",
+    )
+    request = requests[0].request
+    hypothesis_request = ComputeJobRequest(
+        mode=JobMode.STATISTICS,
+        inputs={
+            "workflow_mode": statistics["workflow_mode"],
+            "test_kind": hypothesis["test_kind"],
+            "values": tuple(request.inputs["values"]),
+            "source_row_ids": tuple(requests[0].source_row_ids),
+            "value_column": requests[0].value_col,
+            "mu0": hypothesis["null_parameter"],
+            "alternative": hypothesis["alternative"],
+            "alpha": hypothesis["alpha"],
+        },
+        options=JobOptions(precision_digits=request.options.precision_digits),
+        request_id=request.request_id,
+    )
+
+    service = create_core_session_service()
+    envelope = service.submit(hypothesis_request)
+
+    assert envelope.status is ResultStatus.SUCCEEDED
+    payload = envelope.payload
+    assert isinstance(payload, Mapping)
+    assert payload["workflow_mode"] == "hypothesis_tests"
+    assert payload["test_kind"] == "one_sample_t"
+    assert payload["inputs"]["value_columns"] == ["A"]
+    assert payload["result"]["statistic_name"] == "t"
+
+
+def test_statistics_matrix_example_configuration_runs_covariance_correlation() -> None:
+    import mpmath as mp
+
+    from datalab_core.jobs import ComputeJobRequest, JobMode, JobOptions
+    from datalab_core.service_factory import create_core_session_service
+    from datalab_core.session import ResultStatus
+    from shared.workspace_io import read_workspace
+
+    loaded = read_workspace(Path("examples/workspaces/statistics-matrix.datalab"))
+    workspace = loaded.manifest["workspace"]
+    statistics = workspace["config"]["statistics"]
+    table = workspace["data"]["canonical_table"]
+
+    assert statistics["workflow_mode"] == "covariance_correlation"
+    assert statistics["value_columns"] == ["A", "B", "C"]
+    assert statistics["matrix"]["missing_policy"] == "listwise"
+
+    service = create_core_session_service()
+    envelope = service.submit(
+        ComputeJobRequest(
+            mode=JobMode.STATISTICS,
+            inputs={
+                "workflow_mode": statistics["workflow_mode"],
+                "headers": tuple(table["headers"]),
+                "rows": tuple(tuple(row) for row in table["rows"]),
+                "value_columns": tuple(statistics["value_columns"]),
+                "missing_policy": statistics["matrix"]["missing_policy"],
+                "use_sample": statistics["sample"],
+                "source_row_ids": tuple(str(index + 1) for index in range(len(table["rows"]))),
+            },
+            options=JobOptions(precision_digits=int(workspace["config"]["common"]["mpmath_precision"])),
+            request_id="example-statistics-matrix",
+        )
+    )
+
+    assert envelope.status is ResultStatus.SUCCEEDED
+    payload = envelope.payload
+    assert isinstance(payload, Mapping)
+    assert payload["workflow_mode"] == "covariance_correlation"
+    assert payload["columns"] == ["A", "B", "C"]
+    assert payload["missing_policy"] == "listwise"
+    assert payload["correlation_metadata"]["budget_eligible"] is True
+    correlation = payload["matrices"]["correlation"]["values"]
+    assert mp.almosteq(mp.mpf(correlation[0][1]), mp.mpf("1"))
+    assert mp.almosteq(mp.mpf(correlation[0][2]), mp.mpf("-1"))
+
+
+def test_statistics_grouped_example_configuration_runs_grouped_statistics() -> None:
+    import mpmath as mp
+
+    from datalab_core.jobs import ComputeJobRequest, JobMode, JobOptions
+    from datalab_core.service_factory import create_core_session_service
+    from datalab_core.session import ResultStatus
+    from shared.workspace_io import read_workspace
+
+    loaded = read_workspace(Path("examples/workspaces/statistics-grouped.datalab"))
+    workspace = loaded.manifest["workspace"]
+    statistics = workspace["config"]["statistics"]
+    table = workspace["data"]["canonical_table"]
+
+    assert statistics["workflow_mode"] == "grouped_statistics"
+    assert statistics["group_column"] == "Group"
+    assert statistics["value_columns"] == ["Signal", "Reference"]
+    assert statistics["sigma_column"] == "Sigma"
+    assert {"grouped_statistics", "multi_column", "weighted"} <= set(loaded.manifest.get("examples", {}).get("variants", []))
+
+    service = create_core_session_service()
+    envelope = service.submit(
+        ComputeJobRequest(
+            mode=JobMode.STATISTICS,
+            inputs={
+                "workflow_mode": statistics["workflow_mode"],
+                "headers": tuple(table["headers"]),
+                "rows": tuple(tuple(row) for row in table["rows"]),
+                "group_column": statistics["group_column"],
+                "value_columns": tuple(statistics["value_columns"]),
+                "sigma_column": statistics["sigma_column"],
+                "stats_mode": statistics["mode"],
+                "use_sample": statistics["sample"],
+                "use_weighted_variance": statistics["weighted_variance"],
+                "source_row_ids": tuple(str(index + 1) for index in range(len(table["rows"]))),
+            },
+            options=JobOptions(precision_digits=int(workspace["config"]["common"]["mpmath_precision"]), uncertainty_digits=1),
+            request_id="example-statistics-grouped",
+        )
+    )
+
+    assert envelope.status is ResultStatus.SUCCEEDED
+    payload = envelope.payload
+    assert isinstance(payload, Mapping)
+    assert payload["workflow_mode"] == "grouped_statistics"
+    assert payload["group_order"] == ["Control", "Treatment"]
+    control_signal = payload["groups"][0]["columns"][0]["result"]
+    assert mp.almosteq(mp.mpf(control_signal["mean"]), mp.mpf("10.2"))
+    assert control_signal["dropped"] == 0
+
+
+def test_statistics_time_series_examples_run_through_core_service() -> None:
+    from datalab_core.jobs import ComputeJobRequest, JobMode, JobOptions
+    from datalab_core.service_factory import create_core_session_service
+    from datalab_core.session import ResultStatus
+    from shared.workspace_io import read_workspace
+
+    service = create_core_session_service()
+    cases = {
+        "statistics-time-series-rolling.datalab": ("rolling_mean", "12.5"),
+        "statistics-time-series-ewma.datalab": ("ewma", None),
+    }
+    for name, (expected_method, expected_last_value) in cases.items():
+        workspace = read_workspace(Path("examples/workspaces") / name).manifest["workspace"]
+        statistics = workspace["config"]["statistics"]
+        time_series = statistics["time_series"]
+        table = workspace["data"]["canonical_table"]
+        headers = list(table["headers"])
+        rows = list(table["rows"])
+        value_column = statistics["value_column"]
+        value_index = headers.index(value_column)
+        time_column = time_series["time_column"]
+        time_index = headers.index(time_column)
+        sigma_column = str(statistics.get("sigma_column") or "")
+        inputs = {
+            "workflow_mode": statistics["workflow_mode"],
+            "series_method": time_series["series_method"],
+            "values": tuple(row[value_index] for row in rows),
+            "source_row_ids": tuple(str(index + 1) for index in range(len(rows))),
+            "value_column": value_column,
+            "column_index": 1,
+            "time_labels": tuple(row[time_index] for row in rows),
+            "time_column": time_column,
+            "window_size": time_series["window_size"],
+            "min_periods": time_series["min_periods"],
+            "alignment": time_series["alignment"],
+            "denominator": time_series["denominator"],
+            "adjust": time_series["adjust"],
+        }
+        if sigma_column:
+            sigma_index = headers.index(sigma_column)
+            inputs["sigmas"] = tuple(row[sigma_index] for row in rows)
+            inputs["sigma_column"] = sigma_column
+        if time_series["series_method"] == "ewma":
+            inputs[time_series["ewma_parameter"]] = time_series["ewma_value"]
+
+        envelope = service.submit(
+            ComputeJobRequest(
+                mode=JobMode.STATISTICS,
+                inputs=inputs,
+                options=JobOptions(precision_digits=int(workspace["config"]["common"]["mpmath_precision"])),
+                request_id=f"example-{name}",
+            )
+        )
+
+        assert envelope.status is ResultStatus.SUCCEEDED
+        payload = envelope.payload
+        assert isinstance(payload, Mapping)
+        assert payload["workflow_mode"] == "time_series_rolling"
+        assert payload["series_method"] == expected_method
+        final_point = payload["columns"][0]["points"][-1]
+        assert final_point["status"] == "ok"
+        if expected_last_value is not None:
+            assert final_point["value"] == expected_last_value
+            assert final_point["uncertainty"] is not None
 
 
 def test_example_workspaces_do_not_persist_backend_strategy_fields():

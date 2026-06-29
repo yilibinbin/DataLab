@@ -454,6 +454,73 @@ def test_web_post_fit_route_renders_result_bundle(client, monkeypatch):
     }
 
 
+def test_web_post_fit_route_renders_comparison_table_without_single_fit_cards(client, monkeypatch):
+    received: dict[str, object] = {}
+
+    def fake_run(data_text, form):
+        received["data_text"] = data_text
+        received["fit_mode"] = form.get("fit_mode")
+        received["candidates"] = form.get("fit_comparison_candidates")
+        return SimpleNamespace(
+            best_label="Selected fit comparison",
+            mp_precision=60,
+            x=[1, 2],
+            params=[],
+            metrics={},
+            diagnostic_correlations=[],
+            diagnostic_residuals=[],
+            comparison_rows=[
+                {
+                    "candidate_id": "linear",
+                    "order": 1,
+                    "model_label": "Linear",
+                    "status": "success",
+                    "free_parameters": 2,
+                    "chi2": "0",
+                    "reduced_chi2": "0",
+                    "aic": "4",
+                    "bic": "5",
+                    "rmse": "0",
+                    "r2": "1",
+                    "warnings": "",
+                    "error": "",
+                }
+            ],
+            warnings=[],
+            csv_data="candidate_id,order\nlinear,1\n",
+            plot_b64=None,
+            summary_text="=== Selected Fit Comparison ===\nLinear | success",
+            latex_text="COMPARISON_LATEX",
+            pdf_b64=None,
+        )
+
+    monkeypatch.setattr(pages, "_run_fit", fake_run)
+
+    response = _post(
+        client,
+        "/fit",
+        {
+            "fit_data_text": pages.SAMPLE_FIT_DATA.strip(),
+            "fit_mode": "comparison",
+            "fit_comparison_candidates": '[{"candidate_id":"linear","label":"Linear","model_type":"polynomial","poly_degree":1}]',
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Selected Fit Comparison" in html
+    assert "Linear" in html
+    assert "COMPARISON_LATEX" in html
+    assert 'serverFitCsvData = "candidate_id,order\\nlinear,1\\n";' in html
+    assert "fitCsvFilename = 'fitting_comparison_results.csv';" in html
+    assert 'data-i18n="fit.paramsLabel"' not in html
+    assert 'data-i18n="fit.metricsLabel"' not in html
+    assert "winner" not in html.lower()
+    assert "best_model" not in html
+    assert received["fit_mode"] == "comparison"
+    assert "linear" in str(received["candidates"])
+
+
 def test_web_post_stats_route_renders_result_bundle(client, monkeypatch):
     received: dict[str, object] = {}
 

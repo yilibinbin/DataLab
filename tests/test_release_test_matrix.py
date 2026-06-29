@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -13,6 +14,8 @@ _UPDATE_MANIFEST_COMMAND_HEADING = (
 )
 _POST_PACKAGING_ARTIFACT_HEADING = "After macOS and Windows packaging complete"
 _INSTALLER_UPDATE_GATE_HEADING = "### Installer Update Release Gate"
+_P0_1_BASELINE_HEADING = "### P0.1 Baseline Coverage Matrix"
+_ERROR_PROPAGATION_HEADING = "### Error Propagation"
 _PYTEST_PATH_RE = re.compile(r"(?:tests|app_web)/[A-Za-z0-9_./-]+\.py")
 _TOOL_PATH_RE = re.compile(r"tools/[A-Za-z0-9_./-]+\.py")
 _REQUIRED_RUFF_TARGETS = {
@@ -31,6 +34,7 @@ _REQUIRED_RUFF_TARGETS = {
 }
 _REQUIRED_EXACT_RELEASE_COMMANDS = {
     "python -m compileall -q .",
+    "python tools/release_import_hygiene.py",
     "python tools/scan_desktop_gui_schema.py",
     "QT_QPA_PLATFORM=offscreen python tools/capture_desktop_gui_screens.py --out build/gui-screenshots --width 1440 --height 900",
     "QT_QPA_PLATFORM=offscreen pytest -q",
@@ -53,6 +57,70 @@ _REQUIRED_INSTALLER_UPDATE_GATE_PHRASES = (
     "installer arguments are constructed by application code",
     "Offline startup performs no network request unless automatic updates",
 )
+_P0_1_BASELINE_REQUIRED_PHRASES = (
+    "P1/P2 statistics metrics stay out of this",
+    "core payload still exposes `min` / `max`",
+    "legacy compute/display dictionaries still expose `v_min` / `v_max`",
+    "condition-specific `effective_n`",
+    "condition-specific `zero_sigma_anchor`",
+    "`ResultEnvelope.warnings` preservation through `statistics_payload_to_compute_result()`",
+    "datalab_core.statistics_compute.compute_statistics()",
+    "datalab_core.statistics.run_statistics()",
+    "datalab_core.statistics.statistics_payload_to_compute_result()",
+    "app_desktop.window_statistics_mixin.WindowStatisticsMixin._format_statistics_display()",
+    "app_desktop.workers_core._execute_calc_job()",
+    "app_desktop.window_extrapolation_mixin.WindowExtrapolationMixin.run_calculation()",
+    "app_web.logic.statistics._run_statistics()",
+    "statistics_utils.generate_statistics_latex()",
+    "statistics_utils.generate_statistics_latex_batches()",
+    "P0.1 self-contained statistics LaTeX evidence uses tracked tests",
+    "tests/test_latex_generation_consistency.py::test_statistics_latex",
+    "tests/test_latex_compile_e2e.py::test_latex_compile_e2e",
+    "pre-existing untracked",
+    "they are not the only P0.1 statistics LaTeX evidence",
+    "WindowFittingFormattersMixin._build_fit_csv_rows()",
+    "WindowFittingFormattersMixin._fit_latex_block()",
+    "WindowExtrapolationMixin._write_root_latex_if_requested()",
+    "app_desktop.root_latex_writer.write_root_latex()",
+    "app_desktop.workers_core._aggregate_error_contributions()",
+    "app_desktop.workers_qt.CalcWorker._aggregate_error_contributions()",
+    "app_web.logic.fitting._generate_fitting_latex()",
+    "app_web.logic.error_propagation._render_error_latex()",
+    "Internal-only allowlist for this baseline",
+    "No new P1/P2 statistics metrics, public result keys, GUI controls, or",
+)
+_P0_1_BASELINE_REQUIRED_ROW_LABELS = (
+    "Arithmetic mean sample, population, and bare `mean` mode",
+    "Weighted normal case",
+    "Weighted zero-sigma anchor",
+    "Weighted dropped-row case",
+    "High-precision guard",
+)
+_ERROR_PROPAGATION_P2_4_REQUIRED_PHRASES = (
+    "P2.4 diagnostics",
+    "shared.error_contributions",
+    "error semantic snapshot",
+    "contribution diagnostics",
+    "propagation metadata",
+    "cumulative contribution overlay rows",
+    "Taylor/Monte Carlo comparison rows",
+    "sensitivity rows",
+    "Taylor-order comparison rows",
+    "JSON-safe distribution summary/spec",
+    "visible distribution plot routing via row plot galleries",
+    "tests/test_datalab_core_uncertainty.py",
+    "tests/test_shared_error_propagation_engine.py",
+    "tests/test_app_desktop_workers_core.py",
+    "tests/test_app_web_precision_concurrency.py",
+    "tests/test_web_plot_generation.py",
+    "tests/test_plotting_backend.py",
+)
+_UNCERTAINTY_DOC_PATHS = (
+    ROOT / "docs" / "desktop" / "uncertainty.en.md",
+    ROOT / "docs" / "desktop" / "uncertainty.zh.md",
+    ROOT / "docs" / "web" / "uncertainty.en.md",
+    ROOT / "docs" / "web" / "uncertainty.zh.md",
+)
 
 
 def _command_block_after(matrix: str, heading: str) -> str:
@@ -71,6 +139,29 @@ def _command_block_after(matrix: str, heading: str) -> str:
 
 def _release_gate_command_block(matrix: str) -> str:
     return _command_block_after(matrix, _RELEASE_GATE_HEADING)
+
+
+def _git_tracked_paths() -> set[str]:
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--"],
+            cwd=ROOT,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise AssertionError("git executable is required to verify release-gate tracked paths") from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.strip()
+        detail = f": {stderr}" if stderr else ""
+        raise AssertionError(f"failed to read git tracked paths{detail}") from exc
+
+    tracked_paths = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    if not tracked_paths:
+        raise AssertionError("git tracked path list is empty; cannot verify release-gate tracked paths")
+    return tracked_paths
 
 
 def _section_after(matrix: str, heading: str) -> str:
@@ -165,6 +256,7 @@ def _required_release_tests() -> set[str]:
         "tests/test_phase0_adr_guardrails.py",
         "tests/test_phase0_desktop_guardrails.py",
         "tests/test_release_artifact_sizes.py",
+        "tests/test_release_import_hygiene.py",
         "tests/test_packaging_qt_excludes.py",
         "tests/test_webengine_measurement_evidence.py",
         "tests/test_webengine_asset_evidence_tool.py",
@@ -174,11 +266,20 @@ def _required_release_tests() -> set[str]:
         "tests/test_webengine_spike_report.py",
         "tests/test_webengine_evidence_bundle_tool.py",
         "tests/test_formula_render_service.py",
+        "tests/test_formula_export.py",
+        "tests/test_formula_latex_export.py",
+        "tests/test_expression_registry.py",
         "tests/test_expression_engine_formula_rendering_integration.py",
         "tests/test_formula_preview_rendering.py",
         "tests/test_formula_preview_dialog.py",
-        "tests/test_formula_tex_render_worker.py",
+        "tests/test_formula_mathtext_png.py",
+        "tests/test_formula_renderer_boundary.py",
+        "tests/test_formula_renderer_value_gate.py",
+        "tests/test_app_web_extrapolation_latex.py",
+        "tests/test_app_web_fitting_latex.py",
         "tests/test_latex_table_segments_and_filtering.py",
+        "tests/test_latex_generation_consistency.py",
+        "tests/test_latex_group_size_zero.py",
         "tests/test_fitting_latex_writer.py",
         "tests/test_latex_tables_facade_exports.py",
         "tests/test_latex_security_include_traversal.py",
@@ -216,6 +317,7 @@ def _required_release_tests() -> set[str]:
         "tests/test_error_propagation_higher_order_and_mc.py",
         "tests/test_error_propagation_mathematica_reference.py",
         "tests/test_error_propagation_method_aliases.py",
+        "tests/test_error_propagation_second_order_reference.py",
         "tests/test_error_propagation_symbolic_derivative.py",
         "tests/test_extrapolation_accelerators.py",
         "tests/test_extrapolation_high_precision_convergence.py",
@@ -352,24 +454,30 @@ def test_release_gate_test_paths_exist() -> None:
     matrix = (ROOT / "docs" / "TEST_MATRIX.md").read_text(encoding="utf-8")
     release_gate_commands = _release_gate_command_block(matrix)
     test_paths = sorted(set(_PYTEST_PATH_RE.findall(release_gate_commands)))
+    tracked_paths = _git_tracked_paths()
 
     assert test_paths, "docs/TEST_MATRIX.md release gate should list pytest test files"
 
     missing = [test_path for test_path in test_paths if not (ROOT / test_path).is_file()]
+    untracked = [test_path for test_path in test_paths if test_path not in tracked_paths]
 
     assert not missing, "docs/TEST_MATRIX.md release gate references missing test files: " + ", ".join(missing)
+    assert not untracked, "docs/TEST_MATRIX.md release gate references untracked test files: " + ", ".join(untracked)
 
 
 def test_release_gate_tool_paths_exist() -> None:
     matrix = (ROOT / "docs" / "TEST_MATRIX.md").read_text(encoding="utf-8")
     release_gate_commands = _release_gate_command_block(matrix)
     tool_paths = sorted(set(_TOOL_PATH_RE.findall(release_gate_commands)))
+    tracked_paths = _git_tracked_paths()
 
     assert tool_paths, "docs/TEST_MATRIX.md release gate should list helper tool scripts"
 
     missing = [tool_path for tool_path in tool_paths if not (ROOT / tool_path).is_file()]
+    untracked = [tool_path for tool_path in tool_paths if tool_path not in tracked_paths]
 
     assert not missing, "docs/TEST_MATRIX.md release gate references missing tool scripts: " + ", ".join(missing)
+    assert not untracked, "docs/TEST_MATRIX.md release gate references untracked tool scripts: " + ", ".join(untracked)
 
 
 def test_release_gate_includes_release_relevant_ruff_targets() -> None:
@@ -460,3 +568,50 @@ def test_installer_update_release_gate_policy_is_documented() -> None:
     ]
 
     assert not missing, "installer update release gate is missing policy text: " + ", ".join(missing)
+
+
+def test_p0_1_baseline_matrix_documents_schema_mapping_and_internal_allowlist() -> None:
+    matrix = (ROOT / "docs" / "TEST_MATRIX.md").read_text(encoding="utf-8")
+    section = _section_after(matrix, _P0_1_BASELINE_HEADING)
+    row_labels: set[str] = set()
+    for line in section.splitlines():
+        if not line.startswith("| ") or " | " not in line:
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2 or cells[0] in {"Current row", "---"}:
+            continue
+        row_labels.add(cells[0])
+    missing_rows = [
+        label
+        for label in _P0_1_BASELINE_REQUIRED_ROW_LABELS
+        if label not in row_labels
+    ]
+    missing = [
+        phrase
+        for phrase in _P0_1_BASELINE_REQUIRED_PHRASES
+        if phrase not in section
+    ]
+
+    assert not missing_rows, "P0.1 baseline matrix is missing rows: " + ", ".join(missing_rows)
+    assert not missing, "P0.1 baseline matrix is missing coverage text: " + ", ".join(missing)
+
+
+def test_error_propagation_p2_4_docs_and_matrix_cover_distribution_plots() -> None:
+    matrix = (ROOT / "docs" / "TEST_MATRIX.md").read_text(encoding="utf-8")
+    section = _section_after(matrix, _ERROR_PROPAGATION_HEADING)
+    missing = [
+        phrase
+        for phrase in _ERROR_PROPAGATION_P2_4_REQUIRED_PHRASES
+        if phrase not in section
+    ]
+
+    assert not missing, "Error Propagation matrix is missing P2.4 evidence: " + ", ".join(missing)
+
+    for doc_path in _UNCERTAINTY_DOC_PATHS:
+        doc = doc_path.read_text(encoding="utf-8")
+        assert "Monte Carlo" in doc
+        assert "per-variable contribution" in doc or "逐变量贡献" in doc
+        assert "percentile" in doc or "百分位" in doc
+        assert "distribution histogram" in doc or "分布直方图" in doc
+        assert "Taylor" in doc
+        assert "cumulative contribution" in doc or "累计贡献" in doc

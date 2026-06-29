@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ast
 import os
-import subprocess
+import re
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -17,6 +17,16 @@ from PySide6.QtWidgets import QApplication
 
 from app_desktop.constants_editor import ConstantsEditor
 from app_desktop.workers_core import _execute_fit_job_payload
+
+
+def _python_sources_under_app_desktop(*, exclude: set[str] | None = None) -> list[Path]:
+    root = Path(__file__).resolve().parents[1] / "app_desktop"
+    exclude = exclude or set()
+    return [
+        path
+        for path in root.rglob("*.py")
+        if path.relative_to(root).as_posix() not in exclude
+    ]
 
 
 def _make_main_window(qtbot):
@@ -113,6 +123,55 @@ def test_constants_editor_tooltip_updates_accessible_descriptions(qtbot):
         assert widget.accessibleDescription() == "Constants help"
 
 
+def test_constants_editor_enable_checkbox_is_hidden_compatibility_only(qtbot):
+    editor = ConstantsEditor()
+    qtbot.addWidget(editor)
+
+    assert editor.checkbox.isHidden()
+
+    editor.set_rows([{"name": "K", "value": "1"}])
+    editor.setChecked(False)
+
+    assert editor.isChecked() is True
+    assert editor.constants_dict(validate=True) == {"K": "1"}
+
+
+def test_constants_editor_numeric_mode_setter_validates_and_emits(qtbot):
+    editor = ConstantsEditor(numeric_mode="uncertainty")
+    qtbot.addWidget(editor)
+    emissions = []
+    editor.changed.connect(lambda: emissions.append(True))
+
+    editor.set_numeric_mode("mpmath")
+
+    assert editor.numeric_mode() == "mpmath"
+    assert emissions
+    with pytest.raises(ValueError, match="Unsupported constants numeric mode"):
+        editor.set_numeric_mode("float")
+
+
+def test_shared_constants_editor_control_labels_follow_window_language(qtbot):
+    win = _make_main_window(qtbot)
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("root_solving"))
+
+    win._apply_language("en")
+
+    assert win.input_constants_editor.add_button.text() == "+ Row"
+    assert win.input_constants_editor.remove_button.text() == "- Row"
+    assert win.input_constants_editor.clear_button.text() == "Clear"
+    assert win.input_constants_editor.view_toggle_button.text() == "Text View"
+
+    win.input_constants_editor.use_text_view(True)
+    assert win.input_constants_editor.view_toggle_button.text() == "Table View"
+
+    win._apply_language("zh")
+
+    assert win.input_constants_editor.add_button.text() == "+ 行"
+    assert win.input_constants_editor.remove_button.text() == "- 行"
+    assert win.input_constants_editor.clear_button.text() == "清除"
+    assert win.input_constants_editor.view_toggle_button.text() == "表格视图"
+
+
 def test_constants_editor_text_view_round_trip(qtbot):
     editor = ConstantsEditor()
     qtbot.addWidget(editor)
@@ -149,20 +208,27 @@ def test_constants_editor_preserves_text_view_single_token_draft_rows(qtbot):
 
 
 def test_production_code_has_no_legacy_constants_alias_references():
-    result = subprocess.run(
-        [
-            "rg",
-            "constants_checkbox|constants_table|manual_constants_edit|_constants_stack|implicit_constants_table",
-            "app_desktop",
-            "--glob",
-            "!app_desktop/constants_editor.py",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    pattern = re.compile(r"constants_checkbox|constants_table|manual_constants_edit|_constants_stack|implicit_constants_table")
+    matches = [
+        f"{path}:{line_no}:{line}"
+        for path in _python_sources_under_app_desktop(exclude={"constants_editor.py"})
+        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if pattern.search(line)
+    ]
 
-    assert result.returncode == 1, result.stdout
+    assert matches == []
+
+
+def test_production_code_uses_public_constants_numeric_mode_setter():
+    pattern = re.compile(r"\._numeric_mode\s*=")
+    matches = [
+        f"{path}:{line_no}:{line}"
+        for path in _python_sources_under_app_desktop(exclude={"constants_editor.py"})
+        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if pattern.search(line)
+    ]
+
+    assert matches == []
 
 
 @pytest.mark.parametrize(
@@ -215,17 +281,27 @@ def test_legacy_constants_surface_aliases_are_not_public_window_api(qtbot):
         assert not hasattr(win, name), name
 
 
-def test_disabled_custom_constants_do_not_hide_parameter_detection(qtbot):
+def test_content_driven_custom_constants_hide_parameter_detection_even_after_legacy_disable(qtbot):
     win = _make_main_window(qtbot)
     win.custom_constants_editor.set_rows([{"name": "K", "value": "1"}])
     win.custom_constants_editor.setChecked(False)
 
-    constants = (
-        list(win.custom_constants_editor.constants_dict(validate=False))
-        if win.custom_constants_editor.isChecked()
-        else []
-    )
+    constants = list(win.custom_constants_editor.constants_dict(validate=False))
     names = win._infer_parameter_names("A*x + K", ["x"], [], constants=constants)
+
+    assert names == ["A"]
+
+
+def test_draft_constant_name_remains_detected_parameter(qtbot):
+    win = _make_main_window(qtbot)
+    win.custom_constants_editor.set_rows([{"name": "K", "value": ""}])
+
+    names = win._infer_parameter_names(
+        "A*x + K",
+        ["x"],
+        [],
+        constants=list(win._raw_constant_names_from_editor(win.custom_constants_editor)),
+    )
 
     assert names == ["A", "K"]
 
@@ -334,7 +410,7 @@ def test_custom_constants_accept_uncertainty_notation_nominal_values(qtbot):
     assert mp.almosteq(payload.fit_result.params["A"], mp.mpf("2"), abs_eps=mp.mpf("1e-20"))
 
 
-def test_disabled_custom_constants_remain_fit_parameters_in_job(qtbot):
+def test_content_driven_custom_constants_remain_active_in_fit_job_after_legacy_disable(qtbot):
     win = _prepare_custom_fit_window(qtbot, constants_enabled=False, constant_value="1")
     dataset = (
         ["x", "y"],
@@ -344,5 +420,75 @@ def test_disabled_custom_constants_remain_fit_parameters_in_job(qtbot):
 
     job = win._prepare_fit_job(dataset, generate_latex=False, output_path="", verbose=False, render_plots=False)
 
-    assert job.parameter_names == ["A", "K"]
-    assert job.custom_constants == {}
+    assert job.parameter_names == ["A"]
+    assert job.custom_constants == {"K": "1"}
+
+
+def test_bracket_constant_survives_switch_from_root_to_custom_fit(qtbot):
+    win = _make_main_window(qtbot)
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("root_solving"))
+    win.root_constants_editor.set_rows([{"name": "K", "value": "1.23(4)"}])
+    assert win.input_constants_editor.numeric_mode() == "uncertainty"
+    assert win.root_constants_editor.constants_dict(validate=True) == {"K": "1.23(4)"}
+
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("fitting"))
+    win.fit_model_combo.setCurrentIndex(win.fit_model_combo.findData("custom"))
+    QApplication.processEvents()
+
+    assert win.input_constants_editor.numeric_mode() == "mpmath"
+    assert win.custom_constants_editor.rows() == [{"name": "K", "value": "1.23(4)"}]
+    assert win.custom_constants_editor.constants_dict(validate=True) == {"K": "1.23(4)"}
+
+
+def test_error_constants_file_hiding_does_not_leak_to_other_constant_modes(qtbot):
+    win = _make_main_window(qtbot)
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("error"))
+    win.use_constants_file_checkbox.setChecked(True)
+    QApplication.processEvents()
+
+    assert not win.input_constants_editor.inputs_visible()
+
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("root_solving"))
+    QApplication.processEvents()
+
+    assert win.input_constants_editor.inputs_visible()
+    assert win.input_constants_editor.numeric_mode() == "uncertainty"
+
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("fitting"))
+    win.fit_model_combo.setCurrentIndex(win.fit_model_combo.findData("custom"))
+    QApplication.processEvents()
+
+    assert win.input_constants_editor.inputs_visible()
+    assert win.input_constants_editor.numeric_mode() == "mpmath"
+
+
+def test_shared_constants_tooltip_tracks_current_mode(qtbot):
+    win = _make_main_window(qtbot)
+    win._apply_language("en")
+
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("root_solving"))
+    QApplication.processEvents()
+    assert "equations" in win.input_constants_editor.toolTip()
+
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("fitting"))
+    win.fit_model_combo.setCurrentIndex(win.fit_model_combo.findData("custom"))
+    win._apply_language("en")
+    QApplication.processEvents()
+    assert "custom fit expression" in win.input_constants_editor.toolTip()
+
+    win.fit_model_combo.setCurrentIndex(win.fit_model_combo.findData("self_consistent"))
+    QApplication.processEvents()
+    assert "implicit model" in win.input_constants_editor.toolTip()
+
+
+def test_shared_constants_editor_marks_workspace_dirty_once_per_edit(qtbot):
+    win = _make_main_window(qtbot)
+    calls = []
+    win._workspace_dirty = False
+    win._workspace_snapshot_only = False
+    win._workspace_snapshot_stale = False
+    win._update_workspace_window_title = lambda *_args: calls.append(True)
+
+    win.input_constants_editor.changed.emit()
+
+    assert len(calls) == 1

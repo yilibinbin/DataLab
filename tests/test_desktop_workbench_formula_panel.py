@@ -66,32 +66,26 @@ def test_formula_workspace_moves_formula_actions_to_title_row(qtbot: Any) -> Non
     assert header.schema_label.isVisible() is False
 
 
-def test_formula_workspace_language_combo_matches_render_service_languages(qtbot: Any) -> None:
-    from datalab_core.workbench_model import FORMULA_PREVIEW_LANGUAGES
-
+def test_formula_workspace_has_no_preview_language_selector(qtbot: Any) -> None:
     window = _window(qtbot)
 
-    values = {
-        str(window.workbench_formula_language_combo.itemData(index))
-        for index in range(window.workbench_formula_language_combo.count())
-    }
-
-    assert values == set(FORMULA_PREVIEW_LANGUAGES)
+    assert not hasattr(window, "workbench_formula_language_row")
+    assert not hasattr(window, "workbench_formula_language_label")
+    assert not hasattr(window, "workbench_formula_language_combo")
 
 
-def test_formula_workspace_restores_latex_preview_language(qtbot: Any) -> None:
-    from datalab_latex.formula_render_service import InputLanguage
-
+def test_formula_workspace_ignores_legacy_preview_language_state(qtbot: Any) -> None:
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
     window._workbench_formula_preview_languages = {
-        "fitting.custom.expression": InputLanguage.LATEX.value
+        "fitting.custom.expression": "latex"
     }
 
     window.refresh_workbench_formula_panel()
 
-    assert window.workbench_formula_language_combo.currentData() == InputLanguage.LATEX.value
+    assert not hasattr(window, "workbench_formula_language_combo")
+    assert window.workbench_formula_preview_label.text() or not window.workbench_formula_preview_label.pixmap().isNull()
 
 
 def test_formula_workspace_spec_duplicate_guards_report_editor_and_schema_keys(
@@ -226,22 +220,15 @@ def test_formula_workspace_preview_uses_current_editor_text(qtbot: Any) -> None:
     assert window.workbench_formula_preview_label.text() or not window.workbench_formula_preview_label.pixmap().isNull()
 
 
-def test_formula_workspace_preview_syntax_selector_matches_render_service(qtbot: Any) -> None:
-    from datalab_latex.formula_render_service import InputLanguage
-
+def test_formula_workspace_preview_has_single_rendered_style(qtbot: Any) -> None:
     window = _window(qtbot)
-    combo = window.workbench_formula_language_combo
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
+    window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
+    window.fit_expr_edit.setPlainText("Sin[x] + Sqrt[A]")
+    window.refresh_workbench_formula_panel()
 
-    assert window.workbench_formula_language_label.text() == "预览语法："
-    assert combo.currentData() == InputLanguage.DATALAB.value
-    expected_languages = [language.value for language in InputLanguage]
-    assert [combo.itemData(index) for index in range(combo.count())] == expected_languages
-    assert combo.findData(InputLanguage.LATEX.value) >= 0
-    assert "仅影响预览" in combo.toolTip()
-
-    window._apply_language("en")
-    assert window.workbench_formula_language_label.text() == "Preview syntax:"
-    assert "preview only" in combo.toolTip().lower()
+    assert not hasattr(window, "workbench_formula_language_combo")
+    assert window.workbench_formula_preview_label.text() or not window.workbench_formula_preview_label.pixmap().isNull()
 
 
 def test_formula_workspace_description_uses_schema_metadata(qtbot: Any) -> None:
@@ -498,7 +485,7 @@ def test_formula_workspace_function_entry_requires_action_page_layout(qtbot: Any
     assert window.workbench_formula_function_button.parentWidget() is not layoutless_page
 
 
-def test_formula_workspace_preview_syntax_selector_controls_render_language(
+def test_formula_workspace_preview_uses_datalab_render_language(
     qtbot: Any,
     monkeypatch: Any,
 ) -> None:
@@ -521,41 +508,37 @@ def test_formula_workspace_preview_syntax_selector_controls_render_language(
             error_message="forced fallback",
         )
 
-    monkeypatch.setattr(preview, "render_formula", fake_render)
+    monkeypatch.setattr(preview, "render_desktop_preview", fake_render)
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
     window.fit_expr_edit.setPlainText("Sin[x]")
-    window.workbench_formula_language_combo.setCurrentIndex(
-        window.workbench_formula_language_combo.findData(InputLanguage.MATHEMATICA.value)
-    )
     window.refresh_workbench_formula_panel()
 
     assert calls
-    assert calls[-1] is InputLanguage.MATHEMATICA
+    assert calls[-1] is InputLanguage.DATALAB
 
 
-def test_formula_workspace_language_change_during_restore_does_not_mark_dirty(
+def test_formula_workspace_legacy_language_state_during_restore_does_not_mark_dirty(
     qtbot: Any,
     monkeypatch: Any,
 ) -> None:
-    from datalab_latex.formula_render_service import InputLanguage
-
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
     window.refresh_workbench_formula_panel()
-    combo = window.workbench_formula_language_combo
     called: list[str] = []
     monkeypatch.setattr(window, "_mark_workspace_dirty", lambda: called.append("dirty"))
 
     window._workspace_restoring = True
-    combo.setCurrentIndex(combo.findData(InputLanguage.PYTHON.value))
+    window._workbench_formula_preview_languages = {"fitting.custom.expression": "python"}
+    window.refresh_workbench_formula_panel()
     assert called == []
 
     window._workspace_restoring = False
-    combo.setCurrentIndex(combo.findData(InputLanguage.MATHEMATICA.value))
-    assert called == ["dirty"]
+    window._workbench_formula_preview_languages = {"fitting.custom.expression": "mathematica"}
+    window.refresh_workbench_formula_panel()
+    assert called == []
 
 
 def test_formula_workspace_refresh_populates_panel_if_needed(qtbot: Any, monkeypatch: Any) -> None:
@@ -594,15 +577,10 @@ def test_formula_workspace_visible_mounts_empty_before_population(qtbot: Any) ->
     assert _visible_formula_mounts(window, "fitting") == []
 
 
-def test_formula_workspace_language_sync_ignores_empty_combo(qtbot: Any) -> None:
-    from app_desktop.workbench_formula_panel import _sync_formula_language_controls
-    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
-
+def test_formula_workspace_does_not_create_preview_language_controls(qtbot: Any) -> None:
     window = _window(qtbot)
-    mount = MODE_WORKBENCH_SPECS["fitting"].formulas[0]
-    window.workbench_formula_language_combo.clear()
 
-    _sync_formula_language_controls(window, mount)
+    assert not window.workbench_formula_panel.findChildren(type(window.mode_combo), "workbench_formula_language_combo")
 
 
 def test_formula_workspace_population_failure_is_cached(qtbot: Any) -> None:
@@ -836,7 +814,7 @@ def test_formula_workspace_error_strip_tracks_bad_preview_input(qtbot: Any, monk
             error_message="",
         )
 
-    monkeypatch.setattr(preview, "render_formula", fake_render)
+    monkeypatch.setattr(preview, "render_desktop_preview", fake_render)
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))

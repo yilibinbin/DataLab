@@ -24,6 +24,14 @@ def _pick_tex_engine() -> str | None:
     return None
 
 
+def _pick_tex_engines() -> list[str]:
+    return [
+        engine
+        for engine in ("pdflatex", "xelatex", "lualatex")
+        if shutil.which(engine)
+    ]
+
+
 def _compile_or_fail(tex_text: str, engine: str, label: str) -> bytes:
     warnings: list[str] = []
     pdf = compile_latex_safe(tex_text, engine, warnings, label)
@@ -131,3 +139,94 @@ def test_latex_compile_e2e(tmp_path):
         uncertainty_digits=None,
     )
     _compile_or_fail(fitting_tex_text, engine, "fitting")
+
+
+def test_statistics_latex_zero_sigma_diagnostics_compile_dcolumn_and_siunitx(tmp_path):
+    engine = _pick_tex_engine()
+    if not engine:
+        pytest.skip("No TeX engine found (pdflatex/xelatex/lualatex).")
+
+    values = [mp.mpf("1.25"), mp.mpf("2.5")]
+    sigmas = [mp.mpf("0"), mp.mpf("0.1")]
+    stats_result = compute_statistics(values, sigmas, "weighted_sigma", use_sample=True, use_weighted_variance=True)
+    data_rows = [(value,) for value in values]
+    sigma_rows = [(sigma,) for sigma in sigmas]
+
+    for use_dcolumn in (False, True):
+        tex_path = tmp_path / f"statistics-zero-sigma-{'dcolumn' if use_dcolumn else 'siunitx'}.tex"
+        generate_statistics_latex(
+            "X",
+            data_rows,
+            sigma_rows,
+            stats_result,
+            digits=10,
+            tex_path=str(tex_path),
+            use_dcolumn=use_dcolumn,
+            caption="Statistics",
+            latex_group_size=0,
+        )
+        tex_text = tex_path.read_text(encoding="utf-8")
+
+        assert "Detected" in tex_text
+        assert "statistics.warning.zero" not in tex_text
+        _compile_or_fail(tex_text, engine, f"statistics-zero-sigma-{use_dcolumn}")
+
+
+def test_statistics_latex_options_compile_with_all_discovered_local_engines(tmp_path):
+    engines = _pick_tex_engines()
+    if not engines:
+        pytest.skip("No TeX engine found (pdflatex/xelatex/lualatex).")
+
+    values = [mp.mpf("1.25"), mp.mpf("2.5")]
+    sigmas = [mp.mpf("0"), mp.mpf("0.1")]
+    stats_result = compute_statistics(
+        values,
+        sigmas,
+        "weighted_sigma",
+        use_sample=True,
+        use_weighted_variance=True,
+    )
+    data_rows = [(value,) for value in values]
+    sigma_rows = [(sigma,) for sigma in sigmas]
+
+    for engine in engines:
+        for use_dcolumn in (False, True):
+            for latex_group_size in (0, 4):
+                captions = ("English caption",)
+                if engine == "xelatex":
+                    captions = ("English caption", "中文标题")
+                for caption in captions:
+                    tex_path = tmp_path / (
+                        f"statistics-{engine}-{use_dcolumn}-"
+                        f"{latex_group_size}-{caption}.tex"
+                    )
+                    generate_statistics_latex(
+                        "X",
+                        data_rows,
+                        sigma_rows,
+                        stats_result,
+                        digits=10,
+                        tex_path=str(tex_path),
+                        use_dcolumn=use_dcolumn,
+                        caption=caption,
+                        latex_group_size=latex_group_size,
+                    )
+                    tex_text = tex_path.read_text(encoding="utf-8")
+
+                    if not use_dcolumn:
+                        if latex_group_size == 0:
+                            assert "group-digits = false" in tex_text
+                        else:
+                            assert (
+                                f"group-minimum-digits = {latex_group_size}"
+                                in tex_text
+                            )
+                    assert caption in tex_text
+                    assert "Detected" in tex_text
+                    assert "statistics.warning.zero" not in tex_text
+                    _compile_or_fail(
+                        tex_text,
+                        engine,
+                        f"statistics-options-{engine}-{use_dcolumn}-"
+                        f"{latex_group_size}-{caption}",
+                    )

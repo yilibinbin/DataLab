@@ -17,6 +17,7 @@ from app_desktop.workbench_visual_contract import (
     SUPPORTED_VISUAL_HEIGHT,
     SUPPORTED_VISUAL_WIDTH,
     WORKSPACE_CANVAS_MIN_WIDTH,
+    WorkbenchRegionMetric,
 )
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -60,16 +61,15 @@ def test_screenshot_manifest_includes_common_workbench_panels(tmp_path) -> None:
         item["mode"] == "fitting" and item["root_mode"] == "self_consistent"
         for item in manifest["screenshots"]
     )
-    formula_syntaxes = {
-        item["formula_syntax"]
-        for item in manifest["screenshots"]
-        if item["mode"] == "fitting" and item["root_mode"] == "custom"
-    }
-    assert {"datalab", "python", "mathematica"} <= formula_syntaxes
     assert all(
         item["formula_syntax"] == ""
         for item in manifest["screenshots"]
         if item["mode"] == "statistics"
+    )
+    assert all(
+        item["formula_syntax"] == "datalab"
+        for item in manifest["screenshots"]
+        if item["mode"] != "statistics"
     )
     for screenshot in manifest["screenshots"]:
         regions = screenshot["regions"]
@@ -114,7 +114,7 @@ def test_screenshot_manifest_includes_common_workbench_panels(tmp_path) -> None:
             assert visible_variable_height >= 160
 
 
-def test_screen_scenario_refreshes_formula_preview_without_waiting_for_debounce(qtbot) -> None:
+def test_screen_scenario_refreshes_single_formula_preview_without_waiting_for_debounce(qtbot) -> None:
     from PySide6.QtWidgets import QApplication
 
     from app_desktop.window import ExtrapolationWindow
@@ -133,21 +133,20 @@ def test_screen_scenario_refreshes_formula_preview_without_waiting_for_debounce(
             language="zh",
             mode="root_solving",
             root_mode="scalar",
-            formula_syntax="python",
             result_tab="numeric",
             width=1440,
             height=900,
         ),
     )
 
-    assert window.workbench_formula_language_combo.currentData() == "python"
+    assert not hasattr(window, "workbench_formula_language_combo")
     pixmap = window.workbench_formula_preview_label.pixmap()
     assert pixmap is not None
     assert not pixmap.isNull()
     assert pixmap.height() >= 64
 
 
-def test_screen_scenario_resets_formula_syntax_when_unspecified(qtbot) -> None:
+def test_screen_scenario_keeps_formula_preview_single_style(qtbot) -> None:
     from PySide6.QtWidgets import QApplication
 
     from app_desktop.window import ExtrapolationWindow
@@ -167,13 +166,12 @@ def test_screen_scenario_resets_formula_syntax_when_unspecified(qtbot) -> None:
             language="en",
             mode="fitting",
             root_mode="custom",
-            formula_syntax="python",
             result_tab="numeric",
             width=1440,
             height=900,
         ),
     )
-    assert window.workbench_formula_language_combo.currentData() == "python"
+    assert not hasattr(window, "workbench_formula_language_combo")
 
     default_custom = ScreenScenario(
         key="en:fitting:custom",
@@ -186,7 +184,6 @@ def test_screen_scenario_resets_formula_syntax_when_unspecified(qtbot) -> None:
     )
     _apply_screen_scenario(window, default_custom)
 
-    assert window.workbench_formula_language_combo.currentData() == "datalab"
     assert _current_formula_syntax(window, default_custom) == "datalab"
 
     _apply_screen_scenario(
@@ -202,7 +199,7 @@ def test_screen_scenario_resets_formula_syntax_when_unspecified(qtbot) -> None:
         ),
     )
 
-    assert window.workbench_formula_language_combo.currentData() == "datalab"
+    assert not hasattr(window, "workbench_formula_language_combo")
 
 
 def test_screenshot_scenarios_do_not_leak_fake_result_state(qtbot) -> None:
@@ -259,7 +256,7 @@ def test_screenshot_report_issue_status_controls_cli_exit() -> None:
     assert report_has_issues({"screenshots": [{"issue_count": 0}, {"issue_count": 1}]}) is True
 
 
-def test_screenshot_capture_rejects_persistent_size_mismatch(
+def test_screenshot_capture_records_persistent_size_mismatch(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -277,6 +274,10 @@ def test_screenshot_capture_rejects_persistent_size_mismatch(
 
         def height(self) -> int:
             return 900
+
+        def save(self, target: str, _format: str) -> bool:
+            Path(target).write_bytes(PNG_SIGNATURE)
+            return True
 
     class FakeWindow:
         def resize(self, *_args: object) -> None:
@@ -306,9 +307,93 @@ def test_screenshot_capture_rejects_persistent_size_mismatch(
         ],
     )
     monkeypatch.setattr(capture_tool, "_prepare_screenshot_scenario", lambda *_args: None)
+    monkeypatch.setattr(capture_tool, "workbench_region_metrics", lambda _window: {})
+    monkeypatch.setattr(capture_tool, "visual_contract_issues", lambda _window: [])
+    monkeypatch.setattr(
+        capture_tool,
+        "widget_metric",
+        lambda _window, object_name: WorkbenchRegionMetric(object_name, 0, 0, 0, 0, False),
+    )
 
-    with pytest.raises(RuntimeError, match="screenshot size mismatch for en:statistics"):
-        capture_tool.capture_desktop_gui_screens(out=tmp_path, width=1440, height=900)
+    report = capture_tool.capture_desktop_gui_screens(out=tmp_path, width=1440, height=900)
+
+    assert report["count"] == 1
+    screenshot = report["screenshots"][0]
+    assert screenshot["requested_size"] == {"width": 1440, "height": 900}
+    assert screenshot["actual_size"] == {"width": 1439, "height": 900}
+    assert screenshot["window_size_adjusted"] is True
+    assert screenshot["issue_count"] == 1
+    assert screenshot["issues"][0]["kind"] == "screenshot_size_mismatch"
+    assert Path(screenshot["path"]).read_bytes() == PNG_SIGNATURE
+
+
+def test_screenshot_capture_accepts_benign_width_expansion(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PySide6.QtCore import QSize
+
+    import tools.capture_desktop_gui_screens as capture_tool
+    from tools.scan_desktop_gui_schema import ScreenScenario
+
+    class ExpandedWidthImage:
+        def size(self) -> QSize:
+            return QSize(1337, 800)
+
+        def width(self) -> int:
+            return 1337
+
+        def height(self) -> int:
+            return 800
+
+        def save(self, target: str, _format: str) -> bool:
+            Path(target).write_bytes(PNG_SIGNATURE)
+            return True
+
+    class FakeWindow:
+        def resize(self, *_args: object) -> None:
+            pass
+
+        def show(self) -> None:
+            pass
+
+        def grab(self) -> ExpandedWidthImage:
+            return ExpandedWidthImage()
+
+        def deleteLater(self) -> None:
+            pass
+
+    monkeypatch.setattr(capture_tool, "_create_window", FakeWindow)
+    monkeypatch.setattr(
+        capture_tool,
+        "_capture_scenarios",
+        lambda **_: [
+            ScreenScenario(
+                key="en:statistics",
+                language="en",
+                mode="statistics",
+                width=1280,
+                height=800,
+            )
+        ],
+    )
+    monkeypatch.setattr(capture_tool, "_prepare_screenshot_scenario", lambda *_args: None)
+    monkeypatch.setattr(capture_tool, "workbench_region_metrics", lambda _window: {})
+    monkeypatch.setattr(capture_tool, "visual_contract_issues", lambda _window: [])
+    monkeypatch.setattr(
+        capture_tool,
+        "widget_metric",
+        lambda _window, object_name: WorkbenchRegionMetric(object_name, 0, 0, 0, 0, False),
+    )
+
+    report = capture_tool.capture_desktop_gui_screens(out=tmp_path, width=1280, height=800)
+
+    screenshot = report["screenshots"][0]
+    assert screenshot["requested_size"] == {"width": 1280, "height": 800}
+    assert screenshot["actual_size"] == {"width": 1337, "height": 800}
+    assert screenshot["window_size_adjusted"] is True
+    assert screenshot["issue_count"] == 0
+    assert screenshot["issues"] == []
 
 
 def test_screenshot_cli_returns_failure_when_manifest_has_issues(

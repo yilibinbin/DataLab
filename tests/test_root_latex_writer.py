@@ -1,6 +1,71 @@
 from __future__ import annotations
 
+import inspect
+
 from app_desktop.root_latex_writer import build_root_latex_document
+
+
+def _raw_root_rows() -> list[dict[str, str]]:
+    return [
+        {
+            "input_row_index": "0",
+            "root_index": "0",
+            "name": "x",
+            "value": "1.234567890123456789",
+            "uncertainty": "0.000000123456789",
+            "backend": "mpmath",
+            "mode": "scalar",
+        },
+        {
+            "input_row_index": "1",
+            "root_index": "0",
+            "name": "alpha_beta",
+            "value": "1234567.890123",
+            "uncertainty": "0.00000123",
+            "backend": "scipy",
+            "mode": "batch & scan",
+        },
+    ]
+
+
+def test_shared_root_latex_builder_matches_desktop_wrapper() -> None:
+    from datalab_latex.latex_tables_root import build_root_latex_document as shared_builder
+
+    rows = _raw_root_rows()
+    shared_latex = shared_builder(
+        rows=rows,
+        caption="Root & boundary_1",
+        digits=12,
+        uncertainty_digits=3,
+        group_size=2,
+        include_dcolumn=True,
+        language="en",
+    )
+    desktop_latex = build_root_latex_document(
+        rows=rows,
+        caption="Root & boundary_1",
+        digits=12,
+        uncertainty_digits=3,
+        group_size=2,
+        include_dcolumn=True,
+        language="en",
+    )
+
+    assert shared_latex == desktop_latex
+    assert r"\section*{Root \& boundary\_1}" in shared_latex
+    assert r"alpha\_beta" in shared_latex
+    assert r"batch \& scan" in shared_latex
+    assert r"\multicolumn{1}{c}{Value}" in shared_latex
+
+
+def test_shared_root_latex_module_is_qt_free() -> None:
+    import datalab_latex.latex_tables_root as shared_root_latex
+
+    source = inspect.getsource(shared_root_latex)
+
+    assert "app_desktop" not in source
+    assert "PySide" not in source
+    assert "Qt" not in source
 
 
 def test_root_latex_uses_raw_rows_and_latex_digits_independent_from_display_digits() -> None:
@@ -81,6 +146,47 @@ def test_root_latex_uses_numeric_column_spec_controls() -> None:
 
     assert r"\begin{tabular}{lllS" in siunitx_latex
     assert r"\begin{tabular}{llld" in dcolumn_latex
+
+
+def test_root_latex_units_use_text_column_without_polluting_numeric_cells() -> None:
+    rows = _raw_root_rows()
+
+    latex = build_root_latex_document(
+        rows=rows,
+        root_units={"x": "m/s", "alpha_beta": "kg_m^2"},
+        include_dcolumn=True,
+        language="en",
+    )
+
+    assert r"\begin{tabular}{lllld" in latex
+    assert "Unit" in latex
+    assert "m/s" in latex
+    assert r"kg\_m\textasciicircum{}2" in latex
+    assert "1.234567890123456789" not in latex
+    assert r"1.234\,567\,9(1)" in latex
+
+
+def test_root_latex_failure_rows_preserve_failure_reason() -> None:
+    latex = build_root_latex_document(
+        rows=[
+            {
+                "input_row_index": "0",
+                "root_index": "",
+                "name": "",
+                "value": "",
+                "uncertainty": "",
+                "backend": "",
+                "mode": "",
+                "failure": "could not solve x & y",
+            }
+        ],
+        language="en",
+    )
+
+    assert "Failure" in latex
+    assert r"could not solve x \& y" in latex
+    assert r"\begin{tabular}{lllS" in latex
+    assert "Backend & Mode & Failure" in latex
 
 
 def test_root_latex_dcolumn_preamble_declares_column_type() -> None:

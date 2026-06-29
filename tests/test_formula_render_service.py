@@ -50,6 +50,30 @@ print("ok")
     assert completed.stdout.strip() == "ok"
 
 
+def test_render_formula_metadata_does_not_import_desktop_renderer() -> None:
+    script = r"""
+import sys
+
+from datalab_latex.formula_render_service import RenderRequest, render_formula_metadata
+
+result = render_formula_metadata(RenderRequest(source="x^2 + 1"))
+if not result.ok:
+    raise SystemExit(result.error_message)
+if "app_desktop.formula_renderer" in sys.modules:
+    raise SystemExit("desktop renderer imported by metadata service")
+print("ok")
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    )
+
+    assert completed.stdout.strip() == "ok"
+
+
 def test_datalab_latex_package_import_stays_lightweight() -> None:
     script = r"""
 import sys
@@ -126,6 +150,26 @@ def test_render_service_accepts_datalab_python_and_mathematica_sources() -> None
     assert mathematica.ok
     assert r"\sin" in mathematica.latex
     assert r"\sqrt{A}" in mathematica.latex
+
+
+def test_render_service_does_not_double_escape_pi_inside_nested_calls() -> None:
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula,
+    )
+
+    result = render_formula(
+        RenderRequest(
+            source="Exp[-x] + Log[Pi*x]",
+            language=InputLanguage.MATHEMATICA,
+        )
+    )
+
+    assert result.ok, result.error_message
+    assert r"\pi\cdot x" in result.latex
+    assert r"\\pi" not in result.latex
+    assert result.png_bytes.startswith(b"\x89PNG")
 
 
 def test_python_formula_preview_handles_nested_calls_and_function_exponents() -> None:

@@ -4,7 +4,10 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
+
+from examples.catalog import EXAMPLE_NAMES
 
 
 def _allow_discard(win):
@@ -150,6 +153,62 @@ def test_example_workspaces_open_as_live_templates(qtbot):
         assert win.result_edit.toPlainText().strip()
         if win.workbench_formula_panel.isVisible():
             assert _formula_preview_has_content(win), source.name
+
+
+def test_opening_narrow_example_clears_stale_manual_table_columns(qtbot):
+    from app_desktop.window import ExtrapolationWindow, list_example_workspaces
+
+    QApplication.instance() or QApplication([])
+    win = ExtrapolationWindow()
+    _allow_discard(win)
+    qtbot.addWidget(win)
+    examples = {path.name: path for path in list_example_workspaces()}
+
+    assert win._open_workspace_from_path(examples["quantum-defect-implicit.datalab"], as_template=True)
+    assert win.manual_table.columnCount() == 3
+
+    assert win._open_workspace_from_path(examples["root-batch-quadratic.datalab"], as_template=True)
+
+    assert win.manual_table.columnCount() == 1
+    assert win.manual_table.horizontalHeaderItem(0).text() == "A"
+    assert win.manual_table.item(0, 0).text() == "1.0(1)"
+
+
+@pytest.mark.parametrize("example_name", EXAMPLE_NAMES)
+def test_example_workspace_can_run_default_calculation(qtbot, monkeypatch, example_name: str):
+    from app_desktop.window import ExtrapolationWindow, list_example_workspaces
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *args, **kwargs: QMessageBox.StandardButton.Ok))
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *args, **kwargs: QMessageBox.StandardButton.Ok))
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *args, **kwargs: QMessageBox.StandardButton.Ok))
+    win = ExtrapolationWindow()
+    _allow_discard(win)
+    qtbot.addWidget(win)
+    examples = {path.name: path for path in list_example_workspaces()}
+    source = examples[example_name]
+
+    try:
+        assert win._open_workspace_from_path(source, as_template=True), source.name
+        win.generate_latex_checkbox.setChecked(False)
+        win.generate_plots_checkbox.setChecked(False)
+        win.run_calculation()
+        qtbot.waitUntil(
+            lambda: getattr(win, "_workbench_result_state", "") != "running" and not win._has_running_worker(),
+            timeout=120000,
+        )
+        QApplication.processEvents()
+
+        result_text = win.result_edit.toPlainText().strip()
+        log_text = win.log_edit.toPlainText()
+        assert getattr(win, "_workbench_result_state", "") != "failed", source.name + "\n" + log_text
+        assert result_text or win._csv_rows, source.name
+        assert "Traceback" not in log_text, source.name
+    finally:
+        if win._has_running_worker():
+            win._stop_current_worker()
+            qtbot.waitUntil(lambda: not win._has_running_worker(), timeout=10000)
+        win.close()
 
 
 def test_template_save_as_refuses_bundled_example_path(qtbot, monkeypatch):

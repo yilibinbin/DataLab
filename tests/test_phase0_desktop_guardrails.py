@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -10,6 +11,7 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
+from mpmath import mp
 from PySide6.QtWidgets import QApplication
 
 from shared.parallel_config import NestedParallelPolicy, ParallelMode
@@ -157,6 +159,231 @@ def test_run_when_idle_collects_inputs_and_starts_worker(
     assert captured["job"].core_request.inputs["values"] == ["1.0", "2.0"]
     assert captured["job"].core_request.inputs["sigmas"] == [None, None]
     assert captured["job"].core_request.inputs["stats_mode"] == "mean"
+    assert captured["job"].core_request.inputs["source_row_ids"] == ["1", "2"]
+
+
+def test_statistics_interactive_display_keeps_current_legacy_statistics_projection(
+    window: Any,
+) -> None:
+    window._apply_language("en")
+    stats_result = {
+        "mean": mp.mpf("1.25"),
+        "std_mean": mp.mpf("0"),
+        "std": mp.mpf("0"),
+        "v_min": mp.mpf("1.25"),
+        "v_max": mp.mpf("2.5"),
+        "method_label": "Weighted mean (σ=0 anchor)",
+        "dropped": 1,
+        "effective_n": mp.mpf("1"),
+        "zero_sigma_anchor": True,
+        "warnings": ["Detected σ=0; treated as infinite weight."],
+    }
+
+    text, csv_rows = window._format_statistics_display(stats_result, "A", 2)
+
+    metrics = {str(row["metric"]): row for row in csv_rows}
+    assert "Weighted effective n_eff = 1.0" in text
+    assert "Min = 1.25" in text
+    assert "Max = 2.5" in text
+    assert metrics["rows"]["value"] == 2
+    assert str(metrics["min"]["value"]).startswith("1.25")
+    assert str(metrics["max"]["value"]).startswith("2.5")
+    assert str(metrics["effective_n"]["value"]).startswith("1.0")
+    assert metrics["dropped"]["value"] == 1
+    assert metrics["zero_sigma_anchor"]["value"] == "True"
+
+
+def test_statistics_direct_mode_attaches_source_row_ids(
+    window: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app_desktop.window_statistics_mixin as statistics_mixin
+
+    window._apply_language("en")
+    window.manual_data_edit.setPlainText("A\n1\n2\n")
+    window._data_stack.setCurrentIndex(1)
+    window.stats_value_column_edit.setText("A")
+    stats_result = {
+        "mean": mp.mpf("1.5"),
+        "std_mean": mp.mpf("0.5"),
+        "std": mp.mpf("0.7071067811865475"),
+        "v_min": mp.mpf("1"),
+        "v_max": mp.mpf("2"),
+        "method_label": "Arithmetic mean (sample)",
+        "dropped": 0,
+    }
+    captured: dict[str, object] = {}
+
+    def fake_compute_statistics(
+        values: list[mp.mpf],
+        sigmas: list[mp.mpf | None],
+        stats_mode: str,
+        *,
+        use_sample: bool,
+        use_weighted_variance: bool,
+    ) -> dict[str, object]:
+        captured["values"] = [str(value) for value in values]
+        captured["sigmas"] = list(sigmas)
+        captured["stats_mode"] = stats_mode
+        captured["use_sample"] = use_sample
+        captured["use_weighted_variance"] = use_weighted_variance
+        return stats_result
+
+    monkeypatch.setattr(statistics_mixin, "compute_statistics", fake_compute_statistics)
+
+    window._run_statistics_mode(False, "")
+
+    assert captured["values"] == ["1.0", "2.0"]
+    assert captured["sigmas"] == [None, None]
+    assert stats_result["source_row_ids"] == ("1", "2")
+
+
+def test_statistics_display_result_routes_current_csv_plot_and_snapshot(
+    window: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window._apply_language("en")
+    stats_result = {
+        "mean": mp.mpf("1.25"),
+        "std_mean": mp.mpf("0"),
+        "std": mp.mpf("0"),
+        "v_min": mp.mpf("1.25"),
+        "v_max": mp.mpf("2.5"),
+        "method_label": "Weighted mean (σ=0 anchor)",
+        "dropped": 1,
+        "effective_n": mp.mpf("1"),
+        "zero_sigma_anchor": True,
+        "warnings": ["Detected σ=0; treated as infinite weight."],
+    }
+    values = [mp.mpf("1.25"), mp.mpf("2.5")]
+    sigmas = [mp.mpf("0"), mp.mpf("0.1")]
+    captured: dict[str, object] = {}
+
+    def fake_render_statistics_plots(
+        plot_values: list[mp.mpf],
+        plot_sigmas: list[mp.mpf | None] | None,
+        plot_result: dict[str, object],
+        batch_idx: int | None = None,
+    ) -> list[bytes]:
+        captured["plot_values"] = list(plot_values)
+        captured["plot_sigmas"] = list(plot_sigmas or [])
+        captured["plot_result"] = plot_result
+        captured["plot_batch_idx"] = batch_idx
+        return [b"\x89PNG\r\n\x1a\nstats-1", b"\x89PNG\r\n\x1a\nstats-2"]
+
+    def fake_save_batch_figure(plot_bytes: bytes, _label: str, idx: int, *, prefix: str) -> Path:
+        captured.setdefault("saved_plots", []).append((plot_bytes, idx, prefix))
+        return Path(f"/tmp/datalab-p0-1-{prefix}.png")
+
+    def fake_set_image_list(mode: str, paths: list[Path]) -> None:
+        captured["image_list"] = (mode, paths)
+
+    def fake_remember_last_result(kind: str, payload: dict[str, object]) -> None:
+        captured["last_result"] = (kind, payload)
+
+    monkeypatch.setattr(window, "_render_statistics_plots", fake_render_statistics_plots)
+    monkeypatch.setattr(window, "_save_batch_figure", fake_save_batch_figure)
+    monkeypatch.setattr(window, "_set_image_list", fake_set_image_list)
+    monkeypatch.setattr(window, "_remember_last_result", fake_remember_last_result)
+
+    window._display_statistics_result(
+        stats_result,
+        "A",
+        2,
+        values=values,
+        sigmas=sigmas,
+        render_plots=True,
+    )
+
+    assert window._csv_headers == ["batch", "metric", "value", "uncertainty"]
+    metrics = {str(row["metric"]): row for row in window._csv_rows}
+    assert metrics["min"]["value"].startswith("1.25")
+    assert metrics["max"]["value"].startswith("2.5")
+    assert metrics["zero_sigma_anchor"]["value"] == "True"
+    assert captured["plot_values"] == values
+    assert captured["plot_sigmas"] == sigmas
+    assert captured["plot_result"] is stats_result
+    assert captured["plot_batch_idx"] is None
+    assert captured["saved_plots"] == [
+        (b"\x89PNG\r\n\x1a\nstats-1", 1, "stats1"),
+        (b"\x89PNG\r\n\x1a\nstats-2", 1, "stats2"),
+    ]
+    assert captured["image_list"] == (
+        "stats",
+        [Path("/tmp/datalab-p0-1-stats1.png"), Path("/tmp/datalab-p0-1-stats2.png")],
+    )
+    assert captured["last_result"] == (
+        "statistics_single",
+        {"result": stats_result, "value_col": "A", "n": 2},
+    )
+
+    window._display_statistics_result(
+        stats_result,
+        "A",
+        2,
+        values=values,
+        sigmas=sigmas,
+        render_plots=False,
+    )
+
+    assert captured["last_result"] == (
+        "statistics_single",
+        {"result": stats_result, "value_col": "A", "n": 2},
+    )
+
+
+def test_statistics_render_plot_returns_png_for_current_statistics_result(
+    window: Any,
+) -> None:
+    pytest.importorskip("matplotlib")
+    window._apply_language("en")
+
+    png = window._render_statistics_plot(
+        [mp.mpf("1.25"), mp.mpf("2.5")],
+        [mp.mpf("0.1"), None],
+        {
+            "mean": mp.mpf("1.875"),
+            "std_mean": mp.mpf("0.625"),
+            "std": mp.mpf("0.883883476"),
+            "v_min": mp.mpf("1.25"),
+            "v_max": mp.mpf("2.5"),
+            "method_label": "Arithmetic mean (sample)",
+        },
+        batch_idx=1,
+    )
+
+    assert png is not None
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_statistics_render_plot_routes_shared_spec_with_direct_labels(
+    window: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from shared import plotting
+
+    captured: dict[str, Any] = {}
+
+    def fake_render(spec: Any) -> bytes:
+        captured["spec"] = spec
+        return b"\x89PNG\r\n\x1a\ndesktop"
+
+    monkeypatch.setattr(plotting, "render_statistics_plot_from_spec", fake_render)
+    window._apply_language("en")
+
+    png = window._render_statistics_plot(
+        [mp.mpf("1.25"), mp.mpf("2.5")],
+        [mp.mpf("0.1"), None],
+        {"mean": mp.mpf("1.875"), "std_mean": mp.mpf("0.625")},
+        batch_idx=2,
+    )
+
+    assert png == b"\x89PNG\r\n\x1a\ndesktop"
+    spec = captured["spec"]
+    assert spec.values == (mp.mpf("1.25"), mp.mpf("2.5"))
+    assert spec.labels.title == "Statistics"
+    assert spec.labels.mean_band == "Mean ± SE"
+    assert spec.batch_suffix == " #2"
 
 
 def test_statistics_core_projection_failure_does_not_block_legacy_worker(

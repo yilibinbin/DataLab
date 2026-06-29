@@ -148,6 +148,44 @@ def test_fitting_click_workflow_custom_model(window: Any, qtbot: Any) -> None:
     assert window._csv_rows
 
 
+def test_fitting_click_workflow_selected_comparison(window: Any, qtbot: Any, tmp_path: Path) -> None:
+    from fitting.comparison_formatting import COMPARISON_TABLE_HEADERS
+
+    _select_mode(window, "fitting")
+    _enter_manual_text(window, "x y\n0 1\n1 3\n2 5\n3 7\n")
+    _select_combo_data(window.fit_model_combo, "comparison")
+    variable_edit, column_edit, *_ = window.variable_rows[0]
+    variable_edit.setText("x")
+    column_edit.setText("x")
+    window.fit_target_edit.setText("y")
+    window.fit_comparison_candidates_edit.setPlainText(
+        "[\n"
+        '  {"candidate_id": "linear", "label": "Linear", "model_type": "polynomial", "poly_degree": 1},\n'
+        '  {"candidate_id": "quadratic", "label": "Quadratic", "model_type": "polynomial", "poly_degree": 2}\n'
+        "]"
+    )
+    window.generate_plots_checkbox.setChecked(False)
+    tex_path = tmp_path / "comparison.tex"
+    window.generate_latex_checkbox.setChecked(True)
+    window.output_file_edit.setText(str(tex_path))
+
+    _click_run_and_wait(qtbot, window, timeout=15000)
+
+    text = _result_text(window)
+    assert "Selected Fit Comparison" in text
+    assert "Linear" in text
+    assert "Quadratic" in text
+    assert window._csv_headers == list(COMPARISON_TABLE_HEADERS)
+    assert [row["candidate_id"] for row in window._csv_rows] == ["linear", "quadratic"]
+    assert window._csv_suggest_name == "fitting_comparison_results.csv"
+    latex_source = tex_path.read_text(encoding="utf-8")
+    assert "\\begin{table}" in latex_source
+    assert "$\\chi^2$" in latex_source
+    assert "Linear" in latex_source
+    assert "Quadratic" in latex_source
+    assert window.latex_edit.toPlainText() == latex_source
+
+
 def test_root_solving_click_workflow_and_workspace_round_trip(window: Any, qtbot: Any, tmp_path: Path) -> None:
     _select_mode(window, "root_solving")
     _enter_manual_text(window, "A\n4.0\n")

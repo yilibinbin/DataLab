@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from importlib import import_module
 import os
+from pathlib import Path
 from typing import Any, cast
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -15,7 +16,12 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from app_desktop.panels import _refresh_visible_table_min_widths
+from app_desktop.theme import SUPPORTED_MIN_WINDOW_WIDTH
+import tools.capture_desktop_gui_screens as capture_tool
+from tools.capture_desktop_gui_screens import LEFT_RAIL_CAPTURE_WIDTHS
 from tools.scan_desktop_gui_schema import ScreenScenario
+from tools.scan_desktop_gui_schema import LEFT_RAIL_SCROLLBAR_SCAN_WIDTHS
+from tools.scan_desktop_gui_schema import SCAN_WIDTHS
 from tools.scan_desktop_gui_schema import _combo_index_for_data
 from tools.scan_desktop_gui_schema import _force_smallest_left_splitter
 from tools.scan_desktop_gui_schema import _state_ownership_issues
@@ -49,6 +55,48 @@ def test_gui_schema_scan_reports_no_issues(window: Any) -> None:
     assert report["checks"]["root_plot_display"] is True
     assert report["checks"]["left_panel_no_horizontal_scrollbar"] is True
     assert report["checks"]["workspace_result_restore"] is True
+
+
+def test_left_rail_scrollbar_scan_covers_requested_capture_widths(window: Any) -> None:
+    report = scan_window(window)
+
+    assert SUPPORTED_MIN_WINDOW_WIDTH == 1280
+    assert tuple(report["checks"]["scenario_widths"]) == (1280, 1440, 1680)
+    assert LEFT_RAIL_SCROLLBAR_SCAN_WIDTHS == (1280, 1440, 1680)
+    assert SCAN_WIDTHS == (1280, 1440, 1680)
+    assert LEFT_RAIL_CAPTURE_WIDTHS == (1280, 1440, 1680)
+    assert report["checks"]["left_panel_no_horizontal_scrollbar"] is True
+
+
+def test_screenshot_capture_records_actual_size_when_qt_adjusts_window(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(
+        capture_tool,
+        "_capture_scenarios",
+        lambda *, width, height: [
+            ScreenScenario(
+                key="en:extrapolation",
+                language="en",
+                mode="extrapolation",
+                result_tab="numeric",
+                width=width,
+                height=height,
+            )
+        ],
+    )
+
+    report = capture_tool.capture_desktop_gui_screens(out=tmp_path, width=1280, height=800)
+
+    assert report["checks"]["left_panel_no_horizontal_scrollbar"] is True
+    assert report["count"] == 1
+    screenshot = report["screenshots"][0]
+    assert screenshot["requested_size"] == {"width": 1280, "height": 800}
+    assert screenshot["actual_size"]["width"] >= 1280
+    assert screenshot["actual_size"]["height"] == 800
+    assert screenshot["window_size_adjusted"] is (screenshot["actual_size"] != screenshot["requested_size"])
+    assert screenshot["issue_count"] == 0
 
 
 def test_gui_schema_scan_uses_real_workspace_restore(window: Any) -> None:

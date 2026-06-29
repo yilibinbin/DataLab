@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -16,6 +17,8 @@ def _minimal_workspace() -> dict[str, object]:
         "language": "auto",
         "ui": {
             "main_tab": 0,
+            # Legacy preview-language metadata should be ignored by the current
+            # single rendered-preview UI.
             "formula_preview": {"fitting.custom.expression": "python"},
         },
         "data": {
@@ -60,13 +63,6 @@ def test_workbench_model_module_imports_without_qt_or_legacy_runtime_modules() -
     assert module.WorkbenchModel.__name__ == "WorkbenchModel"
 
 
-def test_workbench_model_formula_preview_languages_match_render_service_enum() -> None:
-    from datalab_core.workbench_model import FORMULA_PREVIEW_LANGUAGES
-    from datalab_latex.formula_render_service import InputLanguage
-
-    assert FORMULA_PREVIEW_LANGUAGES == frozenset(language.value for language in InputLanguage)
-
-
 def test_workbench_model_builds_from_minimal_v1_workspace() -> None:
     from datalab_core.workbench_model import WorkbenchModel
 
@@ -76,7 +72,7 @@ def test_workbench_model_builds_from_minimal_v1_workspace() -> None:
     assert model.schema_version == 1
     assert model.current_mode == "fitting"
     assert model.compute["config"]["fitting"]["expression"] == "a*x+b"
-    assert model.ui["formula_preview"] == {"fitting.custom.expression": "python"}
+    assert "formula_preview" not in model.ui
     assert model.result_snapshot == {"present": False}
 
 
@@ -89,7 +85,7 @@ def test_workbench_model_hash_matches_v1_workspace_hash() -> None:
     assert model.compute_hash() == compute_workspace_hash(workspace)
 
 
-def test_workbench_model_formula_preview_ui_does_not_affect_compute_hash() -> None:
+def test_workbench_model_ignores_legacy_formula_preview_ui() -> None:
     from datalab_core.workbench_model import WorkbenchModel
 
     workspace = _minimal_workspace()
@@ -99,9 +95,11 @@ def test_workbench_model_formula_preview_ui_does_not_affect_compute_hash() -> No
         "root_solving.equation": "mathematica",
     }
 
-    assert WorkbenchModel.from_v1_workspace(workspace).compute_hash() == WorkbenchModel.from_v1_workspace(
-        changed_preview
-    ).compute_hash()
+    original = WorkbenchModel.from_v1_workspace(workspace)
+    changed = WorkbenchModel.from_v1_workspace(changed_preview)
+
+    assert original.compute_hash() == changed.compute_hash()
+    assert original.ui == changed.ui == {"main_tab": 0}
 
 
 def test_workbench_model_rejects_binary_float_in_compute_relevant_fields() -> None:
@@ -125,7 +123,7 @@ def test_workbench_model_can_normalize_legacy_compute_floats_for_readers() -> No
     assert model.compute["config"]["fitting"]["parameter_rows"][0]["initial"] == "1.0"
 
 
-def test_workbench_model_lenient_ui_omits_malformed_formula_preview() -> None:
+def test_workbench_model_omits_malformed_formula_preview() -> None:
     from datalab_core.workbench_model import WorkbenchModel
 
     workspace = _minimal_workspace()
@@ -136,23 +134,13 @@ def test_workbench_model_lenient_ui_omits_malformed_formula_preview() -> None:
     assert "formula_preview" not in model.ui
 
 
-def test_workbench_model_rejects_unknown_formula_preview_language() -> None:
+def test_workbench_model_omits_unknown_formula_preview_language() -> None:
     from datalab_core.workbench_model import WorkbenchModel
 
     workspace = _minimal_workspace()
     workspace["ui"]["formula_preview"] = {"fitting.custom.expression": "javascript"}  # type: ignore[index]
 
-    with pytest.raises(ValueError, match="Unsupported formula preview language"):
-        WorkbenchModel.from_v1_workspace(workspace)
-
-
-def test_workbench_model_lenient_ui_omits_unknown_formula_preview_language() -> None:
-    from datalab_core.workbench_model import WorkbenchModel
-
-    workspace = _minimal_workspace()
-    workspace["ui"]["formula_preview"] = {"fitting.custom.expression": "javascript"}  # type: ignore[index]
-
-    model = WorkbenchModel.from_v1_workspace(workspace, lenient_ui=True)
+    model = WorkbenchModel.from_v1_workspace(workspace)
 
     assert "formula_preview" not in model.ui
 
@@ -164,9 +152,84 @@ def test_workbench_model_to_v1_workspace_returns_plain_copy() -> None:
     model = WorkbenchModel.from_v1_workspace(workspace)
     exported = model.to_v1_workspace()
 
-    assert exported == workspace
-    exported["config"]["fitting"]["expression"] = "changed"  # type: ignore[index]
+    expected = cast(dict[str, Any], copy.deepcopy(workspace))
+    cast(dict[str, Any], expected["ui"]).pop("formula_preview")
+    assert exported == expected
+    cast(dict[str, Any], cast(dict[str, Any], exported["config"])["fitting"])["expression"] = "changed"
     assert model.compute["config"]["fitting"]["expression"] == "a*x+b"
+
+
+def test_workbench_model_preserves_valid_history_without_affecting_hash() -> None:
+    from datalab_core.history import HistoryEntry, HistoryStore
+    from datalab_core.workbench_model import WorkbenchModel
+
+    workspace = _minimal_workspace()
+    entry = HistoryEntry.from_workspace_snapshot(
+        entry_id="e01",
+        label="fit",
+        created_at="2026-06-20T00:00:00Z",
+        workspace=workspace,
+        family="fitting",
+        kind="fit_single",
+        result_snapshot={"status": "success", "value": "1"},
+    )
+    history = HistoryStore(current=entry).to_json()
+    workspace["history"] = history
+
+    model = WorkbenchModel.from_v1_workspace(workspace)
+    exported = model.to_v1_workspace()
+
+    assert model.history == history
+    assert exported["history"] == history
+    assert model.compute_hash() == compute_workspace_hash(workspace)
+    with pytest.raises(TypeError):
+        cast(Any, model.history)["entries"] = []
+    cast(list[Any], exported["history"]["entries"]).append({"entry_id": "mutated"})
+    assert model.to_v1_workspace()["history"] == history
+
+
+def test_workbench_model_rejects_malformed_history() -> None:
+    from datalab_core.history import HistoryEntry, HistoryStore
+    from datalab_core.workbench_model import WorkbenchModel
+
+    workspace = _minimal_workspace()
+    entry = HistoryEntry.from_workspace_snapshot(
+        entry_id="e01",
+        label="fit",
+        created_at="2026-06-20T00:00:00Z",
+        workspace=workspace,
+        family="fitting",
+        kind="fit_single",
+        result_snapshot={"status": "success", "value": "1"},
+    )
+    history = HistoryStore(current=entry).to_json()
+    history["current"]["semantic_snapshot"]["result"]["value"] = 1.0
+    workspace["history"] = history
+
+    with pytest.raises(TypeError, match="JSON floats are not allowed"):
+        WorkbenchModel.from_v1_workspace(workspace)
+
+
+def test_workbench_model_rejects_history_floats_even_when_legacy_floats_allowed() -> None:
+    from datalab_core.history import HistoryEntry, HistoryStore
+    from datalab_core.workbench_model import WorkbenchModel
+
+    workspace = _minimal_workspace()
+    entry = HistoryEntry.from_workspace_snapshot(
+        entry_id="e01",
+        label="fit",
+        created_at="2026-06-20T00:00:00Z",
+        workspace=workspace,
+        family="fitting",
+        kind="fit_single",
+        result_snapshot={"status": "success", "value": "1"},
+    )
+    history = HistoryStore(current=entry).to_json()
+    history["current"]["semantic_snapshot"]["result"]["value"] = 1.0
+    workspace["history"] = history
+
+    with pytest.raises(TypeError, match="JSON floats are not allowed"):
+        WorkbenchModel.from_v1_workspace(workspace, allow_legacy_floats=True)
 
 
 def test_workbench_model_builds_from_v1_manifest() -> None:
@@ -210,35 +273,36 @@ def test_workbench_model_builds_from_bundled_example_workspaces() -> None:
         assert model.compute_hash() == compute_workspace_hash(workspace), path.name
 
 
-def test_workbench_model_exposes_formula_preview_language_state_as_copy() -> None:
+def test_workbench_model_legacy_formula_preview_language_view_is_empty_copy() -> None:
     from datalab_core.workbench_model import WorkbenchModel
 
     model = WorkbenchModel.from_v1_workspace(_minimal_workspace())
     languages = model.formula_preview_languages
 
-    assert languages == {"fitting.custom.expression": "python"}
+    assert languages == {}
     languages["fitting.custom.expression"] = "mathematica"
-    assert model.formula_preview_language("fitting.custom.expression") == "python"
+    assert model.formula_preview_language("fitting.custom.expression") is None
 
 
-def test_workbench_model_updates_formula_preview_language_immutably() -> None:
+def test_workbench_model_legacy_formula_preview_language_update_is_inert() -> None:
     from datalab_core.workbench_model import WorkbenchModel
 
     model = WorkbenchModel.from_v1_workspace(_minimal_workspace())
     updated = model.with_formula_preview_language("root_solving.equation", "mathematica")
 
-    assert updated is not model
+    assert updated is model
     assert model.formula_preview_language("root_solving.equation") is None
-    assert updated.formula_preview_language("root_solving.equation") == "mathematica"
+    assert updated.formula_preview_language("root_solving.equation") is None
     assert updated.compute_hash() == model.compute_hash()
 
 
-def test_workbench_model_removes_formula_preview_language_without_hash_change() -> None:
+def test_workbench_model_legacy_formula_preview_language_remove_is_inert() -> None:
     from datalab_core.workbench_model import WorkbenchModel
 
     model = WorkbenchModel.from_v1_workspace(_minimal_workspace())
     removed = model.without_formula_preview_language("fitting.custom.expression")
 
+    assert removed is model
     assert removed.formula_preview_languages == {}
     assert "formula_preview" not in removed.to_v1_workspace()["ui"]
     assert removed.compute_hash() == model.compute_hash()
@@ -265,10 +329,9 @@ def test_workbench_model_rejects_invalid_formula_preview_language_updates(
         model.with_formula_preview_language(schema_key, language)  # type: ignore[arg-type]
 
 
-def test_workbench_model_rejects_unknown_formula_preview_language_updates() -> None:
+def test_workbench_model_ignores_unknown_formula_preview_language_updates() -> None:
     from datalab_core.workbench_model import WorkbenchModel
 
     model = WorkbenchModel.from_v1_workspace(_minimal_workspace())
 
-    with pytest.raises(ValueError, match="Unsupported formula preview language"):
-        model.with_formula_preview_language("fitting.custom.expression", "javascript")
+    assert model.with_formula_preview_language("fitting.custom.expression", "javascript") is model
