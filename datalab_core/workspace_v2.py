@@ -63,6 +63,8 @@ def model_from_manifest(manifest: Mapping[str, Any]) -> WorkbenchModel:
     }
     if "history" in model_payload:
         workspace["history"] = model_payload["history"]
+    if "provenance" in model_payload:
+        workspace["provenance"] = model_payload["provenance"]
     return WorkbenchModel.from_v1_workspace(workspace)
 
 
