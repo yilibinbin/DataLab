@@ -9,7 +9,11 @@ import mpmath as mp
 from .._security_shim import compile_latex_safe, mpmath_synchronized, validate_latex_engine
 from datalab_core.results import ResultStatus
 from datalab_core.service_factory import create_core_session_service
-from datalab_core.statistics import build_statistics_requests, statistics_payload_to_compute_result
+from datalab_core.statistics import (
+    build_statistics_requests,
+    statistics_csv_rows_from_result,
+    statistics_payload_to_compute_result,
+)
 
 from data_extrapolation_latex_latest import (
     _dual_msg,
@@ -26,11 +30,12 @@ from .common import (
     _generate_csv_from_rows,
     _is_checked,
     _latex_to_plain,
+    _merged_core_warnings,
     _norm_token,
     _parse_int,
 )
-from .plots import _render_statistics_plot
-from shared.uncertainty import parse_uncertainty_format
+from .plots import _render_statistics_plot, _render_statistics_plots
+from shared.uncertainty import has_explicit_uncertainty, parse_uncertainty_format
 
 
 @dataclass
@@ -42,6 +47,7 @@ class StatsResultBundle:
     latex_text: str
     pdf_b64: str | None
     plot_b64: str | None
+    plot_b64_list: list[str] | None
     csv_data: str | None
     raw_csv_data: str | None
     warnings: list[str]
@@ -90,7 +96,11 @@ def _parse_stats_data(text: str):
             try:
                 uv = parse_uncertainty_format(token, lang="zh")
                 val = mp.mpf(uv.value)
-                sigma_val = mp.mpf(uv.uncertainty) if uv.uncertainty > 0 else None
+                sigma_val = (
+                    mp.mpf(uv.uncertainty)
+                    if has_explicit_uncertainty(token)
+                    else None
+                )
             except Exception as exc:
                 raise ValueError(
                     _dual_msg(
@@ -119,6 +129,13 @@ def _parse_stats_data(text: str):
                     sigma_val = mp.mpf(uv2.value)
                 except Exception:
                     sigma_val = mp.mpf(token2)
+                if not mp.isfinite(sigma_val):
+                    raise ValueError(
+                        _dual_msg(
+                            f"第 {line_num} 行的不确定度不是有限数: {parts[1]}",
+                            f"Uncertainty on line {line_num} is not finite: {parts[1]}",
+                        )
+                    )
 
             except Exception as exc:
                 raise ValueError(
@@ -129,44 +146,22 @@ def _parse_stats_data(text: str):
                 ) from exc
 
             values.append(val)
-            sigmas.append(sigma_val if sigma_val > 0 else None)
+            sigmas.append(sigma_val)
             data_rows.append((val,))
-            sigma_rows.append((sigma_val if sigma_val > 0 else None,))
+            sigma_rows.append((sigma_val,))
 
     return headers, values, sigmas, data_rows, sigma_rows
 
 
 def _format_statistics_rows(stats_result: dict, row_count: int, mp_precision: int | None = None) -> list[dict[str, object]]:
-    """Convert statistics result dict into CSV-friendly rows."""
+    """Compatibility wrapper around the shared semantic statistics CSV serializer."""
 
-    def _fmt(value) -> str:
-        return _format_with_precision(value, mp_precision)
-
-    rows: list[dict[str, object]] = [
-        {"metric": "method", "value": stats_result.get("method_label", ""), "uncertainty": ""},
-        {
-            "metric": "mean",
-            "value": _fmt(stats_result.get("mean", mp.nan)),
-            "uncertainty": _fmt(stats_result.get("std_mean", mp.nan)),
-        },
-        {"metric": "rows", "value": row_count, "uncertainty": ""},
-        {"metric": "min", "value": _fmt(stats_result.get("v_min", mp.nan)), "uncertainty": ""},
-        {"metric": "max", "value": _fmt(stats_result.get("v_max", mp.nan)), "uncertainty": ""},
-    ]
-
-    std_val = stats_result.get("std", mp.nan)
-    try:
-        if not mp.isnan(mp.mpf(std_val)):
-            rows.append({"metric": "std", "value": _fmt(std_val), "uncertainty": ""})
-    except Exception:
-        pass
-    eff_n = stats_result.get("effective_n")
-    if eff_n is not None:
-        rows.append({"metric": "effective_n", "value": _fmt(eff_n), "uncertainty": ""})
-    dropped = stats_result.get("dropped", 0)
-    if dropped:
-        rows.append({"metric": "dropped", "value": dropped, "uncertainty": ""})
-    return rows
+    return statistics_csv_rows_from_result(
+        stats_result,
+        row_count=row_count,
+        include_batch=False,
+        precision_digits=mp_precision,
+    )
 
 
 @mpmath_synchronized
@@ -189,6 +184,7 @@ def _run_statistics(data_text: str, form, lang: str = "zh") -> StatsResultBundle
     stats_mode = (form.get("stats_mode") or "mean_sample").strip()
     use_sample = _is_checked(form, "stats_use_sample", default=False)
     use_weighted_variance = _is_checked(form, "stats_use_weighted_variance", default=False)
+    trim_fraction = form.get("stats_trim_fraction")
 
     warnings: list[str] = []
     with _precision_guard(mp_precision) as applied_precision:
@@ -203,6 +199,7 @@ def _run_statistics(data_text: str, form, lang: str = "zh") -> StatsResultBundle
                 stats_mode=stats_mode,
                 use_sample=use_sample,
                 use_weighted_variance=use_weighted_variance,
+                trim_fraction=trim_fraction,
                 precision_digits=applied_precision,
                 uncertainty_digits=result_digits,
                 request_id_prefix="web-statistics",
@@ -219,6 +216,7 @@ def _run_statistics(data_text: str, form, lang: str = "zh") -> StatsResultBundle
             core_result.payload,
             core_result.warnings,
         )
+        warnings.extend(_merged_core_warnings(core_result.payload, core_result.warnings))
         with tempfile.TemporaryDirectory() as tmpdir:
             tex_path = Path(tmpdir) / "stats.tex"
             generate_statistics_latex(
@@ -255,10 +253,17 @@ def _run_statistics(data_text: str, form, lang: str = "zh") -> StatsResultBundle
         display_result["mean_latex"] = mean_latex
 
         plot_b64 = None
+        plot_b64_list = None
         if generate_plots and values:
-            plot_bytes = _render_statistics_plot(values, sigmas, stats_result, lang=lang)
-            if plot_bytes:
-                plot_b64 = _encode_b64(plot_bytes)
+            plot_bytes_list = _render_statistics_plots(values, sigmas, stats_result, lang=lang)
+            if plot_bytes_list:
+                plot_b64_list = [_encode_b64(plot_bytes) for plot_bytes in plot_bytes_list]
+                plot_b64 = plot_b64_list[0]
+            else:
+                plot_bytes = _render_statistics_plot(values, sigmas, stats_result, lang=lang)
+                if plot_bytes:
+                    plot_b64 = _encode_b64(plot_bytes)
+                    plot_b64_list = [plot_b64]
 
         csv_data = None
         stats_rows = _format_statistics_rows(stats_result, len(values), mp_precision)
@@ -309,6 +314,7 @@ def _run_statistics(data_text: str, form, lang: str = "zh") -> StatsResultBundle
         latex_text=latex_text,
         pdf_b64=pdf_b64,
         plot_b64=plot_b64,
+        plot_b64_list=plot_b64_list,
         csv_data=csv_data,
         raw_csv_data=raw_csv_data,
         warnings=warnings,

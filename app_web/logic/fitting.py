@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import mpmath as mp
 
 from .._security_shim import compile_latex_safe, mpmath_synchronized, validate_latex_engine
 
 from datalab_core.fitting import build_fitting_request, fitting_payload_to_fit_result
+from datalab_core.fitting_comparison import (
+    build_fitting_comparison_request,
+    build_fitting_comparison_result_snapshot,
+    render_fitting_comparison_snapshot_outputs,
+    run_fitting_comparison,
+)
 from datalab_core.results import ResultStatus
 from datalab_core.service_factory import create_core_session_service
 from data_extrapolation_latex_latest import (
@@ -25,6 +33,13 @@ from fitting import (
     render_fitting_overview,
     summarize_fit_result,
 )
+from fitting.diagnostic_formatting import (
+    build_fitting_diagnostic_csv_rows,
+    build_fitting_diagnostic_latex_entries,
+    fitting_diagnostic_view,
+)
+from fitting.comparison_formatting import build_comparison_table_rows_from_payload
+from shared.formula_export import inline_formula_summary_or_none
 
 from .common import (
     _core_failure_message,
@@ -40,6 +55,7 @@ from .common import (
 )
 from shared.fitting_uncertainty import fit_uncertainty_policy
 from shared.uncertainty import parse_uncertainty_format
+from datalab_latex.latex_tables_fitting import build_fitting_comparison_latex_block
 
 
 @dataclass
@@ -51,6 +67,9 @@ class FitResultBundle:
     best_label: str
     params: list[dict[str, object]]
     metrics: dict[str, object]
+    diagnostic_correlations: list[dict[str, object]]
+    diagnostic_residuals: list[dict[str, object]]
+    comparison_rows: list[dict[str, object]]
     plot_b64: str | None
     summary_text: str
     warnings: list[str]
@@ -285,6 +304,8 @@ def _format_fit_rows(
             }
         )
 
+    rows.extend(build_fitting_diagnostic_csv_rows(fit_res, batch=batch, format_value=_fmt))
+
     covariance = getattr(fit_res, "covariance", None)
     if covariance:
         for i, cov_row in enumerate(covariance):
@@ -357,6 +378,9 @@ def _generate_fitting_latex(
     latex_precision: int,
     latex_group_size: int = 3,
     uncertainty_digits: int | None = None,
+    model_expression: object | None = None,
+    diagnostic_entries: list[tuple[str, str]] | None = None,
+    diagnostic_warnings: list[str] | None = None,
 ) -> str:
     """
     Generate LaTeX document for fitting results.
@@ -470,9 +494,13 @@ def _generate_fitting_latex(
             "\\sloppy",
             "\\section*{Fitting Results}",
             f"Model: \\texttt{{{latex_escape(best_label)}}}",
-            "",
         ]
     )
+    formula_summary = inline_formula_summary_or_none(model_expression)
+    if formula_summary is not None:
+        lines.append("")
+        lines.append(f"Formula: {formula_summary}")
+    lines.append("")
 
     # Parameters table
     if params:
@@ -589,8 +617,117 @@ def _generate_fitting_latex(
             ]
         )
 
+    diagnostic_entries = diagnostic_entries or []
+    if diagnostic_entries:
+        value_cells = [value for _, value in diagnostic_entries]
+        num_spec = (
+            calculate_dcolumn_format_for_column(value_cells, "fit_diagnostic_values")
+            if use_dcolumn
+            else siunitx_column_spec(value_cells)
+        )
+        col_spec = f"l {num_spec}"
+        lines.extend(
+            [
+                "",
+                "\\begin{table}[!ht]",
+                "\\centering",
+                "\\caption{Fitting Diagnostics}",
+                f"\\begin{{tabular}}{{{col_spec}}}",
+                "\\toprule",
+                "Diagnostic & \\multicolumn{1}{c}{Value} \\\\",
+                "\\midrule",
+            ]
+        )
+        for label, formatted in diagnostic_entries:
+            lines.append(f"{label} & {formatted} \\\\")
+        lines.extend(
+            [
+                "\\bottomrule",
+                "\\end{tabular}",
+                "\\end{table}",
+            ]
+        )
+    for warning in diagnostic_warnings or []:
+        lines.append(f"Diagnostic warning: {latex_escape(warning)}\\\\")
+
     lines.append("\\end{document}")
 
+    return "\n".join(lines)
+
+
+def _parse_comparison_candidates(raw_candidates: object) -> list[dict[str, Any]]:
+    if raw_candidates is None or not str(raw_candidates).strip():
+        raise ValueError("comparison candidates must be provided.")
+    try:
+        decoded = json.loads(str(raw_candidates))
+    except Exception as exc:
+        raise ValueError(f"comparison candidates must be valid JSON: {exc}") from exc
+
+    candidates = decoded.get("candidates") if isinstance(decoded, Mapping) else decoded
+    if isinstance(candidates, (str, bytes, bytearray, memoryview)) or not isinstance(candidates, Sequence):
+        raise ValueError("comparison candidates must be a JSON list or an object with a candidates list.")
+    normalized: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates, start=1):
+        if not isinstance(candidate, Mapping):
+            raise ValueError(f"comparison candidates[{index}] must be an object.")
+        normalized.append({str(key): value for key, value in candidate.items()})
+    if not normalized:
+        raise ValueError("comparison candidates must contain at least one candidate.")
+    return normalized
+
+
+def _generate_fitting_comparison_latex(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    use_dcolumn: bool,
+    caption: str | None,
+    latex_group_size: int,
+) -> str:
+    group_size = max(0, int(latex_group_size))
+    lines = [
+        "\\documentclass{article}",
+        "\\usepackage{ifxetex}",
+        "\\usepackage{ifluatex}",
+        "\\ifxetex",
+        "  \\usepackage{xeCJK}",
+        "\\else",
+        "  \\ifluatex",
+        "    \\usepackage{xeCJK}",
+        "  \\else",
+        "    \\usepackage[utf8]{inputenc}",
+        "    \\usepackage[T1]{fontenc}",
+        "  \\fi",
+        "\\fi",
+        "\\usepackage{amsmath}",
+        "\\usepackage{array}",
+        "\\usepackage{booktabs}",
+        "\\usepackage{geometry}",
+        "\\geometry{margin=1in}",
+    ]
+    if use_dcolumn:
+        lines.extend(
+            [
+                "\\usepackage{dcolumn}",
+                "\\newcolumntype{d}[1]{D{.}{.}{#1}}",
+            ]
+        )
+    lines.append("\\usepackage{siunitx}")
+    lines.append(build_sisetup_block(group_size=group_size, include_dcolumn=use_dcolumn).rstrip("\n"))
+    lines.extend(
+        [
+            "\\begin{document}",
+            "\\sloppy",
+            "\\section*{Selected Fit Comparison}",
+        ]
+    )
+    lines.extend(
+        build_fitting_comparison_latex_block(
+            rows,
+            use_dcolumn=use_dcolumn,
+            caption_text=caption or "Selected model comparison",
+        )
+    )
+    lines.append("\\end{document}")
     return "\n".join(lines)
 
 
@@ -674,14 +811,82 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                         )
                     var_mapping[name] = col
 
+    if fit_mode == "comparison":
+        comparison_candidates = _parse_comparison_candidates(form.get("fit_comparison_candidates"))
+        comparison_variable_map = dict(var_mapping) if var_mapping else {"x": x_column}
+        with _precision_guard(mp_precision):
+            request = build_fitting_comparison_request(
+                headers=headers,
+                data_rows=rows,
+                variable_map=comparison_variable_map,
+                target_column=target_column,
+                candidates=comparison_candidates,
+                sigma_rows=sigma_rows,
+                sigma_series=sigma_list,
+                weighted=use_weights,
+                weights=fit_weights,
+                precision_digits=mp_precision,
+                uncertainty_digits=result_digits,
+                request_id="web-fitting-comparison",
+            )
+            core_result = run_fitting_comparison(request)
+        if core_result.status is not ResultStatus.SUCCEEDED:
+            raise ValueError(_core_failure_message(core_result.payload, "Fitting comparison failed."))
+        snapshot = build_fitting_comparison_result_snapshot(
+            "fitting_comparison",
+            core_result.payload,
+            overview_state="complete",
+            precision={"compute_digits": mp_precision, "uncertainty_digits": result_digits},
+        )
+        outputs = render_fitting_comparison_snapshot_outputs(snapshot or {})
+        if outputs is None:
+            raise ValueError("fitting comparison output could not be rendered.")
+        summary_text, csv_rows, csv_headers = outputs
+        comparison_rows = build_comparison_table_rows_from_payload(core_result.payload)
+        latex_text = _generate_fitting_comparison_latex(
+            comparison_rows,
+            use_dcolumn=use_dcolumn,
+            caption=caption,
+            latex_group_size=latex_group_size,
+        )
+        comparison_warnings = _merged_core_warnings(core_result.payload, core_result.warnings)
+        pdf_b64 = None
+        if compile_pdf:
+            validated_engine = validate_latex_engine(latex_engine)
+            pdf_bytes = compile_latex_safe(latex_text, validated_engine, comparison_warnings, "fitting")
+            if pdf_bytes:
+                pdf_b64 = _encode_b64(pdf_bytes)
+        return FitResultBundle(
+            headers=headers,
+            x=x_vals,
+            y=y_vals,
+            sigma=sigma_list,
+            best_label="Selected fit comparison",
+            params=[],
+            metrics={},
+            diagnostic_correlations=[],
+            diagnostic_residuals=[],
+            comparison_rows=[dict(row) for row in comparison_rows],
+            plot_b64=None,
+            summary_text=summary_text,
+            warnings=comparison_warnings,
+            csv_data=_generate_csv_from_rows(csv_rows, headers=csv_headers),
+            mp_precision=mp_precision,
+            latex_text=latex_text,
+            pdf_b64=pdf_b64,
+        )
+
     params: list[dict[str, object]] = []
     metrics: dict[str, object] = {}
+    diagnostic_correlations: list[dict[str, object]] = []
+    diagnostic_residuals: list[dict[str, object]] = []
     summary_text = ""
     warnings: list[str] = []
     best_label = ""
     fit_res = None
     plot_b64 = None
     expression_for_csv: str | None = None
+    expression_for_latex: object | None = None
 
     def _collect_params(fit_res):
         collected = []
@@ -705,7 +910,7 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
         return collected
 
     def _collect_metrics(fit_res):
-        return {
+        metrics = {
             "chi2": _format_number(fit_res.chi2, 8),
             "reduced_chi2": _format_number(fit_res.reduced_chi2, 8),
             "aic": _format_number(fit_res.aic, 8),
@@ -713,6 +918,30 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
             "r2": _format_number(fit_res.r2, 8),
             "rmse": _format_number(fit_res.rmse, 8),
         }
+        for metric in fitting_diagnostic_view(fit_res).metrics:
+            metrics[metric.key] = _format_number(metric.value, 8)
+        return metrics
+
+    def _collect_diagnostic_display(fit_res):
+        view = fitting_diagnostic_view(fit_res)
+        correlations = [
+            {
+                "left": item.left,
+                "right": item.right,
+                "value": _format_number(item.value, 8),
+            }
+            for item in view.correlations
+        ]
+        residuals = [
+            {
+                "index": item.index,
+                "value": _format_number(item.value, 8),
+                "label": item.label,
+                "method": item.method,
+            }
+            for item in view.residuals
+        ]
+        return correlations, residuals
 
     def _render_plot(fit_res):
         if not generate_plots:
@@ -729,6 +958,8 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                 log_scale=log_scale if log_scale else None,
                 dpi=200,
                 show_curves=True,
+                diagnostics=fit_res.details.get("diagnostics") if isinstance(fit_res.details, dict) else None,
+                covariance=fit_res.covariance,
             )
             return _encode_b64(plot_bytes)
         except Exception:
@@ -827,9 +1058,11 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
             raise ValueError(_core_failure_message(core_result.payload, "Fitting failed."))
         fit_res = fitting_payload_to_fit_result(core_result.payload["fit_result"])
         warnings.extend(_merged_core_warnings(core_result.payload, core_result.warnings))
-        expression_for_csv = str(core_result.payload.get("expression") or model_expr)
+        expression_for_latex = core_result.payload.get("expression") if "expression" in core_result.payload else None
+        expression_for_csv = str(expression_for_latex or model_expr)
         params = _collect_params(fit_res)
         metrics = _collect_metrics(fit_res)
+        diagnostic_correlations, diagnostic_residuals = _collect_diagnostic_display(fit_res)
         summary_text = summarize_fit_result(fit_res)
         plot_b64 = _render_plot(fit_res)
 
@@ -840,6 +1073,28 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
             csv_headers = ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error", "note"]
             csv_data = _generate_csv_from_rows(fit_rows, headers=csv_headers)
 
+    diagnostic_latex_entries: list[tuple[str, str]] = []
+    diagnostic_latex_warnings: list[str] = []
+    if fit_res:
+        from statistics_utils import latex_escape
+
+        def _format_latex_diagnostic_value(value: object) -> str:
+            return format_value_for_latex_file(
+                mp.mpf(value),
+                None,
+                use_dcolumn=use_dcolumn,
+                latex_input_decimals=latex_precision or 10,
+                is_input=True,
+                latex_group_size=max(0, int(latex_group_size)),
+                uncertainty_digits=result_digits,
+            )
+
+        diagnostic_latex_entries, diagnostic_latex_warnings = build_fitting_diagnostic_latex_entries(
+            fit_res,
+            format_value=_format_latex_diagnostic_value,
+            escape_text=latex_escape,
+        )
+
     latex_text = _generate_fitting_latex(
         best_label=best_label,
         params=params,
@@ -849,6 +1104,9 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
         latex_precision=latex_precision or 10,
         latex_group_size=latex_group_size,
         uncertainty_digits=result_digits,
+        model_expression=expression_for_latex,
+        diagnostic_entries=diagnostic_latex_entries,
+        diagnostic_warnings=diagnostic_latex_warnings,
     )
 
     pdf_b64 = None
@@ -866,6 +1124,9 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
         best_label=best_label,
         params=params,
         metrics=metrics,
+        diagnostic_correlations=diagnostic_correlations,
+        diagnostic_residuals=diagnostic_residuals,
+        comparison_rows=[],
         plot_b64=plot_b64,
         summary_text=summary_text,
         warnings=warnings,

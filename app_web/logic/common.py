@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Mapping as MappingABC
+from collections.abc import Sequence as SequenceABC
 from decimal import Decimal, InvalidOperation
 import io
 import re
@@ -273,10 +274,14 @@ def _merged_core_warnings(
     payload_warnings = _core_payload_mapping(payload).get("warnings")
     if isinstance(payload_warnings, str):
         merged.append(payload_warnings)
-    else:
-        try:
-            merged.extend(str(item) for item in (payload_warnings or ()))
-        except TypeError:
-            pass
+    elif isinstance(payload_warnings, SequenceABC):
+        merged.extend(str(item) for item in payload_warnings)
     merged.extend(str(item) for item in (result_warnings or ()))
-    return merged
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for warning in merged:
+        if not warning or warning in seen:
+            continue
+        seen.add(warning)
+        deduped.append(warning)
+    return deduped

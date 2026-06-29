@@ -75,6 +75,7 @@
         <option value="pade" {% if mode == 'pade' %}selected{% endif %} data-i18n="fit.modePade">Padé 拟合</option>
         <option value="power_limit" {% if mode == 'power_limit' %}selected{% endif %} data-i18n="fit.modePowerLimit">幂律极限拟合</option>
         <option value="custom" {% if mode == 'custom' %}selected{% endif %} data-i18n="fit.modeCustom">自定义模型表达式</option>
+        <option value="comparison" {% if mode == 'comparison' %}selected{% endif %} data-i18n="fit.modeComparison">选定拟合比较</option>
       </select>
 
       <div class="method-block" data-fit-mode="custom" style="{% if mode == 'custom' %}display:block{% endif %}">
@@ -120,6 +121,12 @@
 
       <div class="method-block" data-fit-mode="power_limit" style="{% if mode == 'power_limit' %}display:block{% endif %}">
         <div class="hint" data-i18n="fit.powerLimitHint">使用模板 A*x**(-p)+C，p≥0.1，参数初值沿用内置默认值。</div>
+      </div>
+
+      <div class="method-block" data-fit-mode="comparison" style="{% if mode == 'comparison' %}display:block{% endif %}">
+        <label class="field-label" for="fit_comparison_candidates" data-i18n="fit.comparisonCandidatesLabel">选定拟合列表 (JSON)</label>
+        <textarea id="fit_comparison_candidates" name="fit_comparison_candidates" rows="10" spellcheck="false">{{ request.form.get('fit_comparison_candidates', '[\n  {\"candidate_id\": \"linear\", \"label\": \"Linear\", \"model_type\": \"polynomial\", \"poly_degree\": 1},\n  {\"candidate_id\": \"quadratic\", \"label\": \"Quadratic\", \"model_type\": \"polynomial\", \"poly_degree\": 2}\n]') }}</textarea>
+        <div class="hint" data-i18n="fit.comparisonCandidatesHint">只比较这里显式列出的拟合项；顺序按 JSON 列表保留。</div>
       </div>
 
       <label class="field-label" for="fit_log_scale" data-i18n="fit.logScaleLabel">坐标轴对数刻度</label>
@@ -201,6 +208,7 @@
 </form>
 
 {% if result %}
+{% set is_comparison = result.comparison_rows is defined and result.comparison_rows %}
 <section class="results">
   <div class="results-header">
     <div>
@@ -231,6 +239,59 @@
     </ul>
   {% endif %}
 
+  {% if is_comparison %}
+    <div class="card">
+      <div class="card-header">
+        <div class="label" data-i18n="fit.comparisonResultsLabel">选定拟合比较</div>
+        <div class="muted" data-i18n="fit.comparisonResultsHint">按输入顺序显示每个拟合项的状态和指标。</div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th data-i18n="fit.compareOrder">序号</th>
+              <th data-i18n="fit.compareId">ID</th>
+              <th data-i18n="fit.compareModel">模型</th>
+              <th data-i18n="fit.compareStatus">状态</th>
+              <th data-i18n="fit.compareParams">参数数</th>
+              <th>χ²</th>
+              <th>Reduced χ²</th>
+              <th>AIC</th>
+              <th>BIC</th>
+              <th>RMSE</th>
+              <th>R²</th>
+              <th data-i18n="fit.compareWarnings">提示</th>
+              <th data-i18n="fit.compareError">错误</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in result.comparison_rows %}
+              <tr>
+                <td>{{ row.order }}</td>
+                <td>{{ row.candidate_id }}</td>
+                <td>{{ row.model_label }}</td>
+                <td>{{ row.status }}</td>
+                <td>{{ row.free_parameters }}</td>
+                <td class="fmt-number" data-raw="{{ row.chi2 }}">{{ row.chi2 }}</td>
+                <td class="fmt-number" data-raw="{{ row.reduced_chi2 }}">{{ row.reduced_chi2 }}</td>
+                <td class="fmt-number" data-raw="{{ row.aic }}">{{ row.aic }}</td>
+                <td class="fmt-number" data-raw="{{ row.bic }}">{{ row.bic }}</td>
+                <td class="fmt-number" data-raw="{{ row.rmse }}">{{ row.rmse }}</td>
+                <td class="fmt-number" data-raw="{{ row.r2 }}">{{ row.r2 }}</td>
+                <td>{{ row.warnings }}</td>
+                <td>{{ row.error }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if result.csv_data %}
+        <div style="margin-top: 1rem;">
+          <a class="download" href="#" id="fit-csv-download-btn" data-i18n="fit.exportComparison">导出比较结果 CSV</a>
+        </div>
+      {% endif %}
+    </div>
+  {% else %}
   <div class="grid">
     <div class="card">
       <div class="card-header">
@@ -277,9 +338,77 @@
         <li>BIC: <span class="fmt-number" data-raw="{{ result.metrics.bic }}">{{ result.metrics.bic }}</span></li>
         <li>R²: <span class="fmt-number" data-raw="{{ result.metrics.r2 }}">{{ result.metrics.r2 }}</span></li>
         <li>RMSE: <span class="fmt-number" data-raw="{{ result.metrics.rmse }}">{{ result.metrics.rmse }}</span></li>
+        {% if result.metrics.chi_square_p_value is defined %}
+          <li>χ² p-value: <span class="fmt-number" data-raw="{{ result.metrics.chi_square_p_value }}">{{ result.metrics.chi_square_p_value }}</span></li>
+        {% endif %}
+        {% if result.metrics.max_standardized_residual is defined %}
+          <li>Max standardized residual: <span class="fmt-number" data-raw="{{ result.metrics.max_standardized_residual }}">{{ result.metrics.max_standardized_residual }}</span></li>
+        {% endif %}
       </ul>
     </div>
   </div>
+
+  {% if result.diagnostic_correlations or result.diagnostic_residuals %}
+    <div class="grid">
+      {% if result.diagnostic_correlations %}
+        <div class="card">
+          <div class="card-header">
+            <div class="label">Parameter Correlations</div>
+            <div class="muted">Covariance-derived correlation coefficients.</div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Parameter i</th>
+                  <th>Parameter j</th>
+                  <th>Correlation</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in result.diagnostic_correlations %}
+                  <tr>
+                    <td>{{ row.left }}</td>
+                    <td>{{ row.right }}</td>
+                    <td class="fmt-number" data-raw="{{ row.value }}">{{ row.value }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {% endif %}
+      {% if result.diagnostic_residuals %}
+        <div class="card">
+          <div class="card-header">
+            <div class="label">Standardized Residuals</div>
+            <div class="muted">Sigma, weight, or RMSE-normalized residual diagnostics.</div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Row</th>
+                  <th>Value</th>
+                  <th>Type</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in result.diagnostic_residuals %}
+                  <tr>
+                    <td>{{ row.index }}</td>
+                    <td class="fmt-number" data-raw="{{ row.value }}">{{ row.value }}</td>
+                    <td>{{ row.label }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {% endif %}
+    </div>
+  {% endif %}
+  {% endif %}
 
   {% if result.plot_b64 %}
     <div class="card">
@@ -362,6 +491,8 @@
     }
 
     const fitCsvBtn = document.getElementById('fit-csv-download-btn');
+    const serverFitCsvData = {% if result and result.csv_data %}{{ result.csv_data | tojson }}{% else %}null{% endif %};
+    const fitCsvFilename = {% if result and result.comparison_rows is defined and result.comparison_rows %}'fitting_comparison_results.csv'{% else %}'fit_results.csv'{% endif %};
     function tableToCsv(table, sci, digits) {
       const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim());
       const lines = [headers.join(',')];
@@ -383,15 +514,15 @@
       fitCsvBtn.addEventListener('click', (e) => {
         e.preventDefault();
         const table = document.querySelector('.table-wrap table');
-        if (!table) return;
+        if (!table && !serverFitCsvData) return;
         const sci = fmtSci && fmtSci.checked;
         const digits = fmtDigits ? parseInt(fmtDigits.value || '10', 10) : 10;
-        const csvData = tableToCsv(table, sci, digits);
+        const csvData = serverFitCsvData || tableToCsv(table, sci, digits);
         const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = 'fit_results.csv';
+        link.download = fitCsvFilename;
         link.click();
         URL.revokeObjectURL(url);
       });

@@ -245,7 +245,16 @@
     {% endif %}
   </div>
 
-  {% if result.plot_b64 %}
+  {% if result.plot_b64_list %}
+  <div class="card">
+    <div class="card-header"><div class="label" data-i18n="error.plotLabel">不确定度贡献分解</div></div>
+    <div class="plot-gallery">
+      {% for plot_b64 in result.plot_b64_list %}
+        <img src="data:image/png;base64,{{ plot_b64 }}" data-i18n-alt="error.plotAlt" alt="不确定度图" style="width: 100%; max-width: 600px; height: auto;">
+      {% endfor %}
+    </div>
+  </div>
+  {% elif result.plot_b64 %}
   <div class="card">
     <div class="card-header"><div class="label" data-i18n="error.plotLabel">不确定度贡献分解</div></div>
     <img src="data:image/png;base64,{{ result.plot_b64 }}" data-i18n-alt="error.plotAlt" alt="不确定度贡献图" style="width: 100%; max-width: 600px; height: auto;">

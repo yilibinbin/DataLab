@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +16,11 @@ from .._security_shim import (
 
 from datalab_core.results import ResultStatus
 from datalab_core.service_factory import create_core_session_service
-from datalab_core.uncertainty import build_uncertainty_request, uncertainty_payload_to_results
+from datalab_core.uncertainty import (
+    build_uncertainty_request,
+    normalize_uncertainty_propagation_config,
+    uncertainty_payload_to_results,
+)
 from data_extrapolation_latex_latest import (
     _precision_guard,
     detect_used_error_propagation_inputs,
@@ -32,7 +38,7 @@ from .common import (
     _latex_to_plain,
     _parse_int,
 )
-from .plots import _render_contribution_plot
+from .plots import _render_contribution_plot, _render_monte_carlo_distribution_plot
 
 
 @dataclass
@@ -44,10 +50,34 @@ class ErrorPropagationBundle:
     latex_text: str
     pdf_b64: str | None
     plot_b64: str | None
+    plot_b64_list: list[str] | None
     csv_data: str | None
     warnings: list[str]
     formula: str
     mp_precision: int | None
+
+
+def _form_text(form, name: str) -> str:
+    value = form.get(name) if hasattr(form, "get") else None
+    return str(value or "").strip()
+
+
+def _reject_active_units_on_web(form) -> None:
+    raw_config = _form_text(form, "error_units_config")
+    if raw_config:
+        try:
+            parsed = json.loads(raw_config)
+        except json.JSONDecodeError as exc:
+            raise ValueError("unit_evaluation_unsupported_on_web") from exc
+        if isinstance(parsed, Mapping):
+            enabled = bool(parsed.get("enabled"))
+            mode = str(parsed.get("mode") or "display_only").strip()
+            if enabled and mode != "display_only":
+                raise ValueError("unit_evaluation_unsupported_on_web")
+    mode = _form_text(form, "error_units_mode")
+    enabled = _is_checked(form, "error_units_enabled", default=False)
+    if enabled and (mode or "display_only") != "display_only":
+        raise ValueError("unit_evaluation_unsupported_on_web")
 
 
 def _format_uncertain_value(uv, digits: int = 10, uncertainty_digits: int | None = None) -> str:
@@ -118,8 +148,32 @@ def _render_error_latex(
         return tex_path.read_text(encoding="utf-8")
 
 
+def _should_collect_monte_carlo_distribution(
+    *,
+    propagation_method: str,
+    propagation_order: int,
+    mc_samples: int | None,
+    mc_seed: int | None,
+    generate_plots: bool,
+) -> bool:
+    if not generate_plots:
+        return False
+    try:
+        propagation = normalize_uncertainty_propagation_config(
+            method=propagation_method,
+            order=propagation_order,
+            mc_samples=mc_samples,
+            mc_seed=mc_seed,
+        )
+    except Exception:
+        return False
+    method = propagation.get("method") if isinstance(propagation, Mapping) else None
+    return method == "monte_carlo"
+
+
 @mpmath_synchronized
 def _run_error_propagation(data_text: str, constants_text: str, form, lang: str = "zh") -> ErrorPropagationBundle:
+    _reject_active_units_on_web(form)
     mp_precision = _parse_int(form.get("error_mp_precision"))
     latex_precision = _parse_int(form.get("error_latex_precision"))
     latex_group_size = _parse_int(form.get("error_latex_group_size"))
@@ -142,6 +196,7 @@ def _run_error_propagation(data_text: str, constants_text: str, form, lang: str 
         propagation_order = 1
     mc_samples = _parse_int(form.get("error_mc_samples"))
     mc_seed = _parse_int(form.get("error_mc_seed"))
+    generate_plots = _is_checked(form, "error_generate_plots", default=False)
 
     warnings: list[str] = []
     with _precision_guard(mp_precision):
@@ -160,6 +215,13 @@ def _run_error_propagation(data_text: str, constants_text: str, form, lang: str 
             propagation_order=propagation_order,
             mc_samples=mc_samples,
             mc_seed=mc_seed,
+            collect_monte_carlo_distribution=_should_collect_monte_carlo_distribution(
+                propagation_method=propagation_method,
+                propagation_order=propagation_order,
+                mc_samples=mc_samples,
+                mc_seed=mc_seed,
+                generate_plots=generate_plots,
+            ),
             precision_digits=mp_precision,
             uncertainty_digits=result_digits,
             request_id="web-uncertainty",
@@ -192,12 +254,27 @@ def _run_error_propagation(data_text: str, constants_text: str, form, lang: str 
             mp_precision=mp_precision,
         )
 
-    generate_plots = _is_checked(form, "error_generate_plots", default=False)
     plot_b64 = None
+    plot_b64_list = None
     if generate_plots:
+        encoded_plots: list[str] = []
         plot_bytes = _render_contribution_plot(results, lang=lang)
         if plot_bytes:
-            plot_b64 = _encode_b64(plot_bytes)
+            encoded_plots.append(_encode_b64(plot_bytes))
+        for idx, result in enumerate(results, 1):
+            distribution_summary = getattr(result, "monte_carlo_distribution", None)
+            if not distribution_summary:
+                continue
+            distribution_plot = _render_monte_carlo_distribution_plot(
+                distribution_summary,
+                lang=lang,
+                row_index=idx,
+            )
+            if distribution_plot:
+                encoded_plots.append(_encode_b64(distribution_plot))
+        if encoded_plots:
+            plot_b64_list = encoded_plots
+            plot_b64 = encoded_plots[0]
 
     pdf_b64 = None
     if compile_pdf:
@@ -216,6 +293,7 @@ def _run_error_propagation(data_text: str, constants_text: str, form, lang: str 
         latex_text=latex_text,
         pdf_b64=pdf_b64,
         plot_b64=plot_b64,
+        plot_b64_list=plot_b64_list,
         csv_data=csv_data,
         warnings=warnings,
         formula=formula,

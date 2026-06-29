@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import io
 
 import mpmath as mp
+
+from shared.error_contributions import (
+    aggregate_contribution_summary,
+    render_error_contribution_plot,
+    render_monte_carlo_distribution_plot,
+)
 
 
 def _render_extrapolation_plot(
@@ -21,7 +28,7 @@ def _render_extrapolation_plot(
         return None
 
     try:
-        from shared.plotting import plt  # centralised backend = Agg
+        from shared.plotting import apply_cjk_font, plt  # centralised backend = Agg
     except Exception:
         return None
 
@@ -57,6 +64,7 @@ def _render_extrapolation_plot(
         ax.set_title(title)
         ax.grid(True, alpha=0.3)
         ax.legend(frameon=False)
+        apply_cjk_font(ax)
         fig.tight_layout()
 
         buf = io.BytesIO()
@@ -73,60 +81,28 @@ def _render_contribution_plot(
     lang: str = "zh",
 ) -> bytes | None:
     """Generate uncertainty contribution breakdown plot (PNG bytes)."""
-    all_contributions: dict[str, mp.mpf] = {}
-    total_variance = mp.mpf("0")
-
-    for res in results:
-        if not hasattr(res, "contributions") or not res.contributions:
-            continue
-        for name, variance in res.contributions.items():
-            all_contributions[name] = all_contributions.get(name, mp.mpf("0")) + mp.mpf(variance)
-            total_variance += mp.mpf(variance)
-
-    if not all_contributions or total_variance <= 0:
+    summary = aggregate_contribution_summary(results)
+    total_variance = sum(mp.mpf(entry.get("variance", mp.mpf("0"))) for entry in summary)
+    if total_variance <= 0:
         return None
+    return render_error_contribution_plot(
+        summary,
+        lang,
+        title_en="Uncertainty contribution breakdown",
+        title_zh="不确定度贡献分解",
+    )
 
-    summary = []
-    for name, variance in all_contributions.items():
-        percent = float((variance / total_variance) * 100) if total_variance > 0 else 0.0
-        summary.append({"name": name, "percent": percent})
 
-    summary.sort(key=lambda x: x["percent"], reverse=True)
-    if not summary:
+def _render_monte_carlo_distribution_plot(
+    summary: object,
+    lang: str = "zh",
+    *,
+    row_index: int | None = None,
+) -> bytes | None:
+    if not isinstance(summary, Mapping):
         return None
-
-    try:
-        from shared.plotting import plt  # centralised backend = Agg
-    except Exception:
-        return None
-
-    try:
-        labels = [entry["name"] for entry in summary]
-        percents = [entry["percent"] for entry in summary]
-
-        fig, ax = plt.subplots(figsize=(6.0, 0.45 * len(summary) + 1.2), dpi=180)
-        y_pos = list(range(len(labels)))
-        bars = ax.barh(y_pos, percents, color="#4f6bed")
-        ax.invert_yaxis()
-        is_en = (lang or "").lower().startswith("en")
-        ax.set_xlabel("Uncertainty contribution (%)" if is_en else "不确定度贡献 (%)")
-        ax.set_xlim(0, max(100.0, (max(percents) if percents else 0) * 1.1))
-        ax.set_yticks(y_pos, labels)
-
-        for bar, pct in zip(bars, percents):
-            ax.text(bar.get_width() + 1.5, bar.get_y() + bar.get_height() / 2, f"{pct:.2f}%", va="center")
-
-        ax.grid(axis="x", alpha=0.3, linestyle="--")
-        ax.set_title("Uncertainty contribution breakdown" if is_en else "不确定度贡献分解")
-        fig.tight_layout()
-
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png")
-        plt.close(fig)
-        buf.seek(0)
-        return buf.getvalue()
-    except Exception:
-        return None
+    result = render_monte_carlo_distribution_plot(summary, lang, row_index=row_index)
+    return result if isinstance(result, bytes) or result is None else None
 
 
 def _render_statistics_plot(
@@ -136,72 +112,71 @@ def _render_statistics_plot(
     lang: str = "zh",
 ) -> bytes | None:
     """Render a statistics plot showing data points, mean, and error bars."""
-    if not values:
-        return None
     try:
-        from shared.plotting import plt  # centralised backend = Agg
+        from shared.plotting import (
+            render_statistics_plot_from_spec,
+            statistics_plot_spec_from_result,
+            StatisticsPlotLabels,
+        )
     except Exception:
         return None
 
-    try:
-        xs = list(range(1, len(values) + 1))
-        ys = [float(mp.mpf(v)) for v in values]
-        yerr = None
-        if sigmas and any(s is not None for s in sigmas):
-            yerr = [abs(float(mp.mpf(s))) if s is not None else 0.0 for s in sigmas]
-
-        mean_val = stats_result.get("mean", None)
-        std_mean = stats_result.get("std_mean", None)
-        mean_f = float(mp.mpf(mean_val)) if mean_val is not None else None
-        std_mean_f = abs(float(mp.mpf(std_mean))) if std_mean is not None else None
-
-        is_en = (lang or "").lower().startswith("en")
-        label_data = "Data" if is_en else "数据"
-        label_mean = "Mean" if is_en else "平均值"
-        label_mean_band = "Mean ± standard error" if is_en else "平均值±标准误差"
-        xlabel = "Point index" if is_en else "点序号"
-        ylabel = "Value" if is_en else "数值"
-        title = "Statistical mean" if is_en else "统计平均"
-
-        fig, ax = plt.subplots(figsize=(6.0, 4.0), dpi=180)
-        if yerr:
-            ax.errorbar(
-                xs,
-                ys,
-                yerr=yerr,
-                fmt="o-",
-                color="#1f77b4",
-                ecolor="#555555",
-                capsize=4,
-                label=label_data,
-            )
-        else:
-            ax.plot(xs, ys, "o-", color="#1f77b4", label=label_data)
-
-        if mean_f is not None:
-            ax.axhline(mean_f, color="#d62728", linestyle="--", label=label_mean)
-            if std_mean_f is not None and std_mean_f > 0:
-                ax.fill_between(
-                    [min(xs) - 0.2, max(xs) + 0.2],
-                    mean_f - std_mean_f,
-                    mean_f + std_mean_f,
-                    color="#d62728",
-                    alpha=0.15,
-                    label=label_mean_band,
-                )
-
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.grid(True, alpha=0.3)
-        ax.legend(frameon=False)
-        fig.tight_layout()
-
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png")
-        plt.close(fig)
-        buf.seek(0)
-        return buf.getvalue()
-    except Exception:
+    is_en = (lang or "").lower().startswith("en")
+    spec = statistics_plot_spec_from_result(
+        values,
+        sigmas,
+        stats_result,
+        StatisticsPlotLabels(
+            data="Data" if is_en else "数据",
+            mean="Mean" if is_en else "平均值",
+            mean_band="Mean ± standard error" if is_en else "平均值±标准误差",
+            x_axis="Point index" if is_en else "点序号",
+            y_axis="Value" if is_en else "数值",
+            title="Statistical mean" if is_en else "统计平均",
+        ),
+    )
+    if spec is None:
         return None
+    return render_statistics_plot_from_spec(spec)
 
+
+def _render_statistics_plots(
+    values: list[mp.mpf],
+    sigmas: list[mp.mpf | None] | None,
+    stats_result: dict[str, object],
+    lang: str = "zh",
+) -> list[bytes]:
+    """Render all supported statistics plots."""
+    try:
+        from shared.plotting import (
+            render_statistics_plots_from_specs,
+            statistics_plot_specs_from_result,
+            StatisticsPlotLabels,
+        )
+    except Exception:
+        return []
+
+    is_en = (lang or "").lower().startswith("en")
+    specs = statistics_plot_specs_from_result(
+        values,
+        sigmas,
+        stats_result,
+        StatisticsPlotLabels(
+            data="Data" if is_en else "数据",
+            mean="Mean" if is_en else "平均值",
+            mean_band="Mean ± standard error" if is_en else "平均值±标准误差",
+            x_axis="Point index" if is_en else "点序号",
+            y_axis="Value" if is_en else "数值",
+            title="Statistical mean" if is_en else "统计平均",
+            median="Median" if is_en else "中位数",
+            histogram_title="Histogram" if is_en else "直方图",
+            box_title="Box plot" if is_en else "箱线图",
+            qq_title="Normal QQ plot" if is_en else "正态 QQ 图",
+            weighted_residual_title="Weighted residuals" if is_en else "加权残差",
+            frequency_axis="Frequency" if is_en else "频数",
+            theoretical_quantile_axis="Theoretical normal quantile" if is_en else "理论正态分位数",
+            sample_quantile_axis="Sample standardized quantile" if is_en else "样本标准化分位数",
+            residual_axis="Standardized residual" if is_en else "标准化残差",
+        ),
+    )
+    return render_statistics_plots_from_specs(specs)
