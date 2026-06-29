@@ -52,3 +52,6 @@ test_tex.pdf
 
 # uv lockfile — project installs via requirements*.txt / pip, not uv.
 uv.lock
+
+# Diff dumps written by external review tools (codex/antigravity companions).
+*.patch
