@@ -128,6 +128,55 @@ def test_run_fitting_comparison_returns_rows_and_serialized_fit_results() -> Non
     assert mp.almosteq(fits["linear"].params["b1"], mp.mpf("2"), abs_eps=mp.mpf("1e-40"))
 
 
+def test_run_fitting_comparison_serializes_at_requested_precision_under_low_ambient_dps() -> None:
+    # Regression: mp.dps is process-global. Serialization (serialize_fitting_comparison_result
+    # -> mp.nstr(mp.mpf(value), n=keep_digits)) must run at the request's precision, not the
+    # ambient mp.dps left by a prior job. A non-terminating slope (1/3) exposes truncation.
+    from datalab_core.fitting_comparison import (
+        build_fitting_comparison_request,
+        run_fitting_comparison,
+    )
+    from datalab_core.results import ResultStatus
+
+    request = build_fitting_comparison_request(
+        headers=("x", "y"),
+        # y = x/3 -> the linear-fit slope b1 is 1/3 = 0.3333... (non-terminating)
+        data_rows=(("0", "0"), ("3", "1"), ("6", "2"), ("9", "3")),
+        variable_map={"x": "x"},
+        target_column="y",
+        candidates=(
+            {"candidate_id": "linear", "label": "Linear", "model_type": "polynomial", "poly_degree": 1},
+        ),
+        precision_digits=60,
+    )
+
+    previous_dps = mp.mp.dps
+    mp.mp.dps = 15  # simulate a fresh/leaked worker thread at the default precision
+    try:
+        envelope = run_fitting_comparison(request)
+    finally:
+        restored_dps = mp.mp.dps
+        mp.mp.dps = previous_dps
+
+    assert envelope.status is ResultStatus.SUCCEEDED
+    # The guard must restore the ambient dps on exit (no leak).
+    assert restored_dps == 15
+
+    entry = envelope.payload["entries"][0]
+    serialized = entry["fit_result"]
+    # The slope b1 == 1/3 (non-terminating). It must be serialized correctly to the
+    # requested precision, not re-rounded to ~15 digits under the ambient dps. Compare
+    # the round-tripped value to 1/3 at high precision: ~16-digit truncation would
+    # leave an error around 1e-16, far above the 1e-40 tolerance below.
+    with mp.workdps(80):
+        b1_value = mp.mpf(str(serialized["params"]["b1"]))
+        one_third = mp.mpf(1) / mp.mpf(3)
+        assert mp.almosteq(b1_value, one_third, abs_eps=mp.mpf("1e-40")), (
+            f"b1 serialized as {serialized['params']['b1']!r}; "
+            "precision guard missing around serialization (truncated to ambient dps)"
+        )
+
+
 def test_fitting_comparison_payload_formatter_accepts_result_envelope_payload() -> None:
     from datalab_core.fitting_comparison import build_fitting_comparison_request, run_fitting_comparison
     from fitting.comparison_formatting import build_comparison_table_rows_from_payload

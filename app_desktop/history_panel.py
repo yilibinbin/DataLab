@@ -210,7 +210,13 @@ class HistoryPanel(QWidget):
         before_semantic = getattr(self._owner, "_last_result_semantic_snapshot", None)
         before_kind = getattr(self._owner, "_last_result_semantic_snapshot_kind", "")
 
-        restore_history_entry_result(self._owner, entry)
+        try:
+            restore_history_entry_result(self._owner, entry)
+        except (HistoryValidationError, TypeError) as exc:
+            self.message_label.setText(
+                self._tr(f"恢复历史结果失败：{exc}", f"Restore failed: {exc}")
+            )
+            return False
 
         store_changed = False
         if not is_current:

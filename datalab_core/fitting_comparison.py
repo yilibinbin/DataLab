@@ -21,6 +21,7 @@ from fitting.model_comparison import (
 )
 from fitting.problem import ModelProblem
 from shared.fitting_engine import deserialize_fit_result, serialize_fit_result
+from shared.precision import precision_guard
 
 from ._payload import normalize_json_payload
 from .fitting import DEFAULT_FITTING_PRECISION_DIGITS, build_fitting_request
@@ -111,24 +112,30 @@ def run_fitting_comparison(request: ComputeJobRequest) -> ResultEnvelope:
     )
     variable_data = _mapping_or_empty(request.inputs.get("variable_data"))
     variable_names = tuple(str(name) for name in variable_data) or ("x",)
-    result = _compare_candidate_payloads(
-        candidates_payload,
-        variable_names=variable_names,
-        x_data=_mp_sequence(request.inputs.get("x_series"), field_name="x_series"),
-        y_data=_mp_sequence(request.inputs.get("y_series"), field_name="y_series"),
-        precision=precision,
-        weights=_optional_mpf_sequence(request.inputs.get("weights"), field_name="weights"),
-        data_sigmas=_optional_mpf_or_none_sequence(
-            request.inputs.get("sigma_series"),
-            field_name="sigma_series",
-        ),
-        variable_data={
-            str(name): _mp_sequence(values, field_name=f"variable_data.{name}")
-            for name, values in variable_data.items()
-        },
-    )
-    keep_digits = max(int(precision) + 10, 30)
-    payload = serialize_fitting_comparison_result(result, keep_digits=keep_digits)
+    # mp.dps is process-global; serialization below re-rounds high-precision mpf values
+    # to the active dps. Guard the whole compute+serialize span so results keep the
+    # requested precision regardless of the ambient dps left by a prior job (desktop
+    # workers run on shared QThreads). The web path already wraps this call in its own
+    # guard; nested precision_guard is safe (it save/restores).
+    with precision_guard(precision):
+        result = _compare_candidate_payloads(
+            candidates_payload,
+            variable_names=variable_names,
+            x_data=_mp_sequence(request.inputs.get("x_series"), field_name="x_series"),
+            y_data=_mp_sequence(request.inputs.get("y_series"), field_name="y_series"),
+            precision=precision,
+            weights=_optional_mpf_sequence(request.inputs.get("weights"), field_name="weights"),
+            data_sigmas=_optional_mpf_or_none_sequence(
+                request.inputs.get("sigma_series"),
+                field_name="sigma_series",
+            ),
+            variable_data={
+                str(name): _mp_sequence(values, field_name=f"variable_data.{name}")
+                for name, values in variable_data.items()
+            },
+        )
+        keep_digits = max(int(precision) + 10, 30)
+        payload = serialize_fitting_comparison_result(result, keep_digits=keep_digits)
     payload["comparison"] = True
     payload["precision_used"] = int(precision)
     payload["candidate_count"] = len(candidates_payload)

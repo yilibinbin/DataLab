@@ -589,6 +589,42 @@ def test_history_panel_restores_selected_entry_via_semantic_snapshot(qtbot: Any)
     assert window._workspace_snapshot_only is True
 
 
+def test_history_panel_restore_unsupported_snapshot_reports_error_without_raising(
+    qtbot: Any,
+) -> None:
+    window = _window(qtbot)
+    current = _entry("h1", "Current result", "1.25")
+    recent = _entry("h2", "Older result", "2.50")
+    window._apply_language("en")
+    # An entry whose family is outside the supported renderer set (e.g. a legacy,
+    # foreign, or future-version .datalab file). Load-time validation only requires
+    # non-empty strings, so such an entry loads and is selectable, but
+    # restore_history_entry_result raises HistoryValidationError because
+    # _semantic_snapshot_matches_kind rejects the unknown family.
+    unsupported_semantic = dict(recent.semantic_snapshot)
+    unsupported_semantic["family"] = "extrapolation"
+    unsupported_semantic["kind"] = "extrapolation_richardson"
+    recent = HistoryEntry(
+        entry_id=recent.entry_id,
+        label=recent.label,
+        created_at=recent.created_at,
+        pinned=recent.pinned,
+        semantic_snapshot=unsupported_semantic,
+    )
+    window._workspace_history_store = HistoryStore(current=current, entries=(recent,))
+    window._workspace_dirty = False
+    window.refresh_workbench_result_rail()
+    panel = window.workbench_history_panel
+
+    panel.entry_list.setCurrentRow(1)
+
+    # Must not raise into the Qt event loop; it surfaces a message and returns False.
+    assert panel.restore_selected() is False
+    assert window._workspace_dirty is False
+    assert window._workspace_history_store.current.entry_id == "h1"
+    assert "restore" in panel.message_label.text().lower()
+
+
 def test_history_panel_refreshes_after_workspace_restore(qtbot: Any) -> None:
     from app_desktop.workspace_controller import restore_workspace
 
