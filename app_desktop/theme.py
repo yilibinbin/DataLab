@@ -5,6 +5,29 @@ from PySide6.QtWidgets import QApplication
 PANEL_MARGIN = 10
 SECTION_SPACING = 8
 CONTROL_SPACING = 6
+
+# --- Unified spacing scale (px) ---
+# One source of truth for inter-control / card / gutter spacing so panels stop
+# hardcoding divergent literals. Legacy names above remain valid aliases.
+SPACE_XS = 4    # deliberately tight control rows
+SPACE_SM = 6    # default control-row gap   (== CONTROL_SPACING)
+SPACE_MD = 8    # section/card row gap       (== SECTION_SPACING)
+SPACE_LG = 12   # workspace gutter           (== WORKSPACE_GUTTER)
+
+# Inner titled-box content margin (replaces ad-hoc 8,8,8,8).
+INNER_BOX_MARGIN = SPACE_MD            # 8
+# Card content margins (replaces ad-hoc 12,10,12,12).
+CARD_MARGIN_H = SPACE_LG               # 12
+CARD_MARGIN_V = PANEL_MARGIN           # 10
+
+# Vertical space a *styled* QGroupBox (one whose QSS sets a border) must reserve
+# above its content so the title band never overlaps the first control. Must be
+# >= the rendered title height (~19px on this theme). Any QSS rule that gives a
+# QGroupBox a border MUST pair it with `margin-top: {GROUPBOX_TITLE_CLEARANCE}px`
+# and a `QGroupBox::title { subcontrol-origin: margin; ... }` block, or the
+# title overlaps the content (see the canvas rule below).
+GROUPBOX_TITLE_CLEARANCE = 18
+
 MIN_LEFT_PANEL_WIDTH = 420
 SUPPORTED_MIN_WINDOW_WIDTH = 1280
 TOOLBAR_HEIGHT = 54
@@ -703,6 +726,19 @@ QFrame#workbench_result_rail QWidget#workbench_result_overview_panel {{
     border: 1px solid {border};
     border-radius: {REGION_RADIUS}px;
     background: {panel_bg};
+}}
+/* A styled QGroupBox border drops Qt's native title-band reservation, so the
+   title overlaps the first control. Reserve the band (mirrors the config_card
+   rule) for every titled box reparented into the canvas. */
+QFrame#workbench_workspace_canvas_content QGroupBox {{
+    margin-top: {GROUPBOX_TITLE_CLEARANCE}px;
+}}
+QFrame#workbench_workspace_canvas_content QGroupBox::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 8px;
+    top: 0px;
+    padding: 0 3px;
 }}
 QFrame#workbench_workspace_canvas_content QLabel,
 QFrame#workbench_config_rail_content QLabel,
