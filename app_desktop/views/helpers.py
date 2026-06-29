@@ -5,16 +5,21 @@ from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QGroupBox,
     QHeaderView,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSizePolicy,
     QTableWidget,
     QVBoxLayout,
+    QWidget,
 )
 
+from app_desktop.constants_editor import ConstantsEditor
 from app_desktop.formula_preview import open_formula_preview_dialog
 from app_desktop.theme import table_style, workbench_section_card_style
 from shared.ui_schema import FormFieldSpec
@@ -92,6 +97,168 @@ def make_small_help_button() -> QPushButton:
     button.setFocusPolicy(Qt.NoFocus)
     button.setFixedWidth(24)
     return button
+
+
+def _unit_editor(
+    owner: Any,
+    *,
+    schema_key: str,
+    tooltip_zh: str,
+    tooltip_en: str,
+) -> ConstantsEditor:
+    editor = ConstantsEditor(min_rows=2, checked=True, checkbox_text="")
+    register_constant_headers(
+        owner,
+        editor.set_table_headers,
+        zh_headers=("符号", "单位"),
+        en_headers=("Symbol", "Unit"),
+    )
+    editor.setToolTip(_translate_owner(owner, tooltip_zh, tooltip_en))
+    editor.setProperty("datalab_schema_key", schema_key)
+    owner._register_text(editor, tooltip_zh, tooltip_en, "setToolTip")
+    apply_equal_column_stretch(editor.table_view)
+    editor.table_view.setStyleSheet(get_table_style())
+    fit_table_height_to_contents(editor.table_view, min_rows=2, max_rows=5)
+    return editor
+
+
+def make_display_unit_controls(
+    owner: Any,
+    *,
+    attr_prefix: str,
+    schema_prefix: str,
+    title_zh: str = "单位标注",
+    title_en: str = "Units",
+    input_label_zh: str = "输入单位：",
+    input_label_en: str = "Input units:",
+    input_tooltip_zh: str = "输入列的单位。符号使用数据列名或规范化后的变量名。",
+    input_tooltip_en: str = "Units for input columns. Symbols use data column names or canonical variable names.",
+    include_constants: bool = False,
+    constants_label_zh: str = "常数单位：",
+    constants_label_en: str = "Constant units:",
+    constants_tooltip_zh: str = "常数的单位。符号必须与常数表中的常数名一致。",
+    constants_tooltip_en: str = "Units for constants. Symbols must match names in the constants table.",
+    include_parameters: bool = False,
+    parameters_label_zh: str = "参数单位：",
+    parameters_label_en: str = "Parameter units:",
+    parameters_tooltip_zh: str = "拟合参数的单位。符号必须与参数列表中的参数名一致。",
+    parameters_tooltip_en: str = "Units for fitting parameters. Symbols must match names in the parameter table.",
+    output_label_zh: str = "输出 result 单位：",
+    output_label_en: str = "Output result unit:",
+    output_tooltip_zh: str = "可选。只用于结果、LaTeX 和图片中的单位显示，不改变数值计算。",
+    output_tooltip_en: str = "Optional. Used only for result, LaTeX, and plot labels; it does not change numeric computation.",
+) -> QGroupBox:
+    """Create shared display-only unit annotation controls.
+
+    Error propagation still owns its validate-expression UI. Other families use
+    this display-only control so unit labels stay metadata instead of changing
+    calculation semantics.
+    """
+
+    box = QGroupBox(_translate_owner(owner, title_zh, title_en))
+    owner._register_text(box, title_zh, title_en, "setTitle")
+    layout = QVBoxLayout(box)
+    layout.setContentsMargins(8, 8, 8, 8)
+    layout.setSpacing(6)
+
+    checkbox = QCheckBox(_translate_owner(owner, "启用单位标注", "Enable units"))
+    checkbox.setProperty("datalab_schema_key", f"{schema_prefix}.units.enabled")
+    checkbox.setToolTip(
+        _translate_owner(
+            owner,
+            "启用后，仅保存并渲染单位标注；不会改变数值计算或执行量纲校验。",
+            "When enabled, unit annotations are stored and rendered only; numeric computation and dimensional validation are unchanged.",
+        )
+    )
+    owner._register_text(checkbox, "启用单位标注", "Enable units")
+    owner._register_text(
+        checkbox,
+        "启用后，仅保存并渲染单位标注；不会改变数值计算或执行量纲校验。",
+        "When enabled, unit annotations are stored and rendered only; numeric computation and dimensional validation are unchanged.",
+        "setToolTip",
+    )
+
+    header = QHBoxLayout()
+    header.addWidget(checkbox)
+    header.addStretch()
+    layout.addLayout(header)
+
+    body = QWidget()
+    body_layout = QVBoxLayout(body)
+    body_layout.setContentsMargins(0, 0, 0, 0)
+    body_layout.setSpacing(6)
+
+    input_label = QLabel(_translate_owner(owner, input_label_zh, input_label_en))
+    owner._register_text(input_label, input_label_zh, input_label_en)
+    inputs_editor = _unit_editor(
+        owner,
+        schema_key=f"{schema_prefix}.units.inputs",
+        tooltip_zh=input_tooltip_zh,
+        tooltip_en=input_tooltip_en,
+    )
+    body_layout.addWidget(input_label)
+    body_layout.addWidget(inputs_editor)
+
+    constants_editor = None
+    if include_constants:
+        constants_label = QLabel(_translate_owner(owner, constants_label_zh, constants_label_en))
+        owner._register_text(constants_label, constants_label_zh, constants_label_en)
+        constants_editor = _unit_editor(
+            owner,
+            schema_key=f"{schema_prefix}.units.constants",
+            tooltip_zh=constants_tooltip_zh,
+            tooltip_en=constants_tooltip_en,
+        )
+        body_layout.addWidget(constants_label)
+        body_layout.addWidget(constants_editor)
+
+    parameters_editor = None
+    if include_parameters:
+        parameters_label = QLabel(_translate_owner(owner, parameters_label_zh, parameters_label_en))
+        owner._register_text(parameters_label, parameters_label_zh, parameters_label_en)
+        parameters_editor = _unit_editor(
+            owner,
+            schema_key=f"{schema_prefix}.units.parameters",
+            tooltip_zh=parameters_tooltip_zh,
+            tooltip_en=parameters_tooltip_en,
+        )
+        body_layout.addWidget(parameters_label)
+        body_layout.addWidget(parameters_editor)
+
+    output_row = QHBoxLayout()
+    output_label = QLabel(_translate_owner(owner, output_label_zh, output_label_en))
+    owner._register_text(output_label, output_label_zh, output_label_en)
+    output_row.addWidget(output_label)
+    output_edit = QLineEdit()
+    output_edit.setPlaceholderText(_translate_owner(owner, "例如 m", "e.g. m"))
+    output_edit.setProperty("datalab_schema_key", f"{schema_prefix}.units.outputs.result")
+    output_edit.setToolTip(_translate_owner(owner, output_tooltip_zh, output_tooltip_en))
+    owner._register_text(output_edit, "例如 m", "e.g. m", "setPlaceholderText")
+    owner._register_text(output_edit, output_tooltip_zh, output_tooltip_en, "setToolTip")
+    output_row.addWidget(output_edit)
+    body_layout.addLayout(output_row)
+
+    layout.addWidget(body)
+
+    setattr(owner, f"{attr_prefix}_units_box", box)
+    setattr(owner, f"{attr_prefix}_units_enabled_checkbox", checkbox)
+    setattr(owner, f"{attr_prefix}_units_body", body)
+    setattr(owner, f"{attr_prefix}_units_inputs_editor", inputs_editor)
+    if constants_editor is not None:
+        setattr(owner, f"{attr_prefix}_units_constants_editor", constants_editor)
+    if parameters_editor is not None:
+        setattr(owner, f"{attr_prefix}_units_parameters_editor", parameters_editor)
+    setattr(owner, f"{attr_prefix}_units_output_edit", output_edit)
+
+    def update_controls() -> None:
+        enabled = checkbox.isChecked()
+        body.setVisible(enabled)
+        body.setEnabled(enabled)
+
+    setattr(owner, f"_update_{attr_prefix}_units_controls", update_controls)
+    checkbox.toggled.connect(lambda *_args: update_controls())
+    update_controls()
+    return box
 
 
 def make_workbench_section_card_view(
@@ -231,12 +398,44 @@ def remove_parameter_table_rows(table: Any) -> None:
     table.delete_rows(selected_rows)
 
 
+def _populated_row_count(table: QTableWidget) -> int:
+    count = 0
+    for row in range(table.rowCount()):
+        if any(
+            table.item(row, col) is not None and table.item(row, col).text().strip()
+            for col in range(table.columnCount())
+        ):
+            count = row + 1
+    return count
+
+
+def fit_table_height_to_contents(table: QTableWidget, min_rows: int = 1, max_rows: int = 8) -> None:
+    if table is None:
+        return
+    row_height = table.rowHeight(0) if table.rowCount() > 0 else 24
+    if row_height <= 0:
+        row_height = 24
+    header = table.horizontalHeader()
+    header_height = 0
+    if not header.isHidden():
+        header_height = header.height() or 25
+        if header_height <= 0:
+            header_height = 25
+    visible_rows = max(min_rows, min(_populated_row_count(table) + 1, max_rows))
+    frame_width = table.frameWidth() * 2
+    total_height = header_height + (visible_rows * row_height) + frame_width + 4
+    table.setMinimumHeight(total_height)
+    table.setMaximumHeight(total_height)
+
+
 __all__ = [
     "apply_equal_column_stretch",
     "add_detected_rows_table_row",
     "add_parameter_table_row",
+    "fit_table_height_to_contents",
     "get_table_style",
     "make_formula_preview_button",
+    "make_display_unit_controls",
     "make_small_help_button",
     "make_workbench_section_card_view",
     "open_formula_preview",

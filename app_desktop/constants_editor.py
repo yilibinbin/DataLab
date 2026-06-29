@@ -50,6 +50,8 @@ class ConstantsEditor(QWidget):
         numeric_mode: str = "uncertainty",
     ) -> None:
         super().__init__(parent)
+        if numeric_mode not in {"uncertainty", "mpmath"}:
+            raise ValueError(f"Unsupported constants numeric mode: {numeric_mode}")
         self._min_rows = max(1, int(min_rows))
         self._syncing = False
         self._numeric_mode = numeric_mode
@@ -57,6 +59,11 @@ class ConstantsEditor(QWidget):
         self._text_source_table_revision = -1
         self._inputs_visible = True
         self._constructed = False
+        self._add_row_label = "+ 行"
+        self._remove_row_label = "- 行"
+        self._clear_label = "清除"
+        self._table_view_label = "表格视图"
+        self._text_view_label = "文本视图"
         self.setProperty("datalab_constants_card", True)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setMinimumHeight(52)
@@ -72,6 +79,7 @@ class ConstantsEditor(QWidget):
         self.checkbox = QCheckBox(checkbox_text)
         self.checkbox.setChecked(bool(checked))
         self.checkbox.toggled.connect(self._on_checked_changed)
+        self.checkbox.hide()
         header_layout.addWidget(self.checkbox)
         self.help_button = _HelpButton("?")
         self.help_button.setFlat(True)
@@ -135,6 +143,25 @@ class ConstantsEditor(QWidget):
         self.style().unpolish(self)
         self.style().polish(self)
 
+    def set_control_labels(
+        self,
+        *,
+        add_row: str,
+        remove_row: str,
+        clear: str,
+        table_view: str,
+        text_view: str,
+    ) -> None:
+        self._add_row_label = add_row
+        self._remove_row_label = remove_row
+        self._clear_label = clear
+        self._table_view_label = table_view
+        self._text_view_label = text_view
+        self.add_button.setText(add_row)
+        self.remove_button.setText(remove_row)
+        self.clear_button.setText(clear)
+        self._update_toggle_label()
+
     def setChecked(self, checked: bool) -> None:  # noqa: N802 - Qt-style API
         self.checkbox.setChecked(bool(checked))
 
@@ -153,13 +180,23 @@ class ConstantsEditor(QWidget):
         set_accessible_description(self.text_view, text)
 
     def isChecked(self) -> bool:  # noqa: N802 - Qt-style API
-        return bool(self.checkbox.isChecked())
+        try:
+            return bool(self.constants_dict(validate=False))
+        except Exception:
+            return False
 
     def using_text_view(self) -> bool:
         return self.stack.currentIndex() == _TEXT_VIEW
 
     def numeric_mode(self) -> str:
         return self._numeric_mode
+
+    def set_numeric_mode(self, mode: str) -> None:
+        if mode not in {"uncertainty", "mpmath"}:
+            raise ValueError(f"Unsupported constants numeric mode: {mode}")
+        if self._numeric_mode != mode:
+            self._numeric_mode = mode
+            self._emit_changed()
 
     def use_text_view(self, enabled: bool) -> None:
         if enabled and self.stack.currentIndex() != _TEXT_VIEW:
@@ -175,6 +212,9 @@ class ConstantsEditor(QWidget):
     def set_inputs_visible(self, visible: bool) -> None:
         self._inputs_visible = bool(visible)
         self._apply_inputs_visibility()
+
+    def inputs_visible(self) -> bool:
+        return self._inputs_visible
 
     def rows(self) -> list[dict[str, str]]:
         if self.using_text_view():
@@ -227,7 +267,7 @@ class ConstantsEditor(QWidget):
         self._emit_changed()
 
     def _apply_inputs_visibility(self) -> None:
-        visible = self._inputs_visible and self.checkbox.isChecked()
+        visible = self._inputs_visible
         self.controls_widget.setVisible(visible)
         self.stack.setVisible(visible)
         self.controls_widget.setEnabled(visible)
@@ -272,7 +312,7 @@ class ConstantsEditor(QWidget):
         self._emit_changed()
 
     def _update_toggle_label(self) -> None:
-        self.view_toggle_button.setText("表格视图" if self.using_text_view() else "文本视图")
+        self.view_toggle_button.setText(self._table_view_label if self.using_text_view() else self._text_view_label)
 
     def _table_rows(self) -> list[dict[str, str]]:
         rows: list[dict[str, str]] = []

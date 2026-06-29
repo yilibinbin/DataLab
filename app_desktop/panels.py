@@ -84,6 +84,7 @@ from app_desktop.workbench_formula_panel import (
     schedule_formula_workspace_refresh,
 )
 from app_desktop.workbench_results import build_result_overview
+from app_desktop.history_panel import build_history_panel
 from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS, ModeKey
 from app_desktop.workbench_variable_panel import (
     build_variable_workspace_panel,
@@ -324,7 +325,6 @@ def build_ui(self):
     self._left_scroll = self.workbench_config_rail
 
     self._build_left_panel()
-    reparent_widget(self.workbench_workspace_layout, self.manual_box, stretch=2)
     self.workbench_formula_panel = build_formula_workspace_panel(self)
     self.workbench_workspace_layout.addWidget(self.workbench_formula_panel)
     populate_formula_workspace_panel(self)
@@ -420,10 +420,20 @@ def _bind_workbench_state_roles(self) -> None:
     self.custom_params_table.setObjectName("custom_params_table")
     self.implicit_params_table.setObjectName("implicit_params_table")
     self.root_unknowns_table.setObjectName("root_unknowns_table")
-    self.error_constants_editor.setObjectName("error_constants_editor")
-    self.custom_constants_editor.setObjectName("custom_constants_editor")
-    self.implicit_constants_editor.setObjectName("implicit_constants_editor")
-    self.root_constants_editor.setObjectName("root_constants_editor")
+    self.input_constants_editor.setObjectName("input_constants_editor")
+    shared_constants_editor = self.input_constants_editor
+    for editor_name in (
+        "error_constants_editor",
+        "custom_constants_editor",
+        "implicit_constants_editor",
+        "root_constants_editor",
+    ):
+        editor = getattr(self, editor_name)
+        if editor is not shared_constants_editor:
+            editor.setObjectName(editor_name)
+
+    self.input_constants_editor.setProperty("datalab_state_role", "input_constants_owner")
+    bind_model_path(self.input_constants_editor, model_path_for_state_role("input_constants_owner"))
 
     self.manual_box.setProperty("datalab_state_role", "manual_data_owner")
     bind_model_path(self.manual_box, model_path_for_state_role("manual_data_owner"))
@@ -692,8 +702,8 @@ def build_left_panel(self):
 
     refresh_workbench_config_cards(self)
 
-    self.left_layout.addWidget(self.input_section)
     self.left_layout.addWidget(self.mode_section)
+    self.left_layout.addWidget(self.input_section)
     self.left_layout.addWidget(self.output_setup_section)
     self.left_layout.addWidget(self.run_section)
 
@@ -746,8 +756,8 @@ def build_left_panel(self):
     self._register_text(self.use_file_checkbox, "使用数据文件", "Use data file")
     self._register_text(
         self.use_file_checkbox,
-        "启用后从文件读取数据；关闭后在中间工作区手动输入数据。",
-        "Read data from a file when enabled; otherwise use the manual data input in the center workspace.",
+        "启用后从文件读取数据；关闭后在左侧输入区手动输入数据。",
+        "Read data from a file when enabled; otherwise use the manual data input in the left input area.",
         "setToolTip",
     )
     self.use_file_checkbox.toggled.connect(self._on_data_source_toggle)
@@ -841,15 +851,21 @@ def build_left_panel(self):
     # Stacked widget: table view (0) / text view (1)
     self._data_stack = QStackedWidget()
 
-    self.manual_table = QTableWidget(6, 3)
+    self.manual_table = QTableWidget(1, 3)
     self.manual_table.setHorizontalHeaderLabels(["A", "B", "C"])
     self.manual_table.verticalHeader().setVisible(True)
     _apply_equal_column_stretch(self.manual_table)
     self.manual_table.setAlternatingRowColors(True)
     self.manual_table.setStyleSheet(view_helpers.get_table_style())
-    self.manual_table.setMinimumHeight(180)
     self.manual_table.installEventFilter(_TablePasteFilter(self.manual_table, self))
     self.manual_table.itemChanged.connect(lambda *_args: _update_data_summary(self))
+    manual_table_model = self.manual_table.model()
+    manual_table_model.rowsInserted.connect(lambda *_args: _refresh_manual_table_summary_from_model(self))
+    manual_table_model.rowsRemoved.connect(lambda *_args: _refresh_manual_table_summary_from_model(self))
+    manual_table_model.columnsInserted.connect(lambda *_args: _refresh_manual_table_summary_from_model(self))
+    manual_table_model.columnsRemoved.connect(lambda *_args: _refresh_manual_table_summary_from_model(self))
+    manual_table_model.modelReset.connect(lambda *_args: _refresh_manual_table_summary_from_model(self))
+    view_helpers.fit_table_height_to_contents(self.manual_table)
     self._data_stack.addWidget(self.manual_table)
 
     self.manual_data_edit = QPlainTextEdit()
@@ -858,6 +874,18 @@ def build_left_panel(self):
     self._data_stack.setCurrentIndex(_STACK_PAGE_TABLE)  # table view by default
     manual_layout.addWidget(self._data_stack)
     self.input_section_layout.addWidget(self.manual_box)
+
+    from app_desktop.constants_editor import ConstantsEditor
+    self.input_constants_editor = ConstantsEditor(min_rows=1, checked=False, numeric_mode="uncertainty")
+    self.input_constants_editor.set_embedded_in_workbench(True)
+    self.input_section_layout.addWidget(self.input_constants_editor)
+
+    self.error_constants_editor = self.input_constants_editor
+    self.custom_constants_editor = self.input_constants_editor
+    self.implicit_constants_editor = self.input_constants_editor
+    self.root_constants_editor = self.input_constants_editor
+
+    self._update_data_summary = lambda: _update_data_summary(self)
     _update_data_summary(self)
 
     self.mode_stack = CurrentPageStack()
@@ -1085,6 +1113,8 @@ def build_left_panel(self):
 def build_right_panel(self, layout: QVBoxLayout):
     self.workbench_result_overview_panel = build_result_overview(self)
     layout.addWidget(self.workbench_result_overview_panel)
+    self.workbench_history_panel = build_history_panel(self)
+    layout.addWidget(self.workbench_history_panel)
 
     self.workbench_result_details_panel = QWidget()
     self.workbench_result_details_panel.setObjectName("workbench_result_details_panel")
@@ -1497,6 +1527,17 @@ def build_right_panel(self, layout: QVBoxLayout):
 
 # -- Table editor helpers ---------------------------------------------------
 
+def _refresh_manual_table_summary_from_model(self) -> None:
+    table = getattr(self, "manual_table", None)
+    if table is None:
+        return
+    try:
+        table.rowCount()
+    except RuntimeError:
+        return
+    _update_data_summary(self)
+
+
 def _add_table_column(self):
     """Append a new column to the manual data table."""
     table = self.manual_table
@@ -1511,14 +1552,12 @@ def _add_table_column(self):
     # without this the new column shows up at narrow default width
     # and the visible columns become uneven.
     _apply_equal_column_stretch(table)
-    _update_data_summary(self)
 
 
 def _add_table_row(self):
     """Append a new row to the manual data table."""
     table = self.manual_table
     table.setRowCount(table.rowCount() + 1)
-    _update_data_summary(self)
 
 
 def _remove_table_row(self):
@@ -1532,7 +1571,6 @@ def _remove_table_row(self):
     current = table.rowCount()
     if current > 1:
         table.setRowCount(current - 1)
-    _update_data_summary(self)
 
 
 def _remove_table_column(self):
@@ -1550,7 +1588,6 @@ def _remove_table_column(self):
         # remaining columns share the freed width unevenly without
         # an explicit re-apply. Cheap to call regardless.
         _apply_equal_column_stretch(table)
-    _update_data_summary(self)
 
 
 def _view_toggle_label(self, current_index: int) -> str:
@@ -1572,12 +1609,12 @@ def _toggle_data_view(self):
         # Table → Text: serialize table into text edit
         self.manual_data_edit.setPlainText(_serialize_table(self))
         stack.setCurrentIndex(_STACK_PAGE_TEXT)
+        _update_data_summary(self)
     else:
         # Text → Table: load text into table
         _load_text_into_table(self, self.manual_data_edit.toPlainText())
         stack.setCurrentIndex(_STACK_PAGE_TABLE)
     self._data_view_toggle.setText(_view_toggle_label(self, stack.currentIndex()))
-    _update_data_summary(self)
 
 
 def _serialize_table(self) -> str:
@@ -1631,38 +1668,46 @@ def _load_text_into_table(self, text: str):
     if max_cols == 0:
         return
 
-    table.setColumnCount(max_cols)
-    # Pad / synthesize headers so every column has a label. Reuse
-    # ``_synthetic_headers`` (Excel-style A/B/.../Z/AA/AB) so > 26
-    # columns don't get ASCII-punctuation labels like ``[`` from a
-    # naive ``chr(65 + i)`` rollover bug.
-    synth = _synthetic_headers(max_cols)
-    headers = [
-        result.headers[i] if i < len(result.headers) else synth[i]
-        for i in range(max_cols)
-    ]
-    table.setHorizontalHeaderLabels(headers)
-    _apply_equal_column_stretch(table)
+    model = table.model()
+    previous_table_blocked = table.blockSignals(True)
+    previous_model_blocked = model.blockSignals(True)
+    try:
+        table.setColumnCount(max_cols)
+        # Pad / synthesize headers so every column has a label. Reuse
+        # ``_synthetic_headers`` (Excel-style A/B/.../Z/AA/AB) so > 26
+        # columns don't get ASCII-punctuation labels like ``[`` from a
+        # naive ``chr(65 + i)`` rollover bug.
+        synth = _synthetic_headers(max_cols)
+        headers = [
+            result.headers[i] if i < len(result.headers) else synth[i]
+            for i in range(max_cols)
+        ]
+        table.setHorizontalHeaderLabels(headers)
+        _apply_equal_column_stretch(table)
 
-    table.setRowCount(max(len(result.rows), 5))
-    raw_rows = result.raw_rows or [["" for _ in row] for row in result.rows]
-    for r, row in enumerate(result.rows):
-        raw_row = raw_rows[r] if r < len(raw_rows) else []
-        for c, val in enumerate(row):
-            raw_cell = raw_row[c].strip() if c < len(raw_row) else ""
-            if val is None:
-                cell_text = raw_cell
-            elif val.is_integer() and abs(val) <= 1e15:
-                # Prefer "1" over "1.0" for Excel-style integers;
-                # preserves the user's input fidelity for whole numbers
-                # without eating scientific notation for genuinely
-                # float-typed values. Boundary is inclusive so 1e15
-                # renders as "1000000000000000" (not "1e+15" or
-                # "1000000000000000.0").
-                cell_text = str(int(val))
-            else:
-                cell_text = repr(val)  # round-trip safe float repr
-            table.setItem(r, c, QTableWidgetItem(cell_text))
+        table.clearContents()
+        table.setRowCount(max(len(result.rows) + 1, 1))
+        raw_rows = result.raw_rows or [["" for _ in row] for row in result.rows]
+        for r, row in enumerate(result.rows):
+            raw_row = raw_rows[r] if r < len(raw_rows) else []
+            for c, val in enumerate(row):
+                raw_cell = raw_row[c].strip() if c < len(raw_row) else ""
+                if val is None:
+                    cell_text = raw_cell
+                elif val.is_integer() and abs(val) <= 1e15:
+                    # Prefer "1" over "1.0" for Excel-style integers;
+                    # preserves the user's input fidelity for whole numbers
+                    # without eating scientific notation for genuinely
+                    # float-typed values. Boundary is inclusive so 1e15
+                    # renders as "1000000000000000" (not "1e+15" or
+                    # "1000000000000000.0").
+                    cell_text = str(int(val))
+                else:
+                    cell_text = repr(val)  # round-trip safe float repr
+                table.setItem(r, c, QTableWidgetItem(cell_text))
+    finally:
+        model.blockSignals(previous_model_blocked)
+        table.blockSignals(previous_table_blocked)
     _update_data_summary(self)
 
 
@@ -1691,6 +1736,7 @@ def _update_data_summary(self):
             f"{data_rows} {row_unit} · {cols} {column_unit}",
         )
     )
+    view_helpers.fit_table_height_to_contents(table)
 
 
 def _mark_schema_choices(combo: QComboBox) -> None:
@@ -2060,11 +2106,19 @@ def _clear_table(self):
     table = self.manual_table
     mode = self.mode_combo.currentData() if hasattr(self, "mode_combo") else None
     column_count = 1 if mode == "root_solving" else 3
-    table.setRowCount(6)
-    table.setColumnCount(column_count)
-    table.setHorizontalHeaderLabels([chr(65 + index) for index in range(column_count)])
-    table.clearContents()
-    _apply_equal_column_stretch(table)
+    model = table.model()
+    previous_table_blocked = table.blockSignals(True)
+    previous_model_blocked = model.blockSignals(True)
+    try:
+        table.setRowCount(1)
+        table.setColumnCount(column_count)
+        table.setHorizontalHeaderLabels([chr(65 + index) for index in range(column_count)])
+        table.clearContents()
+        _apply_equal_column_stretch(table)
+    finally:
+        model.blockSignals(previous_model_blocked)
+        table.blockSignals(previous_table_blocked)
+    _update_data_summary(self)
 
 
 class _TablePasteFilter(QObject):

@@ -65,15 +65,24 @@ import traceback
 
 from PySide6.QtWidgets import QMessageBox
 
+from datalab_core.fitting_comparison import (
+    build_fitting_comparison_result_snapshot,
+    render_fitting_comparison_snapshot_outputs,
+)
+from datalab_latex.latex_tables_fitting import build_fitting_comparison_latex_block
 from fitting import render_fitting_overview
 from fitting.auto_models import (
     build_inverse_series_definition,
     build_polynomial_definition,
 )
+from fitting.comparison_formatting import build_comparison_table_rows_from_payload
 from fitting.hp_fitter import FitResult
+from shared.plotting import FittingPlotLabels, fitting_plot_labels_with_units
 
 from .workers_core import (
     FitBatchResultEntry,
+    FittingComparisonJob,
+    FittingComparisonResultPayload,
     FitJob,
     FitResultPayload,
 )
@@ -97,7 +106,13 @@ class WindowFittingResidualsMixin:
                 job = payload.job
                 expression = payload.expression or job.model_expr
                 substituted = self._build_substituted_expression(expression, payload.fit_result.params) if expression else ""
-                text, rows = self._format_fit_display(payload.fit_result, expression, substituted, batch_idx=entry.index)
+                text, rows = self._format_fit_display(
+                    payload.fit_result,
+                    expression,
+                    substituted,
+                    batch_idx=entry.index,
+                    units=payload.units,
+                )
                 batch_texts.append(header + "\n" + text)
                 csv_rows.extend(rows)
             else:
@@ -107,7 +122,7 @@ class WindowFittingResidualsMixin:
         if csv_rows:
             self._set_csv_data(
                 csv_rows,
-                ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error", "note"],
+                self._fit_csv_headers(csv_rows),
                 suggestion="fitting_results.csv",
             )
         else:
@@ -125,6 +140,7 @@ class WindowFittingResidualsMixin:
         plot_bytes: bytes | None,
         output_path: str,
         use_dcolumn: bool,
+        units: dict | None = None,
     ) -> Path | None:
         digits = self.latex_input_precision_spin.value() if hasattr(self, "latex_input_precision_spin") else 16
         group_size = self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3
@@ -143,6 +159,7 @@ class WindowFittingResidualsMixin:
                 use_dcolumn,
                 digits,
                 latex_group_size=group_size,
+                units=units,
             )
         )
         lines.append("\\end{document}")
@@ -189,6 +206,7 @@ class WindowFittingResidualsMixin:
                     digits,
                     latex_group_size=group_size,
                     batch_index=entry.get("index"),
+                    units=entry.get("units"),
                 )
             )
         lines.append("\\end{document}")
@@ -206,10 +224,56 @@ class WindowFittingResidualsMixin:
             )
             return None
 
-    def _render_fit_plot_bytes(self, job: FitJob, fit_result: FitResult, comparison=None, log_scale: str | None = None) -> bytes | None:
+    def _write_fitting_comparison_latex(
+        self,
+        payload: dict[str, object],
+        job: FittingComparisonJob,
+    ) -> Path | None:
+        digits = int(getattr(job, "latex_digits", 16) or 16)
+        group_size = int(getattr(job, "latex_group_size", 3) or 3)
+        tex_path = Path(job.output_path).expanduser()
+        try:
+            comparison_rows = build_comparison_table_rows_from_payload(payload)
+        except ValueError as exc:
+            QMessageBox.warning(
+                self,
+                self._tr("写入失败", "Write Failed"),
+                str(exc),
+            )
+            return None
+        lines = self._fit_latex_preamble(job.use_dcolumn, digits, group_size)
+        lines.extend(
+            build_fitting_comparison_latex_block(
+                comparison_rows,
+                use_dcolumn=job.use_dcolumn,
+                caption_text=job.caption or self._tr("选定拟合比较", "Selected fit comparison"),
+            )
+        )
+        lines.append("\\end{document}")
+        try:
+            with open(tex_path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines))
+            self._append_log(f"拟合比较 LaTeX 已写入: {tex_path}")
+            self._load_latex_into_editor(tex_path)
+            return tex_path
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                self._tr("写入失败", "Write Failed"),
+                str(exc),
+            )
+            return None
+
+    def _render_fit_plot_bytes(self, job: FitJob, fit_result: FitResult, comparison=None, log_scale: str | None = None, units: dict | None = None) -> bytes | None:
         x_values = [float(v) for v in job.x_series]
         y_values = [float(v) for v in job.y_series]
         show_curves = not job.is_multidim
+        plot_labels = fitting_plot_labels_with_units(
+            FittingPlotLabels(),
+            x_unit=self._fit_input_unit_for_job(units, job),
+            y_unit=self._fit_output_unit(units, getattr(job, "target_column", "")),
+            parameter_unit=self._fit_single_parameter_axis_unit(units, fit_result.params.keys()),
+        )
         try:
             # Validate log-scale selection against current data to avoid log(<=0) failures
             safe_log_scale = self._sanitize_log_scale(log_scale if log_scale is not None else self._current_log_scale(), job.x_series, job.y_series)
@@ -240,6 +304,9 @@ class WindowFittingResidualsMixin:
                     parameter_info=parameter_info,
                     uncertainties=uncertainties,
                     log_scale=safe_log_scale,
+                    diagnostics=fit_result.details.get("diagnostics") if isinstance(fit_result.details, dict) else None,
+                    covariance=fit_result.covariance,
+                    labels=plot_labels,
                 )
             residuals = fit_result.residuals
             return render_fitting_overview(
@@ -256,6 +323,9 @@ class WindowFittingResidualsMixin:
                 uncertainties=None,
                 log_scale=safe_log_scale,
                 show_curves=False,
+                diagnostics=fit_result.details.get("diagnostics") if isinstance(fit_result.details, dict) else None,
+                covariance=fit_result.covariance,
+                labels=plot_labels,
             )
         except Exception as exc:  # noqa: BLE001
             self._append_log(self._tr(f"生成拟合图像失败: {exc}", f"Failed to render fit plot: {exc}"))
@@ -275,7 +345,7 @@ class WindowFittingResidualsMixin:
             job = payload.get("job")
             fit_result = payload.get("fit_result")
             if job and fit_result and getattr(job, "render_plots", True):
-                plot_bytes = self._render_fit_plot_bytes(job, fit_result, log_scale=log_scale)
+                plot_bytes = self._render_fit_plot_bytes(job, fit_result, log_scale=log_scale, units=payload.get("units"))
                 if plot_bytes:
                     self._image_mode = "fit"
                     self._update_result_plot(plot_bytes)
@@ -284,7 +354,7 @@ class WindowFittingResidualsMixin:
             job = payload.get("job")
             fit_result = payload.get("fit_result")
             if job and fit_result and getattr(job, "render_plots", True):
-                plot_bytes = self._render_fit_plot_bytes(job, fit_result, log_scale=log_scale)
+                plot_bytes = self._render_fit_plot_bytes(job, fit_result, log_scale=log_scale, units=payload.get("units"))
                 if plot_bytes:
                     self._image_mode = "fit"
                     self._update_result_plot(plot_bytes)
@@ -305,7 +375,7 @@ class WindowFittingResidualsMixin:
                 job = entry.fit_payload.job
                 fit_res = entry.fit_payload.fit_result
                 if job and fit_res and getattr(job, "render_plots", True):
-                    plot_bytes = self._render_fit_plot_bytes(job, fit_res, log_scale=log_scale)
+                    plot_bytes = self._render_fit_plot_bytes(job, fit_res, log_scale=log_scale, units=entry.fit_payload.units)
                     if plot_bytes:
                         path = self._save_batch_figure(plot_bytes, ctx.get("output_path", ""), entry.index, "fit")
                         if path:
@@ -344,9 +414,9 @@ class WindowFittingResidualsMixin:
                     job = payload.job
                     expression = payload.expression or job.model_expr
                     substituted = self._build_substituted_expression(expression, payload.fit_result.params) if expression else ""
-                    summary = self._format_fit_result_text(payload.fit_result, expression, substituted)
+                    summary = self._format_fit_result_text(payload.fit_result, expression, substituted, units=payload.units)
                     batch_texts.append(header + "\n" + summary)
-                    plot_bytes = self._render_fit_plot_bytes(job, payload.fit_result) if getattr(job, "render_plots", True) else None
+                    plot_bytes = self._render_fit_plot_bytes(job, payload.fit_result, units=payload.units) if getattr(job, "render_plots", True) else None
                     fig_path = self._save_batch_figure(plot_bytes, output_path, entry.index, "fit") if plot_bytes else None
                     if fig_path:
                         figure_paths.append(fig_path)
@@ -360,6 +430,7 @@ class WindowFittingResidualsMixin:
                             "expression": expression or "",
                             "substituted": substituted or "",
                             "figure_path": fig_path,
+                            "units": payload.units,
                         }
                     )
                     csv_rows.extend(
@@ -367,6 +438,7 @@ class WindowFittingResidualsMixin:
                             payload.fit_result,
                             expression or "",
                             batch_idx=entry.index,
+                            units=payload.units,
                         )
                     )
                 else:
@@ -377,7 +449,7 @@ class WindowFittingResidualsMixin:
             if csv_rows:
                 self._set_csv_data(
                     csv_rows,
-                    ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error", "note"],
+                    self._fit_csv_headers(csv_rows),
                     suggestion="fitting_results.csv",
                 )
             else:
@@ -413,18 +485,19 @@ class WindowFittingResidualsMixin:
             job = payload.job
             fit_result = payload.fit_result
             expression = payload.expression or job.model_expr
+            units = payload.units
             for entry in payload.logs:
                 self._append_log(entry)
             for warn in payload.warnings:
                 self._append_log(self._tr(f"警告: {warn}", f"Warning: {warn}"))
             substituted = self._build_substituted_expression(expression, fit_result.params) if expression else None
-            summary = self._format_fit_result_text(fit_result, expression, substituted)
+            summary = self._format_fit_result_text(fit_result, expression, substituted, units=units)
             self._set_result_text(summary, final_result=True)
-            csv_rows = self._build_fit_csv_rows(fit_result, expression, batch_idx=1)
+            csv_rows = self._build_fit_csv_rows(fit_result, expression, batch_idx=1, units=units)
             if csv_rows:
                 self._set_csv_data(
                     csv_rows,
-                    ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error", "note"],
+                    self._fit_csv_headers(csv_rows),
                     suggestion="fitting_results.csv",
                 )
             else:
@@ -435,7 +508,7 @@ class WindowFittingResidualsMixin:
             sys_warning = fit_result.details.get("systematic_warning")
             if sys_warning:
                 self._append_log(self._tr(f"系统误差警告: {sys_warning}", f"Systematic warning: {sys_warning}"))
-            plot_bytes = self._render_fit_plot_bytes(job, fit_result) if getattr(job, "render_plots", True) else None
+            plot_bytes = self._render_fit_plot_bytes(job, fit_result, units=units) if getattr(job, "render_plots", True) else None
             if plot_bytes is not None:
                 self._image_mode = "fit"
                 self.current_fit_figures = []
@@ -459,17 +532,68 @@ class WindowFittingResidualsMixin:
                     plot_bytes,
                     job.output_path,
                     job.use_dcolumn,
+                    units=units,
                 )
             self.tabs.setCurrentIndex(self.result_tab_index)
             self._remember_last_result(
                 "fit_single",
-                {"fit_result": fit_result, "expression": expression, "substituted": substituted, "job": job},
+                {"fit_result": fit_result, "expression": expression, "substituted": substituted, "job": job, "units": units},
             )
             QMessageBox.information(self, self._tr("完成", "Done"), self._tr("拟合完成。", "Fit completed."))
         except Exception as exc:  # noqa: BLE001
             self._append_log(traceback.format_exc())
             localized = self._localize_text(str(exc))
             self._append_log(self._tr(f"拟合后处理警告: {localized}", f"Fit post-processing warning: {localized}"))
+        return True
+
+    def _on_fitting_comparison_finished(self, payload: FittingComparisonResultPayload):
+        try:
+            job = payload.job
+            for entry in payload.logs:
+                self._append_log(entry)
+            for warn in payload.warnings:
+                self._append_log(self._tr(f"警告: {warn}", f"Warning: {warn}"))
+            snapshot = build_fitting_comparison_result_snapshot(
+                "fitting_comparison",
+                payload.payload,
+                overview_state="complete",
+                precision={
+                    "compute_digits": job.precision,
+                    "uncertainty_digits": job.uncertainty_digits,
+                },
+            )
+            outputs = render_fitting_comparison_snapshot_outputs(snapshot or {})
+            if outputs is None:
+                raise ValueError(
+                    self._tr(
+                        "无法渲染选定拟合比较结果。",
+                        "Could not render selected-fit comparison results.",
+                    )
+                )
+            text, csv_rows, headers = outputs
+            self._set_result_text(text, final_result=True)
+            self._set_csv_data(csv_rows, headers, suggestion="fitting_comparison_results.csv")
+            self._set_image_list("fit", [])
+        except Exception as exc:  # noqa: BLE001
+            self._mark_workbench_result_failed()
+            self._append_log(traceback.format_exc())
+            localized = self._localize_text(str(exc))
+            QMessageBox.critical(self, self._tr("拟合比较失败", "Fit comparison failed"), localized)
+            return False
+        try:
+            if job.generate_latex and job.output_path:
+                self._write_fitting_comparison_latex(payload.payload, job)
+            self.tabs.setCurrentIndex(self.result_tab_index)
+            self._remember_last_result("fitting_comparison", dict(payload.payload))
+            QMessageBox.information(
+                self,
+                self._tr("完成", "Done"),
+                self._tr("选定拟合比较完成。", "Selected-fit comparison completed."),
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._append_log(traceback.format_exc())
+            localized = self._localize_text(str(exc))
+            self._append_log(self._tr(f"拟合比较后处理警告: {localized}", f"Fit comparison post-processing warning: {localized}"))
         return True
 
     def _on_fit_failed(self, message: str):

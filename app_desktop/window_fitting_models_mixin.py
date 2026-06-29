@@ -61,6 +61,8 @@ State variables READ from the host class:
 """
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any, TypedDict, cast
@@ -70,6 +72,7 @@ import mpmath as mp
 from PySide6.QtWidgets import QMessageBox
 
 from datalab_core.fitting import build_fitting_request
+from datalab_core.fitting_comparison import build_fitting_comparison_request
 from data_extrapolation_latex_latest import _dual_msg
 from fitting import (
     ImplicitModelDefinition,
@@ -94,12 +97,13 @@ from app_desktop.fitting_input_normalization import (
 )
 
 from .workers_core import (
+    FittingComparisonJob,
     FitBatchTask,
     FitJob,
     _mp_precision_guard,
 )
 from .parallel_preferences import current_parallel_config_from_widgets
-from .workers_qt import FitBatchWorker, FitWorker
+from .workers_qt import FitBatchWorker, FittingComparisonWorker, FitWorker
 
 
 class CustomFitConfig(TypedDict):
@@ -116,8 +120,8 @@ class WindowFittingModelsMixin:
 
     def _collect_custom_constants(self) -> dict[str, str]:
         host = cast(Any, self)
-        editor = getattr(host, "custom_constants_editor", None)
-        if editor is None or not editor.isChecked():
+        editor = host._active_constants_source() if hasattr(host, "_active_constants_source") else getattr(host, "custom_constants_editor", None)
+        if editor is None:
             return {}
         normalized = normalize_fitting_input_from_widgets(
             model_type="custom",
@@ -149,7 +153,7 @@ class WindowFittingModelsMixin:
         table = getattr(host, "custom_params_table", None)
         if table is None:
             raise ValueError(host._tr("请在参数列表中添加参数。", "Please add at least one parameter."))
-        editor = getattr(host, "custom_constants_editor", None)
+        editor = host._active_constants_source() if hasattr(host, "_active_constants_source") else getattr(host, "custom_constants_editor", None)
         try:
             normalized = normalize_fitting_input_from_widgets(
                 model_type="custom",
@@ -747,6 +751,7 @@ class WindowFittingModelsMixin:
             parameter_config = custom_config["parameter_config"]
             parameter_names = custom_config["parameter_names"]
         parallel_config = self._current_parallel_config()
+        units_config = self._collect_fitting_units_config()
         core_request = build_fitting_request(
             model_type=model_type_text,
             headers=headers,
@@ -772,6 +777,7 @@ class WindowFittingModelsMixin:
             implicit_definition=implicit_definition,
             timeout_seconds=(None if timeout_seconds is None else str(timeout_seconds)),
             custom_constants=custom_constants,
+            units=units_config,
             weights=weights,
             precision_digits=precision,
             parallel={
@@ -826,6 +832,124 @@ class WindowFittingModelsMixin:
             core_request=core_request,
         )
 
+    def _comparison_candidates_from_text(self) -> list[dict[str, object]]:
+        raw_text = self.fit_comparison_candidates_edit.toPlainText().strip()
+        if not raw_text:
+            raise ValueError(
+                self._tr(
+                    "请填写选定拟合比较的候选 JSON 列表。",
+                    "Please enter the selected-fit comparison candidates JSON list.",
+                )
+            )
+        try:
+            parsed = json.loads(raw_text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                self._tr(
+                    f"选定拟合列表不是有效 JSON: {exc.msg}",
+                    f"Selected-fit list is not valid JSON: {exc.msg}",
+                )
+            ) from exc
+        if isinstance(parsed, Mapping):
+            parsed = parsed.get("candidates")
+        if isinstance(parsed, (str, bytes, bytearray, memoryview)) or not isinstance(parsed, Sequence):
+            raise ValueError(
+                self._tr(
+                    "选定拟合列表必须是 JSON 数组，或包含 candidates 数组的对象。",
+                    "Selected-fit list must be a JSON array or an object containing a candidates array.",
+                )
+            )
+        candidates: list[dict[str, object]] = []
+        for index, candidate in enumerate(parsed, start=1):
+            if not isinstance(candidate, Mapping):
+                raise ValueError(
+                    self._tr(
+                        f"选定拟合列表第 {index} 项必须是对象。",
+                        f"Selected-fit candidate {index} must be an object.",
+                    )
+                )
+            candidates.append({str(key): value for key, value in candidate.items()})
+        if not candidates:
+            raise ValueError(
+                self._tr(
+                    "选定拟合列表至少需要一个候选。",
+                    "Selected-fit comparison requires at least one candidate.",
+                )
+            )
+        return candidates
+
+    def _prepare_fitting_comparison_job(
+        self,
+        dataset,
+        generate_latex: bool,
+        output_path: str,
+        verbose: bool,
+    ) -> FittingComparisonJob:
+        headers, data_rows, sigma_rows = dataset
+        precision = self._read_precision()
+        uncertainty_digits = self._uncertainty_digits_value()
+        self._current_precision = precision
+        self._set_fit_output_precision(precision)
+        variable_map = self._collect_variable_mapping(headers)
+        target_column = self.fit_target_edit.text().strip()
+        if not target_column:
+            raise ValueError(_dual_msg("请指定目标列。", "Please specify the target column."))
+        normalized_worker = normalize_fitting_input(
+            model_type="comparison",
+            expression="",
+            variable_names=list(variable_map.keys()),
+            target_column=target_column,
+            parameters=ParameterInput(),
+            worker_request=WorkerInputRequest(
+                headers=headers,
+                data_rows=data_rows,
+                sigma_rows=sigma_rows,
+                variable_mapping=variable_map,
+            ),
+            weighted=self.fit_weighted_checkbox.isChecked(),
+            validate=False,
+        ).worker_input
+        if normalized_worker is None:
+            raise ValueError(_dual_msg("无法准备拟合数据。", "Could not prepare fitting data."))
+        parallel_config = self._current_parallel_config()
+        sigma_series = list(normalized_worker.sigma_series)
+        weights = list(normalized_worker.weights) if normalized_worker.weights is not None else None
+        request = build_fitting_comparison_request(
+            headers=headers,
+            data_rows=data_rows,
+            sigma_rows=sigma_rows,
+            sigma_series=sigma_series if len(sigma_series) == len(data_rows) else None,
+            variable_map=dict(normalized_worker.variable_map),
+            target_column=target_column,
+            candidates=self._comparison_candidates_from_text(),
+            weighted=self.fit_weighted_checkbox.isChecked(),
+            weights=weights,
+            precision_digits=precision,
+            uncertainty_digits=uncertainty_digits,
+            parallel={
+                "mode": parallel_config.mode,
+                "max_workers": parallel_config.max_workers,
+                "reserve_cores": parallel_config.reserve_cores,
+                "default_worker_cap": parallel_config.default_worker_cap,
+                "min_process_tasks": parallel_config.min_process_tasks,
+                "nested_policy": parallel_config.nested_policy,
+                "process_start_method": parallel_config.process_start_method,
+            },
+            request_id="desktop-fitting-comparison",
+        )
+        return FittingComparisonJob(
+            core_request=request,
+            generate_latex=generate_latex,
+            output_path=output_path,
+            use_dcolumn=self.dcolumn_checkbox.isChecked(),
+            caption=self._caption_value(),
+            verbose=verbose,
+            precision=precision,
+            uncertainty_digits=uncertainty_digits,
+            latex_digits=self.latex_input_precision_spin.value(),
+            latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+        )
+
     def _execute_fit_async(self, job: FitJob):
         if self._fit_worker and self._fit_worker.isRunning():
             QMessageBox.information(self, self._tr("提示", "Notice"), self._tr("拟合正在运行中。", "Fitting already running."))
@@ -841,12 +965,40 @@ class WindowFittingModelsMixin:
         self._start_worker_with_workbench_result_state(worker)
         self._append_log(self._tr("拟合已在后台运行…", "Fit running in background…"))
 
+    def _execute_fitting_comparison_async(self, job: FittingComparisonJob):
+        if self._fit_worker and self._fit_worker.isRunning():
+            QMessageBox.information(self, self._tr("提示", "Notice"), self._tr("拟合正在运行中。", "Fitting already running."))
+            return
+        worker = FittingComparisonWorker(job)
+        worker.finished_ok.connect(self._on_fitting_comparison_finished)
+        worker.failed.connect(self._on_fit_failed)
+        worker.finished.connect(self._on_fit_thread_done)
+        worker.cancelled.connect(self._on_worker_cancelled)
+        if getattr(job, "verbose", False):
+            worker.log_ready.connect(self._append_log)
+        self._fit_worker = worker
+        self._start_worker_with_workbench_result_state(worker)
+        self._append_log(self._tr("选定拟合比较已在后台运行…", "Selected-fit comparison running in background…"))
+
     def _run_fitting_mode(self, generate_latex: bool, output_path: str, verbose: bool, render_plots: bool = True) -> bool:
         headers, rows, sigma_rows, segments, _ = self._collect_batched_fitting_dataset(precision_hint=self._peek_user_precision())
         batches = self._build_batches_from_segments(headers, rows, sigma_rows, segments)
         if not batches:
             raise ValueError(_dual_msg("没有可用于拟合的数据。", "No data available for fitting."))
         mode = self.fit_model_combo.currentData()
+        if mode == "comparison":
+            if len(batches) != 1:
+                raise ValueError(
+                    _dual_msg(
+                        "选定拟合比较暂不支持批量分段数据；请使用单个数据段。",
+                        "Selected-fit comparison does not support segmented batch data yet; use one data segment.",
+                    )
+                )
+            batch = batches[0]
+            dataset = (batch["headers"], batch["rows"], batch["sigma_rows"])
+            job = self._prepare_fitting_comparison_job(dataset, generate_latex, output_path, verbose)
+            self._execute_fitting_comparison_async(job)
+            return True
         if len(batches) == 1:
             batch = batches[0]
             dataset = (batch["headers"], batch["rows"], batch["sigma_rows"])

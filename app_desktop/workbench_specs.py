@@ -67,14 +67,7 @@ MODE_WORKBENCH_SPECS: dict[ModeKey, ModeWorkbenchSpec] = {
                 "error.formula",
             ),
         ),
-        constants=(
-            WidgetMount(
-                "error_constants_editor",
-                "error.constants",
-                "constants",
-                "error_constants_owner",
-            ),
-        ),
+        constants=(),
         result_adapter_key="tabular",
     ),
     "fitting": ModeWorkbenchSpec(
@@ -115,20 +108,7 @@ MODE_WORKBENCH_SPECS: dict[ModeKey, ModeWorkbenchSpec] = {
                 companion_attrs=("implicit_param_header_widget", "implicit_constraints_checkbox"),
             ),
         ),
-        constants=(
-            WidgetMount(
-                "custom_constants_editor",
-                "fitting.custom.constants",
-                "constants",
-                "custom_constants_owner",
-            ),
-            WidgetMount(
-                "implicit_constants_editor",
-                "fitting.implicit.constants",
-                "constants",
-                "implicit_constants_owner",
-            ),
-        ),
+        constants=(),
         result_adapter_key="tabular",
     ),
     "root_solving": ModeWorkbenchSpec(
@@ -151,14 +131,7 @@ MODE_WORKBENCH_SPECS: dict[ModeKey, ModeWorkbenchSpec] = {
                 companion_attrs=("root_unknown_header_widget",),
             ),
         ),
-        constants=(
-            WidgetMount(
-                "root_constants_editor",
-                "root.constants",
-                "constants",
-                "root_constants_owner",
-            ),
-        ),
+        constants=(),
         result_adapter_key="tabular",
     ),
     "statistics": ModeWorkbenchSpec(

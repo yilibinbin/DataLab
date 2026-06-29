@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app_desktop.constants_editor import ConstantsEditor
 from app_desktop.detected_rows_table import DetectedRowsTable
 from app_desktop.formula_preview import open_formula_preview_dialog
 from app_desktop.schema_widgets import make_editor_header
@@ -144,13 +143,26 @@ def build_root_solving_mode_view(owner: Any) -> QGroupBox:
     view_helpers.apply_equal_column_stretch(owner.root_unknowns_table.table_view)
     root_layout.addWidget(owner.root_unknowns_table)
 
-    owner.root_constants_editor = ConstantsEditor(min_rows=3, checked=False, numeric_mode="uncertainty")
-    owner._register_text(owner.root_constants_editor.checkbox, "启用常数设置", "Enable constants")
     view_helpers.register_constant_headers(owner, owner.root_constants_editor.set_table_headers)
     view_helpers.apply_equal_column_stretch(owner.root_constants_editor.table_view)
     owner.root_constants_editor.table_view.setStyleSheet(view_helpers.get_table_style())
     owner.root_constants_editor.table_view.setMinimumHeight(120)
-    root_layout.addWidget(owner.root_constants_editor)
+    root_layout.addWidget(
+        view_helpers.make_display_unit_controls(
+            owner,
+            attr_prefix="root",
+            schema_prefix="root_solving",
+            input_tooltip_zh="输入数据列的单位。符号使用批处理数据列名，例如 A。",
+            input_tooltip_en="Units for input data columns. Symbols use batch data column names, such as A.",
+            include_constants=True,
+            constants_tooltip_zh="求根常数的单位。符号必须与输入常数名一致。",
+            constants_tooltip_en="Units for root-solving constants. Symbols must match input constant names.",
+            output_label_zh="根 result 单位：",
+            output_label_en="Root result unit:",
+            output_tooltip_zh="可选。用于根结果、LaTeX 和根图中的单位显示；不改变求解算法。",
+            output_tooltip_en="Optional. Used for root result, LaTeX, and root plot labels; it does not change solving.",
+        )
+    )
     _bind_root_schema_fields(owner, lbl_root_equations, lbl_root_mode, lbl_root_unknowns, root_mode_items)
     refresh_root_field_help(owner)
 
@@ -295,17 +307,6 @@ def _bind_root_schema_fields(
         ),
         required=True,
     )
-    root_constants_field = FormFieldSpec(
-        key="root.constants",
-        widget_kind="table",
-        label=LocalizedText("常数设置", "Constants"),
-        tooltip=LocalizedText(
-            "常数设置：填写方程中的固定量，支持 1.23(4) 和 1.23(4)[-5] 这类不确定度写法。关闭时不会代入常数表。",
-            "Constants: fixed quantities used by equations; accepts uncertainty notation such as 1.23(4) and 1.23(4)[-5]. When disabled, constants are not substituted.",
-        ),
-        required=False,
-    )
-
     bind_field(
         field=root_equations_field,
         label=lbl_root_equations,
@@ -335,7 +336,6 @@ def _bind_root_schema_fields(
         help_button=owner.root_unknowns_help_button,
         lang=lang,
     )
-    bind_field(field=root_constants_field, widget=owner.root_constants_editor, lang=lang)
 
 
 def refresh_root_field_help(owner: Any) -> None:
@@ -359,8 +359,8 @@ def refresh_root_field_help(owner: Any) -> None:
     if constants_editor is not None:
         constants_editor.set_table_headers(*constants_headers)
         constants_tooltip = owner._tr(
-            "常数设置：填写方程中的固定量，支持 1.23(4) 和 1.23(4)[-5] 这类不确定度写法。关闭时不会代入常数表。",
-            "Constants: fixed quantities used by equations; accepts uncertainty notation such as 1.23(4) and 1.23(4)[-5]. When disabled, constants are not substituted.",
+            "常数设置：填写方程中的固定量，支持 1.23(4) 和 1.23(4)[-5] 这类不确定度写法；非空常数会自动代入。",
+            "Constants: fixed quantities used by equations; accepts uncertainty notation such as 1.23(4) and 1.23(4)[-5]; non-empty constants are substituted automatically.",
         )
         constants_editor.setToolTip(constants_tooltip)
         if hasattr(constants_editor, "help_button"):

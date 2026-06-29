@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app_desktop.constants_editor import ConstantsEditor
 from app_desktop.parameter_table import ParameterTable
 from app_desktop.schema_widgets import make_editor_header
 from app_desktop.theme import workbench_warning_text_style
@@ -53,6 +52,7 @@ def build_fitting_mode_view(owner: Any) -> QGroupBox:
     owner.fit_model_combo.addItem("1/x^p 展开", "inverse_power")
     owner.fit_model_combo.addItem("Padé 拟合", "pade")
     owner.fit_model_combo.addItem("幂律极限拟合", "power_limit")
+    owner.fit_model_combo.addItem("选定拟合比较", "comparison")
     fit_items = [
         ("自定义模型（非线性）", "Custom (nonlinear)", "custom"),
         ("自洽隐式模型", "Self-consistent / implicit", "self_consistent"),
@@ -60,6 +60,7 @@ def build_fitting_mode_view(owner: Any) -> QGroupBox:
         ("1/x^p 展开", "1/x^p series", "inverse_power"),
         ("Padé 拟合", "Padé", "pade"),
         ("幂律极限拟合", "Power limit", "power_limit"),
+        ("选定拟合比较", "Selected-fit comparison", "comparison"),
     ]
     owner._register_combo(owner.fit_model_combo, fit_items)
     owner.fit_model_combo.currentIndexChanged.connect(owner._on_model_type_changed)
@@ -135,6 +136,42 @@ def build_fitting_mode_view(owner: Any) -> QGroupBox:
     owner.fit_model_hint.setWordWrap(True)
     owner.fit_model_hint.hide()
     fit_layout.addWidget(owner.fit_model_hint)
+
+    comparison_candidates_field = FormFieldSpec(
+        key="fitting.comparison.candidates",
+        widget_kind="textarea",
+        label=LocalizedText("选定拟合列表：", "Selected fits:"),
+        placeholder=LocalizedText(
+            (
+                "示例：\n"
+                "[\n"
+                "  {\"candidate_id\":\"linear\",\"label\":\"Linear\",\"model_type\":\"polynomial\",\"poly_degree\":1},\n"
+                "  {\"candidate_id\":\"quadratic\",\"label\":\"Quadratic\",\"model_type\":\"polynomial\",\"poly_degree\":2}\n"
+                "]"
+            ),
+            (
+                "Example:\n"
+                "[\n"
+                "  {\"candidate_id\":\"linear\",\"label\":\"Linear\",\"model_type\":\"polynomial\",\"poly_degree\":1},\n"
+                "  {\"candidate_id\":\"quadratic\",\"label\":\"Quadratic\",\"model_type\":\"polynomial\",\"poly_degree\":2}\n"
+                "]"
+            ),
+        ),
+        tooltip=LocalizedText(
+            "显式列出要比较的拟合候选；只比较这里的 JSON 项，顺序按列表保留。",
+            "Explicitly list fitting candidates to compare; only these JSON entries are compared and list order is preserved.",
+        ),
+        required=True,
+    )
+    comparison_candidates_header = make_editor_header(owner, comparison_candidates_field)
+    owner.fit_comparison_candidates_title_widget = comparison_candidates_header
+    lbl_comparison_candidates = comparison_candidates_header.schema_label
+    fit_layout.addWidget(comparison_candidates_header)
+    owner.fit_comparison_candidates_edit = QPlainTextEdit("")
+    owner.fit_comparison_candidates_edit.setMinimumHeight(150)
+    fit_layout.addWidget(owner.fit_comparison_candidates_edit)
+    comparison_candidates_header.hide()
+    owner.fit_comparison_candidates_edit.hide()
 
     owner.inverse_power_widget = QWidget()
     inverse_layout = QHBoxLayout(owner.inverse_power_widget)
@@ -228,13 +265,11 @@ def build_fitting_mode_view(owner: Any) -> QGroupBox:
     fit_expr_hint_row.addWidget(owner.fit_func_help_btn)
     fit_expr_hint_row.addStretch()
     fit_layout.addLayout(fit_expr_hint_row)
-    owner.custom_constants_editor = ConstantsEditor(min_rows=3, checked=False, numeric_mode="mpmath")
-    owner._register_text(owner.custom_constants_editor.checkbox, "启用常数设置", "Enable constants")
-    owner._register_text(
-        owner.custom_constants_editor.checkbox,
-        "启用后在自定义拟合表达式中代入常数，并从参数识别中排除这些名称。",
-        "Enable constants for the custom fit expression and exclude those names from parameter detection.",
-        "setToolTip",
+    owner.custom_constants_editor.setToolTip(
+        owner._tr(
+            "在左侧输入区填写自定义拟合表达式中的固定常数；非空常数会自动代入并从参数识别中排除。",
+            "Enter fixed constants for the custom fit expression in the left input area; non-empty constants are substituted and excluded from parameter detection.",
+        )
     )
     view_helpers.register_constant_headers(owner, owner.custom_constants_editor.set_table_headers)
     view_helpers.apply_equal_column_stretch(owner.custom_constants_editor.table_view)
@@ -284,7 +319,7 @@ def build_fitting_mode_view(owner: Any) -> QGroupBox:
     view_helpers.apply_equal_column_stretch(owner.custom_params_table.table_view)
     owner.custom_constraints_checkbox.toggled.connect(owner.custom_params_table.set_constraints_enabled)
     fit_layout.addWidget(owner.custom_params_table)
-    fit_layout.addWidget(owner.custom_constants_editor)
+
 
     owner.implicit_model_widget = QGroupBox("自洽隐式模型")
     owner._register_title(owner.implicit_model_widget, "自洽隐式模型", "Self-consistent / implicit")
@@ -397,19 +432,16 @@ def build_fitting_mode_view(owner: Any) -> QGroupBox:
     owner.implicit_constraints_checkbox.toggled.connect(owner.implicit_params_table.set_constraints_enabled)
     implicit_layout.addWidget(owner.implicit_constraints_checkbox)
 
-    owner.implicit_constants_editor = ConstantsEditor(min_rows=3, checked=True, numeric_mode="mpmath")
-    owner._register_text(owner.implicit_constants_editor.checkbox, "启用常数设置", "Enable constants")
-    owner._register_text(
-        owner.implicit_constants_editor.checkbox,
-        "启用后在自洽隐式模型中代入常数，并从参数识别中排除这些名称。",
-        "Enable constants for the implicit model and exclude those names from parameter detection.",
-        "setToolTip",
+    owner.implicit_constants_editor.setToolTip(
+        owner._tr(
+            "在左侧输入区填写自洽隐式模型中的固定常数；非空常数会自动代入并从参数识别中排除。",
+            "Enter fixed constants for the implicit model in the left input area; non-empty constants are substituted and excluded from parameter detection.",
+        )
     )
     view_helpers.register_constant_headers(owner, owner.implicit_constants_editor.set_table_headers)
     view_helpers.apply_equal_column_stretch(owner.implicit_constants_editor.table_view)
     owner.implicit_constants_editor.table_view.setStyleSheet(view_helpers.get_table_style())
     owner.implicit_constants_editor.table_view.setMinimumHeight(120)
-    implicit_layout.addWidget(owner.implicit_constants_editor)
 
     implicit_basic_layout = QFormLayout()
     owner.implicit_variable_edit = QLineEdit("u")
@@ -470,6 +502,7 @@ def build_fitting_mode_view(owner: Any) -> QGroupBox:
         lbl_implicit_timeout=lbl_implicit_timeout,
         lbl_custom_params=lbl_custom_params,
         lbl_implicit_params=lbl_implicit_params,
+        lbl_comparison_candidates=lbl_comparison_candidates,
     )
 
     var_header = QHBoxLayout()
@@ -530,6 +563,25 @@ def build_fitting_mode_view(owner: Any) -> QGroupBox:
     )
     weight_row.addWidget(owner.fit_weighted_checkbox)
     fit_layout.addLayout(weight_row)
+    fit_layout.addWidget(
+        view_helpers.make_display_unit_controls(
+            owner,
+            attr_prefix="fit",
+            schema_prefix="fitting",
+            input_tooltip_zh="拟合输入列的单位。符号使用变量映射中的数据列名，例如 A。",
+            input_tooltip_en="Units for fitting input columns. Symbols use data column names from the variable mapping, such as A.",
+            include_constants=True,
+            constants_tooltip_zh="拟合常数的单位。符号必须与自定义或隐式常数名一致。",
+            constants_tooltip_en="Units for fitting constants. Symbols must match custom or implicit constant names.",
+            include_parameters=True,
+            parameters_tooltip_zh="拟合参数的单位。符号必须与参数列表中的参数名一致。",
+            parameters_tooltip_en="Units for fitting parameters. Symbols must match parameter-table names.",
+            output_label_zh="目标 result 单位：",
+            output_label_en="Target result unit:",
+            output_tooltip_zh="可选。用于拟合结果、残差、LaTeX 和图中的单位显示；不改变优化算法。",
+            output_tooltip_en="Optional. Used for fit results, residuals, LaTeX, and plots; it does not change optimization.",
+        )
+    )
 
     owner.inverse_min_spin.valueChanged.connect(owner._on_model_settings_changed)
     owner.inverse_max_spin.valueChanged.connect(owner._on_model_settings_changed)
@@ -556,6 +608,7 @@ def _bind_fitting_schema_fields(
     lbl_implicit_timeout: QLabel,
     lbl_custom_params: QLabel,
     lbl_implicit_params: QLabel,
+    lbl_comparison_candidates: QLabel,
 ) -> None:
     lang = "en" if bool(getattr(owner, "_is_en", lambda: False)()) else "zh"
     fit_model_field = FormFieldSpec(
@@ -579,16 +632,6 @@ def _bind_fitting_schema_fields(
             "Enter the custom fitting expression. Leaving it blank does not use the example; the example is only placeholder text.",
         ),
         required=True,
-    )
-    custom_constants_field = FormFieldSpec(
-        key="fitting.custom.constants",
-        widget_kind="table",
-        label=LocalizedText("常数设置", "Constants"),
-        tooltip=LocalizedText(
-            "可选常数表。启用后，常数名会从参数识别和拟合参数中排除。",
-            "Optional constants table. When enabled, constant names are excluded from parameter detection and fit parameters.",
-        ),
-        required=False,
     )
     custom_params_field = FormFieldSpec(
         key="fitting.custom.parameters",
@@ -674,16 +717,6 @@ def _bind_fitting_schema_fields(
         ),
         required=True,
     )
-    implicit_constants_field = FormFieldSpec(
-        key="fitting.implicit.constants",
-        widget_kind="table",
-        label=LocalizedText("常数设置", "Constants"),
-        tooltip=LocalizedText(
-            "可选常数表。启用后，常数名会从隐式参数识别和拟合参数中排除。",
-            "Optional constants table. When enabled, constant names are excluded from implicit parameter detection and fit parameters.",
-        ),
-        required=False,
-    )
     implicit_params_field = FormFieldSpec(
         key="fitting.implicit.parameters",
         widget_kind="table",
@@ -693,6 +726,32 @@ def _bind_fitting_schema_fields(
             "Self-consistent implicit model parameters with initial values, fixed values, and constraints.",
         ),
         required=False,
+    )
+    comparison_candidates_field = FormFieldSpec(
+        key="fitting.comparison.candidates",
+        widget_kind="textarea",
+        label=LocalizedText("选定拟合列表：", "Selected fits:"),
+        placeholder=LocalizedText(
+            (
+                "示例：\n"
+                "[\n"
+                "  {\"candidate_id\":\"linear\",\"label\":\"Linear\",\"model_type\":\"polynomial\",\"poly_degree\":1},\n"
+                "  {\"candidate_id\":\"quadratic\",\"label\":\"Quadratic\",\"model_type\":\"polynomial\",\"poly_degree\":2}\n"
+                "]"
+            ),
+            (
+                "Example:\n"
+                "[\n"
+                "  {\"candidate_id\":\"linear\",\"label\":\"Linear\",\"model_type\":\"polynomial\",\"poly_degree\":1},\n"
+                "  {\"candidate_id\":\"quadratic\",\"label\":\"Quadratic\",\"model_type\":\"polynomial\",\"poly_degree\":2}\n"
+                "]"
+            ),
+        ),
+        tooltip=LocalizedText(
+            "显式列出要比较的拟合候选；只比较这里的 JSON 项，顺序按列表保留。",
+            "Explicitly list fitting candidates to compare; only these JSON entries are compared and list order is preserved.",
+        ),
+        required=True,
     )
 
     bind_field(field=fit_model_field, label=lbl_model, widget=owner.fit_model_combo, lang=lang)
@@ -711,7 +770,6 @@ def _bind_fitting_schema_fields(
         help_button=owner.fit_formula_preview_button,
     )
     view_helpers.register_schema_label_refresh(owner, lbl_fit_expr, custom_expression_field)
-    bind_field(field=custom_constants_field, widget=owner.custom_constants_editor, lang=lang)
     bind_field(field=custom_params_field, label=lbl_custom_params, widget=owner.custom_params_table, lang=lang)
     bind_field(
         field=implicit_equation_field,
@@ -748,8 +806,15 @@ def _bind_fitting_schema_fields(
     bind_field(field=implicit_method_field, label=lbl_implicit_method, widget=owner.implicit_method_combo, lang=lang)
     bind_choices(owner.implicit_method_combo, implicit_method_field.choices, lang=lang)
     bind_field(field=implicit_timeout_field, label=lbl_implicit_timeout, widget=owner.implicit_timeout_spin, lang=lang)
-    bind_field(field=implicit_constants_field, widget=owner.implicit_constants_editor, lang=lang)
     bind_field(field=implicit_params_field, label=lbl_implicit_params, widget=owner.implicit_params_table, lang=lang)
+    bind_field(
+        field=comparison_candidates_field,
+        label=lbl_comparison_candidates,
+        widget=owner.fit_comparison_candidates_edit,
+        lang=lang,
+    )
+    register_schema_text_refresh(owner, comparison_candidates_field, widget=owner.fit_comparison_candidates_edit)
+    view_helpers.register_schema_label_refresh(owner, lbl_comparison_candidates, comparison_candidates_field)
 
 
 

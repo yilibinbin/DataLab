@@ -86,46 +86,98 @@ def build_error_mode_view(owner: Any) -> QGroupBox:
     func_btn_row.addWidget(func_help_btn)
     error_layout.addLayout(func_btn_row)
 
-    owner.constants_widget = QWidget()
-    const_wrapper_layout = QVBoxLayout(owner.constants_widget)
-    const_wrapper_layout.setSpacing(6)
-    owner.use_constants_file_checkbox = QCheckBox("使用常数文件")
-    owner.use_constants_file_checkbox.setChecked(False)
-    owner._register_text(owner.use_constants_file_checkbox, "使用常数文件", "Use constants file")
-    owner.use_constants_file_checkbox.toggled.connect(owner._on_constants_source_toggle)
-    const_wrapper_layout.addWidget(owner.use_constants_file_checkbox)
-
-    const_row = QHBoxLayout()
-    const_row.setContentsMargins(0, 0, 0, 0)
-    const_row.setSpacing(2)
-    owner.constants_file_edit = QLineEdit()
-    const_row.addWidget(owner.constants_file_edit)
-    const_btn = QPushButton("常数文件…")
-    const_btn.clicked.connect(owner.browse_constants_file)
-    owner._register_text(const_btn, "常数文件…", "Constants file…")
-    const_row.addWidget(const_btn)
-    owner.constants_hint_btn = QPushButton("?")
-    owner.constants_hint_btn.setFlat(True)
-    owner.constants_hint_btn.setFixedWidth(22)
-    owner.constants_hint_btn.setFocusPolicy(Qt.NoFocus)
-    owner.constants_hint_btn.setToolTip("")
-    owner.constants_hint_btn.clicked.connect(owner._show_constants_file_hint)
-    owner.constants_hint_btn.hide()
-    const_row.addWidget(owner.constants_hint_btn)
-    owner.constants_file_row = QWidget()
-    owner.constants_file_row.setLayout(const_row)
-    owner.constants_file_row.setVisible(False)
-    const_wrapper_layout.addWidget(owner.constants_file_row)
-
-    owner.error_constants_editor = ConstantsEditor(min_rows=4, checked=False)
-    owner._register_text(owner.error_constants_editor.checkbox, "启用常数设置", "Enable constants")
-    view_helpers.register_constant_headers(owner, owner.error_constants_editor.set_table_headers)
-    view_helpers.apply_equal_column_stretch(owner.error_constants_editor.table_view)
-    owner.error_constants_editor.table_view.setStyleSheet(view_helpers.get_table_style())
+    # owner.error_constants_editor is aliased to input_constants_editor
     owner.error_constants_editor.table_view.setMinimumHeight(160)
     owner.error_constants_editor.text_view.setMinimumHeight(160)
-    const_wrapper_layout.addWidget(owner.error_constants_editor)
-    error_layout.addWidget(owner.constants_widget)
+
+    owner.error_units_box = QGroupBox(owner._tr("单位标注", "Units"))
+    owner._register_text(owner.error_units_box, "单位标注", "Units", "setTitle")
+    units_layout = QVBoxLayout(owner.error_units_box)
+    units_layout.setContentsMargins(8, 8, 8, 8)
+    units_layout.setSpacing(6)
+
+    units_header = QHBoxLayout()
+    owner.error_units_enabled_checkbox = QCheckBox(owner._tr("启用单位标注", "Enable units"))
+    owner._register_text(owner.error_units_enabled_checkbox, "启用单位标注", "Enable units")
+    owner.error_units_enabled_checkbox.setProperty("datalab_schema_key", "error.units.enabled")
+    owner.error_units_enabled_checkbox.setToolTip(
+        owner._tr(
+            "启用后，运行误差传递时会保存并可选验证输入、常数和输出单位。",
+            "When enabled, error propagation stores and can validate input, constant, and output units.",
+        )
+    )
+    units_header.addWidget(owner.error_units_enabled_checkbox)
+    units_header.addWidget(QLabel(owner._tr("模式：", "Mode:")))
+    owner.error_units_mode_combo = QComboBox()
+    units_mode_items = [
+        ("仅显示", "Display only", "display_only"),
+        ("验证公式", "Validate expression", "validate_expression"),
+    ]
+    for zh, _en, data in units_mode_items:
+        owner.error_units_mode_combo.addItem(zh, data)
+    owner._register_combo(owner.error_units_mode_combo, units_mode_items)
+    owner.error_units_mode_combo.setProperty("datalab_schema_key", "error.units.mode")
+    owner.error_units_mode_combo.setToolTip(
+        owner._tr(
+            "仅显示只保存/渲染单位；验证公式会在数值计算前检查量纲兼容性。",
+            "Display only stores/renders units; validate expression checks dimensional compatibility before numeric evaluation.",
+        )
+    )
+    units_header.addWidget(owner.error_units_mode_combo)
+    units_header.addStretch()
+    units_layout.addLayout(units_header)
+
+    owner.error_units_body = QWidget()
+    units_body_layout = QVBoxLayout(owner.error_units_body)
+    units_body_layout.setContentsMargins(0, 0, 0, 0)
+    units_body_layout.setSpacing(6)
+    owner.error_units_inputs_editor = ConstantsEditor(min_rows=2, checked=True, checkbox_text="")
+    owner.error_units_inputs_editor.set_table_headers(owner._tr("符号", "Symbol"), owner._tr("单位", "Unit"))
+    owner.error_units_inputs_editor.setToolTip(
+        owner._tr(
+            "输入列的单位。符号使用公式中的列名或规范化后的变量名，例如 A 或 distance。",
+            "Units for input columns. Symbols use formula column names or canonical variable names, such as A or distance.",
+        )
+    )
+    owner.error_units_inputs_editor.setProperty("datalab_schema_key", "error.units.inputs")
+    owner.error_units_constants_editor = ConstantsEditor(min_rows=2, checked=True, checkbox_text="")
+    owner.error_units_constants_editor.set_table_headers(owner._tr("符号", "Symbol"), owner._tr("单位", "Unit"))
+    owner.error_units_constants_editor.setToolTip(
+        owner._tr(
+            "常数的单位。符号必须与左侧常数表中的常数名一致。",
+            "Units for constants. Symbols must match names in the left constants table.",
+        )
+    )
+    owner.error_units_constants_editor.setProperty("datalab_schema_key", "error.units.constants")
+    output_row = QHBoxLayout()
+    output_row.addWidget(QLabel(owner._tr("输出 result 单位：", "Output result unit:")))
+    owner.error_units_output_edit = QLineEdit()
+    owner.error_units_output_edit.setPlaceholderText(owner._tr("例如 m", "e.g. m"))
+    owner.error_units_output_edit.setProperty("datalab_schema_key", "error.units.outputs.result")
+    owner.error_units_output_edit.setToolTip(
+        owner._tr(
+            "可选。验证模式下，公式结果单位必须与这里填写的 result 单位完全一致。",
+            "Optional. In validate mode, the formula result unit must exactly match this result unit.",
+        )
+    )
+    output_row.addWidget(owner.error_units_output_edit)
+    units_body_layout.addWidget(QLabel(owner._tr("输入单位：", "Input units:")))
+    units_body_layout.addWidget(owner.error_units_inputs_editor)
+    units_body_layout.addWidget(QLabel(owner._tr("常数单位：", "Constant units:")))
+    units_body_layout.addWidget(owner.error_units_constants_editor)
+    units_body_layout.addLayout(output_row)
+    units_layout.addWidget(owner.error_units_body)
+    error_layout.addWidget(owner.error_units_box)
+
+    def _update_error_units_controls() -> None:
+        enabled = owner.error_units_enabled_checkbox.isChecked()
+        owner.error_units_mode_combo.setEnabled(enabled)
+        owner.error_units_body.setVisible(enabled)
+        owner.error_units_body.setEnabled(enabled)
+
+    owner._update_error_units_controls = _update_error_units_controls
+    owner.error_units_enabled_checkbox.toggled.connect(lambda *_args: owner._update_error_units_controls())
+    owner._update_error_units_controls()
 
     method_row = QHBoxLayout()
     lbl_err_method = QLabel("方法：")
@@ -205,7 +257,7 @@ def build_error_mode_view(owner: Any) -> QGroupBox:
         lbl_mc_seed=lbl_mc_seed,
     )
 
-    owner._on_constants_source_toggle(owner.use_constants_file_checkbox.isChecked())
+    owner._update_error_propagation_controls()
     owner._update_error_propagation_controls()
     return error_box
 
@@ -242,37 +294,6 @@ def _bind_error_schema_fields(
         tooltip=LocalizedText(
             "查看公式中支持的函数和表达式语法。",
             "View supported functions and expression syntax for formulas.",
-        ),
-        required=False,
-    )
-    constants_use_file_field = FormFieldSpec(
-        key="error.constants.use_file",
-        widget_kind="checkbox",
-        label=LocalizedText("使用常数文件", "Use constants file"),
-        tooltip=LocalizedText(
-            "启用后从外部常数文件读取固定量；关闭时使用下方常数表。",
-            "When enabled, fixed values are read from an external constants file; otherwise the constants table below is used.",
-        ),
-        required=False,
-    )
-    constants_file_field = FormFieldSpec(
-        key="error.constants.file_path",
-        widget_kind="file",
-        label=LocalizedText("常数文件…", "Constants file…"),
-        placeholder=LocalizedText("选择常数文件", "Choose a constants file"),
-        tooltip=LocalizedText(
-            "常数文件每行填写名称和值，例如 ALPHA 7.2973525693(11)[-3]。",
-            "Constants files use one name and value per line, for example ALPHA 7.2973525693(11)[-3].",
-        ),
-        required=False,
-    )
-    constants_field = FormFieldSpec(
-        key="error.constants",
-        widget_kind="table",
-        label=LocalizedText("常数设置", "Constants"),
-        tooltip=LocalizedText(
-            "可选常数设置，支持表格和文本视图；关闭时不会向误差传递公式代入这些常数。",
-            "Optional constants for table or text entry; when disabled they are not substituted into the error propagation formula.",
         ),
         required=False,
     )
@@ -335,28 +356,6 @@ def _bind_error_schema_fields(
     view_helpers.register_schema_label_refresh(owner, lbl_error_formula, formula_field)
     bind_field(field=function_help_field, widget=owner.func_help_btn, lang=lang)
     register_schema_text_refresh(owner, function_help_field, widget=owner.func_help_btn)
-    bind_field(field=constants_use_file_field, widget=owner.use_constants_file_checkbox, lang=lang)
-    register_schema_text_refresh(owner, constants_use_file_field, widget=owner.use_constants_file_checkbox)
-    bind_field(
-        field=constants_file_field,
-        widget=owner.constants_file_edit,
-        help_button=owner.constants_hint_btn,
-        lang=lang,
-    )
-    register_schema_text_refresh(owner, constants_file_field, widget=owner.constants_file_edit)
-    bind_field(
-        field=constants_field,
-        widget=owner.error_constants_editor,
-        help_button=owner.error_constants_editor.help_button,
-        lang=lang,
-    )
-    register_schema_text_refresh(
-        owner,
-        constants_field,
-        widget=owner.error_constants_editor,
-        help_button=owner.error_constants_editor.help_button,
-    )
-    register_schema_text_refresh(owner, constants_field, widget=owner.error_constants_editor.checkbox)
     bind_field(field=method_field, label=lbl_error_method, widget=owner.error_method_combo, lang=lang)
     bind_choices(owner.error_method_combo, method_field.choices, lang=lang)
     register_schema_text_refresh(owner, method_field, widget=owner.error_method_combo)

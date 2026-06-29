@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Mapping
 from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import QMessageBox
 
 from data_extrapolation_latex_latest import ExtrapolationOptions, format_uncertainty_display_latex
 from datalab_core.statistics import build_statistics_requests
+from shared.unit_annotations import unit_annotations_for_labels
 
 from .workers_core import (
     CalcResult,
@@ -21,6 +23,14 @@ from .workers_core import (
     CalcJob,
 )
 from .workers_qt import CalcWorker, RootSolvingWorker
+
+_DIRECT_STATISTICS_WORKFLOWS = {
+    "bootstrap_confidence_intervals",
+    "covariance_correlation",
+    "grouped_statistics",
+    "hypothesis_tests",
+    "time_series_rolling",
+}
 
 
 def _widget_value(owner, attr_name: str, default: object) -> object:
@@ -39,6 +49,69 @@ def _combo_current_data(owner, attr_name: str, default: str) -> str:
         if value is not None and str(value).strip():
             return str(value)
     return default
+
+
+def _unit_rows_to_map(owner, editor_attr: str, label_zh: str, label_en: str) -> dict[str, str]:
+    editor = getattr(owner, editor_attr, None)
+    if editor is None:
+        return {}
+    rows_func = getattr(editor, "rows", None)
+    rows = rows_func() if callable(rows_func) else []
+    values: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        name = str(row.get("name") or "").strip()
+        unit = str(row.get("value") or "").strip()
+        if not name and not unit:
+            continue
+        if not name or not unit:
+            raise ValueError(owner._tr(f"{label_zh}的符号和单位都需要填写。", f"{label_en} requires both symbol and unit."))
+        if name in values:
+            raise ValueError(owner._tr(f"{label_zh}重复：{name}", f"Duplicate {label_en}: {name}"))
+        values[name] = unit
+    return values
+
+
+def _error_output_unit(units: object) -> str:
+    if not isinstance(units, Mapping):
+        return ""
+    outputs = units.get("outputs")
+    if not isinstance(outputs, Mapping):
+        return ""
+    result_unit = outputs.get("result")
+    if isinstance(result_unit, Mapping):
+        result_unit = result_unit.get("unit")
+    return str(result_unit or "").strip()
+
+
+def _error_csv_headers_for_units(units: object) -> list[str]:
+    headers = ["index", "value", "uncertainty", "latex"]
+    if _error_output_unit(units):
+        headers.append("output_unit")
+    return headers
+
+
+def _root_units_for_rows(rows: object, units: object) -> dict[str, str]:
+    if not isinstance(rows, list):
+        return {}
+    names = [
+        str(row.get("name") or "")
+        for row in rows
+        if isinstance(row, Mapping) and str(row.get("name") or "").strip()
+    ]
+    return unit_annotations_for_labels(
+        units,
+        "outputs",
+        names,
+        fallback_prefix="root",
+        default_key="result",
+    )
+
+
+def _label_with_unit(label: str, unit: str) -> str:
+    unit_text = str(unit or "").strip()
+    return f"{label} [{unit_text}]" if unit_text else label
 
 
 def _read_extrapolation_method_options_from_controls(owner) -> dict[str, object]:
@@ -111,7 +184,12 @@ class WindowExtrapolationMixin:
             return
 
         mode = self.mode_combo.currentData()
-        data_path, manual_content = self._active_data_source()
+        try:
+            input_bundle = self._active_input_bundle()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, self._tr("错误", "Error"), self._localize_text(str(exc)))
+            return
+        data_path, manual_content = input_bundle.data_path, input_bundle.data_text
         if mode == "root_solving":
             generate_latex = self.generate_latex_checkbox.isChecked()
             output_path = ""
@@ -133,13 +211,9 @@ class WindowExtrapolationMixin:
             )
             return
 
-        constants_editor = getattr(self, "error_constants_editor", None)
-        manual_constants_content = (
-            constants_editor.text().strip()
-            if constants_editor is not None and constants_editor.isChecked()
-            else ""
-        )
+        manual_constants_content = input_bundle.constants_text.strip()
         use_file_mode = getattr(self, "use_file_checkbox", None).isChecked() if hasattr(self, "use_file_checkbox") else False
+        use_constants_file = self.use_constants_file_checkbox.isChecked() if hasattr(self, "use_constants_file_checkbox") else False
 
         if data_path:
             data_path = _safe_resolve_path(str(data_path))
@@ -150,7 +224,7 @@ class WindowExtrapolationMixin:
                     self._tr("请选择有效的数据文件路径。", "Please select a valid data file path."),
                 )
                 return
-        if use_file_mode and not data_path:
+        if use_file_mode and not data_path and not manual_content:
             QMessageBox.critical(
                 self,
                 self._tr("错误", "Error"),
@@ -293,8 +367,8 @@ class WindowExtrapolationMixin:
                     use_dcolumn=use_dcolumn,
                     verbose=verbose,
                     render_plots=generate_plots,
-                    constants_enabled=constants_editor.isChecked() if constants_editor is not None else False,
-                    use_constants_file=self.use_constants_file_checkbox.isChecked() if hasattr(self, "use_constants_file_checkbox") else False,
+                    constants_enabled=bool(use_constants_file or manual_constants_content),
+                    use_constants_file=use_constants_file,
                     formula=self.formula_edit.toPlainText().strip() if mode == "error" else None,
                     error_propagation_method=error_method,
                     error_propagation_order=error_order,
@@ -304,6 +378,7 @@ class WindowExtrapolationMixin:
                     latex_digits=self.latex_input_precision_spin.value() if hasattr(self, "latex_input_precision_spin") else 16,
                     latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
                     uncertainty_digits=uncertainty_digits,
+                    units_config=self._collect_error_units_config() if mode == "error" else None,
                 )
                 worker = CalcWorker(job)
                 worker.finished_ok.connect(self._on_calc_finished)
@@ -316,6 +391,11 @@ class WindowExtrapolationMixin:
                 self._start_worker_with_workbench_result_state(worker)
                 return
             if mode == "statistics":
+                workflow_mode = _combo_current_data(self, "stats_workflow_combo", "standard")
+                if workflow_mode in _DIRECT_STATISTICS_WORKFLOWS:
+                    self._run_statistics_mode(generate_latex, output_path)
+                    self.tabs.setCurrentIndex(self.result_tab_index)
+                    return
                 headers, rows, sigma_rows, segments, _ = self._collect_batched_fitting_dataset(precision_hint=self._peek_user_precision())
                 dataset = (headers, rows, sigma_rows)
                 stats_value_col = self.stats_value_column_edit.text().strip()
@@ -323,6 +403,12 @@ class WindowExtrapolationMixin:
                 stats_mode = self.stats_mode_combo.currentData()
                 stats_sample = self.stats_sample_checkbox.isChecked()
                 stats_weighted_variance = self.stats_weight_variance_checkbox.isChecked()
+                stats_trim_fraction = (
+                    self.stats_trim_fraction_edit.text()
+                    if hasattr(self, "stats_trim_fraction_edit")
+                    else None
+                )
+                stats_units_config = self._collect_statistics_units_config()
                 core_request = None
                 try:
                     core_batches = build_statistics_requests(
@@ -334,13 +420,17 @@ class WindowExtrapolationMixin:
                         stats_mode=stats_mode or "mean",
                         use_sample=stats_sample,
                         use_weighted_variance=stats_weighted_variance,
+                        trim_fraction=stats_trim_fraction,
                         precision_digits=mp_precision,
                         uncertainty_digits=uncertainty_digits,
                         segments=segments,
                         request_id_prefix="desktop-statistics",
+                        units=stats_units_config,
                     )
                     core_request = core_batches[0].request if core_batches else None
                 except Exception:  # noqa: BLE001 - projection must not alter legacy worker validation.
+                    if stats_units_config is not None:
+                        raise
                     core_request = None
                 job = CalcJob(
                     mode=mode,
@@ -363,6 +453,7 @@ class WindowExtrapolationMixin:
                     stats_mode=stats_mode,
                     stats_sample=stats_sample,
                     stats_weighted_variance=stats_weighted_variance,
+                    stats_trim_fraction=stats_trim_fraction,
                     dataset=dataset,
                     latex_digits=self.latex_input_precision_spin.value(),
                     latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
@@ -461,20 +552,35 @@ class WindowExtrapolationMixin:
                 precision_used = result.payload.get("precision_used")
                 if precision_used:
                     self._current_precision = precision_used
-                self._show_error_results(headers, parsed, results, formula)
+                self._show_error_results(
+                    headers,
+                    parsed,
+                    results,
+                    formula,
+                    precision_used=precision_used,
+                    warnings=result.warnings,
+                    propagation=result.payload.get("propagation"),
+                    units=result.payload.get("units"),
+                )
                 breakdown = result.payload.get("contribution_breakdown")
                 plot_bytes = result.payload.get("contribution_plot")
                 row_plots = result.payload.get("row_contribution_plots")
+                distribution_plots = result.payload.get("row_distribution_plots")
                 if breakdown or plot_bytes:
                     self._display_error_contributions(breakdown or [], plot_bytes)
-                if row_plots:
+                if row_plots or distribution_plots:
                     figure_paths: list[Path] = []
-                    for idx, plot in enumerate(row_plots, 1):
-                        if not plot:
+                    image_index = 1
+                    for plot_list in (row_plots, distribution_plots):
+                        if not isinstance(plot_list, list):
                             continue
-                        img_path = self._save_batch_figure(plot, "", idx, prefix="error")
-                        if img_path:
-                            figure_paths.append(img_path)
+                        for plot in plot_list:
+                            if not plot:
+                                continue
+                            img_path = self._save_batch_figure(plot, "", image_index, prefix="error")
+                            image_index += 1
+                            if img_path:
+                                figure_paths.append(img_path)
                     self._set_image_list("error", figure_paths)
             elif result.mode == "statistics":
                 precision_used = result.payload.get("precision_used")
@@ -625,6 +731,7 @@ class WindowExtrapolationMixin:
                 group_size=int(payload.get("latex_group_size", 3)),
                 include_dcolumn=bool(payload.get("latex_include_dcolumn", False)),
                 language=str(payload.get("latex_language", "zh") or "zh"),
+                root_units=_root_units_for_rows(raw_rows, payload.get("units")),
             )
             self._append_log(self._tr(f"求根 LaTeX 已写入: {tex_path}", f"Root LaTeX written: {tex_path}"))
             self._load_latex_into_editor(tex_path)
@@ -837,6 +944,7 @@ class WindowExtrapolationMixin:
         data_rows,
         results,
         formula: str,
+        units=None,
     ) -> tuple[str, list[dict[str, object]]]:
         """Return Markdown-formatted text and CSV rows for error propagation results."""
         lines = [
@@ -853,8 +961,9 @@ class WindowExtrapolationMixin:
 
         # Markdown table
         h_idx = self._tr("#", "#")
-        h_val = self._tr("值", "Value")
-        h_unc = self._tr("不确定度", "Uncertainty")
+        output_unit = _error_output_unit(units)
+        h_val = _label_with_unit(self._tr("值", "Value"), output_unit)
+        h_unc = _label_with_unit(self._tr("不确定度", "Uncertainty"), output_unit)
         h_ltx = self._tr("LaTeX", "LaTeX")
         lines.append(f"| {h_idx} | {h_val} | {h_unc} | {h_ltx} |")
         lines.append("| --- | --- | --- | --- |")
@@ -886,17 +995,133 @@ class WindowExtrapolationMixin:
                     "latex": latex_display,
                 }
             )
+            if output_unit:
+                csv_rows[-1]["output_unit"] = output_unit
         lines.append("")
         return "\n".join(lines), csv_rows
 
-    def _show_error_results(self, headers, data_rows, results, formula):
-        text, csv_rows = self._format_error_display(headers=headers, data_rows=data_rows, results=results, formula=formula)
+    def _show_error_results(
+        self,
+        headers,
+        data_rows,
+        results,
+        formula,
+        *,
+        precision_used=None,
+        warnings=(),
+        propagation=None,
+        units=None,
+    ):
+        text, csv_rows = self._format_error_display(
+            headers=headers,
+            data_rows=data_rows,
+            results=results,
+            formula=formula,
+            units=units,
+        )
         self._set_result_text(text, final_result=True)
         if csv_rows:
-            self._set_csv_data(csv_rows, ["index", "value", "uncertainty", "latex"], suggestion="error_propagation_results.csv")
+            self._set_csv_data(csv_rows, _error_csv_headers_for_units(units), suggestion="error_propagation_results.csv")
         else:
             self._reset_csv_data()
-        self._remember_last_result("error", {"headers": headers, "data_rows": data_rows, "results": results, "formula": formula})
+        payload = {"headers": headers, "data_rows": data_rows, "results": results, "formula": formula}
+        if precision_used is not None:
+            payload["precision_used"] = precision_used
+        if warnings:
+            payload["warnings"] = list(warnings) if not isinstance(warnings, str) else warnings
+        if propagation is not None:
+            payload["propagation"] = propagation
+        if units is not None:
+            payload["units"] = units
+        self._remember_last_result("error", payload)
+
+    def _collect_error_units_config(self):
+        checkbox = getattr(self, "error_units_enabled_checkbox", None)
+        if checkbox is None:
+            units = getattr(self, "error_units_config", None)
+            return units if isinstance(units, Mapping) else None
+        if not checkbox.isChecked():
+            return None
+        units: dict[str, object] = {
+            "enabled": True,
+            "mode": _combo_current_data(self, "error_units_mode_combo", "display_only"),
+            "inputs": _unit_rows_to_map(self, "error_units_inputs_editor", "输入单位", "input units"),
+            "constants": _unit_rows_to_map(self, "error_units_constants_editor", "常数单位", "constant units"),
+        }
+        output_edit = getattr(self, "error_units_output_edit", None)
+        output_unit = output_edit.text().strip() if output_edit is not None else ""
+        if output_unit:
+            units["outputs"] = {"result": output_unit}
+        return units
+
+    def _collect_display_units_config(
+        self,
+        attr_prefix: str,
+        *,
+        label_zh: str,
+        label_en: str,
+        include_constants: bool = False,
+        include_parameters: bool = False,
+    ):
+        checkbox = getattr(self, f"{attr_prefix}_units_enabled_checkbox", None)
+        if checkbox is None:
+            units = getattr(self, f"{attr_prefix}_units_config", None)
+            return units if isinstance(units, Mapping) else None
+        if not checkbox.isChecked():
+            return None
+        units: dict[str, object] = {
+            "enabled": True,
+            "mode": "display_only",
+            "inputs": _unit_rows_to_map(
+                self,
+                f"{attr_prefix}_units_inputs_editor",
+                f"{label_zh}输入单位",
+                f"{label_en} input units",
+            ),
+        }
+        if include_constants:
+            units["constants"] = _unit_rows_to_map(
+                self,
+                f"{attr_prefix}_units_constants_editor",
+                f"{label_zh}常数单位",
+                f"{label_en} constant units",
+            )
+        if include_parameters:
+            units["parameters"] = _unit_rows_to_map(
+                self,
+                f"{attr_prefix}_units_parameters_editor",
+                f"{label_zh}参数单位",
+                f"{label_en} parameter units",
+            )
+        output_edit = getattr(self, f"{attr_prefix}_units_output_edit", None)
+        output_unit = output_edit.text().strip() if output_edit is not None else ""
+        if output_unit:
+            units["outputs"] = {"result": output_unit}
+        return units
+
+    def _collect_root_units_config(self):
+        return self._collect_display_units_config(
+            "root",
+            label_zh="求根",
+            label_en="root-solving",
+            include_constants=True,
+        )
+
+    def _collect_statistics_units_config(self):
+        return self._collect_display_units_config(
+            "stats",
+            label_zh="统计",
+            label_en="statistics",
+        )
+
+    def _collect_fitting_units_config(self):
+        return self._collect_display_units_config(
+            "fit",
+            label_zh="拟合",
+            label_en="fitting",
+            include_constants=True,
+            include_parameters=True,
+        )
 
     def _split_extrapolation_result(self, result):
         return split_extrapolation_result(result)

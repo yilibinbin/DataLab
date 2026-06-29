@@ -5,7 +5,6 @@ from typing import Any
 from PySide6.QtCore import QEvent, QObject, QSize, QTimer
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -40,14 +39,6 @@ from app_desktop.ui_schema_binder import (
     TOOLTIP_ZH_PROPERTY,
 )
 from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS, FormulaMount
-from datalab_latex.formula_render_service import InputLanguage
-
-_PREVIEW_LANGUAGES: tuple[InputLanguage, ...] = (
-    InputLanguage.DATALAB,
-    InputLanguage.PYTHON,
-    InputLanguage.MATHEMATICA,
-    InputLanguage.LATEX,
-)
 
 
 class _CurrentPageSizeStack(QStackedWidget):
@@ -109,22 +100,6 @@ def build_formula_workspace_panel(owner: Any) -> QWidget:
     _reserve_formula_actions_width(owner, owner.workbench_formula_empty_actions_page)
     layout.addWidget(title_row)
 
-    owner.workbench_formula_language_row = QWidget()
-    owner.workbench_formula_language_row.setObjectName("workbench_formula_language_row")
-    language_layout = QHBoxLayout(owner.workbench_formula_language_row)
-    language_layout.setContentsMargins(0, 0, 0, 0)
-    language_layout.setSpacing(6)
-    owner.workbench_formula_language_label = QLabel(owner._tr("预览语法：", "Preview syntax:"))
-    owner.workbench_formula_language_label.setObjectName("workbench_formula_language_label")
-    language_layout.addWidget(owner.workbench_formula_language_label)
-    owner.workbench_formula_language_combo = QComboBox()
-    owner.workbench_formula_language_combo.setObjectName("workbench_formula_language_combo")
-    for language in _PREVIEW_LANGUAGES:
-        owner.workbench_formula_language_combo.addItem(language.value, language.value)
-    language_layout.addWidget(owner.workbench_formula_language_combo)
-    language_layout.addStretch()
-    layout.addWidget(owner.workbench_formula_language_row)
-
     owner.workbench_formula_description_label = QLabel("")
     owner.workbench_formula_description_label.setObjectName("workbench_formula_description_label")
     owner.workbench_formula_description_label.setWordWrap(True)
@@ -158,11 +133,6 @@ def build_formula_workspace_panel(owner: Any) -> QWidget:
     layout.addWidget(owner.workbench_formula_error_label)
 
     owner._workbench_active_formula_attr = ""
-    owner._workbench_formula_preview_languages = {}
-    owner._workbench_formula_language_syncing = False
-    owner.workbench_formula_language_combo.currentIndexChanged.connect(
-        lambda _index: _on_formula_language_changed(owner)
-    )
 
     owner._workbench_formula_refresh_timer = QTimer(owner)
     owner._workbench_formula_refresh_timer.setSingleShot(True)
@@ -458,7 +428,6 @@ def refresh_formula_workspace_panel(owner: Any) -> None:
     if mount is None:
         if title is not None:
             title.setText(owner._tr("公式预览", "Formula preview"))
-        _sync_formula_language_controls(owner, None)
         _show_formula_actions(owner, None)
         _show_formula_function_button(owner, False)
         if panel is not None:
@@ -471,8 +440,6 @@ def refresh_formula_workspace_panel(owner: Any) -> None:
 
     if panel is not None:
         panel.setVisible(True)
-    language = _formula_language_for_mount(owner, mount)
-    _sync_formula_language_controls(owner, mount)
     editor = getattr(owner, mount.editor_attr)
     if title is not None:
         title.setText(_formula_panel_title(owner, mode))
@@ -487,7 +454,6 @@ def refresh_formula_workspace_panel(owner: Any) -> None:
         label,
         text,
         lhs=mount.lhs,
-        language=language,
         constrain_size=True,
         empty_text=owner._tr(
             "输入公式后将在此渲染预览；点击预览可放大查看。",
@@ -502,82 +468,6 @@ def refresh_formula_workspace_panel(owner: Any) -> None:
     else:
         _set_formula_error(owner, "")
     _localize_preview_label(owner, label)
-
-
-def _on_formula_language_changed(owner: Any) -> None:
-    if bool(getattr(owner, "_workbench_formula_language_syncing", False)):
-        return
-    mount = current_formula_mount(owner)
-    if mount is None:
-        return
-    combo = getattr(owner, "workbench_formula_language_combo", None)
-    if combo is None:
-        return
-    language = _coerce_preview_language(combo.currentData())
-    _formula_language_state(owner)[mount.schema_key] = language.value
-    if hasattr(owner, "_mark_workspace_dirty") and not getattr(owner, "_workspace_restoring", False):
-        owner._mark_workspace_dirty()
-    schedule_formula_workspace_refresh(owner, mount.editor_attr)
-
-
-def _formula_language_state(owner: Any) -> dict[str, str]:
-    state = getattr(owner, "_workbench_formula_preview_languages", None)
-    if not isinstance(state, dict):
-        state = {}
-        owner._workbench_formula_preview_languages = state
-    return state
-
-
-def _formula_language_for_mount(owner: Any, mount: FormulaMount) -> InputLanguage:
-    return _coerce_preview_language(_formula_language_state(owner).get(mount.schema_key))
-
-
-def _coerce_preview_language(value: object) -> InputLanguage:
-    try:
-        language = InputLanguage(str(value))
-    except ValueError:
-        return InputLanguage.DATALAB
-    if language not in _PREVIEW_LANGUAGES:
-        return InputLanguage.DATALAB
-    return language
-
-
-def _sync_formula_language_controls(owner: Any, mount: FormulaMount | None) -> None:
-    row = getattr(owner, "workbench_formula_language_row", None)
-    label = getattr(owner, "workbench_formula_language_label", None)
-    combo = getattr(owner, "workbench_formula_language_combo", None)
-    if row is None or label is None or combo is None:
-        return
-    if combo.count() == 0:
-        return
-    tooltip = owner._tr(
-        "仅影响预览解析方式；不会修改公式文本或计算。",
-        "Controls preview only; it does not modify formula text or computation.",
-    )
-    label.setText(owner._tr("预览语法：", "Preview syntax:"))
-    label.setToolTip(tooltip)
-    label.setAccessibleDescription(tooltip)
-    combo.setToolTip(tooltip)
-    combo.setAccessibleDescription(tooltip)
-    language_labels = {
-        InputLanguage.DATALAB: owner._tr("DataLab 兼容", "DataLab compatible"),
-        InputLanguage.PYTHON: owner._tr("Python 风格", "Python style"),
-        InputLanguage.MATHEMATICA: owner._tr("Mathematica 风格", "Mathematica style"),
-        InputLanguage.LATEX: owner._tr("LaTeX 源码", "LaTeX source"),
-    }
-    owner._workbench_formula_language_syncing = True
-    try:
-        for index, language in enumerate(_PREVIEW_LANGUAGES):
-            combo.setItemText(index, language_labels[language])
-        row.setVisible(mount is not None)
-        combo.setEnabled(mount is not None)
-        if mount is not None:
-            language = _formula_language_for_mount(owner, mount)
-            combo_index = combo.findData(language.value)
-            if combo_index >= 0:
-                combo.setCurrentIndex(combo_index)
-    finally:
-        owner._workbench_formula_language_syncing = False
 
 
 def _set_formula_error(owner: Any, message: str) -> None:

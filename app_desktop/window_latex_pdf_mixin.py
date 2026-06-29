@@ -302,11 +302,34 @@ class WindowLatexPdfMixin:
         target = self._persist_latex_editor(silent=True)
         if not target:
             return
-        engine = self.latex_engine_combo.currentText()
-        engine_exec = self._ensure_latex_engine(engine)
+        requested_engine = self.latex_engine_combo.currentText()
+        engine = requested_engine
+        used_default_engine_fallback = False
+        is_default_tectonic = requested_engine.strip().lower() == "tectonic"
+        if is_default_tectonic:
+            engine_exec = self._resolve_latex_engine_no_prompt(engine)
+        else:
+            engine_exec = self._ensure_latex_engine(engine)
+        if not engine_exec and is_default_tectonic:
+            for fallback_engine in self._latex_compile_fallback_candidates(requested_engine):
+                fallback_exec = self._resolve_latex_engine_no_prompt(fallback_engine)
+                fallback_path = _safe_resolve_path(fallback_exec) if fallback_exec else None
+                if fallback_path is not None and fallback_path.exists():
+                    engine = fallback_engine
+                    engine_exec = str(fallback_path)
+                    used_default_engine_fallback = True
+                    self._append_log(
+                        self._tr(
+                            f"请求的 LaTeX 引擎 {requested_engine} 不可用，改用 {engine}: {fallback_path}",
+                            f"Requested LaTeX engine {requested_engine} is unavailable; using {engine}: {fallback_path}",
+                        )
+                    )
+                    break
+        if not engine_exec and is_default_tectonic:
+            engine_exec = self._ensure_latex_engine(engine)
         if not engine_exec:
-            msg_zh = f"未找到 {engine}，请安装或指定路径。"
-            msg_en = f"{engine} not found. Please install it or specify the path."
+            msg_zh = f"未找到 {requested_engine}，请安装或指定路径。"
+            msg_en = f"{requested_engine} not found. Please install it or specify the path."
             QMessageBox.critical(
                 self,
                 self._tr("缺少 LaTeX 引擎", "Missing LaTeX Engine"),
@@ -321,13 +344,29 @@ class WindowLatexPdfMixin:
                 self._tr("指定的 LaTeX 引擎不可用。", "Specified LaTeX engine is not available."),
             )
             return
+        self._append_log(
+            self._tr(
+                f"LaTeX 引擎: {engine} ({engine_path})",
+                f"LaTeX engine: {engine} ({engine_path})",
+            )
+        )
         pdf_dir = target.parent
         pdf_path = pdf_dir / (target.stem + ".pdf")
-        fallback = "xelatex" if engine.lower() == "pdflatex" else "pdflatex"
-        alt_exec = self._resolve_latex_engine_no_prompt(fallback)
-        fallback_path = _safe_resolve_path(alt_exec) if alt_exec else None
-        if fallback_path is not None and not fallback_path.exists():
-            fallback_path = None
+        fallback: str | None = None
+        fallback_path: Path | None = None
+        if used_default_engine_fallback:
+            fallback = "xelatex" if engine.lower() == "pdflatex" else "pdflatex"
+            alt_exec = self._resolve_latex_engine_no_prompt(fallback)
+            fallback_path = _safe_resolve_path(alt_exec) if alt_exec else None
+            if fallback_path is not None and not fallback_path.exists():
+                fallback_path = None
+            if fallback_path is not None:
+                self._append_log(
+                    self._tr(
+                        f"LaTeX 备用引擎: {fallback} ({fallback_path})",
+                        f"LaTeX fallback engine: {fallback} ({fallback_path})",
+                    )
+                )
 
         progress = QProgressDialog(
             self._tr("正在编译 LaTeX…", "Compiling LaTeX…"),
@@ -360,6 +399,11 @@ class WindowLatexPdfMixin:
         worker.finished.connect(worker.deleteLater)
         progress.show()
         worker.start()
+
+    def _latex_compile_fallback_candidates(self, requested_engine: str) -> tuple[str, ...]:
+        requested = (requested_engine or "").strip().lower()
+        candidates = ("xelatex", "pdflatex", "tectonic")
+        return tuple(candidate for candidate in candidates if candidate != requested)
 
     def _on_latex_compile_completed(self, outcome: _LatexCompileOutcome) -> None:
         progress = getattr(self, "_latex_compile_progress", None)

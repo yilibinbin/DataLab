@@ -9,7 +9,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -24,14 +23,8 @@ from datalab_latex.formula_render_service import (
     InputLanguage,
     RenderRequest,
     RenderResult,
-    format_formula_latex,
-    render_formula,
 )
-from app_desktop.formula_tex_render_worker import (
-    FormulaTexRenderWorker,
-    TexRenderRequest,
-    TexRenderResult,
-)
+from app_desktop.formula_renderer import render_desktop_preview
 from app_desktop.theme import (
     formula_inline_preview_style,
     formula_preview_error_surface_style,
@@ -107,63 +100,17 @@ class FormulaPreviewDialog(QDialog):
         self.expression_text.setStyleSheet(formula_preview_source_edit_style())
         layout.addWidget(self.expression_text)
 
-        self.render_tier_combo = QComboBox()
-        self.render_tier_combo.setObjectName("formula_preview_render_tier_combo")
-        self.render_tier_combo.addItem(self._tr("数学预览", "Math preview"), "mathtext")
-        self.render_tier_combo.addItem(self._tr("高保真 LaTeX", "High-fidelity LaTeX"), "high_fidelity_latex")
-        self.render_tier_combo.setToolTip(
-            self._tr(
-                "仅控制预览渲染方式；不会改变计算输入。",
-                "Controls preview rendering only; it does not change computation input.",
-            )
-        )
-        layout.addWidget(self.render_tier_combo)
-
-        self.latex_source_edit = QPlainTextEdit()
-        self.latex_source_edit.setObjectName("formula_preview_latex_source_edit")
-        self.latex_source_edit.setPlainText(self._default_latex_source())
-        self.latex_source_edit.setMinimumHeight(84)
-        self.latex_source_edit.setToolTip(
-            self._tr(
-                "仅用于高保真预览显示的 LaTeX 源；不会用于计算。",
-                "Display-only LaTeX source for high-fidelity preview; this is never used for computation.",
-            )
-        )
-        self.latex_source_edit.setStyleSheet(formula_preview_source_edit_style())
-        layout.addWidget(self.latex_source_edit)
-
-        self.high_fidelity_status_label = QLabel("")
-        self.high_fidelity_status_label.setObjectName("formula_preview_high_fidelity_status")
-        self.high_fidelity_status_label.setWordWrap(True)
-        layout.addWidget(self.high_fidelity_status_label)
-
         button_row = QHBoxLayout()
-        self.high_fidelity_render_button = QPushButton(self._tr("渲染", "Render"))
-        self.high_fidelity_render_button.setObjectName("formula_preview_high_fidelity_render_button")
-        self.high_fidelity_render_button.setToolTip(
-            self._tr(
-                "使用已安装的 TeX 引擎渲染仅显示用 LaTeX 源。所需宏包必须已缓存；此预览不会安装或下载 TeX 宏包。",
-                "Render the display-only LaTeX source with an installed TeX engine. "
-                "Packages must already be cached; this preview does not install or download TeX packages.",
-            )
-        )
-        self.high_fidelity_render_button.clicked.connect(self._start_high_fidelity_render)
-        button_row.addWidget(self.high_fidelity_render_button)
-        button_row.addStretch()
         self.copy_button = QPushButton(self._tr("复制", "Copy"))
         self.copy_button.clicked.connect(self._copy_expression)
+        button_row.addStretch(1)
         button_row.addWidget(self.copy_button)
         self.close_button = QPushButton(self._tr("关闭", "Close"))
         self.close_button.clicked.connect(self.accept)
         button_row.addWidget(self.close_button)
         layout.addLayout(button_row)
 
-        self._formula_tex_worker = None
-        self._formula_tex_job_id = 0
-        self.render_tier_combo.currentIndexChanged.connect(lambda _index: self._sync_high_fidelity_controls())
-        self._sync_high_fidelity_controls()
         self._render_formula()
-        self._formula_tex_retained_workers = set()
 
     def _tr(self, zh: str, en: str) -> str:
         return _translate_for_widget(self.parentWidget(), zh, en)
@@ -189,135 +136,9 @@ class FormulaPreviewDialog(QDialog):
             )
             self.error_label.show()
 
-    def _default_latex_source(self) -> str:
-        if not self.expression.strip():
-            return ""
-        try:
-            latex = format_formula_latex(self.expression)
-            return f"{self.lhs} = {latex}" if self.lhs else latex
-        except Exception:  # noqa: BLE001
-            return self.expression
-
-    def _sync_high_fidelity_controls(self) -> None:
-        high_fidelity = self.render_tier_combo.currentData() == "high_fidelity_latex"
-        if not high_fidelity:
-            if self._formula_tex_worker is not None:
-                self._formula_tex_job_id += 1
-                self._cancel_formula_tex_worker()
-            self._render_formula()
-        self.latex_source_edit.setEnabled(high_fidelity)
-        self.high_fidelity_render_button.setEnabled(high_fidelity)
-
-    def _start_high_fidelity_render(self) -> None:
-        self._cancel_formula_tex_worker()
-        self._formula_tex_job_id += 1
-        job_id = self._formula_tex_job_id
-        request = TexRenderRequest(
-            latex=self.latex_source_edit.toPlainText(),
-            engine="tectonic",
-            dpi=180,
-        )
-        worker = FormulaTexRenderWorker(request)
-        self._formula_tex_worker = worker
-        worker.finished_ok.connect(lambda result, _job_id=job_id: self._on_high_fidelity_finished(_job_id, result))
-        worker.failed.connect(lambda message, _job_id=job_id: self._on_high_fidelity_failed(_job_id, message))
-        worker.cancelled.connect(lambda _job_id=job_id: self._on_high_fidelity_cancelled(_job_id))
-        finished = getattr(worker, "finished", None)
-        if finished is not None:
-            finished.connect(lambda _worker=worker: self._release_formula_tex_worker(_worker))
-            finished.connect(worker.deleteLater)
-        self.high_fidelity_render_button.setEnabled(False)
-        self.high_fidelity_status_label.setText(self._tr("正在渲染高保真预览...", "Rendering high-fidelity preview..."))
-        worker.start()
-
-    def _on_high_fidelity_finished(self, job_id: int, result: TexRenderResult) -> None:
-        if job_id != self._formula_tex_job_id:
-            return
-        pixmap = QPixmap()
-        if result.ok and result.png_bytes and _load_png_pixmap(pixmap, result.png_bytes):
-            self.formula_surface.setPixmap(pixmap)
-            self.formula_surface.setText("")
-            self.error_label.hide()
-            cache_text = self._tr("（缓存）", " (cache)") if result.from_cache else ""
-            self.high_fidelity_status_label.setText(
-                self._tr(f"高保真预览已生成{cache_text}。", f"High-fidelity preview ready{cache_text}.")
-            )
-        else:
-            self._show_high_fidelity_failed(result.error_message or self._tr("高保真渲染不可用。", "High-fidelity rendering unavailable."))
-        self._finish_high_fidelity_worker(job_id)
-
-    def _on_high_fidelity_failed(self, job_id: int, message: str) -> None:
-        if job_id != self._formula_tex_job_id:
-            return
-        self._show_high_fidelity_failed(message)
-        self._finish_high_fidelity_worker(job_id)
-
-    def _show_high_fidelity_failed(self, message: str) -> None:
-        self.error_label.setText(message)
-        self.error_label.show()
-        self.high_fidelity_status_label.setText(
-            self._tr(
-                "高保真预览不可用；请确认 TeX 宏包已安装或缓存。",
-                "High-fidelity preview unavailable; ensure TeX packages are installed or cached.",
-            )
-        )
-
-    def _on_high_fidelity_cancelled(self, job_id: int) -> None:
-        if job_id != self._formula_tex_job_id:
-            return
-        self.high_fidelity_status_label.setText(self._tr("高保真预览已取消。", "High-fidelity preview cancelled."))
-        self._finish_high_fidelity_worker(job_id)
-
-    def _finish_high_fidelity_worker(self, job_id: int) -> None:
-        if job_id != self._formula_tex_job_id:
-            return
-        worker = self._formula_tex_worker
-        self._disconnect_formula_tex_worker()
-        self.high_fidelity_render_button.setEnabled(self.render_tier_combo.currentData() == "high_fidelity_latex")
-        if worker is not None:
-            self._retain_formula_tex_worker(worker)
-        self._formula_tex_worker = None
-
-    def _cancel_formula_tex_worker(self) -> None:
-        worker = self._formula_tex_worker
-        if worker is not None and hasattr(worker, "request_stop"):
-            worker.request_stop()
-        # Cancellation is cooperative and TeX subprocess cleanup happens in
-        # the worker. Do not wait here: the dialog must stay responsive. The
-        # custom result signals are disconnected so a superseded/closing
-        # worker cannot mutate UI. Keep QThread.finished -> deleteLater, when
-        # present, so the thread object can finish its own Qt lifecycle.
-        self._disconnect_formula_tex_worker()
-        if worker is not None:
-            self._retain_formula_tex_worker(worker)
-        self._formula_tex_worker = None
-
-    def _retain_formula_tex_worker(self, worker: object) -> None:
-        if not hasattr(worker, "finished"):
-            return
-        self._formula_tex_retained_workers.add(worker)
-
-    def _release_formula_tex_worker(self, worker: object) -> None:
-        self._formula_tex_retained_workers.discard(worker)
-
-    def _disconnect_formula_tex_worker(self) -> None:
-        worker = self._formula_tex_worker
-        if worker is None:
-            return
-        for signal in (worker.finished_ok, worker.failed, worker.cancelled):
-            try:
-                signal.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-
     def _copy_expression(self) -> None:
         clipboard = QApplication.clipboard()
         clipboard.setText(self.expression)
-
-    def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        self._formula_tex_job_id += 1
-        self._cancel_formula_tex_worker()
-        super().closeEvent(event)
 
 
 def open_formula_preview_dialog(
@@ -384,7 +205,9 @@ def render_formula_pixmap(
 
     Returns ``None`` for invalid/empty input or when the optional renderer is
     unavailable. This never calls external LaTeX; matplotlib is imported lazily
-    and only uses its built-in mathtext renderer.
+    and only uses its built-in mathtext renderer. The ``language`` keyword is a
+    legacy compatibility shim and is intentionally ignored; preview input is
+    always interpreted as DataLab formula syntax.
     """
     text = (expression or "").strip()
     if not text:
@@ -392,7 +215,7 @@ def render_formula_pixmap(
     if lhs is not None and not _is_identifier(lhs):
         return None
 
-    result = render_formula(RenderRequest(source=text, language=InputLanguage(language), lhs=lhs))
+    result = render_desktop_preview(RenderRequest(source=text, language=InputLanguage.DATALAB, lhs=lhs))
     if not result.ok or not result.png_bytes:
         return None
     pixmap = QPixmap()
@@ -420,7 +243,11 @@ def update_formula_preview_with_empty_text(
     language: InputLanguage | str = InputLanguage.DATALAB,
     constrain_size: bool = False,
 ) -> RenderResult | None:
-    """Update ``label`` with a rendered preview, fallback text, or empty-state copy."""
+    """Update ``label`` with a rendered preview, fallback text, or empty-state copy.
+
+    The ``language`` keyword is retained for old callers but is intentionally
+    inert; preview input is always interpreted as DataLab formula syntax.
+    """
     configure_formula_preview_label(label, constrain_size=constrain_size)
     if hasattr(label, "set_preview_source"):
         label.set_preview_source(expression or "", lhs)
@@ -428,10 +255,10 @@ def update_formula_preview_with_empty_text(
         label.setPixmap(QPixmap())
         label.setText(empty_text or "")
         return None
-    result = render_formula(
+    result = render_desktop_preview(
         RenderRequest(
             source=(expression or "").strip(),
-            language=InputLanguage(language),
+            language=InputLanguage.DATALAB,
             lhs=lhs,
         )
     )

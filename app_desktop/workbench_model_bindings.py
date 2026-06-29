@@ -6,6 +6,7 @@ from typing import Any
 MODEL_PATH_PROPERTY = "datalab_model_path"
 
 STATE_ROLE_MODEL_PATHS: dict[str, str] = {
+    "input_constants_owner": "compute.constants",
     "manual_data_owner": "compute.data",
     "manual_table_editor": "compute.data.canonical_table",
     "manual_text_editor": "compute.data.decoded_text",
