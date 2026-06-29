@@ -269,6 +269,15 @@ if (Test-Path $exampleWorkspacesDir) {
     Write-Warning ("Example workspaces directory not found: {0}" -f $exampleWorkspacesDir)
 }
 
+$exampleRecipesDir = Join-Path $projectRoot "examples\\recipes"
+if (Test-Path $exampleRecipesDir) {
+    $exampleRecipesAbs = (Resolve-Path $exampleRecipesDir).Path
+    Write-Host ("[info] Including example recipes: {0}" -f $exampleRecipesAbs)
+    $dataArgs += @("--add-data", ("{0};examples\\recipes" -f $exampleRecipesAbs))
+} else {
+    Write-Warning ("Example recipes directory not found: {0}" -f $exampleRecipesDir)
+}
+
 # Bundle shared help specs used by "?" help buttons.
 $helpSpecsFile = Join-Path $projectRoot "shared\\help_specs.json"
 if (Test-Path $helpSpecsFile) {
