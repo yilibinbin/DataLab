@@ -246,15 +246,11 @@ Goal: complete the approved formula-rendering plan before broad UI rewrites.
 
 Tasks:
 
-1. Define the preview-state interface before any syntax selector persists
-   state:
-   - the Workspace/model owner adds the `ui.formula_preview[*]` path contract,
-     keyed by formula schema key;
-   - v1 workspace adapters either persist this UI-only state under the existing
-     UI snapshot area or explicitly keep syntax selection session-only until
-     the contract is implemented;
-   - Formula UI code may read/write syntax state only through this contract and
-     may not invent workspace paths locally.
+1. Keep formula preview as a single rendered style:
+   - legacy `ui.formula_preview` metadata remains reader-only compatibility
+     input;
+   - current v1 workspace adapters must not persist preview-language state;
+   - Formula UI code may not invent workspace paths for preview-language state.
 2. Create `datalab_latex/formula_render_service.py`.
 3. Make `app_desktop/formula_preview.py` a Qt adapter over PNG bytes/metadata.
 4. Delegate `datalab_latex/expression_engine.py::format_latex_formula()` to
@@ -346,13 +342,13 @@ Tasks:
    - `compute.parameters`;
    - `compute.constants`;
    - `compute.options`;
-   - `ui.formula_preview[*]`;
+  - legacy `ui.formula_preview` metadata as read-compatible UI-only input;
    - panel/tab/splitter/zoom UI state;
    - result snapshot state.
-4. Adopt and expand the Phase 1 formula preview syntax contract:
-   - the model owns `ui.formula_preview[*]`;
-   - workspace adapters own v1 persistence for those UI-only fields;
-   - formula UI adapters may only read/write through that contract;
+4. Adopt and expand the Phase 1 formula preview compatibility contract:
+   - the model ignores legacy `ui.formula_preview` metadata for current UI;
+   - workspace adapters keep v1 read compatibility but do not re-save those fields;
+   - formula UI adapters expose one rendered preview style;
    - if Phase 1 intentionally kept syntax selection session-only, Phase 3 is
      the first phase allowed to turn on persistence;
    - any change to these paths requires main-thread interface review.
@@ -576,7 +572,8 @@ Required tests and current coverage files:
   - `tests/test_expression_engine_formula_rendering_integration.py`
   - `tests/test_formula_preview_rendering.py`
   - `tests/test_formula_preview_dialog.py`
-  - `tests/test_formula_tex_render_worker.py`
+  - `tests/test_formula_renderer_boundary.py`
+  - `tests/test_formula_renderer_value_gate.py`
 - scanner binding-completeness and shared schema/help tests:
   - `tests/test_desktop_gui_schema_scan.py`
   - `tests/test_desktop_gui_redesign_scan.py`
@@ -620,8 +617,8 @@ Only after Codex, Gemini, and Claude are clean:
   `workspace_v2.py`, and workspace controller adapters.
 - Formula agent: execute the formula-rendering plan in `datalab_latex` plus Qt
   and web adapter updates. It may not invent workspace/model paths for preview
-  syntax; the Workspace agent must define the Phase 1 `ui.formula_preview[*]`
-  contract first, or the main thread must approve a joint interface change.
+  syntax; legacy `ui.formula_preview` metadata is reader-only compatibility
+  input and must not be re-saved by current workspace adapters.
 - Web agent: owns Phase 0 web baseline tests for Flask POST route contracts,
   SSE behavior, precision-lock concurrency, and offline/static formula
   resources; owns Phase 2 `app_web/logic/*` and route adaptation to

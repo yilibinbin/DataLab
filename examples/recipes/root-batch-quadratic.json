@@ -1,0 +1,57 @@
+{
+  "configuration": {
+    "root_solving": {
+      "equations": [
+        "x^2 - target"
+      ],
+      "mode": "scalar",
+      "uncertainty_options": {
+        "method": "taylor",
+        "taylor_order": 1
+      },
+      "unknowns": [
+        {
+          "initial": "1",
+          "name": "x"
+        }
+      ]
+    }
+  },
+  "description": {
+    "en": "Configure batch scalar root solving for x^2 - A = 0 using a data column.",
+    "zh": "使用数据列配置 x^2 - A = 0 的批量标量求根。"
+  },
+  "examples": [
+    {
+      "workspace": "root-batch-quadratic.datalab"
+    }
+  ],
+  "exports": {
+    "latex": true,
+    "plots": true,
+    "report_bundle": false
+  },
+  "family": "root_solving",
+  "id": "root-batch-quadratic",
+  "inputs": {
+    "constants": [],
+    "data": {
+      "required_columns": [
+        {
+          "description": "Quadratic target column with optional uncertainty notation.",
+          "id": "target",
+          "role": "value",
+          "suggested_name": "A",
+          "type": "number_with_uncertainty"
+        }
+      ]
+    }
+  },
+  "schema": "datalab.recipe.v1",
+  "schema_version": 1,
+  "title": {
+    "en": "Root solving: batch quadratic",
+    "zh": "求根：批量二次方程"
+  },
+  "workflow_mode": "root.standard"
+}

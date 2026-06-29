@@ -18,6 +18,7 @@
    - **Padé 拟合**：指定分子/分母阶数
    - **幂律极限拟合**：使用 `A*x**(-p)+C` 模板
    - **自定义模型**：输入自定义表达式
+   - **选定拟合比较**：用 JSON 显式列出要比较的拟合项
 
 3. **设置选项**：
    - 加权拟合：使用不确定度加权
@@ -27,6 +28,7 @@
    - 拟合参数及误差
    - 质量指标（χ², AIC, BIC, R², RMSE）
    - 拟合曲线与残差图
+   - 选定拟合比较表、CSV 和 LaTeX 表
 
 ## 支持的模型
 
@@ -35,3 +37,18 @@
 - Padé 近似
 - 幂律极限模板
 - 自定义模型
+
+## 选定拟合比较
+
+Web 页面支持“选定拟合比较”模式。该模式不会生成或筛选拟合项；用户需要在
+`fit_comparison_candidates` 文本框中显式列出每个拟合项，例如：
+
+```json
+[
+  {"candidate_id": "linear", "label": "Linear", "model_type": "polynomial", "poly_degree": 1},
+  {"candidate_id": "quadratic", "label": "Quadratic", "model_type": "polynomial", "poly_degree": 2}
+]
+```
+
+比较结果按 JSON 列表顺序显示每个拟合项的状态、自由参数数、χ²、约化 χ²、
+AIC、BIC、RMSE、R²、提示和错误信息。CSV 下载和 LaTeX 表格使用同一组比较行。

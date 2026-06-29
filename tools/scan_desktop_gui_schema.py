@@ -66,7 +66,8 @@ class ScreenScenario:
 MODES = ("extrapolation", "error", "fitting", "root_solving", "statistics")
 FITTING_SUBMODES = ("custom", "self_consistent")
 ROOT_SOLVING_SUBMODES = ("scalar", "scan_multiple", "polynomial", "system")
-SCAN_WIDTHS = (SUPPORTED_MIN_WINDOW_WIDTH, 1440, 1680)
+LEFT_RAIL_SCROLLBAR_SCAN_WIDTHS = (SUPPORTED_MIN_WINDOW_WIDTH, 1440, 1680)
+SCAN_WIDTHS = LEFT_RAIL_SCROLLBAR_SCAN_WIDTHS
 RESULT_TABS = ("numeric", "image", "log", "latex", "pdf")
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg=="
@@ -77,6 +78,7 @@ REQUIRED_BASELINE_STATE_ROLES = {
     "mode_stack_owner": "mode_stack",
     "result_tabs_owner": "result_tabs",
 }
+BASELINE_EDITABLE_STATE_OBJECTS = {"input_constants_editor"}
 MIRRORED_STATE_OBJECT_NAMES = {
     "workbench_data_preview_table",
     "workbench_editor_stack",
@@ -280,7 +282,7 @@ def _state_ownership_issues(window: Any, scenario: ScreenScenario) -> list[dict[
         mount.widget_attr
         for spec in MODE_WORKBENCH_SPECS.values()
         for mount in spec.parameters + spec.constants + spec.tables
-    } | set(REQUIRED_BASELINE_STATE_ROLES.values())
+    } | set(REQUIRED_BASELINE_STATE_ROLES.values()) | BASELINE_EDITABLE_STATE_OBJECTS
     owner_widgets = []
     for owner_type in owner_types:
         owner_widgets.extend(window.findChildren(owner_type))
@@ -475,21 +477,9 @@ def _apply_screen_scenario(window: Any, scenario: ScreenScenario) -> None:
 
 
 def _apply_formula_syntax_scenario(window: Any, formula_syntax: str) -> None:
-    if not formula_syntax:
-        panel = getattr(window, "workbench_formula_panel", None)
-        if panel is not None and not panel.isVisible():
-            return
-        formula_syntax = "datalab"
-    combo = getattr(window, "workbench_formula_language_combo", None)
-    if not isinstance(combo, QComboBox):
-        return
-    index = combo.findData(formula_syntax)
-    if index < 0:
-        raise AssertionError(f"missing formula preview syntax {formula_syntax!r}")
-    combo.setCurrentIndex(index)
-    QApplication.processEvents()
-    # The combo handler normally debounces preview work; scan/screenshot gates
-    # need the selected render-only syntax visible immediately and without TeX.
+    # Formula preview no longer exposes selectable input/preview syntaxes. Keep
+    # this hook as a harmless compatibility point for older ScreenScenario data
+    # and refresh the single DataLab-compatible rendered preview immediately.
     _refresh_workbench_panels(window)
 
 

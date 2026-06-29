@@ -1,0 +1,45 @@
+{
+  "configuration": {
+    "statistics": {
+      "mode": "mean",
+      "value_column": "${inputs.data.value}"
+    }
+  },
+  "description": {
+    "en": "Configure standard statistics for a single measurement column. Values may include DataLab uncertainty notation such as 1.0007(12).",
+    "zh": "为单列测量值配置标准统计。数值可包含 DataLab 不确定度记号，例如 1.0007(12)。"
+  },
+  "examples": [
+    {
+      "workspace": "statistics.datalab"
+    }
+  ],
+  "exports": {
+    "latex": true,
+    "plots": true,
+    "report_bundle": false
+  },
+  "family": "statistics",
+  "id": "statistics-mean-basic",
+  "inputs": {
+    "constants": [],
+    "data": {
+      "required_columns": [
+        {
+          "description": "Measurement values. Parenthesized uncertainty notation is accepted.",
+          "id": "value",
+          "role": "value",
+          "suggested_name": "Value",
+          "type": "number_with_uncertainty"
+        }
+      ]
+    }
+  },
+  "schema": "datalab.recipe.v1",
+  "schema_version": 1,
+  "title": {
+    "en": "Statistics: single-column mean",
+    "zh": "统计：单列平均"
+  },
+  "workflow_mode": "statistics.standard"
+}

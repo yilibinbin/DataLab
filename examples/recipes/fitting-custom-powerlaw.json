@@ -1,0 +1,79 @@
+{
+  "configuration": {
+    "fitting": {
+      "constraints_enabled": true,
+      "expression": "A + B*x^(-C)",
+      "model": "custom",
+      "parameter_rows": [
+        {
+          "initial": "1.0",
+          "name": "A"
+        },
+        {
+          "initial": "0.1",
+          "max": "10",
+          "min": "-10",
+          "name": "B"
+        },
+        {
+          "initial": "0.01",
+          "max": "10",
+          "min": "-10",
+          "name": "C"
+        }
+      ],
+      "target_column": "${inputs.data.y}",
+      "variables": [
+        {
+          "column": "${inputs.data.x}",
+          "name": "x"
+        }
+      ],
+      "weighted": true
+    }
+  },
+  "description": {
+    "en": "Configure a weighted custom fit for y = A + B*x^(-C), including parameter bounds.",
+    "zh": "配置 y = A + B*x^(-C) 的加权自定义拟合，并包含参数边界。"
+  },
+  "examples": [
+    {
+      "workspace": "fitting.datalab"
+    }
+  ],
+  "exports": {
+    "latex": true,
+    "plots": true,
+    "report_bundle": false
+  },
+  "family": "fitting",
+  "id": "fitting-custom-powerlaw",
+  "inputs": {
+    "constants": [],
+    "data": {
+      "required_columns": [
+        {
+          "description": "Independent variable column.",
+          "id": "x",
+          "role": "x",
+          "suggested_name": "x",
+          "type": "number"
+        },
+        {
+          "description": "Target measurement column with optional uncertainty notation.",
+          "id": "y",
+          "role": "y",
+          "suggested_name": "y",
+          "type": "number_with_uncertainty"
+        }
+      ]
+    }
+  },
+  "schema": "datalab.recipe.v1",
+  "schema_version": 1,
+  "title": {
+    "en": "Fitting: custom power law",
+    "zh": "拟合：自定义幂律"
+  },
+  "workflow_mode": "fitting.custom"
+}

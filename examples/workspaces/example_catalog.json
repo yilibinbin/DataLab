@@ -3,6 +3,7 @@
     {
       "category": "extrapolation",
       "filename": "extrapolation.datalab",
+      "recipe_files": [],
       "source_files": [
         "examples/extrapolation_richardson.txt"
       ],
@@ -15,6 +16,9 @@
     {
       "category": "error-propagation",
       "filename": "error-propagation.datalab",
+      "recipe_files": [
+        "examples/recipes/error-product-basic.json"
+      ],
       "source_files": [
         "examples/error_propagation.txt",
         "examples/constants.txt"
@@ -27,8 +31,25 @@
       ]
     },
     {
+      "category": "error-propagation",
+      "filename": "error-propagation-units.datalab",
+      "recipe_files": [],
+      "source_files": [],
+      "title_en": "Error propagation: unit labels",
+      "title_zh": "误差传递：单位标注",
+      "variants": [
+        "taylor",
+        "units",
+        "display_only",
+        "validation_ready"
+      ]
+    },
+    {
       "category": "statistics",
       "filename": "statistics.datalab",
+      "recipe_files": [
+        "examples/recipes/statistics-mean-basic.json"
+      ],
       "source_files": [
         "examples/statistics_weighted.txt"
       ],
@@ -40,8 +61,88 @@
       ]
     },
     {
+      "category": "statistics",
+      "filename": "statistics-bootstrap.datalab",
+      "recipe_files": [],
+      "source_files": [],
+      "title_en": "Statistics: Bootstrap confidence interval",
+      "title_zh": "统计平均：Bootstrap 置信区间",
+      "variants": [
+        "bootstrap",
+        "confidence_interval",
+        "seeded"
+      ]
+    },
+    {
+      "category": "statistics",
+      "filename": "statistics-hypothesis.datalab",
+      "recipe_files": [],
+      "source_files": [],
+      "title_en": "Statistics: one-sample t-test",
+      "title_zh": "统计检验：单样本 t 检验",
+      "variants": [
+        "hypothesis_test",
+        "one_sample_t"
+      ]
+    },
+    {
+      "category": "statistics",
+      "filename": "statistics-matrix.datalab",
+      "recipe_files": [],
+      "source_files": [],
+      "title_en": "Statistics matrix: covariance and correlation",
+      "title_zh": "统计矩阵：协方差与相关系数",
+      "variants": [
+        "covariance_correlation",
+        "matrix",
+        "listwise"
+      ]
+    },
+    {
+      "category": "statistics",
+      "filename": "statistics-grouped.datalab",
+      "recipe_files": [],
+      "source_files": [],
+      "title_en": "Grouped statistics: multi-group means",
+      "title_zh": "分组统计：多组多列均值",
+      "variants": [
+        "grouped_statistics",
+        "multi_column",
+        "weighted"
+      ]
+    },
+    {
+      "category": "statistics",
+      "filename": "statistics-time-series-rolling.datalab",
+      "recipe_files": [],
+      "source_files": [],
+      "title_en": "Time series: rolling mean",
+      "title_zh": "时间序列：滚动均值",
+      "variants": [
+        "time_series",
+        "rolling_mean",
+        "uncertainty"
+      ]
+    },
+    {
+      "category": "statistics",
+      "filename": "statistics-time-series-ewma.datalab",
+      "recipe_files": [],
+      "source_files": [],
+      "title_en": "Time series: EWMA smoothing",
+      "title_zh": "时间序列：EWMA 平滑",
+      "variants": [
+        "time_series",
+        "ewma",
+        "smoothing"
+      ]
+    },
+    {
       "category": "fitting",
       "filename": "fitting.datalab",
+      "recipe_files": [
+        "examples/recipes/fitting-custom-powerlaw.json"
+      ],
       "source_files": [
         "examples/fitting_powerlaw.txt"
       ],
@@ -59,6 +160,7 @@
     {
       "category": "fitting",
       "filename": "quantum-defect-implicit.datalab",
+      "recipe_files": [],
       "source_files": [],
       "title_en": "Fitting: self-consistent quantum defect",
       "title_zh": "拟合：自洽量子亏损示例",
@@ -73,6 +175,7 @@
     {
       "category": "root-solving",
       "filename": "root-scalar-with-uncertainty.datalab",
+      "recipe_files": [],
       "source_files": [],
       "title_en": "Root solving: scalar uncertainty",
       "title_zh": "求根：带不确定度的标量根",
@@ -84,6 +187,7 @@
     {
       "category": "root-solving",
       "filename": "root-monte-carlo-uncertainty.datalab",
+      "recipe_files": [],
       "source_files": [],
       "title_en": "Root solving: Monte Carlo uncertainty",
       "title_zh": "求根：Monte Carlo 不确定度",
@@ -95,6 +199,9 @@
     {
       "category": "root-solving",
       "filename": "root-batch-quadratic.datalab",
+      "recipe_files": [
+        "examples/recipes/root-batch-quadratic.json"
+      ],
       "source_files": [],
       "title_en": "Root solving: batch quadratic",
       "title_zh": "求根：批量二次方程",

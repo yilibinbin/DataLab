@@ -32,9 +32,27 @@ Use the function help button to view supported functions and examples.
 After computation you will get:
 
 - Per-row result value and combined uncertainty
-- Uncertainty contribution plot (if enabled)
+- Generated plots (if enabled):
+  - Taylor: contribution breakdown and cumulative contribution when contribution data exists
+  - Monte Carlo: per-row sampled output distribution histogram with mean, standard-deviation, and percentile markers
 - LaTeX table (parentheses notation)
 
 Note:
 
 - Contribution breakdown is only available for Taylor modes (Monte Carlo does not return per-variable contributions).
+
+## Unit Annotations
+
+Desktop error propagation can store units for input symbols, constants, and the
+single result output.
+
+- **Display only**: units are saved in the workspace and shown in result
+  text/CSV/LaTeX/plot labels. Numeric calculation is unchanged.
+- **Validate expression**: when `pint` is installed, DataLab checks the formula
+  dimensions before evaluation. Incompatible formulas fail before numeric
+  calculation. Without `pint`, validation fails closed instead of falling back
+  to unitless evaluation.
+
+The bundled `Error propagation: unit labels` example runs in display-only mode
+on every installation. With `pint` available, switch its unit mode to
+validate-expression to check that `Distance / Time` produces `m/s`.

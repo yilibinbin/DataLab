@@ -7,8 +7,8 @@ This page describes the desktop GUI workflow, organized by the desktop window la
 The desktop window uses a three-zone scientific workbench:
 
 - Top workbench bar: New/Open/Save, Examples, Run/Stop, workspace status, Docs, and Updates
-- Left configuration rail: calculation mode, data source, and output settings
-- Center workspace: data editor, formula/model editor, parameters, and constants
+- Left configuration rail: data editor, calculation mode, data source, and output settings
+- Center workspace: formula/model editor, parameters, and constants
 - Right result rail: an always-visible result summary/status panel above tabs for Numeric results, Image results, Run log, LaTeX source, and PDF preview
 
 The splitter keeps required controls visible at supported desktop sizes. Formula
@@ -18,10 +18,10 @@ partially prepared formulas, parameters, constants, or root-solving settings.
 
 ### Shared workbench
 
-The center workspace keeps the active data editor together with the formula
-preview, parameter table, and constants table when the active mode provides
-those inputs. Formula previews are display-only; calculation still uses the
-source expression in the editor.
+The left rail keeps the active data editor near the data-source controls. The
+center workspace keeps formula preview, parameter table, and constants table
+when the active mode provides those inputs. Formula previews are display-only;
+calculation still uses the source expression in the editor.
 
 ### Result overview
 
@@ -64,23 +64,15 @@ not silently replaced by the example. Use the preview button beside formula
 fields to inspect the rendered expression, and use the Functions button for the
 supported expression syntax.
 
-### Formula Preview Syntax
+### Formula Preview
 
-The formula card's Preview syntax selector controls how the preview interprets
-the current text: DataLab compatible, Python style, or Mathematica style. It does
-not rewrite the formula editor and does not change computation input, fitting
-model configuration, or workspace compute hashes. Calculations still use the raw
-expression in the editor through the active module's safe expression engine. The
-preview syntax is saved as workspace UI preference, so changing it may mark the
-workspace as unsaved, but reopening the workspace restores the same preview
-setting.
-
-The enlarged preview dialog also offers an optional High-fidelity LaTeX render
-path for display-only inspection of constructs such as `cases` and matrices. It
-uses only TeX engines and packages already installed or cached on the machine;
-the preview path does not install or download TeX packages. If unavailable, the
-dialog keeps the existing math preview and shows an error message, with a
-source-text message when needed.
+Formula input uses DataLab/Mathematica-compatible syntax, such as `Sin[x]`,
+`Sqrt[A]`, and `x^2`. The preview always renders the current expression as
+LaTeX-style math so you can inspect how it will read. Preview does not rewrite
+the formula editor and does not change computation input, fitting model
+configuration, workspace compute hashes, or calculation results. Calculations
+still use the raw expression in the editor through the active module's safe
+expression engine.
 
 Parameter and constants tables share the same interaction model across fitting,
 self-consistent/implicit models, error propagation, and root solving:
@@ -89,7 +81,11 @@ self-consistent/implicit models, error propagation, and root solving:
 - `+ Row` and `- Row` allow manual edits when automatic detection is not enough
 - Constants can be entered in table view or text view, including uncertainty
   notation such as `1.23(4)[-5]`
-- Disabled constants are not substituted into the calculation
+- Non-empty constants are substituted automatically in modes that support
+  constants; blank constants are ignored
+- Text input and data files may also use `[data]` and `[constants]` sections;
+  visible constants table/text content takes precedence over `[constants]` from
+  the file
 
 ## Example Workspaces
 
@@ -97,6 +93,15 @@ Use the Examples button in the workbench bar or the Examples menu to open a
 bundled `.datalab` workspace. Examples are opened as templates: editing them does
 not modify the bundled copy, and saving requires choosing a user path. This makes
 examples safe to use as starting points for your own calculations.
+
+## Declarative Recipes
+
+Bundled recipes are JSON data that bind current data columns to existing DataLab
+workflow configuration. They are not plugins and do not execute Python, shell
+commands, imports, or network requests. The first bundled recipe covers a
+single-column Statistics mean and links to the `statistics.datalab` example
+workspace. After applying a recipe, DataLab still shows the ordinary workflow
+controls so you can adjust and save the workspace under your own path.
 
 ## Display Formatting (Decimal Places / Significant Digits)
 
