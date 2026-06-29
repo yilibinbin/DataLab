@@ -830,6 +830,11 @@ class WindowFittingModelsMixin:
             custom_constants=custom_constants,
             parallel_config=parallel_config,
             core_request=core_request,
+            refine_with_mcmc=(
+                self.fit_mcmc_refine.isChecked()
+                if hasattr(self, "fit_mcmc_refine")
+                else False
+            ),
         )
 
     def _comparison_candidates_from_text(self) -> list[dict[str, object]]:

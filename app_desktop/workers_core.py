@@ -112,19 +112,33 @@ _ORIGINAL_FIT_CUSTOM_MODEL = fit_custom_model
 
 
 def _attach_mcmc_refinement(summary: Any, job: Any) -> None:
-    """Attach MCMC diagnostics to the current best fit when available."""
+    """Attach MCMC diagnostics to the best candidate of a model-comparison summary."""
+
+    best = summary.best() if getattr(summary, "best_model", None) is not None else None
+    if best is None or getattr(best, "fit_result", None) is None:
+        _logger.info("refine_with_mcmc=True but no best candidate; skipping")
+        return
+    _attach_mcmc_refinement_to_fit(best.fit_result, job)
+
+
+def _attach_mcmc_refinement_to_fit(best_fit: Any, job: Any) -> None:
+    """Run MCMC refinement on a single FitResult, storing diagnostics in its details.
+
+    Used by both the model-comparison path (via ``_attach_mcmc_refinement``) and the
+    single-explicit-model desktop fit path. Self-skips (with a log line) when emcee is
+    missing, the fit has no free parameters, or no live evaluator is available (e.g. a
+    serialized core-request result), so it is always safe to call when the user opted in.
+    """
 
     from fitting.mcmc_fitter import HAS_EMCEE, render_corner_plot, run_mcmc
 
     if not HAS_EMCEE:
         _logger.info("refine_with_mcmc=True but emcee not installed; skipping")
         return
-    best = summary.best() if getattr(summary, "best_model", None) is not None else None
-    if best is None or getattr(best, "fit_result", None) is None:
-        _logger.info("refine_with_mcmc=True but no best candidate; skipping")
+    if best_fit is None:
+        _logger.info("refine_with_mcmc=True but no fit result; skipping")
         return
 
-    best_fit = best.fit_result
     param_names = _mcmc_free_parameter_names(best_fit, job)
     if not param_names:
         _logger.info("best candidate has no parameters; skipping MCMC")
@@ -1497,6 +1511,7 @@ class FitJob:
     custom_constants: dict[str, str] | None = None
     parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
     core_request: ComputeJobRequest | None = None
+    refine_with_mcmc: bool = False
 
 
 @dataclass(frozen=True)
@@ -2598,6 +2613,8 @@ def _execute_fit_job_payload(job: FitJob, *, should_cancel=None) -> FitResultPay
             message = str(envelope.payload.get("message") or envelope.payload.get("error_code") or "Fitting failed.")
             raise ValueError(message)
         fit_result = fitting_payload_to_fit_result(envelope.payload["fit_result"])
+        if job.refine_with_mcmc:
+            _attach_mcmc_refinement_to_fit(fit_result, job)
         return FitResultPayload(
             job=job,
             fit_result=fit_result,
@@ -2612,6 +2629,8 @@ def _execute_fit_job_payload(job: FitJob, *, should_cancel=None) -> FitResultPay
     model_type = job.model_type
     if model_type != "self_consistent":
         output = execute_direct_fit(_direct_fit_input_from_job(job), verbose=job.verbose)
+        if job.refine_with_mcmc:
+            _attach_mcmc_refinement_to_fit(output.fit_result, job)
         return FitResultPayload(
             job=job,
             fit_result=output.fit_result,
@@ -2696,6 +2715,8 @@ def _execute_fit_job_payload(job: FitJob, *, should_cancel=None) -> FitResultPay
                     print(f"[fit] param_errors_total={fit_result.param_errors_total}")
             except Exception:
                 pass
+    if job.refine_with_mcmc:
+        _attach_mcmc_refinement_to_fit(fit_result, job)
     return FitResultPayload(job=job, fit_result=fit_result, expression=expression, logs=logs, warnings=warnings)
 
 
