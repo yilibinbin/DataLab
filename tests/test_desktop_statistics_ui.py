@@ -518,6 +518,27 @@ def test_statistics_run_accepts_comma_separated_value_columns(window: Any) -> No
     assert "=== Statistics: Column B ===" in window.result_edit.toPlainText()
 
 
+def test_statistics_matrix_run_accepts_delimited_data_with_blank_cells(window: Any) -> None:
+    # Matrix/time-series parsing must preserve delimited cells like the grouped path,
+    # so CSV/TSV exports with blank (missing) cells reach the matrix missing policies
+    # instead of failing as a column-count mismatch before any policy runs.
+    window._apply_language("en")
+    window.manual_data_edit.setPlainText("A,B\n1,\n2,3\n4,5\n")
+    window._data_stack.setCurrentIndex(1)
+    window.stats_workflow_combo.setCurrentIndex(
+        window.stats_workflow_combo.findData("covariance_correlation")
+    )
+    window.stats_value_column_edit.setText("A, B")
+    window.stats_matrix_missing_policy_combo.setCurrentIndex(
+        window.stats_matrix_missing_policy_combo.findData("pairwise")
+    )
+
+    # Must not raise a column-count mismatch on the blank cell in row "1,".
+    window._run_statistics_mode(False, "")
+
+    assert window._last_result_kind == "statistics_matrix"
+
+
 def test_statistics_bootstrap_direct_run_uses_semantic_snapshot(window: Any) -> None:
     window._apply_language("en")
     window.manual_data_edit.setPlainText("A\n1\n2\n3\n4\n")

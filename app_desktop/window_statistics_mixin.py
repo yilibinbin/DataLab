@@ -575,7 +575,7 @@ class WindowStatisticsMixin:
         output_path: str,
     ) -> None:
         source_text = self._statistics_source_text()
-        headers, raw_rows = _statistics_raw_table(source_text)
+        headers, raw_rows = _statistics_raw_table_preserving_cells(source_text)
         value_columns = _statistics_column_names(value_columns_text)
         if len(value_columns) < 2:
             raise ValueError(
@@ -754,7 +754,7 @@ class WindowStatisticsMixin:
         output_path: str,
     ) -> None:
         source_text = self._statistics_source_text()
-        headers, raw_rows = _statistics_raw_table(source_text)
+        headers, raw_rows = _statistics_raw_table_preserving_cells(source_text)
         value_columns = _statistics_column_names(value_columns_text)
         if not value_columns:
             raise ValueError(_dual_msg("请指定至少一个数值列。", "Please specify at least one value column."))
