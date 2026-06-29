@@ -47,3 +47,18 @@ def test_section_panel_title_help_and_size_policy_contract(qtbot: Any) -> None:
     assert panel.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
     assert panel.minimumWidth() == 0
     assert any(button.toolTip() == "Updated help" for button in panel.findChildren(QPushButton))
+
+
+def test_section_panel_help_button_is_wired(qtbot: Any, monkeypatch: Any) -> None:
+    # The "?" help button must do real work (pop the help text), not be a shell button.
+    from app_desktop import section_panel as sp
+
+    panel = SectionPanel("Inputs", help_text="Some help text", collapsible=False)
+    qtbot.addWidget(panel)
+
+    shown: list[str] = []
+    monkeypatch.setattr(sp.QToolTip, "showText", lambda *args, **kwargs: shown.append(args[1]))
+
+    panel._help_button.click()
+
+    assert shown == ["Some help text"], "clicking '?' must pop the help text"
