@@ -19,6 +19,7 @@ from fitting.auto_models import (
     fit_linear_model,
 )
 from fitting.hp_fitter import FitResult
+from fitting.diagnostics import attach_fit_diagnostics
 from shared.bilingual import _dual_msg
 from shared.precision import precision_guard
 
@@ -114,6 +115,13 @@ def execute_direct_fit(fit_input: DirectFitInput, *, verbose: bool = False) -> D
             raise AssertionError(f"Unhandled direct fit model: {model_type}")
         if verbose:
             _emit_verbose_result(fit_result)
+        diagnostic_warnings = attach_fit_diagnostics(
+            fit_result,
+            sigma_series=fit_input.sigma_series,
+            weights=fit_input.weights,
+            precision=fit_input.precision,
+        )
+        warnings.extend(diagnostic_warnings)
     return DirectFitOutput(
         fit_result=fit_result,
         expression=expression,

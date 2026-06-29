@@ -8,10 +8,10 @@ from typing import Callable, TypeAlias
 from mpmath import mp
 
 from shared.bilingual import _dual_msg
-from shared.numerics import noise_floor
 from shared.precision import precision_guard
 
 from .hp_fitter import FitResult, combine_error_components
+from .statistics import compute_fit_statistics
 
 
 @dataclass
@@ -340,38 +340,12 @@ def fit_linear_model(
             evaluator = build_linear_evaluator(definition, params)
             fitted = [evaluator(mp.mpf(x)) for x in x_series]
             residuals_mp = [fitted[i] - mp.mpf(y_targets[i]) for i in range(rows)]
-            if weight_vec:
-                chi2 = sum(w * (r * r) for w, r in zip(weight_vec, residuals_mp))
-                total_weight = sum(weight_vec)
-                if total_weight > 0:
-                    mean_target = sum(w * y for w, y in zip(weight_vec, y_targets)) / total_weight
-                else:
-                    mean_target = sum(y_targets) / rows
-                sst = sum(w * (y - mean_target) ** 2 for w, y in zip(weight_vec, y_targets))
-                rmse = mp.sqrt(chi2 / total_weight)
-            else:
-                chi2 = sum(r * r for r in residuals_mp)
-                mean_target = sum(y_targets) / rows
-                sst = sum((y - mean_target) ** 2 for y in y_targets)
-                rmse = mp.sqrt(chi2 / rows)
-            n = len(y_targets)
-            dof_raw = n - cols
-            if dof_raw <= 0:
-                dof = 0
-                reduced = mp.nan
-                r2 = mp.nan
-                eps = noise_floor()
-                noise = mp.nan
-                aic = mp.nan
-                bic = mp.nan
-            else:
-                dof = dof_raw
-                reduced = chi2 / dof
-                r2 = mp.mpf("1") - (chi2 / sst if sst != 0 else mp.mpf("0"))
-                eps = noise_floor()
-                noise = chi2 / n if chi2 > eps else eps
-                aic = 2 * cols + n * mp.log(noise)
-                bic = cols * mp.log(n) + n * mp.log(noise)
+            statistics = compute_fit_statistics(
+                y_targets,
+                residuals_mp,
+                weight_vec,
+                free_param_count=cols,
+            )
 
             jtj_mp = design.T * design
             try:
@@ -380,7 +354,7 @@ def fit_linear_model(
                 inv = None
             covariance = []
             errors = {}
-            sigma2 = chi2 / dof if dof > 0 else mp.nan
+            sigma2 = statistics.chi2 / statistics.dof if statistics.dof > 0 else mp.nan
             if inv is None:
                 covariance = [[mp.nan for _ in range(cols)] for _ in range(cols)]
                 for name in definition.parameter_names:
@@ -392,7 +366,9 @@ def fit_linear_model(
                         row.append(inv[i, j] * sigma2)
                     covariance.append(row)
                     value = row[i]
-                    errors[definition.parameter_names[i]] = mp.sqrt(value) if (value >= 0 and dof > 0) else mp.nan
+                    errors[definition.parameter_names[i]] = (
+                        mp.sqrt(value) if (value >= 0 and statistics.dof > 0) else mp.nan
+                    )
 
             expression = _expression_text(definition)
             substituted = _substituted_expression(definition, coeffs_mp)
@@ -401,18 +377,20 @@ def fit_linear_model(
                 "substituted_expression": substituted,
                 "label": definition.label,
                 "evaluator": evaluator,
+                "dof": int(statistics.dof),
+                "covariance_parameters": list(definition.parameter_names),
             }
             if weight_vec:
                 details["weighted"] = True
             return _LinearFitComputation(
                 params=params,
                 stat_errors=errors,
-                chi2=chi2,
-                reduced_chi2=reduced,
-                aic=aic,
-                bic=bic,
-                r2=r2,
-                rmse=rmse,
+                chi2=statistics.chi2,
+                reduced_chi2=statistics.reduced_chi2,
+                aic=statistics.aic,
+                bic=statistics.bic,
+                r2=statistics.r2,
+                rmse=statistics.rmse,
                 residuals=residuals_mp,
                 fitted_curve=fitted,
                 covariance=covariance,

@@ -571,6 +571,7 @@ def fit_custom_model(
                     details = {
                         "expression": getattr(current_model, "expression", ""),
                         "dof": int(dof),
+                        "covariance_parameters": list(parameter_state.free_params),
                     }
                     if dof <= 0:
                         details["dof_warning"] = (

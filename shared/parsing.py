@@ -41,6 +41,7 @@ __all__ = [
     "LocaleHint",
     "MAX_CLIPBOARD_CHARS",
     "ParseResult",
+    "clean_tabular_cell",
     "parse_clipboard_tabular",
     "parse_name_value_pairs",
 ]
@@ -128,6 +129,12 @@ def _strip_whitespace(cell: str) -> str:
     fidelity."""
     without_bidi = _BIDI_CONTROL_RE.sub("", cell)
     return without_bidi.strip().strip(_UNICODE_SPACES).strip()
+
+
+def clean_tabular_cell(cell: object) -> str:
+    """Return DataLab's normalized raw table cell text without numeric parsing."""
+
+    return _strip_whitespace("" if cell is None else str(cell))
 
 
 def _normalise_line_endings(text: str) -> str:

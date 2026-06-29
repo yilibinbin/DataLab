@@ -35,6 +35,16 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         raise WorkspaceValidationError("model.result_snapshot is required")
     if not isinstance(model["result_snapshot"], Mapping):
         raise WorkspaceValidationError("model.result_snapshot must be a mapping")
+    if "history" in model:
+        history = model["history"]
+        if not isinstance(history, Mapping):
+            raise WorkspaceValidationError("model.history must be an object")
+        try:
+            from datalab_core.history import history_store_from_json
+
+            history_store_from_json(history)
+        except (TypeError, ValueError) as exc:
+            raise WorkspaceValidationError(f"model.history is invalid: {exc}") from exc
 
 
 def model_from_manifest(manifest: Mapping[str, Any]) -> WorkbenchModel:
@@ -51,6 +61,8 @@ def model_from_manifest(manifest: Mapping[str, Any]) -> WorkbenchModel:
         "config": compute["config"],
         "result_snapshot": model_payload["result_snapshot"],
     }
+    if "history" in model_payload:
+        workspace["history"] = model_payload["history"]
     return WorkbenchModel.from_v1_workspace(workspace)
 
 

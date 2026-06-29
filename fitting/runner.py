@@ -530,6 +530,7 @@ def _fit_with_scipy_least_squares(
     details: dict[str, object] = {
         "expression": getattr(model, "expression", ""),
         "dof": int(dof),
+        "covariance_parameters": list(parameter_state.free_params),
         "scipy_success": bool(scipy_result.success),
         "scipy_message": str(scipy_result.message),
         "scipy_cost": float(scipy_result.cost),

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import importlib
 import math
+import operator
 import re
 from typing import Any
 
@@ -27,6 +28,13 @@ from shared.uncertainty import UncertainValue
 
 _SCIPY_FALLBACK_WARNING = "SciPy validation failed; used mpmath fallback."
 _SCIPY_FLOAT_UNSAFE_WARNING = "SciPy bypassed because literals or coefficients are not binary64-exact; used mpmath fallback."
+_ROOT_CLASSIFICATION_TAGS = (
+    "complex",
+    "bracketed_sign_change",
+    "suspected_tangent_or_repeated",
+    "boundary",
+    "unclassified",
+)
 
 
 class _UnsafeFloatRouteError(ValueError):
@@ -38,6 +46,15 @@ class _Candidate:
     values: tuple[mp.mpf | mp.mpc | complex, ...]
     backend: RootBackend
     warnings: tuple[str, ...] = ()
+    details: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _ScanRootCandidate:
+    value: mp.mpf
+    tags: frozenset[str] = field(default_factory=frozenset)
+    evidence: Mapping[str, object] = field(default_factory=dict)
+    merged_candidates: int = 1
 
 
 def solve_root_problem(
@@ -71,16 +88,31 @@ def _solve_root_problem_with_system(
     if not mp.isfinite(residual_norm):
         raise ValueError("Solver returned a non-finite residual norm.")
 
+    details: dict[str, object] = {
+        "requested_mode": problem.mode,
+        "resolved_mode": mode,
+        "solver_status": "converged",
+        "initial_guess_summary": _initial_guess_summary(problem.unknowns),
+        **dict(candidate.details),
+    }
+    if mode == "polynomial" and "root_classification_tags" not in details:
+        details.update(_polynomial_classification_details(candidate.values))
+    if mode == "system":
+        residuals = _per_equation_residuals(system, candidate.values)
+        if residuals:
+            details["per_equation_residuals"] = residuals
+        jacobian_condition = _system_jacobian_condition(system, candidate.values)
+    else:
+        jacobian_condition = None
+
     result = RootResult(
         roots=roots,
         backend=candidate.backend,
         mode=mode,
         residual_norm=residual_norm,
+        jacobian_condition=jacobian_condition,
         warnings=candidate.warnings,
-        details={
-            "requested_mode": problem.mode,
-            "resolved_mode": mode,
-        },
+        details=details,
     )
     if uncertain_inputs:
         return attach_root_uncertainty(
@@ -191,7 +223,11 @@ def _solve_scipy(problem: RootProblem, system: RootExpressionSystem, mode: RootM
             result = scipy_optimize.root_scalar(scalar_float, bracket=(float(lower), float(upper)), method="brentq")
             if not result.converged:
                 raise ValueError("SciPy scalar bracket solve did not converge.")
-            return _Candidate((_finite_mpf(str(result.root), "SciPy scalar root"),), "scipy")
+            return _Candidate(
+                (_finite_mpf(str(result.root), "SciPy scalar root"),),
+                "scipy",
+                details=_scipy_scalar_details(result),
+            )
 
         initial = _initial_values(problem)[0]
         second = _scipy_scalar_secant_second_guess(initial)
@@ -207,7 +243,11 @@ def _solve_scipy(problem: RootProblem, system: RootExpressionSystem, mode: RootM
         )
         if not result.converged:
             raise ValueError("SciPy scalar root solve did not converge.")
-        return _Candidate((_finite_mpf(str(result.root), "SciPy scalar root"),), "scipy")
+        return _Candidate(
+            (_finite_mpf(str(result.root), "SciPy scalar root"),),
+            "scipy",
+            details=_scipy_scalar_details(result),
+        )
 
     if mode != "system":
         raise ValueError(f"SciPy mode is not supported here: {mode}")
@@ -222,7 +262,11 @@ def _solve_scipy(problem: RootProblem, system: RootExpressionSystem, mode: RootM
     result = scipy_optimize.root(system_vector, [float(value) for value in initials])
     if not bool(getattr(result, "success", False)):
         raise ValueError("SciPy system root solve did not converge.")
-    return _Candidate(tuple(_finite_mpf(str(value), "SciPy system root") for value in result.x), "scipy")
+    return _Candidate(
+        tuple(_finite_mpf(str(value), "SciPy system root") for value in result.x),
+        "scipy",
+        details=_scipy_system_details(result),
+    )
 
 
 def _solve_polynomial_scipy(problem: RootProblem, system: RootExpressionSystem) -> _Candidate:
@@ -250,21 +294,60 @@ def _solve_scan_multiple(problem: RootProblem, system: RootExpressionSystem) -> 
 
         scan_config = problem.scan_config
         sample_count = _scan_sample_count(scan_config)
-        roots: list[mp.mpf] = []
         samples: list[tuple[mp.mpf, mp.mpf]] = []
 
         for index in range(sample_count + 1):
             x_value = lower + (upper - lower) * index / sample_count
             y_value = _evaluate_scan_point(system, unknown.name, x_value)
             samples.append((x_value, y_value))
+
+        cluster_tolerance = _scan_cluster_tolerance(problem.precision, scan_config)
+        residual_tolerance = _scan_residual_tolerance(system, problem.precision, scan_config)
+        configured_scan_step = (upper - lower) / sample_count
+        root_candidates: list[_ScanRootCandidate] = []
+
+        for index, (x_value, y_value) in enumerate(samples):
             if _scan_sample_is_exact_root(y_value):
-                roots.append(x_value)
+                exact_sample_tags: set[str] = set()
+                finite_difference = _scan_exact_sample_finite_difference(samples, index)
+                if finite_difference is not None:
+                    x_left, y_left, x_right, y_right = finite_difference
+                    if _scan_suspected_tangent_or_repeated(
+                        residual=abs(y_value),
+                        x_left=x_left,
+                        y_left=y_left,
+                        x_right=x_right,
+                        y_right=y_right,
+                        configured_scan_step=configured_scan_step,
+                        cluster_tolerance=cluster_tolerance,
+                        residual_tolerance=residual_tolerance,
+                    ):
+                        exact_sample_tags.add("suspected_tangent_or_repeated")
+                root_candidates.append(
+                    _ScanRootCandidate(
+                        x_value,
+                        frozenset(exact_sample_tags),
+                        {"kind": "exact_sample", "sample": x_value},
+                    )
+                )
 
         for (left_x, left_y), (right_x, right_y) in zip(samples, samples[1:], strict=False):
             if not (mp.isfinite(left_y) and mp.isfinite(right_y)):
                 continue
             if left_y * right_y < 0:
-                roots.append(_refine_scalar_bracket(system, unknown.name, left_x, right_x, problem.precision))
+                root_candidates.append(
+                    _ScanRootCandidate(
+                        _refine_scalar_bracket(system, unknown.name, left_x, right_x, problem.precision),
+                        frozenset({"bracketed_sign_change"}),
+                        {
+                            "kind": "bracketed_sign_change",
+                            "left": left_x,
+                            "right": right_x,
+                            "left_value": left_y,
+                            "right_value": right_y,
+                        },
+                    )
+                )
 
         for left, center, right in zip(samples, samples[1:], samples[2:], strict=False):
             left_x, left_y = left
@@ -273,20 +356,73 @@ def _solve_scan_multiple(problem: RootProblem, system: RootExpressionSystem) -> 
             if not (mp.isfinite(left_y) and mp.isfinite(center_y) and mp.isfinite(right_y)):
                 continue
             if abs(center_y) < abs(left_y) and abs(center_y) < abs(right_y):
+                evidence_left = left_x
+                evidence_right = right_x
                 candidate = _refine_abs_minimum(system, unknown.name, left_x, right_x, problem.precision)
                 if _scan_candidate_is_valid(system, unknown.name, candidate, problem.precision, scan_config):
-                    roots.append(candidate)
+                    minimum_tags: set[str] = set()
+                    residual = abs(_evaluate_scan_point(system, unknown.name, candidate))
+                    tangent_points = _scan_candidate_finite_difference(
+                        system,
+                        unknown.name,
+                        candidate,
+                        lower=lower,
+                        upper=upper,
+                        configured_scan_step=configured_scan_step,
+                    )
+                    if tangent_points is not None:
+                        left_x, left_y, right_x, right_y = tangent_points
+                    if _scan_suspected_tangent_or_repeated(
+                        residual=residual,
+                        x_left=left_x,
+                        y_left=left_y,
+                        x_right=right_x,
+                        y_right=right_y,
+                        configured_scan_step=configured_scan_step,
+                        cluster_tolerance=cluster_tolerance,
+                        residual_tolerance=residual_tolerance,
+                    ):
+                        minimum_tags.add("suspected_tangent_or_repeated")
+                    root_candidates.append(
+                        _ScanRootCandidate(
+                            candidate,
+                            frozenset(minimum_tags),
+                            {"kind": "local_minimum", "left": evidence_left, "right": evidence_right},
+                        )
+                    )
 
-        unique_roots = _deduplicate_roots(
-            tuple(roots),
-            tolerance=_scan_cluster_tolerance(problem.precision, scan_config),
+        unique_candidates = _deduplicate_scan_root_candidates(
+            tuple(root_candidates),
+            tolerance=cluster_tolerance,
         )
-        if not unique_roots:
+        unique_candidates = tuple(
+            _scan_candidate_with_boundary_tag(
+                candidate,
+                lower=lower,
+                upper=upper,
+                tolerance=cluster_tolerance,
+            )
+            for candidate in unique_candidates
+        )
+        if not unique_candidates:
             raise ValueError("scan_multiple found no roots in the scan range.")
         max_roots = _scan_max_roots(scan_config)
-        if len(unique_roots) > max_roots:
-            unique_roots = unique_roots[:max_roots]
-        candidate = _Candidate(unique_roots, "scipy" if problem.precision <= 16 else "mpmath")
+        if len(unique_candidates) > max_roots:
+            unique_candidates = unique_candidates[:max_roots]
+        unique_roots = tuple(candidate.value for candidate in unique_candidates)
+        details = _scan_classification_details(unique_candidates, precision=problem.precision)
+        details["scan_summary"] = {
+            "lower": _diagnostic_number_text(lower, problem.precision),
+            "upper": _diagnostic_number_text(upper, problem.precision),
+            "sample_count": sample_count,
+            "max_roots": max_roots,
+            "accepted_roots_count": len(unique_roots),
+        }
+        candidate = _Candidate(
+            unique_roots,
+            "scipy" if problem.precision <= 16 else "mpmath",
+            details=details,
+        )
         _validate_candidate(system, candidate.values, "scan_multiple", problem.precision, scan_config)
         return candidate
 
@@ -403,6 +539,256 @@ def _deduplicate_roots(values: Sequence[mp.mpf], *, tolerance: mp.mpf) -> tuple[
         if not roots or abs(value - roots[-1]) > tolerance:
             roots.append(value)
     return tuple(roots)
+
+
+def _deduplicate_scan_root_candidates(
+    values: Sequence[_ScanRootCandidate],
+    *,
+    tolerance: mp.mpf,
+) -> tuple[_ScanRootCandidate, ...]:
+    ordered = sorted(values, key=lambda candidate: candidate.value)
+    roots: list[_ScanRootCandidate] = []
+    for candidate in ordered:
+        if not roots or abs(candidate.value - roots[-1].value) > tolerance:
+            roots.append(candidate)
+            continue
+        merged_tags = roots[-1].tags | candidate.tags
+        roots[-1] = _ScanRootCandidate(
+            roots[-1].value,
+            frozenset(merged_tags),
+            _preferred_scan_evidence(roots[-1].evidence, candidate.evidence),
+            roots[-1].merged_candidates + candidate.merged_candidates,
+        )
+    return tuple(roots)
+
+
+def _scan_candidate_with_boundary_tag(
+    candidate: _ScanRootCandidate,
+    *,
+    lower: mp.mpf,
+    upper: mp.mpf,
+    tolerance: mp.mpf,
+) -> _ScanRootCandidate:
+    tags = set(candidate.tags)
+    if abs(candidate.value - lower) <= tolerance or abs(candidate.value - upper) <= tolerance:
+        tags.add("boundary")
+    return _ScanRootCandidate(candidate.value, frozenset(tags), candidate.evidence, candidate.merged_candidates)
+
+
+def _scan_classification_details(candidates: Sequence[_ScanRootCandidate], *, precision: int) -> dict[str, object]:
+    details: dict[str, object] = {
+        "root_classification_tags": {
+            str(index): list(_ordered_root_classification_tags(candidate.tags))
+            for index, candidate in enumerate(candidates)
+        }
+    }
+    evidence = {
+        str(index): payload
+        for index, candidate in enumerate(candidates)
+        if (payload := _scan_root_evidence_payload(candidate, precision=precision))
+    }
+    if evidence:
+        details["scan_root_evidence"] = evidence
+    return details
+
+
+def _preferred_scan_evidence(
+    current: Mapping[str, object],
+    candidate: Mapping[str, object],
+) -> Mapping[str, object]:
+    current_priority = _scan_evidence_priority(current)
+    candidate_priority = _scan_evidence_priority(candidate)
+    if candidate_priority > current_priority:
+        return candidate
+    return current
+
+
+def _scan_evidence_priority(evidence: Mapping[str, object]) -> int:
+    kind = evidence.get("kind")
+    if kind == "bracketed_sign_change":
+        return 3
+    if kind == "local_minimum":
+        return 2
+    if kind == "exact_sample":
+        return 1
+    return 0
+
+
+def _scan_root_evidence_payload(candidate: _ScanRootCandidate, *, precision: int) -> dict[str, object]:
+    raw_kind = candidate.evidence.get("kind")
+    if raw_kind not in {"exact_sample", "bracketed_sign_change", "local_minimum"}:
+        return {}
+    payload: dict[str, object] = {"kind": str(raw_kind)}
+    for field_name in ("left", "right", "left_value", "right_value", "sample"):
+        if field_name not in candidate.evidence:
+            continue
+        try:
+            payload[field_name] = _diagnostic_number_text(candidate.evidence[field_name], precision)
+        except (TypeError, ValueError, ArithmeticError):
+            continue
+    if candidate.merged_candidates > 1:
+        payload["merged_candidates"] = candidate.merged_candidates
+    return payload
+
+
+def _polynomial_classification_details(values: Sequence[mp.mpf | mp.mpc | complex]) -> dict[str, object]:
+    return {
+        "root_classification_tags": {
+            str(index): ["complex"] if _is_non_real_complex(value) else ["unclassified"]
+            for index, value in enumerate(values)
+        }
+    }
+
+
+def _scipy_scalar_details(result: Any) -> dict[str, object]:
+    details: dict[str, object] = {}
+    iterations = _diagnostic_int(getattr(result, "iterations", None))
+    if iterations is not None:
+        details["scipy_iterations"] = iterations
+    function_calls = _diagnostic_int(getattr(result, "function_calls", None))
+    if function_calls is not None:
+        details["scipy_function_evaluations"] = function_calls
+    return details
+
+
+def _scipy_system_details(result: Any) -> dict[str, object]:
+    details: dict[str, object] = {}
+    function_evaluations = _diagnostic_int(getattr(result, "nfev", None))
+    if function_evaluations is not None:
+        details["scipy_function_evaluations"] = function_evaluations
+    return details
+
+
+def _diagnostic_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("+"):
+            text = text[1:]
+        if not text.isdecimal():
+            return None
+        return int(text)
+    try:
+        integer = operator.index(value)
+    except TypeError:
+        return None
+    return integer if integer >= 0 else None
+
+
+def _initial_guess_summary(unknowns: Sequence[RootUnknown]) -> str:
+    return "; ".join(
+        f"{unknown.name} initial={unknown.initial} lower={unknown.lower} upper={unknown.upper}"
+        for unknown in unknowns
+    )
+
+
+def _per_equation_residuals(
+    system: RootExpressionSystem,
+    values: Sequence[mp.mpf | mp.mpc | complex],
+) -> dict[str, str]:
+    with precision_guard(system.precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+        scope = {name: value for name, value in zip(system.unknown_names, values, strict=True)}
+        return {
+            str(index): _diagnostic_number_text(residual, system.precision)
+            for index, residual in enumerate(system.residuals(scope))
+        }
+
+
+def _system_jacobian_condition(
+    system: RootExpressionSystem,
+    values: Sequence[mp.mpf | mp.mpc | complex],
+) -> mp.mpf | None:
+    try:
+        with precision_guard(system.precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
+            scope = {name: value for name, value in zip(system.unknown_names, values, strict=True)}
+            jacobian = mp.matrix(
+                [
+                    [system.derivative_unknown(name, scope, equation_index) for name in system.unknown_names]
+                    for equation_index in range(len(system.expressions))
+                ]
+            )
+            condition = mp.mpf(mp.cond(jacobian))
+    except Exception:
+        return None
+    if not mp.isfinite(condition) or condition < 0:
+        return None
+    return condition
+
+
+def _diagnostic_number_text(value: Any, precision: int) -> str:
+    digits = max(1, int(precision))
+    numeric = mp.mpc(value)
+    if numeric.imag:
+        return str(mp.nstr(numeric, n=digits))
+    return str(mp.nstr(numeric.real, n=digits))
+
+
+def _ordered_root_classification_tags(tags: frozenset[str] | set[str]) -> tuple[str, ...]:
+    filtered = {tag for tag in tags if tag in _ROOT_CLASSIFICATION_TAGS and tag != "unclassified"}
+    if not filtered:
+        return ("unclassified",)
+    return tuple(tag for tag in _ROOT_CLASSIFICATION_TAGS if tag in filtered)
+
+
+def _scan_exact_sample_finite_difference(
+    samples: Sequence[tuple[mp.mpf, mp.mpf]],
+    index: int,
+) -> tuple[mp.mpf, mp.mpf, mp.mpf, mp.mpf] | None:
+    if index <= 0 or index >= len(samples) - 1:
+        return None
+    x_left, y_left = samples[index - 1]
+    x_right, y_right = samples[index + 1]
+    return x_left, y_left, x_right, y_right
+
+
+def _scan_candidate_finite_difference(
+    system: RootExpressionSystem,
+    unknown_name: str,
+    value: mp.mpf,
+    *,
+    lower: mp.mpf,
+    upper: mp.mpf,
+    configured_scan_step: mp.mpf,
+) -> tuple[mp.mpf, mp.mpf, mp.mpf, mp.mpf] | None:
+    half_step = configured_scan_step / 2
+    if half_step <= 0:
+        return None
+    x_left = max(lower, value - half_step)
+    x_right = min(upper, value + half_step)
+    if x_left == x_right:
+        return None
+    y_left = _evaluate_scan_point(system, unknown_name, x_left)
+    y_right = _evaluate_scan_point(system, unknown_name, x_right)
+    if not (mp.isfinite(y_left) and mp.isfinite(y_right)):
+        return None
+    return x_left, y_left, x_right, y_right
+
+
+def _scan_suspected_tangent_or_repeated(
+    *,
+    residual: mp.mpf,
+    x_left: mp.mpf,
+    y_left: mp.mpf,
+    x_right: mp.mpf,
+    y_right: mp.mpf,
+    configured_scan_step: mp.mpf,
+    cluster_tolerance: mp.mpf,
+    residual_tolerance: mp.mpf,
+) -> bool:
+    values = (residual, x_left, y_left, x_right, y_right, configured_scan_step, cluster_tolerance, residual_tolerance)
+    if not all(mp.isfinite(value) for value in values):
+        return False
+    if residual > residual_tolerance:
+        return False
+    if y_left * y_right < 0:
+        return False
+    delta_x = x_right - x_left
+    if delta_x == 0:
+        return False
+    slope = (y_right - y_left) / delta_x
+    x_scale = max(abs(delta_x), configured_scan_step, cluster_tolerance)
+    return bool(abs(slope) * x_scale <= residual_tolerance)
 
 
 def _solve_mpmath(problem: RootProblem, system: RootExpressionSystem, mode: RootMode) -> _Candidate:
@@ -552,6 +938,14 @@ def _all_roots_real(roots: Sequence[RootValue]) -> bool:
         elif isinstance(value, complex) and value.imag != 0:
             return False
     return True
+
+
+def _is_non_real_complex(value: mp.mpf | mp.mpc | complex) -> bool:
+    if isinstance(value, mp.mpc):
+        return bool(mp.im(value) != 0)
+    if isinstance(value, complex):
+        return value.imag != 0
+    return False
 
 
 def _initial_values(problem: RootProblem) -> tuple[mp.mpf, ...]:

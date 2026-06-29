@@ -27,6 +27,8 @@ class UncertainValue:
         uncertainty: mp.mpf | int | float | str,
         uncertainty_digits: int | None = None,
         contributions: dict[str, mp.mpf] | None = None,
+        sensitivities: dict[str, dict[str, object]] | None = None,
+        monte_carlo_distribution: dict[str, object] | None = None,
     ) -> None:
         self.value: mp.mpf = _mp(value)
         self.uncertainty: mp.mpf = _mp(uncertainty)
@@ -34,12 +36,21 @@ class UncertainValue:
             raise ValueError("Uncertainty must be non-negative.")
         self.uncertainty_digits: int | None = uncertainty_digits
         self.contributions: dict[str, mp.mpf] | None = contributions or None
+        self.sensitivities: dict[str, dict[str, object]] | None = sensitivities or None
+        self.monte_carlo_distribution: dict[str, object] | None = monte_carlo_distribution or None
 
     def __str__(self) -> str:
         return f"{self.value} ± {self.uncertainty}"
 
     def __repr__(self) -> str:
         return f"UncertainValue({self.value}, {self.uncertainty}, digits={self.uncertainty_digits})"
+
+
+def has_explicit_uncertainty(number_str: str) -> bool:
+    """Return True when a numeric token contains parenthesized uncertainty."""
+
+    cleaned = str(number_str).strip().replace("−", "-")
+    return re.search(r"\((?:\d+(?:\.\d*)?|\.\d+)\)", cleaned) is not None
 
 
 def parse_uncertainty_format(

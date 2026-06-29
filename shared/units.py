@@ -28,14 +28,21 @@ and duplicate the siunitx logic.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, Optional
+
+from mpmath import mp
+
+from .precision import precision_guard
 
 __all__ = [
     "HAS_PINT",
     "convert_to_si",
+    "format_quantity_latex",
     "get_registry",
     "parse_quantity",
     "to_siunitx",
+    "unit_backend_metadata",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -124,6 +131,94 @@ def _escape_unit_for_text(unit: str) -> str:
     return (unit or "").translate(_LATEX_SPECIAL_ESCAPES)
 
 
+def unit_backend_metadata() -> dict[str, str | bool]:
+    """Return deterministic metadata for the optional unit backend."""
+
+    if not HAS_PINT:
+        return {"backend": "none", "available": False, "version": ""}
+    return {
+        "backend": "pint",
+        "available": True,
+        "version": str(getattr(_pint, "__version__", "")),
+    }
+
+
+def _magnitude_text(magnitude: Any, *, precision_digits: int | None = None) -> str:
+    if isinstance(magnitude, bool) or magnitude is None:
+        raise ValueError(f"magnitude must be a finite number, got {magnitude!r}")
+    if isinstance(magnitude, mp.mpf):
+        digits = (
+            max(1, int(precision_digits))
+            if precision_digits is not None
+            else _mpf_compact_display_digits(magnitude)
+        )
+        with precision_guard(digits + 10):
+            text = str(mp.nstr(magnitude, n=digits)).strip()
+    else:
+        text = str(magnitude).strip()
+    if not text:
+        raise ValueError("magnitude must be a finite number, got an empty value")
+    parse_digits = max(80, len(text) + 10)
+    try:
+        with precision_guard(parse_digits):
+            parsed = mp.mpf(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"magnitude must be a finite number, got {magnitude!r}: {exc}") from exc
+    if not mp.isfinite(parsed):
+        raise ValueError(f"magnitude must be finite, got {magnitude!r}")
+    return text
+
+
+def _mpf_compact_display_digits(value: mp.mpf) -> int:
+    try:
+        _, mantissa, exponent, bit_count = value._mpf_  # noqa: SLF001 - mpmath exposes no public bitcount.
+        mantissa = int(mantissa)
+        exponent = int(exponent)
+        bit_count = int(bit_count)
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return 50
+    if mantissa == 0 or bit_count <= 0:
+        return 15
+    significant_digits = int(math.ceil(bit_count * math.log10(2)))
+    high_bit_index = bit_count + exponent - 1
+    integer_digits = max(1, int(math.floor(high_bit_index * math.log10(2))) + 2)
+    return min(50, max(15, significant_digits, min(50, integer_digits)))
+
+
+def _pint_unit_latex(unit: str) -> str | None:
+    if not HAS_PINT or not unit:
+        return None
+    registry = get_registry()
+    try:
+        unit_obj = registry.Unit(unit)
+        return f"{unit_obj:Lx}"
+    except Exception as exc:  # noqa: BLE001
+        _logger.debug("unit LaTeX formatting failed for %r: %s", unit, exc)
+        return None
+
+
+def format_quantity_latex(
+    magnitude: Any,
+    unit: str,
+    *,
+    use_siunitx: bool = True,
+    precision_digits: int | None = None,
+) -> str:
+    """Render a quantity without converting high-precision magnitudes to float."""
+
+    magnitude_value = _magnitude_text(magnitude, precision_digits=precision_digits)
+    unit_text = str(unit or "").strip()
+    if use_siunitx:
+        unit_latex = _pint_unit_latex(unit_text)
+        if unit_latex:
+            return rf"\SI{{{magnitude_value}}}{{{unit_latex}}}"
+
+    escaped = _escape_unit_for_text(unit_text)
+    if escaped:
+        return rf"\num{{{magnitude_value}}}\,\text{{{escaped}}}"
+    return rf"\num{{{magnitude_value}}}"
+
+
 def to_siunitx(magnitude: Any, unit: str) -> str:
     """Render a (magnitude, unit) pair as LaTeX.
 
@@ -133,28 +228,4 @@ def to_siunitx(magnitude: Any, unit: str) -> str:
     ``siunitx`` package at minimum, and with plain ``amsmath`` as a
     reasonable approximation.
     """
-    try:
-        mag_float = float(magnitude)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"magnitude must be a number, got {magnitude!r}: {exc}"
-        ) from exc
-
-    if HAS_PINT:
-        registry = get_registry()
-        try:
-            q = mag_float * registry(unit)
-            # pint's "L" LaTeX format spec emits a siunitx-compatible string.
-            return f"{q:Lx}"
-        except Exception as exc:  # noqa: BLE001
-            _logger.debug(
-                "to_siunitx: pint formatting failed for %r %r: %s",
-                mag_float, unit, exc,
-            )
-            # Fall through to the bare fallback so a caller with a
-            # non-pint-recognised unit string still gets useful output.
-
-    escaped = _escape_unit_for_text(unit)
-    if escaped:
-        return rf"\num{{{mag_float}}}\,\text{{{escaped}}}"
-    return rf"\num{{{mag_float}}}"
+    return format_quantity_latex(magnitude, unit)

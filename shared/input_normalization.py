@@ -15,11 +15,13 @@ __all__ = [
     "CONSTANT_FIELDS",
     "IDENTIFIER_RE",
     "ConstantsState",
+    "InputSections",
     "coerce_string_rows",
     "constants_rows_to_text",
     "freeze_string_rows",
     "normalize_constants_state",
     "parse_constants_text",
+    "parse_input_sections",
     "string_value",
 ]
 
@@ -92,6 +94,65 @@ def constants_rows_to_text(rows: Iterable[dict[str, str]]) -> str:
 
 
 @dataclass(frozen=True)
+class InputSections:
+    data_text: str
+    constants_text: str
+    explicit_sections: bool
+
+
+def _section_header(line: str) -> str | None:
+    stripped = line.strip()
+    if not stripped.startswith("[") or not stripped.endswith("]"):
+        return None
+    return stripped[1:-1].strip().lower()
+
+
+def parse_input_sections(text: str) -> InputSections:
+    lines = (text or "").splitlines()
+    data_lines: list[str] = []
+    constants_lines: list[str] = []
+    current_section: str | None = None
+    seen_sections: set[str] = set()
+    explicit_sections = any(_section_header(line) in {"data", "constants"} for line in lines)
+
+    for line_num, line in enumerate(lines, 1):
+        stripped = line.strip()
+        header = _section_header(line)
+        if header is not None:
+            if header in {"data", "constants"}:
+                if header in seen_sections:
+                    raise ValueError(
+                        _dual_msg(
+                            f"第 {line_num} 行：重复的 [{header}] 段定义。",
+                            f"Line {line_num}: Duplicate [{header}] section definition.",
+                        )
+                    )
+                seen_sections.add(header)
+                current_section = header
+                continue
+            if explicit_sections:
+                raise ValueError(
+                    _dual_msg(
+                        f"第 {line_num} 行：未知的段定义 {stripped}。",
+                        f"Line {line_num}: Unknown section header {stripped}.",
+                    )
+                )
+
+        if current_section == "data":
+            data_lines.append(line)
+        elif current_section == "constants":
+            constants_lines.append(line)
+        else:
+            data_lines.append(line)
+
+    return InputSections(
+        data_text="\n".join(data_lines),
+        constants_text="\n".join(constants_lines),
+        explicit_sections=explicit_sections,
+    )
+
+
+@dataclass(frozen=True)
 class ConstantsState:
     enabled: bool
     view: str
@@ -103,8 +164,6 @@ class ConstantsState:
         return [dict(row) for row in self.rows]
 
     def compute_dict(self, *, validate: bool = True) -> dict[str, str]:
-        if not self.enabled:
-            return {}
         constants: dict[str, str] = {}
         for row in self.rows:
             name = row["name"].strip()
