@@ -52,9 +52,8 @@ Formula renderer value-gate evidence remains informational while WebEngine is
 QT_QPA_PLATFORM=offscreen python tools/formula_renderer_value_gate.py --out build/formula-renderer-value-gate.json
 ```
 
-The standalone GUI-style LaTeX option matrix remains deferred integration work
-until `tests/test_latex_option_matrix.py` and `tools/latex_option_matrix.py`
-are brought into tracked source control. Do not treat those untracked artifacts
+The standalone GUI-style LaTeX option matrix (`tests/test_latex_option_matrix.py`
+and `tools/latex_option_matrix.py`) is now tracked in source control, so it counts
 as mandatory release-gate evidence in a clean checkout.
 
 Build release artifacts after the local gate passes:
@@ -276,9 +275,8 @@ Current route coverage:
   `tests/test_latex_generation_consistency.py::test_statistics_latex` and
   `tests/test_latex_compile_e2e.py::test_latex_compile_e2e`. The broader
   `tests/test_latex_option_matrix.py` / `tools/latex_option_matrix.py`
-  release-gate artifacts already referenced above are pre-existing untracked
-  files in this worktree and must be included by the later integration commit;
-  they are not the only P0.1 statistics LaTeX evidence.
+  release-gate artifacts already referenced above are now tracked in source
+  control; they are not the only P0.1 statistics LaTeX evidence.
 
 Duplicated output paths to migrate in later slices:
 
@@ -329,10 +327,9 @@ Internal-only allowlist for this baseline:
 | Web statistics CSV | `datalab_core.statistics.statistics_csv_rows_from_result()` | `app_web.logic.statistics._format_statistics_rows()` is a compatibility wrapper that keeps `metric,value,uncertainty` headers. | `tests/test_app_web_precision_concurrency.py::test_statistics_analysis_row_mode_condition_coverage_invariant` |
 | Statistics LaTeX summaries and diagnostics | `datalab_latex.latex_tables_common.build_statistics_latex_summary_rows()` / `build_statistics_latex_diagnostic_rows()` | `statistics_utils.generate_statistics_latex*()` remain public compatibility APIs, preserve `latex_group_size=0`, and render current warning diagnostics as compile-safe summary rows. | `tests/test_latex_generation_consistency.py::test_statistics_latex_group_size_zero_keeps_no_grouping_setup_and_diagnostic_row`; `tests/test_latex_compile_e2e.py::test_statistics_latex_zero_sigma_diagnostics_compile_dcolumn_and_siunitx`; `tests/test_latex_compile_e2e.py::test_statistics_latex_options_compile_with_all_discovered_local_engines` covers dcolumn, siunitx-mode, grouping size, diagnostics, and every discovered `compile_latex_safe()` engine (`pdflatex`, `xelatex`, `lualatex`) for English statistics reports; CJK caption compile coverage is limited to XeLaTeX in this tracked P0.5 gate. |
 
-The standalone all-module GUI-style option matrix remains deferred and
-non-gated until `tests/test_latex_option_matrix.py` and
-`tools/latex_option_matrix.py` are tracked; P0.5 mandatory evidence above is
-limited to tracked tests.
+The standalone all-module GUI-style option matrix
+(`tests/test_latex_option_matrix.py` and `tools/latex_option_matrix.py`) is now
+tracked and gated; P0.5 mandatory evidence above includes these tracked tests.
 
 ### P0.6A Shared Statistics Plot Routing
 

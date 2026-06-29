@@ -51,8 +51,16 @@ def _error_key_for_exception(exc: Exception) -> str:
     msg_lower = msg.lower()
     if "utf-8" in msg_lower or "decode" in msg_lower:
         return "errors.file_parse_failed"
-    if "formula" in msg_lower or "parse" in msg_lower or "解析" in msg:
+    if (
+        "formula" in msg_lower
+        or "parse" in msg_lower
+        or "解析" in msg
+        or "valid json" in msg_lower
+        or "candidates" in msg_lower
+    ):
         return "errors.formula_parse_failed"
+    if "unit_evaluation_unsupported_on_web" in msg_lower:
+        return "errors.units_unsupported_on_web"
     if (
         "requires all x > 0" in msg_lower
         or "requires all y > 0" in msg_lower

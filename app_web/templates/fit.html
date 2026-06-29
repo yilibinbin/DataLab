@@ -339,10 +339,10 @@
         <li>R²: <span class="fmt-number" data-raw="{{ result.metrics.r2 }}">{{ result.metrics.r2 }}</span></li>
         <li>RMSE: <span class="fmt-number" data-raw="{{ result.metrics.rmse }}">{{ result.metrics.rmse }}</span></li>
         {% if result.metrics.chi_square_p_value is defined %}
-          <li>χ² p-value: <span class="fmt-number" data-raw="{{ result.metrics.chi_square_p_value }}">{{ result.metrics.chi_square_p_value }}</span></li>
+          <li><span data-i18n="fit.metricChiSquarePValue">χ² p-value</span>: <span class="fmt-number" data-raw="{{ result.metrics.chi_square_p_value }}">{{ result.metrics.chi_square_p_value }}</span></li>
         {% endif %}
         {% if result.metrics.max_standardized_residual is defined %}
-          <li>Max standardized residual: <span class="fmt-number" data-raw="{{ result.metrics.max_standardized_residual }}">{{ result.metrics.max_standardized_residual }}</span></li>
+          <li><span data-i18n="fit.metricMaxStandardizedResidual">Max standardized residual</span>: <span class="fmt-number" data-raw="{{ result.metrics.max_standardized_residual }}">{{ result.metrics.max_standardized_residual }}</span></li>
         {% endif %}
       </ul>
     </div>
@@ -353,16 +353,16 @@
       {% if result.diagnostic_correlations %}
         <div class="card">
           <div class="card-header">
-            <div class="label">Parameter Correlations</div>
-            <div class="muted">Covariance-derived correlation coefficients.</div>
+            <div class="label" data-i18n="fit.correlationsLabel">Parameter Correlations</div>
+            <div class="muted" data-i18n="fit.correlationsHint">Covariance-derived correlation coefficients.</div>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Parameter i</th>
-                  <th>Parameter j</th>
-                  <th>Correlation</th>
+                  <th data-i18n="fit.correlationsParamI">Parameter i</th>
+                  <th data-i18n="fit.correlationsParamJ">Parameter j</th>
+                  <th data-i18n="fit.correlationsValue">Correlation</th>
                 </tr>
               </thead>
               <tbody>
@@ -381,16 +381,16 @@
       {% if result.diagnostic_residuals %}
         <div class="card">
           <div class="card-header">
-            <div class="label">Standardized Residuals</div>
-            <div class="muted">Sigma, weight, or RMSE-normalized residual diagnostics.</div>
+            <div class="label" data-i18n="fit.residualsLabel">Standardized Residuals</div>
+            <div class="muted" data-i18n="fit.residualsHint">Sigma, weight, or RMSE-normalized residual diagnostics.</div>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Row</th>
-                  <th>Value</th>
-                  <th>Type</th>
+                  <th data-i18n="fit.residualsRow">Row</th>
+                  <th data-i18n="fit.residualsValue">Value</th>
+                  <th data-i18n="fit.residualsType">Type</th>
                 </tr>
               </thead>
               <tbody>
