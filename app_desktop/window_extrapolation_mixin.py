@@ -460,6 +460,7 @@ class WindowExtrapolationMixin:
                     segments=segments,
                     uncertainty_digits=uncertainty_digits,
                     core_request=core_request,
+                    units_config=stats_units_config,
                 )
                 worker = CalcWorker(job)
                 worker.finished_ok.connect(self._on_calc_finished)

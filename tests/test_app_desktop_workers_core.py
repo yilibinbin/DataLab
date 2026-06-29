@@ -1216,6 +1216,7 @@ def test_execute_root_solving_job_payload_forwards_uncertainty_options(
         display_digits: int,
         uncertainty_digits: int,
         language: str,
+        root_units_by_name: object = None,
     ) -> tuple[str, list[dict[str, str]], list[str]]:
         captured["display_digits"] = display_digits
         captured["uncertainty_digits"] = uncertainty_digits
@@ -1763,6 +1764,7 @@ def test_execute_root_solving_job_payload_does_not_plot_failed_root_batch(
         display_digits: int,
         uncertainty_digits: int,
         language: str,
+        root_units_by_name: object = None,
     ) -> tuple[str, list[dict[str, str]], list[str]]:
         return "failed", [], ["name"]
 

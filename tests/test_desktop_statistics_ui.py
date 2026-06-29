@@ -330,6 +330,12 @@ def test_standard_statistics_run_passes_visible_units_to_core_request(
     assert job.core_request is not None
     assert job.core_request.inputs["units"]["inputs"] == {"A": {"unit": "J"}}
     assert job.core_request.inputs["units"]["outputs"] == {"result": {"unit": "J"}}
+    # The worker rebuilds its own per-column requests from job fields and does not use
+    # job.core_request, so the units must also be attached to the job itself or normal
+    # single-column statistics runs silently drop all unit metadata.
+    assert job.units_config is not None
+    assert job.units_config["inputs"] == {"A": "J"}
+    assert job.units_config["outputs"] == {"result": "J"}
 
 
 def test_statistics_bootstrap_visibility_replaces_regular_mode_controls(window: Any) -> None:

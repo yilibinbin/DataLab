@@ -1300,6 +1300,7 @@ def _execute_calc_job(
                     precision_digits=applied_precision,
                     uncertainty_digits=job.uncertainty_digits,
                     segments=normalized_segments,
+                    units=job.units_config,
                 )
             except Exception as exc:  # noqa: BLE001
                 raise ValueError(str(exc)) from exc
