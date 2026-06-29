@@ -74,7 +74,6 @@ def build_error_mode_view(owner: Any) -> QGroupBox:
     )
 
     func_btn_row = QHBoxLayout()
-    error_layout.setSpacing(4)
     func_btn_row.addStretch()
     func_help_btn = QPushButton("函数支持")
     func_help_btn.setFlat(True)

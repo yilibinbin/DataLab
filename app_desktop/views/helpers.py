@@ -21,7 +21,15 @@ from PySide6.QtWidgets import (
 
 from app_desktop.constants_editor import ConstantsEditor
 from app_desktop.formula_preview import open_formula_preview_dialog
-from app_desktop.theme import table_style, workbench_section_card_style
+from app_desktop.theme import (
+    CARD_MARGIN_H,
+    CARD_MARGIN_V,
+    INNER_BOX_MARGIN,
+    SPACE_MD,
+    SPACE_SM,
+    table_style,
+    workbench_section_card_style,
+)
 from shared.ui_schema import FormFieldSpec
 
 
@@ -158,8 +166,8 @@ def make_display_unit_controls(
     box = QGroupBox(_translate_owner(owner, title_zh, title_en))
     owner._register_text(box, title_zh, title_en, "setTitle")
     layout = QVBoxLayout(box)
-    layout.setContentsMargins(8, 8, 8, 8)
-    layout.setSpacing(6)
+    layout.setContentsMargins(INNER_BOX_MARGIN, INNER_BOX_MARGIN, INNER_BOX_MARGIN, INNER_BOX_MARGIN)
+    layout.setSpacing(SPACE_SM)
 
     checkbox = QCheckBox(_translate_owner(owner, "启用单位标注", "Enable units"))
     checkbox.setProperty("datalab_schema_key", f"{schema_prefix}.units.enabled")
@@ -293,8 +301,8 @@ def make_workbench_section_card_view(
     card.setProperty("datalab_workbench_section_role", role)
     card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
     card_layout = QVBoxLayout(card)
-    card_layout.setContentsMargins(12, 10, 12, 12)
-    card_layout.setSpacing(8)
+    card_layout.setContentsMargins(CARD_MARGIN_H, CARD_MARGIN_V, CARD_MARGIN_H, CARD_MARGIN_H)
+    card_layout.setSpacing(SPACE_MD)
 
     title_label = QLabel(_translate_owner(owner, title_zh, title_en))
     title_label.setProperty("datalab_workbench_section_title", True)

@@ -41,3 +41,33 @@ def test_config_card_groupbox_still_reserves_title_band(dark: bool) -> None:
     assert "margin-top: 18px" in qss
     assert 'QWidget[datalab_config_card="true"] QGroupBox::title' in qss
     assert "subcontrol-origin: margin" in qss
+
+
+def test_all_mode_section_cards_share_uniform_spacing() -> None:
+    # V6 regression: the error view used to override the shared card layout to 4px,
+    # making error rows visibly tighter than every other mode. All five mode section
+    # cards must share the same spacing and margins (driven by the spacing tokens).
+    from PySide6.QtWidgets import QApplication, QFrame
+
+    from tools.capture_desktop_gui_screens import _create_window
+
+    app = QApplication.instance() or QApplication([])  # noqa: F841
+    window = _create_window()
+    QApplication.processEvents()
+
+    cards = [
+        f
+        for f in window.findChildren(QFrame)
+        if f.property("datalab_workbench_section_card") and f.layout() is not None
+    ]
+    roles = {str(c.property("datalab_workbench_section_role")) for c in cards}
+    # All five modes are present.
+    assert {"error", "fitting", "statistics", "extrapolation", "root_solving"} <= roles
+
+    spacings = {c.layout().spacing() for c in cards}
+    margins = {
+        (c.layout().contentsMargins().left(), c.layout().contentsMargins().top())
+        for c in cards
+    }
+    assert spacings == {theme.SPACE_MD}, f"non-uniform card spacing: {spacings}"
+    assert margins == {(theme.CARD_MARGIN_H, theme.CARD_MARGIN_V)}, f"non-uniform margins: {margins}"
