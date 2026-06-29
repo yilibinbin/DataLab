@@ -400,7 +400,9 @@
         if (!table && !serverStatsCsvData) return;
         const sci = fmtSci && fmtSci.checked;
         const digits = fmtDigits ? parseInt(fmtDigits.value || '10', 10) : 10;
-        const csvData = serverStatsCsvData || tableToCsv(table, sci, digits);
+        // Rebuild from the visible table so the sci/decimals toggles are honored;
+        // fall back to the server CSV only when no table is rendered.
+        const csvData = table ? tableToCsv(table, sci, digits) : serverStatsCsvData;
         const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');

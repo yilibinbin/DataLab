@@ -492,7 +492,8 @@
 
     const fitCsvBtn = document.getElementById('fit-csv-download-btn');
     const serverFitCsvData = {% if result and result.csv_data %}{{ result.csv_data | tojson }}{% else %}null{% endif %};
-    const fitCsvFilename = {% if result and result.comparison_rows is defined and result.comparison_rows %}'fitting_comparison_results.csv'{% else %}'fit_results.csv'{% endif %};
+    const fitCsvIsComparison = {% if result and result.comparison_rows is defined and result.comparison_rows %}true{% else %}false{% endif %};
+    const fitCsvFilename = fitCsvIsComparison ? 'fitting_comparison_results.csv' : 'fit_results.csv';
     function tableToCsv(table, sci, digits) {
       const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim());
       const lines = [headers.join(',')];
@@ -517,7 +518,12 @@
         if (!table && !serverFitCsvData) return;
         const sci = fmtSci && fmtSci.checked;
         const digits = fmtDigits ? parseInt(fmtDigits.value || '10', 10) : 10;
-        const csvData = serverFitCsvData || tableToCsv(table, sci, digits);
+        // For normal results, rebuild from the visible table so the sci/decimals
+        // toggles are honored. The server CSV is used only for the comparison table,
+        // which the toggle-aware tableToCsv cannot reconstruct.
+        const csvData = (table && !fitCsvIsComparison)
+          ? tableToCsv(table, sci, digits)
+          : (serverFitCsvData || tableToCsv(table, sci, digits));
         const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
