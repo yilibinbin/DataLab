@@ -251,10 +251,16 @@ def make_display_unit_controls(
     setattr(owner, f"{attr_prefix}_units_box", box)
     setattr(owner, f"{attr_prefix}_units_enabled_checkbox", checkbox)
     setattr(owner, f"{attr_prefix}_units_body", body)
+    # Name the editors after their owner attribute (mirrors input_constants_editor) so
+    # the GUI schema scanner recognizes them as expected state owners rather than
+    # flagging them as unexpected ConstantsEditor instances mounted with no objectName.
+    inputs_editor.setObjectName(f"{attr_prefix}_units_inputs_editor")
     setattr(owner, f"{attr_prefix}_units_inputs_editor", inputs_editor)
     if constants_editor is not None:
+        constants_editor.setObjectName(f"{attr_prefix}_units_constants_editor")
         setattr(owner, f"{attr_prefix}_units_constants_editor", constants_editor)
     if parameters_editor is not None:
+        parameters_editor.setObjectName(f"{attr_prefix}_units_parameters_editor")
         setattr(owner, f"{attr_prefix}_units_parameters_editor", parameters_editor)
     setattr(owner, f"{attr_prefix}_units_output_edit", output_edit)
 

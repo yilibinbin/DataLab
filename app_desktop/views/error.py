@@ -131,6 +131,7 @@ def build_error_mode_view(owner: Any) -> QGroupBox:
     units_body_layout.setContentsMargins(0, 0, 0, 0)
     units_body_layout.setSpacing(6)
     owner.error_units_inputs_editor = ConstantsEditor(min_rows=2, checked=True, checkbox_text="")
+    owner.error_units_inputs_editor.setObjectName("error_units_inputs_editor")
     owner.error_units_inputs_editor.set_table_headers(owner._tr("符号", "Symbol"), owner._tr("单位", "Unit"))
     owner.error_units_inputs_editor.setToolTip(
         owner._tr(
@@ -140,6 +141,7 @@ def build_error_mode_view(owner: Any) -> QGroupBox:
     )
     owner.error_units_inputs_editor.setProperty("datalab_schema_key", "error.units.inputs")
     owner.error_units_constants_editor = ConstantsEditor(min_rows=2, checked=True, checkbox_text="")
+    owner.error_units_constants_editor.setObjectName("error_units_constants_editor")
     owner.error_units_constants_editor.set_table_headers(owner._tr("符号", "Symbol"), owner._tr("单位", "Unit"))
     owner.error_units_constants_editor.setToolTip(
         owner._tr(

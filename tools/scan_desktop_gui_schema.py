@@ -79,6 +79,20 @@ REQUIRED_BASELINE_STATE_ROLES = {
     "result_tabs_owner": "result_tabs",
 }
 BASELINE_EDITABLE_STATE_OBJECTS = {"input_constants_editor"}
+# Display-only units annotation editors mounted per mode. They are legitimate
+# ConstantsEditor state owners (the user edits symbol/unit rows) but are not
+# model-bound workbench mounts, so they carry no datalab_state_role. They are
+# recognized by their objectName, which mirrors their owner attribute.
+BASELINE_UNITS_EDITOR_OBJECTS = {
+    "error_units_inputs_editor",
+    "error_units_constants_editor",
+    "fit_units_inputs_editor",
+    "fit_units_constants_editor",
+    "fit_units_parameters_editor",
+    "root_units_inputs_editor",
+    "root_units_constants_editor",
+    "stats_units_inputs_editor",
+}
 MIRRORED_STATE_OBJECT_NAMES = {
     "workbench_data_preview_table",
     "workbench_editor_stack",
@@ -282,7 +296,7 @@ def _state_ownership_issues(window: Any, scenario: ScreenScenario) -> list[dict[
         mount.widget_attr
         for spec in MODE_WORKBENCH_SPECS.values()
         for mount in spec.parameters + spec.constants + spec.tables
-    } | set(REQUIRED_BASELINE_STATE_ROLES.values()) | BASELINE_EDITABLE_STATE_OBJECTS
+    } | set(REQUIRED_BASELINE_STATE_ROLES.values()) | BASELINE_EDITABLE_STATE_OBJECTS | BASELINE_UNITS_EDITOR_OBJECTS
     owner_widgets = []
     for owner_type in owner_types:
         owner_widgets.extend(window.findChildren(owner_type))
