@@ -27,4 +27,28 @@ docs/PROGRAM_FRAMEWORK.synctex.gz
 findings.md
 progress.md
 task_plan.md
+CLAUDE_HANDOFF.md
 .worktrees/
+
+# Scratch diff dumps and one-off debug scripts (per-session, not source).
+diff_head.txt
+scoped_diff.txt
+scratch_diff.txt
+scratch_staged.diff
+scratch_working.diff
+fix_history_compare.diff
+test_ast.py
+test_dos.py
+
+# LaTeX compile byproducts from manual/ad-hoc renders at repo root.
+test_latex.aux
+test_latex.log
+test_latex.tex
+test_latex.pdf
+test_tex.aux
+test_tex.log
+test_tex.tex
+test_tex.pdf
+
+# uv lockfile — project installs via requirements*.txt / pip, not uv.
+uv.lock
