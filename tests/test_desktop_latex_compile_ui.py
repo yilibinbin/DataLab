@@ -362,3 +362,45 @@ def test_root_latex_ui_language_and_options_affect_generated_source_before_compi
     assert "Input row" in en_source
     assert r"\usepackage{dcolumn}" in en_source
     assert "1.234567890123" in en_source
+
+
+def test_run_engine_pdflatex_argv_includes_no_shell_escape(tmp_path: Path, monkeypatch: Any) -> None:
+    # Opening and compiling an untrusted .tex must not be able to run shell commands,
+    # so the pdflatex/xelatex argv passes -no-shell-escape (parity with the web path).
+    from app_desktop import window_latex_pdf_mixin as mod
+
+    QApplication.instance() or QApplication([])
+    target = tmp_path / "doc.tex"
+    target.write_text("\\documentclass{article}\\begin{document}x\\end{document}", encoding="utf-8")
+    engine_path = tmp_path / "pdflatex"
+
+    worker = mod._LatexCompileWorker(
+        target=target,
+        pdf_dir=tmp_path,
+        engine_name="pdflatex",
+        engine_path=engine_path,
+        pdf_path=tmp_path / "doc.pdf",
+    )
+
+    captured: dict[str, Any] = {}
+
+    class _FakeProc:
+        returncode = 0
+
+        def poll(self) -> int:
+            return 0
+
+        def communicate(self, timeout: Any = None) -> tuple[str, str]:
+            return ("", "")
+
+    def _fake_popen(cmd: Any, **kwargs: Any) -> _FakeProc:
+        captured["cmd"] = list(cmd)
+        return _FakeProc()
+
+    monkeypatch.setattr(mod.subprocess, "Popen", _fake_popen)
+
+    worker._run_engine("pdflatex", engine_path)
+
+    assert "-no-shell-escape" in captured["cmd"]
+    # The flag must precede the input filename so it is honored by the engine.
+    assert captured["cmd"].index("-no-shell-escape") < captured["cmd"].index(target.name)

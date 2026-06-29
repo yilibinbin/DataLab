@@ -223,7 +223,15 @@ class _LatexCompileWorker(QThread):
             cmd = tectonic_compile_argv(str(path), self._target)
             timeout = 300
         else:
-            cmd = [str(path), "-interaction=nonstopmode", "-halt-on-error", self._target.name]
+            # -no-shell-escape disables \write18 / \input{|...} so opening and compiling
+            # an untrusted .tex cannot run shell commands, matching the hardened web path.
+            cmd = [
+                str(path),
+                "-no-shell-escape",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                self._target.name,
+            ]
             timeout = 120
         proc = subprocess.Popen(
             cmd,

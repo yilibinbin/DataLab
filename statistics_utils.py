@@ -430,8 +430,8 @@ def generate_statistics_latex_batches(
             f"\\section*{{{latex_escape(title)}}}",
         ]
     )
-    for batch in batches:
-        idx = batch.get("index") or (len(lines))
+    for batch_number, batch in enumerate(batches, 1):
+        idx = batch.get("index") or batch_number
         block_value_col = str(batch.get("value_col") or value_col)
         values = batch.get("values")
         sigmas = batch.get("sigmas")
