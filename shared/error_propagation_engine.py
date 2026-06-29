@@ -470,11 +470,26 @@ def _taylor_sensitivity_metadata(
             else:
                 relative_omission_reason = "nonfinite"
         label = label_by_canonical.get(name, name)
-        sensitivities[label] = {
-            "absolute": absolute,
-            "relative": relative,
-            "relative_omission_reason": relative_omission_reason,
-        }
+        existing = sensitivities.get(label)
+        if existing is None:
+            sensitivities[label] = {
+                "absolute": absolute,
+                "relative": relative,
+                "relative_omission_reason": relative_omission_reason,
+            }
+            continue
+        # Two distinct canonical variables share this display label (duplicate column
+        # headers). Aggregate rather than overwrite, mirroring contributions_map. Sum
+        # absolute sensitivities; sum relatives only when every contributor supplied one,
+        # otherwise drop the relative and record the first omission reason.
+        existing["absolute"] = cast(mp.mpf, existing["absolute"]) + absolute
+        existing_relative = cast("mp.mpf | None", existing["relative"])
+        if existing_relative is not None and relative is not None:
+            existing["relative"] = existing_relative + relative
+        else:
+            existing["relative"] = None
+            if existing.get("relative_omission_reason") is None:
+                existing["relative_omission_reason"] = relative_omission_reason or "aggregated"
     return sensitivities or None
 
 

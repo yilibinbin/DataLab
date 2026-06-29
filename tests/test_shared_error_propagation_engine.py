@@ -200,3 +200,25 @@ def test_shared_error_propagation_checks_cancellation_in_row_and_monte_carlo_loo
             cancellation_checker=cancel_during_apply_mc,
         )
     assert apply_mc_calls >= 3
+
+
+def test_taylor_sensitivity_aggregates_duplicate_display_labels() -> None:
+    # Two distinct canonical variables can map to the same display label when the data
+    # has duplicate column headers. The sensitivity metadata must aggregate them (like
+    # the sibling contributions_map does with '+'), not silently overwrite one with the
+    # other.
+    from shared.error_propagation_engine import _taylor_sensitivity_metadata
+
+    with mp.workdps(60):
+        sensitivities = _taylor_sensitivity_metadata(
+            "x1 + x2",
+            ["x1", "x2"],
+            [mp.mpf("2"), mp.mpf("3")],
+            mp.mpf("5"),
+            label_by_canonical={"x1": "A", "x2": "A"},
+        )
+
+    assert sensitivities is not None
+    # Both partials of (x1 + x2) are 1, so the aggregated absolute sensitivity under the
+    # shared label "A" must be 1 + 1 == 2, not the last writer's 1.
+    assert mp.almosteq(cast(mp.mpf, sensitivities["A"]["absolute"]), mp.mpf("2"), abs_eps=mp.mpf("1e-40"))
