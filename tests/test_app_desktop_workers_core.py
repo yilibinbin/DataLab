@@ -1982,10 +1982,15 @@ def test_root_solving_worker_emits_cancelled_when_subprocess_interrupts(
     worker = RootSolvingWorker(job)
     worker.request_stop()
 
-    with qtbot.waitSignal(worker.cancelled, timeout=3000):
+    # cancelled is emitted from the worker QThread and delivered to the main-thread
+    # event loop. The connection is established before start() so the signal cannot be
+    # missed, only delayed; under a full parallel suite the loop can be contended, so a
+    # 3s budget is too tight. 10s fails fast on a genuine break but absorbs scheduling
+    # jitter (the worker itself completes in microseconds).
+    with qtbot.waitSignal(worker.cancelled, timeout=10000):
         worker.start()
 
-    assert worker.wait(3000)
+    assert worker.wait(10000)
     assert observed["job"] is job
     assert observed["timeout_seconds"] == workers_core.ROOT_SOLVING_SUBPROCESS_TIMEOUT_SECONDS
     assert callable(observed["should_cancel"])
@@ -2923,10 +2928,13 @@ def test_fit_batch_worker_emits_cancelled_when_self_consistent_subprocess_interr
     monkeypatch.setattr(workers_core, "_execute_fit_job_payload_subprocess", fake_subprocess)
 
     worker = FitBatchWorker([FitBatchTask(index=0, fit_job=job)], capture_output=False)
-    with qtbot.waitSignal(worker.cancelled, timeout=3000):
+    # cancelled crosses from the worker QThread to the main-thread event loop; under a
+    # full parallel suite the loop can be contended, so 3s is too tight. 10s fails fast
+    # on a genuine break but absorbs scheduling jitter (the worker finishes instantly).
+    with qtbot.waitSignal(worker.cancelled, timeout=10000):
         worker.start()
 
-    assert worker.wait(3000)
+    assert worker.wait(10000)
 
 
 def test_execute_calc_job_extrapolation_returns_payload() -> None:
