@@ -397,7 +397,10 @@ class FittingComparisonWorker(QThread):
             self.failed.emit(str(exc))
 
     def _run_comparison(self) -> FittingComparisonResultPayload:
-        return workers_core._execute_fitting_comparison_job_payload(self.job)
+        return workers_core._execute_fitting_comparison_job_payload(
+            self.job,
+            should_cancel=lambda: self._stop_requested,
+        )
 
 
 class RootSolvingWorker(QThread):

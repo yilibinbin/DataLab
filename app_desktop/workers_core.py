@@ -24,6 +24,7 @@ from datalab_core.fitting import fitting_payload_to_fit_result
 from datalab_core.fitting_comparison import run_fitting_comparison
 from datalab_core.jobs import ComputeJobRequest, JobMode, JobOptions
 from datalab_core.results import ResultStatus
+from datalab_core.session import external_cancellation_scope
 from datalab_core.root_solving import root_batch_payload_to_result
 from datalab_core.service_factory import create_core_session_service
 from datalab_core.statistics import build_multi_column_statistics_requests, statistics_payload_to_compute_result
@@ -2732,8 +2733,16 @@ def _execute_fit_job_payload(job: FitJob, *, should_cancel=None) -> FitResultPay
     return FitResultPayload(job=job, fit_result=fit_result, expression=expression, logs=logs, warnings=warnings)
 
 
-def _execute_fitting_comparison_job_payload(job: FittingComparisonJob) -> FittingComparisonResultPayload:
-    envelope = run_fitting_comparison(job.core_request)
+def _execute_fitting_comparison_job_payload(
+    job: FittingComparisonJob,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+) -> FittingComparisonResultPayload:
+    # run_fitting_comparison checks cancellation before each candidate fit via
+    # check_cancelled(); make that honor the worker's stop flag so Stop
+    # interrupts a running comparison instead of waiting for every candidate.
+    with external_cancellation_scope(should_cancel):
+        envelope = run_fitting_comparison(job.core_request)
     if envelope.status is not ResultStatus.SUCCEEDED:
         message = str(envelope.payload.get("message") or envelope.payload.get("error_code") or "Fitting comparison failed.")
         raise ValueError(message)

@@ -28,6 +28,7 @@ from .fitting import DEFAULT_FITTING_PRECISION_DIGITS, build_fitting_request
 from .jobs import ComputeJobRequest, JobMode, JobOptions
 from .numeric_payload import numeric_payload_tree, request_digit_hint
 from .results import ResultEnvelope, ResultKind, ResultStatus
+from .session import check_cancelled
 
 _SUPPORTED_MODEL_TYPES = {"polynomial", "inverse_power", "custom"}
 _EXPECTED_CANDIDATE_FAILURES = (ValueError, TypeError, ArithmeticError)
@@ -166,6 +167,10 @@ def _compare_candidate_payloads(
     entries: list[FitComparisonEntry] = []
     rows: list[FitComparisonRow] = []
     for order, payload in enumerate(candidates_payload, start=1):
+        # Cooperative cancellation: each candidate fit is the expensive unit, so
+        # check before starting one. Raises CoreJobCancelled when the caller
+        # (desktop worker via external_cancellation_scope) requested a stop.
+        check_cancelled()
         try:
             normalized_payload = _normalize_candidate_payload(
                 payload,
