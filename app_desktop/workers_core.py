@@ -899,7 +899,7 @@ def _execute_calc_job(
     latex_path: str | None = None
     payload: dict[str, object] = {}
     core_warnings: list[str] = []
-    def _run_extrapolation_mode(applied_precision):
+    def _execute_extrapolation_mode(applied_precision):
         nonlocal headers, latex_path, payload
         data_rows: list[tuple[mp.mpf, ...]] = []
         results: list[object] = []
@@ -1026,7 +1026,7 @@ def _execute_calc_job(
         if plot_bytes_list:
             payload["plots"] = plot_bytes_list
 
-    def _run_error_mode(applied_precision):
+    def _execute_error_mode(applied_precision):
         nonlocal headers, latex_path, payload
         _check_cancelled()
         if not job.formula:
@@ -1255,7 +1255,7 @@ def _execute_calc_job(
             latex_path = job.output_path
             logs.append(f"Error propagation LaTeX written: {job.output_path}")
 
-    def _run_statistics_mode(applied_precision):
+    def _execute_statistics_mode(applied_precision):
         nonlocal headers, latex_path, payload
         _check_cancelled()
         if not job.dataset:
@@ -1468,11 +1468,11 @@ def _execute_calc_job(
     _check_cancelled()
     with _mp_precision_guard(options.mp_precision) as applied_precision:
         if job.mode == "extrapolation":
-            _run_extrapolation_mode(applied_precision)
+            _execute_extrapolation_mode(applied_precision)
         elif job.mode == "error":
-            _run_error_mode(applied_precision)
+            _execute_error_mode(applied_precision)
         elif job.mode == "statistics":
-            _run_statistics_mode(applied_precision)
+            _execute_statistics_mode(applied_precision)
         else:
             raise ValueError(f"Unsupported mode for async calculation: {job.mode}")
 

@@ -17,7 +17,7 @@ def test_execute_calc_job_dispatches_to_per_mode_handlers():
     import app_desktop.workers_core as workers_core
 
     source = inspect.getsource(workers_core._execute_calc_job)
-    for handler in ("_run_extrapolation_mode", "_run_error_mode", "_run_statistics_mode"):
+    for handler in ("_execute_extrapolation_mode", "_execute_error_mode", "_execute_statistics_mode"):
         assert f"def {handler}(" in source, f"missing per-mode handler {handler}"
         assert f"{handler}(applied_precision)" in source, f"{handler} is defined but never dispatched"
 
@@ -45,7 +45,7 @@ def test_mode_dispatch_is_a_thin_branch():
                 return body
         raise AssertionError(f"branch not found: {header_substr}")
 
-    assert _branch_body('if job.mode == "extrapolation":') == ["_run_extrapolation_mode(applied_precision)"]
-    assert _branch_body('elif job.mode == "error":') == ["_run_error_mode(applied_precision)"]
-    assert _branch_body('elif job.mode == "statistics":') == ["_run_statistics_mode(applied_precision)"]
+    assert _branch_body('if job.mode == "extrapolation":') == ["_execute_extrapolation_mode(applied_precision)"]
+    assert _branch_body('elif job.mode == "error":') == ["_execute_error_mode(applied_precision)"]
+    assert _branch_body('elif job.mode == "statistics":') == ["_execute_statistics_mode(applied_precision)"]
     assert "Unsupported mode for async calculation" in "\n".join(source)
