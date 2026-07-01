@@ -148,18 +148,21 @@ def _protect_non_ascii_for_mathtext(latex: str) -> str:
     because real LaTeX handles CJK via the document's CJK package.
     """
 
-    latex = latex.translate(_FULL_WIDTH_PUNCT_MAP)
-
-    def _wrap_outside(segment: str) -> str:
+    def _transform_outside(segment: str) -> str:
+        # Normalize full-width punctuation, then wrap remaining non-ASCII runs.
+        # Done per outside-segment (NOT globally first): normalizing ｛→\{ before
+        # the span scan would inject a brace that breaks _MATHTEXT_TEXT_SPAN_RE,
+        # defeating the double-wrap guard and re-nesting \text{\text{...}}.
+        segment = segment.translate(_FULL_WIDTH_PUNCT_MAP)
         return _MATHTEXT_NON_ASCII_RUN_RE.sub(lambda m: rf"\text{{{m.group(0)}}}", segment)
 
     parts: list[str] = []
     cursor = 0
     for span in _MATHTEXT_TEXT_SPAN_RE.finditer(latex):
-        parts.append(_wrap_outside(latex[cursor:span.start()]))
+        parts.append(_transform_outside(latex[cursor:span.start()]))
         parts.append(span.group(0))  # already a \text{...} span — leave untouched
         cursor = span.end()
-    parts.append(_wrap_outside(latex[cursor:]))
+    parts.append(_transform_outside(latex[cursor:]))
     return "".join(parts)
 
 

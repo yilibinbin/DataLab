@@ -209,6 +209,41 @@ def test_mathtext_does_not_double_wrap_existing_text_command() -> None:
     assert r"\text{质量}" in result.mathtext
 
 
+def test_mathtext_full_width_brace_inside_existing_text_span_does_not_nest() -> None:
+    """Full-width braces inside an existing \\text{...} must not defeat the
+    double-wrap guard: normalizing ｛→\\{ before the span scan used to break span
+    matching and produce unparseable \\text{\\text{...}}. The span must stay a
+    single \\text{...}.
+    """
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula_metadata,
+    )
+
+    result = render_formula_metadata(
+        RenderRequest(source=r"\text{质量｛x｝}", language=InputLanguage.LATEX)
+    )
+
+    assert result.ok
+    assert r"\text{\text" not in result.mathtext, result.mathtext
+
+
+def test_render_latex_with_full_width_brace_in_text_span_produces_png() -> None:
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula,
+    )
+
+    result = render_formula(
+        RenderRequest(source=r"\text{质量｛x｝}", language=InputLanguage.LATEX)
+    )
+
+    assert result.ok, result.error_message
+    assert result.png_bytes.startswith(b"\x89PNG")
+
+
 def test_render_latex_with_text_command_produces_png_without_crash() -> None:
     from datalab_latex.formula_render_service import (
         InputLanguage,

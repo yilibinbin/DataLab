@@ -31,7 +31,18 @@ def test_render_mathtext_png_renders_cjk_without_missing_glyphs() -> None:
     (not warnings) and this module builds a bare Figure that does not inherit
     shared.plotting's CJK rcParams, so run in a fresh subprocess (shared.plotting
     NOT preloaded) and assert no "does not have a glyph" appears on stderr.
+
+    CJK support is best-effort: on a host with no CJK-capable font (e.g. a
+    minimal CI image) the feature legitimately cannot render Chinese, so skip
+    rather than fail — matching the other CJK-dependent tests.
     """
+    import pytest
+
+    from shared.plotting import cjk_font_family
+
+    if cjk_font_family() is None:
+        pytest.skip("no CJK-capable font available on this host")
+
     code = (
         "import sys\n"
         "from shared.formula_mathtext_png import render_mathtext_png\n"
