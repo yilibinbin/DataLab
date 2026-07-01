@@ -1128,7 +1128,9 @@ def build_left_panel(self):
     # Ctrl/⌘+Return is the standard "execute" shortcut; a button shortcut fires
     # the click, so it runs or stops depending on the button's current state.
     self.run_button.setShortcut(QKeySequence("Ctrl+Return"))
-    self.run_button.setToolTip(self._tr("开始执行 (Ctrl+Return)", "Run (Ctrl+Return)"))
+    # Register the tooltip for retranslation (not a one-shot setToolTip) so it
+    # switches with the UI language like the button text.
+    self._register_text(self.run_button, "开始执行 (Ctrl+Return)", "Run (Ctrl+Return)", "setToolTip")
     self._register_text(self.run_button, "开始执行", "Run")
     self.run_button.clicked.connect(lambda _checked=False: self.run_calculation())
     self.run_section_layout.addWidget(self.run_button)

@@ -25,7 +25,11 @@ from .history_compare import (
     _safe_key_token,
 )
 from .results import AnalysisRow
-from .uncertainty_budget import UncertaintyBudgetRow, extract_uncertainty_budget
+from .uncertainty_budget import (
+    UncertaintyBudgetRow,
+    budget_source_key_base,
+    extract_uncertainty_budget,
+)
 
 
 def _compare_budget_rows(
@@ -139,4 +143,7 @@ def _budget_match_token(match_key: tuple[str, str]) -> str:
 
 
 def _budget_source_token(row: UncertaintyBudgetRow) -> str:
-    return _safe_key_token(row.source_key or row.label_key)
+    # The source_key may be an encoded analysis-row token; decode to the readable
+    # base so the delta row key is human-readable (contribution_percent.x rather
+    # than a re-encoded base64 blob).
+    return budget_source_key_base(row.source_key or row.label_key)

@@ -99,14 +99,18 @@ def build_error_mode_view(owner: Any) -> QGroupBox:
     owner.error_units_enabled_checkbox = QCheckBox(owner._tr("启用单位标注", "Enable units"))
     owner._register_text(owner.error_units_enabled_checkbox, "启用单位标注", "Enable units")
     owner.error_units_enabled_checkbox.setProperty("datalab_schema_key", "error.units.enabled")
-    owner.error_units_enabled_checkbox.setToolTip(
-        owner._tr(
-            "启用后，运行误差传递时会保存并可选验证输入、常数和输出单位。",
-            "When enabled, error propagation stores and can validate input, constant, and output units.",
-        )
+    # Register tooltips/label for retranslation (not one-shot _tr) so they switch
+    # with the UI language.
+    owner._register_text(
+        owner.error_units_enabled_checkbox,
+        "启用后，运行误差传递时会保存并可选验证输入、常数和输出单位。",
+        "When enabled, error propagation stores and can validate input, constant, and output units.",
+        "setToolTip",
     )
     units_header.addWidget(owner.error_units_enabled_checkbox)
-    units_header.addWidget(QLabel(owner._tr("模式：", "Mode:")))
+    error_units_mode_label = QLabel(owner._tr("模式：", "Mode:"))
+    owner._register_text(error_units_mode_label, "模式：", "Mode:")
+    units_header.addWidget(error_units_mode_label)
     owner.error_units_mode_combo = QComboBox()
     units_mode_items = [
         ("仅显示", "Display only", "display_only"),
@@ -116,11 +120,11 @@ def build_error_mode_view(owner: Any) -> QGroupBox:
         owner.error_units_mode_combo.addItem(zh, data)
     owner._register_combo(owner.error_units_mode_combo, units_mode_items)
     owner.error_units_mode_combo.setProperty("datalab_schema_key", "error.units.mode")
-    owner.error_units_mode_combo.setToolTip(
-        owner._tr(
-            "仅显示只保存/渲染单位；验证公式会在数值计算前检查量纲兼容性。",
-            "Display only stores/renders units; validate expression checks dimensional compatibility before numeric evaluation.",
-        )
+    owner._register_text(
+        owner.error_units_mode_combo,
+        "仅显示只保存/渲染单位；验证公式会在数值计算前检查量纲兼容性。",
+        "Display only stores/renders units; validate expression checks dimensional compatibility before numeric evaluation.",
+        "setToolTip",
     )
     units_header.addWidget(owner.error_units_mode_combo)
     units_header.addStretch()

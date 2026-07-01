@@ -392,6 +392,14 @@ def _analysis_row_source_key(row: AnalysisRow) -> str:
     return f"analysis_row:v1:{token}"
 
 
+def budget_source_key_base(source_key: str | None) -> str:
+    """Decode an encoded ``analysis_row:v1:<base64>`` source key to its plain
+    base key for display (e.g. ``contribution_percent.A``). Passthrough for keys
+    that are not encoded. Public wrapper so UI/label paths render the readable
+    key instead of the opaque token."""
+    return _analysis_row_source_key_base(source_key or "")
+
+
 def _analysis_row_source_key_base(source_key: str) -> str:
     prefix = "analysis_row:v1:"
     if not source_key.startswith(prefix):

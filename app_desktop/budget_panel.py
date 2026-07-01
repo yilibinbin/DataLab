@@ -10,6 +10,7 @@ from datalab_core.history import HistoryEntry
 from datalab_core.uncertainty_budget import (
     BudgetExtractionResult,
     UncertaintyBudgetRow,
+    budget_source_key_base,
     extract_uncertainty_budget,
 )
 
@@ -100,7 +101,9 @@ def budget_rows_to_csv_rows(rows: Sequence[UncertaintyBudgetRow]) -> list[dict[s
             "result_id": row.result_id,
             "source_snapshot_id": row.source_snapshot_id,
             "source_row_id": _cell(row.source_row_id),
-            "source_key": _cell(row.source_key),
+            # Decode the encoded analysis-row token to the readable base key so
+            # exports/labels don't leak the opaque analysis_row:v1:<base64> form.
+            "source_key": budget_source_key_base(row.source_key),
             "category": row.category,
             "label_key": row.label_key,
             "value": _cell(row.value),
@@ -130,7 +133,7 @@ def build_budget_pareto_plot_spec(rows: Sequence[UncertaintyBudgetRow]) -> dict[
     percent: list[str] = []
     cumulative: list[str] = []
     for row in percent_rows:
-        labels.append(row.source_key or row.label_key)
+        labels.append(budget_source_key_base(row.source_key) or row.label_key)
         percent.append(str(row.percent))
         suffix = _contribution_suffix(row.source_key, "contribution_percent.")
         cumulative.append(str(cumulative_by_suffix.get(suffix) or row.cumulative_percent or row.percent))
@@ -198,7 +201,7 @@ def _diagnostic_rows(extraction: BudgetExtractionResult) -> list[dict[str, str]]
 
 
 def _contribution_suffix(source_key: str | None, prefix: str) -> str:
-    text = source_key or ""
+    text = budget_source_key_base(source_key)
     return text[len(prefix) :] if text.startswith(prefix) else text
 
 
