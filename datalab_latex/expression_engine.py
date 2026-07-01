@@ -39,6 +39,7 @@ from shared.expression_engine import (  # noqa: F401  (re-export)
     _normalize_expression,
     _resolve_callable,
     _resolve_name,
+    compile_expression,
     list_allowed_functions,
     safe_eval,
 )
@@ -60,6 +61,7 @@ __all__ = [
     "_resolve_callable",
     "_resolve_name",
     "_split_dual",
+    "compile_expression",
     "format_latex_formula",
     "list_allowed_functions",
     "safe_eval",

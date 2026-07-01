@@ -51,7 +51,7 @@
    on the light theme's near-white surfaces it fails WCAG AA badly (~1.7:1).
    Override the text uses of accent with an on-brand deep cyan that passes AA
    (≥5:1 on both --bg and white). Backgrounds/borders using accent are fine. */
-.theme-light a,
+.theme-light a:not(.download),
 .theme-light td.strong {
   color: #0e7490;
 }

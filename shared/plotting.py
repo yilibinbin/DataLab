@@ -940,7 +940,9 @@ def _finite_plot_float(value: Any) -> float | None:
     try:
         parsed = mp.mpf(value)
     except Exception:
-        _logger.warning("plot rendering failed; returning no image", exc_info=True)
+        # A single non-numeric / None cell is normal control flow — the caller
+        # skips it. Return None silently (matching the isfinite branch below);
+        # only the top-level renderers log a genuine render failure.
         return None
     if not mp.isfinite(parsed):
         return None
@@ -1004,7 +1006,9 @@ def _statistics_finite_float(value: Any) -> float | None:
     try:
         parsed = mp.mpf(value)
     except Exception:
-        _logger.warning("plot rendering failed; returning no image", exc_info=True)
+        # A single non-numeric / None cell is normal control flow — the caller
+        # skips it. Return None silently (matching the isfinite branch below);
+        # only the top-level renderers log a genuine render failure.
         return None
     if not mp.isfinite(parsed):
         return None
@@ -1410,7 +1414,9 @@ def _fitting_finite_float(value: Any) -> float | None:
     try:
         parsed = mp.mpf(value)
     except Exception:
-        _logger.warning("plot rendering failed; returning no image", exc_info=True)
+        # A single non-numeric / None cell is normal control flow — the caller
+        # skips it. Return None silently (matching the isfinite branch below);
+        # only the top-level renderers log a genuine render failure.
         return None
     if not mp.isfinite(parsed):
         return None

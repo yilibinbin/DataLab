@@ -271,9 +271,12 @@ def _maybe_refine_with_mcmc(fit_input: Any, fit_result: Any) -> None:
         {name: mp.mpf(variable_data[name][index]) for name in variable_data}
         for index in range(len(targets))
     ]
+    # Only reweight the MCMC likelihood when the base fit was itself weighted;
+    # otherwise a request carrying sigma/weight data with weighted=False would
+    # run an unweighted LSQ fit and then silently reweight the refinement.
     weights = likelihood_weights_from_series(
-        fit_input.weights,
-        fit_input.sigma_series,
+        fit_input.weights if fit_input.weighted else None,
+        fit_input.sigma_series if fit_input.weighted else None,
         len(targets),
     )
     refine_fit_with_mcmc(

@@ -107,7 +107,11 @@ def _detect_system_light_mode() -> bool | None:
         color_scheme = getattr(hints, "colorScheme", None)
         if callable(color_scheme):
             try:
-                from PySide6.QtGui import Qt
+                # Qt.ColorScheme lives in the QtCore namespace; importing Qt from
+                # QtGui works on some PySide6 builds but not all, and a failure
+                # here is swallowed below — which would silently disable
+                # cross-platform detection. Import from the canonical QtCore.
+                from PySide6.QtCore import Qt
 
                 scheme = color_scheme()
                 if scheme == Qt.ColorScheme.Light:

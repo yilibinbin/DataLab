@@ -80,11 +80,11 @@ def _parse_unknowns(text: str) -> list[dict[str, str]]:
             name_part, guess_part = parts[0], parts[1]
         name = name_part.strip()
         guess = guess_part.strip()
-        if not name:
+        if not name or not guess:
             raise ValueError(
                 _dual_msg(
-                    f"第 {line_num} 行未知量名称为空。",
-                    f"Unknown name is empty on line {line_num}.",
+                    f"第 {line_num} 行未知量格式无效：需要 名称 = 初值。",
+                    f"Invalid unknown on line {line_num}: expected name = guess.",
                 )
             )
         rows.append({"name": name, "initial": guess, "source": "manual"})

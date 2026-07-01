@@ -29,11 +29,26 @@ import os
 _MAX_WORKERS = 16
 
 
+def _int_env(name: str, default: int) -> int:
+    """Read an int env var, falling back to the default on empty/invalid input
+    so a typo can't crash gunicorn config load and prevent startup."""
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 def _resolve_workers() -> int:
     explicit = os.environ.get("WEB_CONCURRENCY", "").strip()
     if explicit:
         try:
-            return max(1, int(explicit))
+            # Keep the floor of 2 even on an explicit override: the whole point of
+            # this file (P1-2) is that a single worker lets one long fit block all
+            # users. Set WEB_CONCURRENCY=1 only knowingly for local debugging.
+            return max(2, int(explicit))
         except ValueError:
             pass
     try:
@@ -53,7 +68,7 @@ workers = _resolve_workers()
 worker_class = "sync"
 # A generous timeout: high-precision fits at large dps can legitimately run for
 # tens of seconds. Override with DATALAB_WORKER_TIMEOUT if your workloads differ.
-timeout = int(os.environ.get("DATALAB_WORKER_TIMEOUT", "120"))
+timeout = _int_env("DATALAB_WORKER_TIMEOUT", 120)
 # Recycle workers periodically so any mpmath/memory growth is bounded.
-max_requests = int(os.environ.get("DATALAB_MAX_REQUESTS", "1000"))
+max_requests = _int_env("DATALAB_MAX_REQUESTS", 1000)
 max_requests_jitter = 100

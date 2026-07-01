@@ -69,9 +69,18 @@ def _evaluate_prediction(evaluator: Any, params: Mapping[str, mp.mpf], observati
         candidates.append((params, scalar_observation))
         candidates.append((scalar_observation,))
     candidates.append((observation,))
+    last_type_error: TypeError | None = None
     for args in candidates:
         if _callable_accepts_args(evaluator, args):
-            return evaluator(*args)
+            try:
+                return evaluator(*args)
+            except TypeError as exc:
+                # Arity bound but the call still rejected these args; try the
+                # next candidate shape before giving up.
+                last_type_error = exc
+                continue
+    if last_type_error is not None:
+        raise last_type_error
     raise TypeError("MCMC evaluator does not accept supported argument shapes")
 
 
@@ -121,6 +130,12 @@ def refine_fit_with_mcmc(
     evaluator = fit_result.details.get("evaluator") if fit_result.details else None
     if evaluator is None:
         _logger.info("MCMC refinement skipped: fit result did not provide an evaluator")
+        return
+    if len(observations) != len(targets):
+        _logger.info("MCMC refinement skipped: observations/targets length mismatch")
+        return
+    if likelihood_weights is not None and len(likelihood_weights) != len(targets):
+        _logger.info("MCMC refinement skipped: likelihood weights length mismatch")
         return
 
     initial_guess = [float(fit_result.params[name]) for name in param_names]
@@ -249,7 +264,16 @@ def likelihood_weights_from_series(
 ) -> list[mp.mpf] | None:
     """Build MCMC likelihood weights from explicit weights or 1/σ²."""
     if weights is not None and len(weights) == target_count:
-        return [mp.mpf(value) for value in weights]
+        # Validate explicit weights like the sigma path does: a non-positive or
+        # non-finite weight makes worse residuals raise the log-probability,
+        # corrupting the posterior. Reject (→ unweighted) rather than corrupt.
+        parsed_weights: list[mp.mpf] = []
+        for value in weights:
+            weight = mp.mpf(value)
+            if weight <= 0 or not mp.isfinite(weight):
+                return None
+            parsed_weights.append(weight)
+        return parsed_weights
     if sigma_series is None or len(sigma_series) != target_count:
         return None
     parsed: list[mp.mpf] = []
