@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, cast
+from typing import Any
 
 from shared.workspace_schema import canonical_json, sha256_bytes, workspace_hash_canonical_bytes, workspace_hash_payload
 
@@ -178,18 +178,18 @@ class HistoryEntry:
 
     @property
     def semantic_hash(self) -> str:
-        return cast(str, sha256_bytes(self.canonical_bytes))
+        return sha256_bytes(self.canonical_bytes)
 
     @property
     def identity_bytes(self) -> bytes:
         payload: dict[str, Any] = {"semantic_snapshot": _plain_json(self.semantic_snapshot)}
         if self.provenance is not None:
             payload["provenance"] = _plain_json(self.provenance)
-        return cast(bytes, canonical_json(payload))
+        return canonical_json(payload)
 
     @property
     def identity_hash(self) -> str:
-        return cast(str, sha256_bytes(self.identity_bytes))
+        return sha256_bytes(self.identity_bytes)
 
     @property
     def semantic_size_bytes(self) -> int:
@@ -400,7 +400,7 @@ def canonical_history_bytes(semantic_snapshot: Mapping[str, Any]) -> bytes:
     if not isinstance(plain, dict):
         raise HistoryValidationError("semantic_snapshot must be a JSON object.")
     _validate_semantic_snapshot(plain)
-    return cast(bytes, canonical_json(plain))
+    return canonical_json(plain)
 
 
 def strip_rendered_cache_fields(value: Any) -> Any:

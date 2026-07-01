@@ -186,14 +186,12 @@ ignore_missing_imports = true
 
 # datalab_core is NOT in the strict perimeter (it mixes service-layer glue that
 # doesn't benefit from full rigor). It IS reached transitively when the strict
-# roots import it, and the base config's warn_redundant_casts would surface its
-# known non-strict issues (redundant casts, non-Literal severity args) at the
-# strict gate. Silence those base warnings for datalab_core so the gate reports
-# only on the four strict roots; tightening datalab_core to strict is its own
-# future task.
+# roots import it, so silence its non-strict base-config diagnostics at the gate.
+# Note: warn_redundant_casts is global-only (can't be relaxed per-module), so the
+# few genuinely-redundant casts in datalab_core were removed instead; here we
+# only relax the strict severity-arg-type check that leaks through follow-imports.
 [[tool.mypy.overrides]]
 module = ["datalab_core.*"]
-warn_redundant_casts = false
 disable_error_code = ["arg-type"]
 
 # Third-party libraries without type stubs. ``ignore_missing_imports``

@@ -103,7 +103,7 @@ class WorkbenchModel:
     def compute_hash(self) -> str:
         from shared.workspace_schema import compute_workspace_hash
 
-        return cast(str, compute_workspace_hash(self.to_v1_workspace()))
+        return compute_workspace_hash(self.to_v1_workspace())
 
     def to_v1_workspace(self) -> dict[str, Any]:
         compute = copy.deepcopy(self.compute)
