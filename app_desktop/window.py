@@ -648,10 +648,17 @@ class ExtrapolationWindow(
 
     def _apply_language(self, lang: str):
         WindowI18nMixin._apply_language(self, lang)
-        # Retranslation replays setText on the run button, which clears its
-        # explicit shortcut in PySide6; re-apply it so Ctrl/⌘+Return survives a
-        # language switch.
-        if hasattr(self, "_reapply_run_button_shortcut"):
+        # Retranslation replays the registered setText on the run button, which
+        # both (a) clears its explicit shortcut in PySide6 and (b) relabels it to
+        # the default "Run" text even mid-run. Re-run the state-specific setter so
+        # a running (Stop) button keeps its Stop label and state in the new
+        # language, and the shortcut is restored either way.
+        run_state = self.run_button.property("datalab_run_state") if hasattr(self, "run_button") else None
+        if run_state == "stop" and hasattr(self, "_set_button_to_stop_mode"):
+            self._set_button_to_stop_mode()
+        elif run_state == "run" and hasattr(self, "_set_button_to_run_mode"):
+            self._set_button_to_run_mode()
+        elif hasattr(self, "_reapply_run_button_shortcut"):
             self._reapply_run_button_shortcut()
         if hasattr(self, "_update_constants_visibility"):
             self._update_constants_visibility()

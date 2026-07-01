@@ -68,6 +68,40 @@ def test_workspace_and_run_keyboard_shortcuts_are_installed(qtbot):
     assert win.run_button.shortcut() == QKeySequence("Ctrl+Return")
 
 
+def test_run_button_stop_state_survives_language_switch(qtbot):
+    """Switching language mid-run must keep the run button's label consistent
+    with datalab_run_state — retranslation replays setText and would otherwise
+    relabel a running (Stop) button back to "Run" while the state stays "stop",
+    so the visible label lies about what the shortcut does (CodeRabbit finding).
+    """
+    from app_desktop.window import ExtrapolationWindow
+
+    QApplication.instance() or QApplication([])
+    win = ExtrapolationWindow()
+    _allow_discard(win)
+    qtbot.addWidget(win)
+
+    win._apply_language("zh")
+    win._set_button_to_stop_mode()
+    assert win.run_button.property("datalab_run_state") == "stop"
+    assert win.run_button.text() == "停止"
+
+    win._apply_language("en")
+    # Still in stop state → label must be the English Stop, not "Run".
+    assert win.run_button.property("datalab_run_state") == "stop"
+    assert win.run_button.text() == "Stop"
+    assert not win.run_button.shortcut().isEmpty()
+
+    # Returning to run state relabels correctly in the active language.
+    win._set_button_to_run_mode()
+    assert win.run_button.property("datalab_run_state") == "run"
+    assert win.run_button.text() == "Run"
+    win._apply_language("zh")
+    assert win.run_button.property("datalab_run_state") == "run"
+    assert win.run_button.text() == "开始执行"
+    assert not win.run_button.shortcut().isEmpty()
+
+
 def test_open_example_workspace_uses_current_language_for_menu_labels(qtbot, monkeypatch):
     from app_desktop.window import ExtrapolationWindow, list_example_menu_entries, list_example_workspaces
 
