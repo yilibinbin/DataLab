@@ -35,6 +35,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import io
+import logging
 import math
 from functools import lru_cache
 from statistics import NormalDist
@@ -51,7 +52,25 @@ _matplotlib.use("Agg")
 
 from matplotlib import font_manager  # noqa: E402
 from matplotlib import rcParams  # noqa: E402
+from matplotlib.backends.backend_agg import FigureCanvasAgg as _FigureCanvasAgg  # noqa: E402
+from matplotlib.figure import Figure as _Figure  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
+
+_logger = logging.getLogger(__name__)
+
+
+def _new_figure_ax(figsize: tuple[float, float], dpi: int) -> tuple[Any, Any]:
+    """Create a standalone (fig, ax) via the object-oriented matplotlib API.
+
+    Unlike ``plt.subplots``, this never touches the pyplot global figure
+    registry — so it is thread-safe (the desktop renders plots on worker
+    threads) and needs no ``plt.close`` to avoid leaking figures (P2-7). The
+    figure is attached to an Agg canvas so ``fig.savefig`` works headless.
+    """
+    fig = _Figure(figsize=figsize, dpi=dpi)
+    _FigureCanvasAgg(fig)
+    ax = fig.subplots()
+    return fig, ax
 
 __all__ = [
     "plt",
@@ -825,6 +844,7 @@ def contribution_plot_spec_from_summary(
             running += percent
             cumulative.append(float(running))
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     return ErrorContributionPlotSpec(
         labels=row_labels,
@@ -912,6 +932,7 @@ def monte_carlo_distribution_plot_spec_from_summary(
             title_suffix=title_suffix,
         )
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
 
 
@@ -919,6 +940,7 @@ def _finite_plot_float(value: Any) -> float | None:
     try:
         parsed = mp.mpf(value)
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     if not mp.isfinite(parsed):
         return None
@@ -982,6 +1004,7 @@ def _statistics_finite_float(value: Any) -> float | None:
     try:
         parsed = mp.mpf(value)
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     if not mp.isfinite(parsed):
         return None
@@ -1047,7 +1070,7 @@ def render_statistics_plot_from_spec(spec: StatisticsPlotSpec) -> bytes | None:
         mean_f = _statistics_plot_float(spec.mean) if spec.mean is not None else None
         std_mean_f = abs(_statistics_plot_float(spec.std_mean)) if spec.std_mean is not None else None
 
-        fig, ax = plt.subplots(figsize=(6.0, 4.0), dpi=180)
+        fig, ax = _new_figure_ax(figsize=(6.0, 4.0), dpi=180)
         if yerr:
             ax.errorbar(
                 xs,
@@ -1087,10 +1110,11 @@ def render_statistics_plot_from_spec(spec: StatisticsPlotSpec) -> bytes | None:
         buf.seek(0)
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def render_statistics_plots_from_specs(specs: Sequence[StatisticsPlotSpec]) -> list[bytes]:
@@ -1131,7 +1155,7 @@ def render_statistics_grouped_mean_overview_from_spec(
     try:
         plot_labels = spec.plot_labels
         width = min(12.0, max(6.0, 2.8 + 0.45 * len(points)))
-        fig, ax = plt.subplots(figsize=(width, 4.2), dpi=180)
+        fig, ax = _new_figure_ax(figsize=(width, 4.2), dpi=180)
         xs = list(range(len(points)))
         means = [point[1] for point in points]
         std_errors = [point[2] if point[2] is not None else 0.0 for point in points]
@@ -1151,10 +1175,11 @@ def render_statistics_grouped_mean_overview_from_spec(
         buf.seek(0)
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def _time_series_x_values(labels: Sequence[str]) -> tuple[list[float], list[str] | None]:
@@ -1183,7 +1208,7 @@ def render_statistics_time_series_plot_from_spec(spec: StatisticsTimeSeriesPlotS
         if not result_points:
             return None
 
-        fig, ax = plt.subplots(figsize=(6.4, 4.0), dpi=180)
+        fig, ax = _new_figure_ax(figsize=(6.4, 4.0), dpi=180)
         ax.plot(xs, observed, "o", color="#4c78a8", markersize=4, label=spec.labels.observed)
         result_x = [point[0] for point in result_points]
         result_y = [point[1] for point in result_points]
@@ -1230,10 +1255,11 @@ def render_statistics_time_series_plot_from_spec(spec: StatisticsTimeSeriesPlotS
         buf.seek(0)
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def render_statistics_time_series_plots_from_specs(
@@ -1256,7 +1282,7 @@ def _render_statistics_histogram_from_spec(spec: StatisticsPlotSpec) -> bytes | 
         if not ys:
             return None
         bins = min(10, max(1, int(len(ys) ** 0.5 + 0.5)))
-        fig, ax = plt.subplots(figsize=(6.0, 4.0), dpi=180)
+        fig, ax = _new_figure_ax(figsize=(6.0, 4.0), dpi=180)
         ax.hist(ys, bins=bins, color="#4f6bed", alpha=0.78, edgecolor="#ffffff")
         mean_f = _statistics_finite_float(spec.mean)
         if mean_f is not None:
@@ -1277,10 +1303,11 @@ def _render_statistics_histogram_from_spec(spec: StatisticsPlotSpec) -> bytes | 
         buf.seek(0)
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def _render_statistics_box_from_spec(spec: StatisticsPlotSpec) -> bytes | None:
@@ -1289,7 +1316,7 @@ def _render_statistics_box_from_spec(spec: StatisticsPlotSpec) -> bytes | None:
         ys = _statistics_values_as_floats(spec.values)
         if not ys:
             return None
-        fig, ax = plt.subplots(figsize=(4.8, 4.0), dpi=180)
+        fig, ax = _new_figure_ax(figsize=(4.8, 4.0), dpi=180)
         ax.boxplot(ys, orientation="vertical", whis=1.5, showmeans=True)
         ax.set_xticks([1], [spec.labels.data])
         ax.set_ylabel(spec.labels.y_axis)
@@ -1302,10 +1329,11 @@ def _render_statistics_box_from_spec(spec: StatisticsPlotSpec) -> bytes | None:
         buf.seek(0)
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def _render_statistics_qq_from_spec(spec: StatisticsPlotSpec) -> bytes | None:
@@ -1318,7 +1346,7 @@ def _render_statistics_qq_from_spec(spec: StatisticsPlotSpec) -> bytes | None:
         theoretical = [normal.inv_cdf((index - 0.5) / len(sample)) for index in range(1, len(sample) + 1)]
         lo = min(min(theoretical), min(sample))
         hi = max(max(theoretical), max(sample))
-        fig, ax = plt.subplots(figsize=(5.2, 4.2), dpi=180)
+        fig, ax = _new_figure_ax(figsize=(5.2, 4.2), dpi=180)
         ax.scatter(theoretical, sample, color="#4f6bed", s=28)
         ax.plot([lo, hi], [lo, hi], color="#d62728", linestyle="--")
         ax.set_xlabel(spec.labels.theoretical_quantile_axis)
@@ -1332,10 +1360,11 @@ def _render_statistics_qq_from_spec(spec: StatisticsPlotSpec) -> bytes | None:
         buf.seek(0)
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def _render_statistics_weighted_residual_from_spec(spec: StatisticsPlotSpec) -> bytes | None:
@@ -1353,7 +1382,7 @@ def _render_statistics_weighted_residual_from_spec(spec: StatisticsPlotSpec) -> 
             xs.append(index)
         if not residuals:
             return None
-        fig, ax = plt.subplots(figsize=(6.0, 4.0), dpi=180)
+        fig, ax = _new_figure_ax(figsize=(6.0, 4.0), dpi=180)
         ax.axhline(0.0, color="#444444", linestyle="-", linewidth=1.0, label=spec.labels.zero_line)
         ax.axhline(3.0, color="#d62728", linestyle="--", linewidth=1.0, label=spec.labels.threshold_line)
         ax.axhline(-3.0, color="#d62728", linestyle="--", linewidth=1.0)
@@ -1370,16 +1399,18 @@ def _render_statistics_weighted_residual_from_spec(spec: StatisticsPlotSpec) -> 
         buf.seek(0)
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def _fitting_finite_float(value: Any) -> float | None:
     try:
         parsed = mp.mpf(value)
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     if not mp.isfinite(parsed):
         return None
@@ -1524,7 +1555,9 @@ def render_fitting_overview_from_spec(
         x_plot = list(range(len(y_plot)))
     fig = None
     try:
-        fig = plt.figure(figsize=(11, 8), dpi=dpi)
+        # OO figure (no pyplot global state — thread-safe, P2-7).
+        fig = _Figure(figsize=(11, 8), dpi=dpi)
+        _FigureCanvasAgg(fig)
         gs = fig.add_gridspec(2, 2, height_ratios=[3, 2])
         ax_main = fig.add_subplot(gs[0, 0])
         ax_resid = fig.add_subplot(gs[1, 0], sharex=ax_main)
@@ -1589,10 +1622,11 @@ def render_fitting_overview_from_spec(
                 pass
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def _fitting_band_shapes_valid(spec: FittingPlotSpec, row_count: int) -> bool:
@@ -1752,7 +1786,7 @@ def _render_fitting_residual_from_spec(spec: FittingPlotSpec) -> bytes | None:
         return None
     fig = None
     try:
-        fig, ax = plt.subplots(figsize=(6.0, 4.0), dpi=180)
+        fig, ax = _new_figure_ax(figsize=(6.0, 4.0), dpi=180)
         _draw_fitting_residual_axis(ax, xs, residuals, spec, index_axis=not spec.show_curves)
         apply_cjk_font(ax)
         fig.tight_layout()
@@ -1760,10 +1794,11 @@ def _render_fitting_residual_from_spec(spec: FittingPlotSpec) -> bytes | None:
         fig.savefig(buf, format="png")
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def _render_fitting_histogram_from_spec(spec: FittingPlotSpec) -> bytes | None:
@@ -1772,7 +1807,7 @@ def _render_fitting_histogram_from_spec(spec: FittingPlotSpec) -> bytes | None:
         return None
     fig = None
     try:
-        fig, ax = plt.subplots(figsize=(5.2, 4.0), dpi=180)
+        fig, ax = _new_figure_ax(figsize=(5.2, 4.0), dpi=180)
         _draw_fitting_histogram_axis(ax, residuals, spec)
         apply_cjk_font(ax)
         fig.tight_layout()
@@ -1780,10 +1815,11 @@ def _render_fitting_histogram_from_spec(spec: FittingPlotSpec) -> bytes | None:
         fig.savefig(buf, format="png")
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def _render_fitting_qq_from_spec(spec: FittingPlotSpec) -> bytes | None:
@@ -1796,7 +1832,7 @@ def _render_fitting_qq_from_spec(spec: FittingPlotSpec) -> bytes | None:
         theoretical = [normal.inv_cdf((index - 0.5) / len(residuals)) for index in range(1, len(residuals) + 1)]
         lo = min(min(theoretical), min(residuals))
         hi = max(max(theoretical), max(residuals))
-        fig, ax = plt.subplots(figsize=(5.2, 4.2), dpi=180)
+        fig, ax = _new_figure_ax(figsize=(5.2, 4.2), dpi=180)
         ax.scatter(theoretical, residuals, color="#4f6bed", s=28)
         ax.plot([lo, hi], [lo, hi], color="#d62728", linestyle="--")
         ax.set_xlabel(spec.labels.theoretical_quantile_axis)
@@ -1809,10 +1845,11 @@ def _render_fitting_qq_from_spec(spec: FittingPlotSpec) -> bytes | None:
         fig.savefig(buf, format="png")
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def _render_fitting_correlation_heatmap_from_spec(spec: FittingPlotSpec) -> bytes | None:
@@ -1832,7 +1869,7 @@ def render_correlation_heatmap_from_spec(spec: CorrelationHeatmapSpec) -> bytes 
         return None
     fig = None
     try:
-        fig, ax = plt.subplots(figsize=(5.0, 4.4), dpi=180)
+        fig, ax = _new_figure_ax(figsize=(5.0, 4.4), dpi=180)
         image = ax.imshow(matrix, cmap="coolwarm", vmin=-1, vmax=1)
         ax.set_xticks(range(len(spec.names)), spec.names, rotation=45, ha="right")
         ax.set_yticks(range(len(spec.names)), spec.names)
@@ -1847,10 +1884,11 @@ def render_correlation_heatmap_from_spec(spec: CorrelationHeatmapSpec) -> bytes 
         fig.savefig(buf, format="png")
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def render_error_contribution_plot_from_spec(spec: ErrorContributionPlotSpec) -> bytes | None:
@@ -1862,7 +1900,7 @@ def render_error_contribution_plot_from_spec(spec: ErrorContributionPlotSpec) ->
 
     fig = None
     try:
-        fig, ax = plt.subplots(figsize=(6.0, 0.45 * len(spec.labels) + 1.2), dpi=180)
+        fig, ax = _new_figure_ax(figsize=(6.0, 0.45 * len(spec.labels) + 1.2), dpi=180)
         y_pos = list(range(len(spec.labels)))
         bars = ax.barh(y_pos, spec.percents, color="#4f6bed")
         ax.invert_yaxis()
@@ -1897,10 +1935,11 @@ def render_error_contribution_plot_from_spec(spec: ErrorContributionPlotSpec) ->
         buf.seek(0)
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def render_monte_carlo_distribution_plot_from_spec(spec: MonteCarloDistributionPlotSpec) -> bytes | None:
@@ -1921,7 +1960,7 @@ def render_monte_carlo_distribution_plot_from_spec(spec: MonteCarloDistributionP
     fig = None
     try:
         widths = [right - left for left, right in zip(spec.bin_edges, spec.bin_edges[1:])]
-        fig, ax = plt.subplots(figsize=(6.0, 4.0), dpi=180)
+        fig, ax = _new_figure_ax(figsize=(6.0, 4.0), dpi=180)
         ax.bar(
             spec.bin_edges[:-1],
             spec.counts,
@@ -1985,10 +2024,11 @@ def render_monte_carlo_distribution_plot_from_spec(spec: MonteCarloDistributionP
         buf.seek(0)
         return buf.getvalue()
     except Exception:
+        _logger.warning("plot rendering failed; returning no image", exc_info=True)
         return None
     finally:
         if fig is not None:
-            plt.close(fig)
+            fig.clear()
 
 
 def assert_agg_backend() -> None:
