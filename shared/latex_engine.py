@@ -29,6 +29,7 @@ from discovery so callers can show a progress dialog around it.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import shutil
@@ -45,6 +46,7 @@ from typing import Any, Callable, Literal
 __all__ = [
     "EngineChoice",
     "MissingHomeDirectoryError",
+    "TectonicChecksumError",
     "TectonicInstallCancelled",
     "UnsupportedPlatformError",
     "discover_bundled_engine",
@@ -180,6 +182,30 @@ _TECTONIC_RELEASE_BASE = (
     f"tectonic%40{_TECTONIC_VERSION}"
 )
 
+# SHA-256 of every Tectonic release archive this module can download, keyed by
+# asset filename. GitHub release assets are immutable once published, so these
+# digests — computed from the canonical HTTPS release for tectonic@0.15.0 — pin
+# the exact bytes we execute and block a tampered mirror or MITM from delivering
+# a swapped binary. When bumping _TECTONIC_VERSION, recompute every entry (this
+# release does not ship an upstream SHA256SUMS file to fetch at runtime).
+_TECTONIC_SHA256: dict[str, str] = {
+    "tectonic-0.15.0-aarch64-apple-darwin.tar.gz": (
+        "24bd46566fa30d41101848405e9cbc4645edb92d8f857c9d21262174fb70cd33"
+    ),
+    "tectonic-0.15.0-x86_64-apple-darwin.tar.gz": (
+        "dd42576eaa4c0df58c243dd78b7b864d9deb405ffdfcdadd1b79a31faceab747"
+    ),
+    "tectonic-0.15.0-x86_64-unknown-linux-musl.tar.gz": (
+        "dfb82876f2986862996e564fa507a9e576e0c1e3bee63c2c1bd677c2543e6407"
+    ),
+    "tectonic-0.15.0-aarch64-unknown-linux-musl.tar.gz": (
+        "1f59f9fb8eb65e8ba18658fc9016767e7d3e12488ded8b8fffa34254e51ce42c"
+    ),
+    "tectonic-0.15.0-x86_64-pc-windows-msvc.zip": (
+        "1d6bb76f049c8a3774f6e9d66e4b04e1a8c3dcb37527b6b41b7e894328e7bf29"
+    ),
+}
+
 
 def tectonic_download_url() -> str:
     """Pick the right Tectonic asset URL for the current platform.
@@ -293,6 +319,15 @@ class TectonicInstallCancelled(RuntimeError):
     """Raised when ``cancel_check`` returns True during install."""
 
 
+class TectonicChecksumError(RuntimeError):
+    """Raised when a downloaded Tectonic archive fails SHA-256 verification.
+
+    A mismatch means the bytes on disk are not the pinned release — a
+    tampered mirror, a corrupted transfer, or an unrecognized asset — so
+    the archive must never be extracted or executed.
+    """
+
+
 def ensure_tectonic_installed(
     *,
     progress_callback: ProgressCallback | None = None,
@@ -333,6 +368,12 @@ def ensure_tectonic_installed(
             progress_callback("downloading")
         archive_path = stage_dir / ("archive.zip" if url.endswith(".zip") else "archive.tar.gz")
         _stream_url_to_file(url, archive_path, cancel_check)
+
+        # Verify the downloaded bytes against the pinned SHA-256 before we
+        # extract or execute anything — a swapped mirror or MITM must not be
+        # able to hand us a different binary. Any mismatch aborts here, and the
+        # finally block wipes the staging tree so nothing tampered survives.
+        _verify_archive_sha256(url, archive_path)
 
         if progress_callback:
             progress_callback("extracting")
@@ -397,6 +438,34 @@ def _stream_url_to_file(
             # read (typically <100 ms on a healthy connection).
             if cancel_check is not None and cancel_check():
                 raise TectonicInstallCancelled("install cancelled by caller")
+
+
+def _verify_archive_sha256(url: str, archive_path: Path) -> None:
+    """Verify ``archive_path`` matches the SHA-256 pinned for ``url``'s asset.
+
+    The asset filename is the last path segment of the download URL; it keys
+    into ``_TECTONIC_SHA256``. An unknown asset (URL we never intended to
+    download) or a digest mismatch both raise ``TectonicChecksumError`` so the
+    caller never extracts unverified bytes.
+    """
+    asset_name = url.rsplit("/", 1)[-1]
+    expected = _TECTONIC_SHA256.get(asset_name)
+    if expected is None:
+        raise TectonicChecksumError(
+            f"No pinned SHA-256 for Tectonic asset {asset_name!r}; refusing to "
+            f"install an unverified download from {url}"
+        )
+    digest = hashlib.sha256()
+    with archive_path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 16), b""):
+            digest.update(block)
+    actual = digest.hexdigest()
+    if actual != expected:
+        raise TectonicChecksumError(
+            f"Tectonic archive {asset_name} failed SHA-256 verification: "
+            f"expected {expected}, got {actual}. The download may be corrupted "
+            f"or tampered with; not installing."
+        )
 
 
 def _extract_tectonic_from_tar(archive_path: Path, dest_dir: Path) -> None:

@@ -55,6 +55,18 @@ def _fake_url_response(payload: bytes) -> MagicMock:
     return response
 
 
+def _pin_fake_payload(latex_engine, payload: bytes, monkeypatch) -> None:
+    """Register ``payload``'s real SHA-256 for the asset the current (mocked)
+    platform resolves to, so the checksum gate accepts the offline fixture
+    instead of rejecting it. Keeps verification live rather than bypassed."""
+    import hashlib
+
+    asset_name = latex_engine.tectonic_download_url().rsplit("/", 1)[-1]
+    pinned = dict(latex_engine._TECTONIC_SHA256)
+    pinned[asset_name] = hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(latex_engine, "_TECTONIC_SHA256", pinned)
+
+
 def test_ensure_tectonic_installed_downloads_and_extracts(
     tmp_path, monkeypatch
 ) -> None:
@@ -65,9 +77,11 @@ def test_ensure_tectonic_installed_downloads_and_extracts(
     monkeypatch.setattr("platform.system", lambda: "Darwin")
     monkeypatch.setattr("platform.machine", lambda: "arm64")
 
+    payload = _build_fake_tar_with_tectonic(tmp_path)
+    _pin_fake_payload(latex_engine, payload, monkeypatch)
     with patch.object(
         latex_engine, "_open_url",
-        return_value=_fake_url_response(_build_fake_tar_with_tectonic(tmp_path)),
+        return_value=_fake_url_response(payload),
     ) as mock_open:
         choice = latex_engine.ensure_tectonic_installed()
 
@@ -114,9 +128,11 @@ def test_ensure_tectonic_installed_windows_zip(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("platform.system", lambda: "Windows")
     monkeypatch.setattr("platform.machine", lambda: "AMD64")
 
+    payload = _build_fake_zip_with_tectonic()
+    _pin_fake_payload(latex_engine, payload, monkeypatch)
     with patch.object(
         latex_engine, "_open_url",
-        return_value=_fake_url_response(_build_fake_zip_with_tectonic()),
+        return_value=_fake_url_response(payload),
     ):
         choice = latex_engine.ensure_tectonic_installed()
 
@@ -165,6 +181,63 @@ def test_ensure_tectonic_installed_honours_cancel_check(
     assert not (install_dir / "tectonic").exists()
     leftovers = list(install_dir.glob(".tectonic-install-*"))
     assert leftovers == [], f"staging dir leaked on cancel: {leftovers}"
+
+
+# ---------------------------------------------------------------------------
+# SHA-256 verification (P0-6): a tampered download must never be installed
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_tectonic_installed_rejects_checksum_mismatch(
+    tmp_path, monkeypatch
+) -> None:
+    """A download whose bytes don't match the pinned SHA-256 must abort the
+    install with TectonicChecksumError, publish no binary, and leave no
+    staging tree — a swapped mirror or MITM cannot slip a binary through."""
+    from shared import latex_engine
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr("platform.system", lambda: "Darwin")
+    monkeypatch.setattr("platform.machine", lambda: "arm64")
+
+    # A well-formed archive, but its digest is NOT pinned (we do not register
+    # it), so verification must reject it before extraction.
+    payload = _build_fake_tar_with_tectonic(tmp_path)
+    with patch.object(
+        latex_engine, "_open_url",
+        return_value=_fake_url_response(payload),
+    ):
+        with pytest.raises(latex_engine.TectonicChecksumError):
+            latex_engine.ensure_tectonic_installed()
+
+    install_dir = tmp_path / ".datalab" / "bin"
+    assert not (install_dir / "tectonic").exists(), "unverified binary was published"
+    leftovers = list(install_dir.glob(".tectonic-install-*")) if install_dir.exists() else []
+    assert leftovers == [], f"staging dir leaked on checksum failure: {leftovers}"
+
+
+def test_every_download_url_has_a_pinned_sha256() -> None:
+    """Structural guard: every platform the URL builder can produce must have a
+    pinned digest, so a version bump that forgets an entry fails loudly here
+    rather than silently skipping verification for that platform."""
+    from shared import latex_engine
+
+    platforms = [
+        ("Darwin", "arm64"),
+        ("Darwin", "x86_64"),
+        ("Linux", "x86_64"),
+        ("Linux", "aarch64"),
+        ("Windows", "AMD64"),
+    ]
+    for sysname, machine in platforms:
+        with patch("platform.system", lambda s=sysname: s), patch(
+            "platform.machine", lambda m=machine: m
+        ):
+            asset = latex_engine.tectonic_download_url().rsplit("/", 1)[-1]
+        assert asset in latex_engine._TECTONIC_SHA256, (
+            f"no pinned SHA-256 for {sysname}/{machine} asset {asset!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
