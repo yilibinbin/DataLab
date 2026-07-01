@@ -290,6 +290,23 @@ def configure_app_security(app):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['X-XSS-Protection'] = '1; mode=block'
+        # Content-Security-Policy (P2-7). Locks external loads to the app itself
+        # and the SRI-pinned KaTeX CDN. 'unsafe-inline' is required because the
+        # templates carry inline <script>/<style> (theme + i18n bootstrapping and
+        # inline style= attributes); img data: covers base64-rendered plots;
+        # connect 'self' covers the SSE stream and /api fetches. Nonces would let
+        # us drop 'unsafe-inline' but need per-request injection — out of scope.
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "font-src 'self' data: https://cdn.jsdelivr.net; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "frame-ancestors 'none'"
+        )
         # CSRF is session-scoped by design (see get_csrf_token()); no CSRF
         # cookie is emitted here.
         return response

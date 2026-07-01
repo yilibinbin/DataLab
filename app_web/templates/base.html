@@ -12,9 +12,14 @@
   <!-- theme.js must load BEFORE body render so the initial class is
        set synchronously, avoiding a flash of the wrong theme. -->
   <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
-  <!-- KaTeX for formula preview -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <!-- KaTeX for formula preview. Subresource Integrity (SRI) pins the exact
+       bytes so a compromised CDN can't inject arbitrary JS/CSS (P2-7). -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+        integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+"
+        crossorigin="anonymous">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"
+          integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg"
+          crossorigin="anonymous"></script>
   <script defer src="{{ url_for('static', filename='js/formula-preview.js') }}"></script>
   <!-- Double-submit guard for the compute forms (disables submit + shows busy). -->
   <script defer src="{{ url_for('static', filename='js/form-submit.js') }}"></script>
