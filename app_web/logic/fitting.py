@@ -764,33 +764,37 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
     latex_engine = (form.get("fit_latex_engine") or "xelatex").strip() or "xelatex"
     generate_plots = _is_checked(form, "fit_generate_plots", default=False)
 
-    headers, rows, sigma_rows = _parse_fit_data(data_text)
-    if not x_column:
-        x_column = headers[0] if headers else ""
-    if not target_column:
-        target_column = headers[1] if len(headers) > 1 else x_column
+    # Parse the data table INSIDE the precision guard: mp.mpf() parses strings to the
+    # active mp.dps, so parsing at an ambient (default 15) dps would silently truncate
+    # high-precision input columns before the fit ever runs (P0-1).
+    with _precision_guard(mp_precision):
+        headers, rows, sigma_rows = _parse_fit_data(data_text)
+        if not x_column:
+            x_column = headers[0] if headers else ""
+        if not target_column:
+            target_column = headers[1] if len(headers) > 1 else x_column
 
-    x_vals = _column_series(headers, rows, x_column)
-    y_vals = _column_series(headers, rows, target_column)
+        x_vals = _column_series(headers, rows, x_column)
+        y_vals = _column_series(headers, rows, target_column)
 
-    sigma_list: list[mp.mpf | None] | None = None
-    if sigma_column:
-        sigma_list = _column_series(headers, rows, sigma_column)
-    else:
-        target_idx = headers.index(target_column)
-        collected: list[mp.mpf | None] = []
-        for sig_row in sigma_rows:
-            entry = sig_row[target_idx] if target_idx < len(sig_row) else None
-            collected.append(mp.mpf(entry) if entry is not None else None)
-        if any(val is not None for val in collected):
-            sigma_list = collected
+        sigma_list: list[mp.mpf | None] | None = None
+        if sigma_column:
+            sigma_list = _column_series(headers, rows, sigma_column)
+        else:
+            target_idx = headers.index(target_column)
+            collected: list[mp.mpf | None] = []
+            for sig_row in sigma_rows:
+                entry = sig_row[target_idx] if target_idx < len(sig_row) else None
+                collected.append(mp.mpf(entry) if entry is not None else None)
+            if any(val is not None for val in collected):
+                sigma_list = collected
 
-    fit_weights: list[mp.mpf] | None = None
-    if sigma_list:
-        uncertainty_policy = fit_uncertainty_policy(sigma_list, weighted=use_weights)
-        fit_weights = list(uncertainty_policy.weights) if uncertainty_policy.weights is not None else None
-    elif use_weights:
-        fit_uncertainty_policy([], weighted=True)
+        fit_weights: list[mp.mpf] | None = None
+        if sigma_list:
+            uncertainty_policy = fit_uncertainty_policy(sigma_list, weighted=use_weights)
+            fit_weights = list(uncertainty_policy.weights) if uncertainty_policy.weights is not None else None
+        elif use_weights:
+            fit_uncertainty_policy([], weighted=True)
     var_mapping: dict[str, str] = {}
     if var_mapping_text:
         for line in var_mapping_text.splitlines():

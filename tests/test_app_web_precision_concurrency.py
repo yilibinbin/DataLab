@@ -1883,3 +1883,39 @@ def test_web_sse_fit_stream_uses_core_request_builder_and_handler(monkeypatch):
     assert result["model"] == "polynomial"
     assert result["params"]["b0"] == pytest.approx(1.0)
     assert result["params"]["b1"] == pytest.approx(2.0)
+
+
+def test_run_fit_parses_high_precision_input_inside_precision_guard() -> None:
+    # P0-1 regression: web fitting must parse the data table INSIDE the precision
+    # guard. If parsing happens at the ambient mp.dps (e.g. 15 left by a prior job),
+    # high-precision input columns are silently truncated before the fit ever runs.
+    import app_web.logic.fitting as fit_logic
+
+    # A well-conditioned line, but the first x carries a digit at the 1e-24 place
+    # (representable only at dps>=24). We assert the PARSED x-column keeps that
+    # precision through to the result bundle; parsing at ambient dps=15 rounds it to 1.0.
+    hi = "1.000000000000000000000001"
+    data = f"x y\n{hi} 3\n2 5\n3 7\n4 9\n5 11\n"
+
+    original = mp.dps
+    mp.dps = 15  # simulate a fresh/leaked worker at the default precision
+    try:
+        result = fit_logic._run_fit(
+            data,
+            {
+                "fit_mode": "polynomial",
+                "fit_poly_degree": "1",
+                "fit_mp_precision": "80",
+                "fit_result_digits": "2",
+            },
+        )
+    finally:
+        mp.dps = original
+
+    # The parsed x-column value must survive at full precision, not rounded to ~15 digits.
+    with mp.workdps(80):
+        got = result.x[0]
+        expected = mp.mpf(hi)
+        assert mp.fabs(got - expected) < mp.mpf("1e-30"), (
+            f"x[0] parsed as {got!r}; high-precision input truncated (parse outside precision guard)"
+        )
