@@ -648,6 +648,11 @@ class ExtrapolationWindow(
 
     def _apply_language(self, lang: str):
         WindowI18nMixin._apply_language(self, lang)
+        # Retranslation replays setText on the run button, which clears its
+        # explicit shortcut in PySide6; re-apply it so Ctrl/⌘+Return survives a
+        # language switch.
+        if hasattr(self, "_reapply_run_button_shortcut"):
+            self._reapply_run_button_shortcut()
         if hasattr(self, "_update_constants_visibility"):
             self._update_constants_visibility()
         if hasattr(self, "refresh_workbench_result_rail"):

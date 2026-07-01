@@ -134,10 +134,25 @@ class WindowExtrapolationMixin:
             or (getattr(self, "_latex_compile_worker", None) and self._latex_compile_worker.isRunning())
         )
 
+    def _reapply_run_button_shortcut(self):
+        """Re-apply the run button's execute shortcut.
+
+        QPushButton.setText() clears an explicitly-set shortcut in PySide6, so
+        every retranslation or run/stop text swap silently drops Ctrl/⌘+Return
+        (it only survived when the new text equalled the old). Re-apply it after
+        any text change to keep the shortcut installed in every language.
+        """
+        button = getattr(self, "run_button", None)
+        if button is not None:
+            from PySide6.QtGui import QKeySequence
+
+            button.setShortcut(QKeySequence("Ctrl+Return"))
+
     def _set_button_to_stop_mode(self):
         """Change the run button to stop mode (red color, stop text)."""
         if hasattr(self, "run_button"):
             self.run_button.setText(self._tr("停止", "Stop"))
+            self._reapply_run_button_shortcut()
             self.run_button.setStyleSheet("")
             self.run_button.setProperty("datalab_run_state", "stop")
             self.run_button.style().unpolish(self.run_button)
@@ -147,6 +162,7 @@ class WindowExtrapolationMixin:
         """Restore the run button to normal run mode."""
         if hasattr(self, "run_button"):
             self.run_button.setText(self._tr("开始执行", "Run"))
+            self._reapply_run_button_shortcut()
             self.run_button.setStyleSheet("")
             self.run_button.setProperty("datalab_run_state", "run")
             self.run_button.style().unpolish(self.run_button)

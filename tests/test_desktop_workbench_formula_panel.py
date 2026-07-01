@@ -18,6 +18,9 @@ def _window(qtbot: Any) -> Any:
 
     QApplication.instance() or QApplication([])
     window = ExtrapolationWindow()
+    # Pin the language so assertions are deterministic regardless of the runner's
+    # system locale (CI defaults to English, local dev often to Chinese).
+    window._apply_language("zh")
     qtbot.addWidget(window)
     window.resize(1440, 900)
     window.show()

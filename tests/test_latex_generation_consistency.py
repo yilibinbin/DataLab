@@ -996,10 +996,14 @@ def test_statistics_latex_summary_rows_include_confidence_interval_metrics():
         "mean_ci_method_label": "Student-t mean CI (sample standard deviation)",
     }
 
-    rows = build_statistics_latex_summary_rows(
-        result,
-        format_value=lambda value, sigma, is_input: str(value) if sigma is None else f"{value}±{sigma}",
-    )
+    # str(mpf) truncates to mp.dps digits, so pin the precision — otherwise a
+    # prior test leaking a higher mp.dps (it is process-global) changes the
+    # rendered digit count and this assertion becomes order-dependent.
+    with mp.workdps(15):
+        rows = build_statistics_latex_summary_rows(
+            result,
+            format_value=lambda value, sigma, is_input: str(value) if sigma is None else f"{value}±{sigma}",
+        )
     rows_by_label = {label: value for label, value in rows}
 
     assert rows_by_label["Mean CI lower"] == "0.445739743239121"

@@ -24,6 +24,10 @@ def window(qtbot: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: QMessageBox.StandardButton.Ok)
     monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: QMessageBox.StandardButton.Ok)
     win = ExtrapolationWindow()
+    # Pin the language so assertions are deterministic regardless of the runner's
+    # system locale (CI defaults to English, local dev often to Chinese). Tests
+    # that need English call _apply_language("en") themselves.
+    win._apply_language("zh")
     qtbot.addWidget(win)
     win.show()
     qtbot.waitExposed(win)

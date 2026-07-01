@@ -227,9 +227,13 @@ def test_example_workspace_can_run_default_calculation(qtbot, monkeypatch, examp
         win.generate_latex_checkbox.setChecked(False)
         win.generate_plots_checkbox.setChecked(False)
         win.run_calculation()
+        # The implicit (self-consistent) example runs a per-point inner root-find
+        # for every seed variant, so it is far heavier than the others (~1-2 min
+        # locally, more on slower shared CI runners). Give it a generous budget.
+        run_timeout_ms = 300000 if "implicit" in example_name else 120000
         qtbot.waitUntil(
             lambda: getattr(win, "_workbench_result_state", "") != "running" and not win._has_running_worker(),
-            timeout=120000,
+            timeout=run_timeout_ms,
         )
         QApplication.processEvents()
 
