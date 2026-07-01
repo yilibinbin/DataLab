@@ -172,6 +172,7 @@ from .docs_dialog import DocsDialog
 from .resources import (
     _apply_system_theme,
     _compute_default_pdf_dpi,
+    _detect_system_light_mode,
     _detect_windows_light_mode,
     _ensure_default_path_augmented,
     _locate_icon_file,
@@ -478,13 +479,26 @@ class ExtrapolationWindow(
         self.resize(1280, 760)
         self._window_icon = None
         self._apply_window_icon()
-        self._windows_light_pref = _detect_windows_light_mode()
+        # OS light/dark preference, detected cross-platform (Qt colorScheme on
+        # macOS/Linux/Windows, registry fallback). Kept under the historical
+        # _windows_light_pref name to avoid churning every reader.
+        self._windows_light_pref = _detect_system_light_mode()
         self._theme_timer: QTimer | None = None
-        if os.name == "nt":
+        # Prefer the event-driven colorSchemeChanged signal (Qt 6.5+, all
+        # platforms). Only fall back to Windows registry polling when the signal
+        # is unavailable, so macOS/Linux dark-mode switches are picked up live.
+        app = QApplication.instance()
+        hints = app.styleHints() if app is not None else None
+        signal = getattr(hints, "colorSchemeChanged", None) if hints is not None else None
+        if signal is not None:
+            signal.connect(self._maybe_refresh_system_theme)
+        elif os.name == "nt":
             self._theme_timer = QTimer(self)
             self._theme_timer.setInterval(5000)
             self._theme_timer.timeout.connect(self._maybe_refresh_system_theme)
             self._theme_timer.start()
+        # Theme mode: "auto" follows the OS (default), "light"/"dark" pin it.
+        self._theme_mode = "auto"
 
         self.current_latex_path: Path | None = None
         self.last_pdf_path: Path | None = None

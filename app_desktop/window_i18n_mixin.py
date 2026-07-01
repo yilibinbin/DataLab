@@ -14,7 +14,7 @@ from app_desktop.theme import round_icon_button_style
 
 from .resources import (
     _apply_system_theme,
-    _detect_windows_light_mode,
+    _detect_system_light_mode,
     _locate_icon_file,
     should_set_runtime_app_icon,
 )
@@ -185,13 +185,35 @@ class WindowI18nMixin:
             self.constants_hint_btn.setToolTip(hint_text)
 
     # ------------------------------------------------------------------ UI --
-    def _maybe_refresh_system_theme(self):
-        if os.name != "nt":
+    def set_theme_mode(self, mode: str) -> None:
+        """Apply an explicit theme mode: 'auto' (follow OS), 'light', or 'dark'.
+
+        'auto' re-reads the OS preference; 'light'/'dark' pin the palette and
+        make _maybe_refresh_system_theme ignore later OS changes."""
+        if mode not in ("auto", "light", "dark"):
+            mode = "auto"
+        self._theme_mode = mode
+        app = QApplication.instance()
+        if not app:
+            return
+        if mode == "auto":
+            prefer_light = _detect_system_light_mode()
+        else:
+            prefer_light = mode == "light"
+        self._windows_light_pref = prefer_light
+        _apply_system_theme(app, prefer_light=prefer_light)
+        self._update_theme_from_palette()
+
+    def _maybe_refresh_system_theme(self, *args):
+        # Cross-platform: fired by QStyleHints.colorSchemeChanged (macOS/Linux/
+        # Windows) or, as a fallback, the Windows registry poll timer. In manual
+        # Light/Dark mode the user's choice wins, so system changes are ignored.
+        if getattr(self, "_theme_mode", "auto") != "auto":
             return
         app = QApplication.instance()
         if not app:
             return
-        current = _detect_windows_light_mode()
+        current = _detect_system_light_mode()
         if current is None or current == self._windows_light_pref:
             return
         self._windows_light_pref = current

@@ -134,12 +134,12 @@ def main() -> None:
     app.installEventFilter(workspace_file_filter)
     app._datalab_workspace_file_filter = workspace_file_filter  # type: ignore[attr-defined]
 
-    if os.name == "nt":
-        pref = _apply_system_theme(app)
-        window = ExtrapolationWindow()
-        window._windows_light_pref = pref if pref is not None else window._windows_light_pref
-    else:
-        window = ExtrapolationWindow()
+    # Apply the OS light/dark palette at startup on every platform. Detection is
+    # cross-platform now (Qt colorScheme), so this is no longer Windows-only —
+    # macOS/Linux users get the correct theme instead of always-light (P1-5).
+    pref = _apply_system_theme(app)
+    window = ExtrapolationWindow()
+    window._windows_light_pref = pref if pref is not None else window._windows_light_pref
 
     workspace_dispatcher.set_window(window)
     window.show()

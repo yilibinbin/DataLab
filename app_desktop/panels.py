@@ -13,7 +13,7 @@ from collections.abc import Callable
 import weakref
 
 from PySide6.QtCore import Qt, QObject, QEvent
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -260,6 +260,20 @@ def build_menu(self):
     action_lang_en.triggered.connect(lambda: self._on_language_change(2))
     lang_menu.addAction(action_lang_en)
     self._register_text(action_lang_en, "English", "English", "setText")
+
+    theme_menu = menubar.addMenu("主题")
+    self._register_text(theme_menu, "主题", "Theme", "setTitle")
+    theme_group = QActionGroup(self)
+    theme_group.setExclusive(True)
+    for mode, zh, en in (("auto", "自动", "Auto"), ("light", "浅色", "Light"), ("dark", "深色", "Dark")):
+        action = QAction(zh, self)
+        action.setMenuRole(QAction.NoRole)
+        action.setCheckable(True)
+        action.setChecked(mode == "auto")
+        action.triggered.connect(lambda _checked=False, m=mode: self.set_theme_mode(m))
+        theme_group.addAction(action)
+        theme_menu.addAction(action)
+        self._register_text(action, zh, en, "setText")
 
     help_menu = menubar.addMenu("帮助")
     self._register_text(help_menu, "帮助", "Help", "setTitle")
