@@ -46,6 +46,7 @@ def build_fitting_request(
     pade_n: int = 1,
     auto_identifier: str | None = None,
     weighted: bool = False,
+    refine_with_mcmc: bool = False,
     label: str = "",
     is_multidim: bool | None = None,
     implicit_definition: Mapping[str, Any] | object | None = None,
@@ -145,6 +146,7 @@ def build_fitting_request(
         "pade_n": _validate_int(pade_n, field_name="pade_n"),
         "auto_identifier": _optional_text(auto_identifier, field_name="auto_identifier"),
         "weighted": _validate_bool(weighted, field_name="weighted"),
+        "refine_with_mcmc": _validate_bool(refine_with_mcmc, field_name="refine_with_mcmc"),
         "label": _text_value(label, field_name="label"),
         "is_multidim": bool(len(normalized_variable_map) > 1) if is_multidim is None else _validate_bool(is_multidim, field_name="is_multidim"),
         "implicit_definition": normalized_implicit_definition,
@@ -221,6 +223,9 @@ def run_fitting(request: ComputeJobRequest) -> ResultEnvelope:
         check_cancelled()
         output = execute_direct_fit(fit_input)
         check_cancelled()
+        if fit_input.refine_with_mcmc:
+            _maybe_refine_with_mcmc(fit_input, output.fit_result)
+            check_cancelled()
         keep_digits = max(precision_used + 10, 30)
         payload = {
             "model_type": model_type,
@@ -238,6 +243,46 @@ def run_fitting(request: ComputeJobRequest) -> ResultEnvelope:
         payload=payload,
         logs=output.logs,
         warnings=output.warnings,
+    )
+
+
+def _maybe_refine_with_mcmc(fit_input: Any, fit_result: Any) -> None:
+    """Run MCMC posterior refinement on a freshly-computed core fit (P1-3).
+
+    Called inside ``run_fitting`` while the live evaluator still exists in
+    ``fit_result.details`` (it is never serialized). Self-skips for models
+    without an evaluator (custom/pade/power_limit), matching desktop coverage.
+    Imports are local so ``datalab_core`` keeps no module-level emcee dependency.
+    """
+    from datalab_core.mcmc_refine import (
+        free_parameter_names,
+        likelihood_weights_from_series,
+        refine_fit_with_mcmc,
+    )
+
+    params = getattr(fit_result, "params", {}) or {}
+    param_names = free_parameter_names(fit_input.parameter_names, params, fit_input.parameter_config)
+    if not param_names:
+        return
+    base_params = {name: mp.mpf(value) for name, value in params.items()}
+    targets = [mp.mpf(value) for value in fit_input.target_series]
+    variable_data = fit_input.variable_data
+    observations: list[object] = [
+        {name: mp.mpf(variable_data[name][index]) for name in variable_data}
+        for index in range(len(targets))
+    ]
+    weights = likelihood_weights_from_series(
+        fit_input.weights,
+        fit_input.sigma_series,
+        len(targets),
+    )
+    refine_fit_with_mcmc(
+        fit_result,
+        param_names=param_names,
+        base_params=base_params,
+        observations=observations,
+        targets=targets,
+        likelihood_weights=weights,
     )
 
 
@@ -368,6 +413,7 @@ def _direct_fit_input_from_request(
             field_name="custom_constants",
             digit_hint=precision,
         ),
+        refine_with_mcmc=_validate_bool(inputs.get("refine_with_mcmc", False), field_name="refine_with_mcmc"),
     )
 
 

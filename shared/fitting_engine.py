@@ -52,6 +52,7 @@ class DirectFitInput:
     weighted: bool = False
     label: str = ""
     custom_constants: Mapping[str, str] | None = None
+    refine_with_mcmc: bool = False
 
 
 @dataclass(frozen=True)

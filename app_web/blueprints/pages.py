@@ -212,6 +212,7 @@ def fit():
         "use_file_checked": use_file_checked,
         "fit_mode": fit_mode,
         "fit_weighted": weighted_checked,
+        "fit_mcmc_refine": _is_checked(request.form, "fit_mcmc_refine", False),
         "use_dcolumn_checked": _is_checked(request.form, "fit_use_dcolumn", True),
         "use_caption_checked": _is_checked(request.form, "fit_use_caption", False),
         "compile_pdf_checked": _is_checked(request.form, "fit_compile_pdf", False),

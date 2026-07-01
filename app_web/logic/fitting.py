@@ -744,6 +744,7 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
     pade_m = _parse_int(form.get("fit_pade_m")) or 1
     pade_n = _parse_int(form.get("fit_pade_n")) or 1
     use_weights = _is_checked(form, "fit_weighted", False)
+    refine_with_mcmc = _is_checked(form, "fit_mcmc_refine", False)
     target_column = (form.get("fit_target_column") or "").strip()
     x_column = (form.get("fit_x_column") or "").strip()
     sigma_column = (form.get("fit_sigma_column") or "").strip()
@@ -1051,6 +1052,7 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
             pade_m=pade_m,
             pade_n=pade_n,
             weighted=use_weights,
+            refine_with_mcmc=refine_with_mcmc,
             label=best_label,
             weights=fit_weights,
             precision_digits=mp_precision,

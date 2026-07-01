@@ -66,6 +66,10 @@
           <input type="checkbox" name="fit_weighted" value="1" {% if fit_weighted %}checked{% endif %}>
           <span data-i18n="fit.weightCheckbox">统计误差加权 (sigma)</span>
         </label>
+        <label class="checkbox inline">
+          <input type="checkbox" name="fit_mcmc_refine" value="1" {% if fit_mcmc_refine %}checked{% endif %}>
+          <span data-i18n="fit.mcmcRefineCheckbox">MCMC 精修（多项式/反幂）</span>
+        </label>
       </div>
       <label class="field-label" for="fit_mode" data-i18n="fit.modeLabel">拟合模式</label>
       {% set mode = fit_mode or 'polynomial' %}

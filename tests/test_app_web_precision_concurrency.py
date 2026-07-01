@@ -1621,6 +1621,32 @@ def test_web_fitting_logic_uses_core_request_builder_and_handler(monkeypatch):
     assert "\\begin" in result.latex_text
 
 
+def test_web_fitting_threads_mcmc_refine_flag_into_core_request(monkeypatch):
+    # P1-3: the web fit form's fit_mcmc_refine checkbox must reach the core
+    # request so web/CLI can run MCMC refinement (previously desktop-only).
+    from datalab_core.fitting import build_fitting_request as real_build_fitting_request
+
+    import app_web.logic.fitting as fit_logic
+
+    captured: dict[str, object] = {}
+
+    def fake_build_fitting_request(**kwargs):
+        captured["refine_with_mcmc"] = kwargs.get("refine_with_mcmc")
+        return real_build_fitting_request(**kwargs)
+
+    monkeypatch.setattr(fit_logic, "build_fitting_request", fake_build_fitting_request, raising=False)
+
+    data = "x y\n0 1\n1 3\n2 5\n3 7\n"
+    base_form = {"fit_mode": "polynomial", "fit_poly_degree": "1", "fit_mp_precision": "50", "fit_result_digits": "2"}
+
+    fit_logic._run_fit(data, {**base_form, "fit_mcmc_refine": "1"})
+    assert captured["refine_with_mcmc"] is True
+
+    captured.clear()
+    fit_logic._run_fit(data, base_form)  # no checkbox → flag off
+    assert captured["refine_with_mcmc"] is False
+
+
 def test_web_statistics_core_failure_without_payload_uses_default_message(monkeypatch):
     from datalab_core.results import ResultStatus
 
