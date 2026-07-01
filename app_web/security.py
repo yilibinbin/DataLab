@@ -17,6 +17,7 @@ from functools import wraps
 from flask import request, session, abort, current_app, has_app_context, has_request_context, render_template
 
 from shared.bilingual import _dual_msg
+from shared.latex_escaping import latex_escape as _canonical_latex_escape
 
 # ============================================================
 # CSRF Protection
@@ -213,38 +214,16 @@ def mpmath_synchronized(f):
 # LaTeX Content Escaping
 # ============================================================
 
-LATEX_SPECIAL_CHARS = {
-    '&': r'\&',
-    '%': r'\%',
-    '$': r'\$',
-    '#': r'\#',
-    '_': r'\_',
-    '{': r'\{',
-    '}': r'\}',
-    '~': r'\textasciitilde{}',
-    '^': r'\textasciicircum{}',
-    '\\': r'\textbackslash{}',
-}
-
-
 def latex_escape(text: str) -> str:
     """
     Escape special LaTeX characters to prevent injection.
 
-    Args:
-        text: Raw text that may contain special chars
-
-    Returns:
-        LaTeX-safe text
+    Delegates to the single canonical implementation (P2-6). The former local
+    version used sequential ``str.replace``, which re-escaped the backslashes its
+    own replacements introduced (``a~b`` -> ``a\\textbackslash{}textasciitilde{}b``);
+    the canonical helper is single-pass and correct.
     """
-    if not isinstance(text, str):
-        text = str(text)
-
-    # Sort by length descending to handle multi-char sequences first
-    for char, escaped in sorted(LATEX_SPECIAL_CHARS.items(), key=lambda x: -len(x[0])):
-        text = text.replace(char, escaped)
-
-    return text
+    return _canonical_latex_escape(text)
 
 
 # ============================================================

@@ -4,6 +4,8 @@ from collections.abc import Mapping, Sequence
 
 from mpmath import mp
 
+from shared.latex_escaping import latex_escape as _canonical_latex_escape
+
 from datalab_latex.latex_formatting import (
     calculate_dcolumn_format_for_column,
     format_value_for_latex_file,
@@ -191,16 +193,5 @@ def _text(value: object) -> str:
 
 
 def _escape_latex(value: str) -> str:
-    replacements = {
-        "\\": r"\textbackslash{}",
-        "&": r"\&",
-        "%": r"\%",
-        "$": r"\$",
-        "#": r"\#",
-        "_": r"\_",
-        "{": r"\{",
-        "}": r"\}",
-        "~": r"\textasciitilde{}",
-        "^": r"\textasciicircum{}",
-    }
-    return "".join(replacements.get(char, char) for char in value)
+    # Delegates to the single canonical implementation (P2-6).
+    return _canonical_latex_escape(value)

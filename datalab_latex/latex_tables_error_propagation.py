@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from shared.latex_escaping import latex_escape as _canonical_latex_escape
 from shared.error_propagation_engine import (
     apply_formula_to_data,
     detect_used_error_propagation_inputs,
@@ -153,24 +154,9 @@ def _error_table_row_strings(
     return rows
 
 
-_LATEX_TEXT_ESCAPES = str.maketrans(
-    {
-        "\\": r"\textbackslash{}",
-        "$": r"\$",
-        "%": r"\%",
-        "#": r"\#",
-        "&": r"\&",
-        "_": r"\_",
-        "{": r"\{",
-        "}": r"\}",
-        "^": r"\textasciicircum{}",
-        "~": r"\textasciitilde{}",
-    }
-)
-
-
 def _escape_latex_text(value: object) -> str:
-    return str(value or "").translate(_LATEX_TEXT_ESCAPES)
+    # Delegates to the single canonical implementation (P2-6).
+    return _canonical_latex_escape(value)
 
 
 def _header_label_latex(label: str) -> str:

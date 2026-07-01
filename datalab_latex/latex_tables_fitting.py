@@ -5,6 +5,8 @@ from typing import Any
 
 from mpmath import mp
 
+from shared.latex_escaping import latex_escape as _canonical_latex_escape
+
 from .latex_formatting import calculate_dcolumn_format_for_column, siunitx_column_spec
 
 _NUMERIC_COLUMNS = ("chi2", "reduced_chi2", "aic", "bic", "rmse", "r2")
@@ -61,19 +63,9 @@ def build_fitting_comparison_latex_block(
 
 
 def latex_escape(text: object) -> str:
-    mapping = {
-        "&": "\\&",
-        "%": "\\%",
-        "$": "\\$",
-        "#": "\\#",
-        "_": "\\_",
-        "{": "\\{",
-        "}": "\\}",
-        "~": "\\textasciitilde{}",
-        "^": "\\textasciicircum{}",
-        "\\": "\\textbackslash{}",
-    }
-    return "".join(mapping.get(ch, ch) for ch in str(text))
+    # Delegates to the single canonical implementation (P2-6) so escaping can't
+    # diverge between table generators and the web layer.
+    return _canonical_latex_escape(text)
 
 
 def _comparison_latex_row(row: Mapping[str, Any]) -> str:
