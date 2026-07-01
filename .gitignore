@@ -50,8 +50,10 @@ test_tex.log
 test_tex.tex
 test_tex.pdf
 
-# uv lockfile — project installs via requirements*.txt / pip, not uv.
-uv.lock
+# uv.lock is committed (P2-1) as the reproducibility pin for the scientific
+# stack — mpmath/sympy/numpy/scipy version drift silently changes numerical
+# results, so a numerical tool needs a locked reference resolution. Day-to-day
+# installs still use requirements*.txt / pip; `uv sync` reproduces the exact set.
 
 # Diff dumps written by external review tools (codex/antigravity companions).
 *.patch

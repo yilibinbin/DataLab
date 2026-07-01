@@ -76,3 +76,24 @@ jobs:
 
       - name: mypy --strict (core layer)
         run: mypy --strict shared fitting extrapolation_methods datalab_latex
+
+  lockfile:
+    name: Lockfile in sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        # Pin to a major tag (the repo's other actions are SHA-pinned; swap this
+        # for a resolved SHA when hardening the whole workflow).
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.6"
+
+      # The committed uv.lock is the reproducibility pin (P2-1). Fail if it has
+      # drifted from pyproject.toml so a dependency bump can't land unlocked.
+      - name: uv lock --check
+        run: uv lock --check
