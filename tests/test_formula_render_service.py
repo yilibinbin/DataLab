@@ -155,11 +155,73 @@ def test_mathtext_protects_cjk_identifiers_from_math_font() -> None:
 
 
 def test_mathtext_normalizes_full_width_punctuation() -> None:
+    """Full-width punctuation must be normalized to ASCII in the mathtext span,
+    otherwise it renders as a tofu box. Feed real full-width chars so the test
+    fails if the normalization is removed.
+    """
     from datalab_latex.formula_render_service import RenderRequest, render_formula_metadata
 
-    result = render_formula_metadata(RenderRequest(source="f(a) + g(b)"))
-    # ASCII case stays ASCII (sanity), and full-width variants would be normalized.
+    result = render_formula_metadata(RenderRequest(source="f（a）＋g［b］"))
+
     assert result.ok
+    # Full-width brackets AND the full-width operator must normalize to ASCII so
+    # none of them leak into a \text{} tofu run.
+    for full_width in "（）［］＋":
+        assert full_width not in result.mathtext, result.mathtext
+    assert "(a)" in result.mathtext and "[b]" in result.mathtext
+    assert "+" in result.mathtext
+
+
+def test_mathtext_full_width_braces_stay_visible_not_grouping() -> None:
+    """Full-width braces ｛｝ must become VISIBLE escaped braces \\{ \\}, not raw
+    { } — raw braces are TeX grouping delimiters (invisible), so ｛b｝ would
+    silently vanish instead of rendering literal braces.
+    """
+    from datalab_latex.formula_render_service import RenderRequest, render_formula_metadata
+
+    result = render_formula_metadata(RenderRequest(source="a｛b｝c"))
+
+    assert result.ok
+    assert "｛" not in result.mathtext and "｝" not in result.mathtext
+    # Escaped (visible) braces, not bare grouping braces.
+    assert r"\{" in result.mathtext and r"\}" in result.mathtext
+    assert "a{b}c" not in result.mathtext
+
+
+def test_mathtext_does_not_double_wrap_existing_text_command() -> None:
+    """A LaTeX source that already wraps CJK in \\text{...} must not be wrapped
+    again — nested \\text{\\text{...}} is unparseable by matplotlib mathtext and
+    crashes the preview (ok=False, empty PNG).
+    """
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula_metadata,
+    )
+
+    result = render_formula_metadata(
+        RenderRequest(source=r"\text{质量} + 1", language=InputLanguage.LATEX)
+    )
+
+    assert result.ok
+    assert r"\text{\text" not in result.mathtext, result.mathtext
+    # The single \text{质量} is preserved, and no bare CJK leaks into math mode.
+    assert r"\text{质量}" in result.mathtext
+
+
+def test_render_latex_with_text_command_produces_png_without_crash() -> None:
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula,
+    )
+
+    result = render_formula(
+        RenderRequest(source=r"\text{质量} + 1", language=InputLanguage.LATEX)
+    )
+
+    assert result.ok, result.error_message
+    assert result.png_bytes.startswith(b"\x89PNG")
     assert "（" not in result.mathtext and "）" not in result.mathtext
 
 

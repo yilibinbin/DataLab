@@ -185,8 +185,15 @@ if _resolved_family:
     # symbols too) and keep Computer-Modern fallback for any math glyph the CJK
     # font lacks. This is applied at import so every figure inherits it.
     rcParams["mathtext.fontset"] = "custom"
-    for _mathtext_key in ("rm", "it", "bf", "cal", "sf", "tt"):
-        rcParams[f"mathtext.{_mathtext_key}"] = _resolved_family
+    # Keep the :italic / :bold style modifiers so math variables still render
+    # italic and bold math renders bold — assigning the plain family to every
+    # key would flatten that distinction for ALL math, not just CJK.
+    rcParams["mathtext.rm"] = _resolved_family
+    rcParams["mathtext.it"] = f"{_resolved_family}:italic"
+    rcParams["mathtext.bf"] = f"{_resolved_family}:bold"
+    rcParams["mathtext.cal"] = _resolved_family
+    rcParams["mathtext.sf"] = _resolved_family
+    rcParams["mathtext.tt"] = _resolved_family
     rcParams["mathtext.fallback"] = "cm"
 else:
     rcParams["font.family"] = "sans-serif"

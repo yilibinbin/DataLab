@@ -102,8 +102,37 @@ _MAX_SOURCE_LENGTH: Final = 8000
 # Non-ASCII runs (CJK etc.) that must not sit bare inside a mathtext $...$ span:
 # matplotlib's math font has no CJK glyphs and would substitute tofu boxes.
 _MATHTEXT_NON_ASCII_RUN_RE: Final = re.compile(r"[^\x00-\x7f]+")
-# Full-width punctuation → ASCII so it renders in the math font instead of tofu.
-_FULL_WIDTH_PUNCT_MAP: Final = str.maketrans("（）［］｛｝，：；．　", "()[]{},:;. ")
+# Existing ``\text{...}`` spans (e.g. from a LaTeX-language source) — their
+# contents are already text-mode, so they must be left untouched.
+_MATHTEXT_TEXT_SPAN_RE: Final = re.compile(r"\\text\{[^{}]*\}")
+# Full-width punctuation and math operators → ASCII so they render in the math
+# font (and as real operators) instead of a tofu box inside a \text{} run.
+# Braces are escaped (\{ \}) not bare ({ }): bare braces are invisible TeX
+# grouping delimiters, so a full-width ｛x｝ must stay a *visible* literal brace.
+_FULL_WIDTH_PUNCT_MAP: Final = str.maketrans(
+    {
+        "（": "(",
+        "）": ")",
+        "［": "[",
+        "］": "]",
+        "｛": r"\{",
+        "｝": r"\}",
+        "，": ",",
+        "：": ":",
+        "；": ";",
+        "．": ".",
+        "　": " ",
+        "＋": "+",
+        "－": "-",
+        "＊": "*",
+        "／": "/",
+        "＝": "=",
+        "＜": "<",
+        "＞": ">",
+        "｜": "|",
+        "％": r"\%",
+    }
+)
 
 
 def _protect_non_ascii_for_mathtext(latex: str) -> str:
@@ -111,14 +140,27 @@ def _protect_non_ascii_for_mathtext(latex: str) -> str:
 
     Normalizes full-width punctuation to ASCII, then wraps each remaining
     non-ASCII run (e.g. a Chinese identifier) in ``\\text{...}`` so it renders
-    with the regular CJK-capable font rather than the CJK-less math font. Real
-    math (``\\cdot``, ``x^{2}``, ``\\chi``) stays in math mode untouched. Only
-    the mathtext field needs this; the plain ``latex`` field stays raw because
-    real LaTeX handles CJK via the document's CJK package.
+    with the regular CJK-capable font rather than the CJK-less math font. Runs
+    already inside a ``\\text{...}`` span are left as-is — double-wrapping into
+    ``\\text{\\text{...}}`` is unparseable by matplotlib and would crash the
+    preview. Real math (``\\cdot``, ``x^{2}``, ``\\chi``) stays in math mode.
+    Only the mathtext field needs this; the plain ``latex`` field stays raw
+    because real LaTeX handles CJK via the document's CJK package.
     """
 
     latex = latex.translate(_FULL_WIDTH_PUNCT_MAP)
-    return _MATHTEXT_NON_ASCII_RUN_RE.sub(lambda match: rf"\text{{{match.group(0)}}}", latex)
+
+    def _wrap_outside(segment: str) -> str:
+        return _MATHTEXT_NON_ASCII_RUN_RE.sub(lambda m: rf"\text{{{m.group(0)}}}", segment)
+
+    parts: list[str] = []
+    cursor = 0
+    for span in _MATHTEXT_TEXT_SPAN_RE.finditer(latex):
+        parts.append(_wrap_outside(latex[cursor:span.start()]))
+        parts.append(span.group(0))  # already a \text{...} span — leave untouched
+        cursor = span.end()
+    parts.append(_wrap_outside(latex[cursor:]))
+    return "".join(parts)
 
 
 def clear_formula_render_cache() -> None:
