@@ -227,9 +227,13 @@ def test_mypy_strict_zero_errors_on_full_core_layer() -> None:
     mode and should fail CI loudly.
     """
     repo_root = Path(__file__).resolve().parents[1]
+    # Do NOT pass --strict on the CLI here: newer mypy applies a CLI --strict to
+    # datalab_core too (reached transitively from the roots), surfacing that
+    # layer's known non-strict issues and failing on a clean cache (as CI does).
+    # The [[tool.mypy.overrides]] strict=true block scopes strict to exactly the
+    # four roots, so config-driven strictness is both correct and CI-stable.
     cmd = [
         sys.executable, "-m", "mypy",
-        "--strict",
         "--no-incremental",
         "shared",
         "fitting",
