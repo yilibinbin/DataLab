@@ -47,6 +47,14 @@
 .theme-light .download {
   background: rgba(69, 211, 255, 0.18);
 }
+/* The brand accent (#45d3ff) is a light cyan tuned for the dark theme; as text
+   on the light theme's near-white surfaces it fails WCAG AA badly (~1.7:1).
+   Override the text uses of accent with an on-brand deep cyan that passes AA
+   (≥5:1 on both --bg and white). Backgrounds/borders using accent are fine. */
+.theme-light a,
+.theme-light td.strong {
+  color: #0e7490;
+}
 
 * { box-sizing: border-box; }
 

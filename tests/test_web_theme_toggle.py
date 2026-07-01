@@ -173,3 +173,58 @@ def test_index_response_references_theme_js(_flask_client):
 def test_index_response_has_theme_toggle_button(_flask_client):
     resp = _flask_client.get("/")
     assert b'id="theme-toggle"' in resp.data
+
+
+# ---------- P1-10: light-theme contrast + double-submit guard ----------
+
+
+def _relative_luminance(hex_color: str) -> float:
+    hex_color = hex_color.lstrip("#")
+    channels = [int(hex_color[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+
+    def _linear(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (_linear(c) for c in channels)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast(fg: str, bg: str) -> float:
+    l1, l2 = _relative_luminance(fg), _relative_luminance(bg)
+    hi, lo = max(l1, l2), min(l1, l2)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def test_light_theme_link_colour_meets_wcag_aa():
+    """The brand accent (#45d3ff) is unreadable as text on the light theme's
+    near-white surfaces (~1.7:1). The light theme must override link / emphasis
+    text with a colour that clears WCAG AA (>=4.5:1) on both --bg and white."""
+    text = (_STATIC / "style.css").read_text(encoding="utf-8")
+
+    light_vars = re.search(r"\.theme-light\s*{([^}]*)}", text, re.DOTALL)
+    assert light_vars
+    light_bg = re.search(r"--bg:\s*(#[0-9a-fA-F]{6})", light_vars.group(1))
+    assert light_bg, "light theme --bg must be a hex colour for this check"
+
+    override = re.search(
+        r"\.theme-light a,\s*\.theme-light td\.strong\s*{[^}]*color:\s*(#[0-9a-fA-F]{6})",
+        text,
+        re.DOTALL,
+    )
+    assert override, "light theme must override link/td.strong text colour"
+    link = override.group(1)
+
+    for bg in (light_bg.group(1), "#ffffff"):
+        ratio = _contrast(link, bg)
+        assert ratio >= 4.5, f"light link colour {link} on {bg} is {ratio:.2f} (<4.5 AA)"
+
+
+def test_form_submit_guard_is_served_and_wired():
+    """The double-submit guard script must exist and be included by base.html."""
+    js = (_STATIC / "js" / "form-submit.js").read_text(encoding="utf-8")
+    # It must hook form submit and toggle the button's disabled/busy state.
+    assert 'addEventListener("submit"' in js
+    assert "disabled" in js and "aria-busy" in js
+
+    base = (_TEMPLATES / "base.html").read_text(encoding="utf-8")
+    assert "js/form-submit.js" in base, "base.html must include form-submit.js"
