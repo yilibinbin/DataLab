@@ -242,7 +242,10 @@ class _UnitParser:
             self._consume()
             result = UnitDimension.unitless()
         elif _is_unit_name(token):
-            result = UnitDimension.from_factors({self._consume(): Fraction(1)})
+            # `token` is already narrowed to a non-None str by _is_unit_name above;
+            # _consume() (typed str | None) only advances the cursor past it.
+            self._consume()
+            result = UnitDimension.from_factors({token: Fraction(1)})
         else:
             raise UnitExpressionError(f"unexpected unit token: {token}")
         if self._peek() == "^":

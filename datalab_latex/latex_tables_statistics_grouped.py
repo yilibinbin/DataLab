@@ -32,7 +32,7 @@ def generate_statistics_grouped_latex(
 ) -> str:
     """Generate a standalone LaTeX document for grouped statistics payloads."""
 
-    from data_extrapolation_latex_latest import calculate_dcolumn_format_for_column, siunitx_column_spec
+    from datalab_latex.latex_formatting import calculate_dcolumn_format_for_column, siunitx_column_spec
 
     validate_statistics_grouped_payload(payload)
     group_size = max(0, int(latex_group_size))

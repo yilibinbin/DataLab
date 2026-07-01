@@ -220,7 +220,7 @@ def format_statistics_latex_value(
 ) -> str:
     """Format a statistics numeric cell through the canonical LaTeX formatter."""
 
-    from data_extrapolation_latex_latest import format_value_for_latex_file
+    from datalab_latex.latex_formatting import format_value_for_latex_file
 
     sigma_digits = uncertainty_digits
     if sigma is not None and hasattr(sigma, "uncertainty_digits"):
