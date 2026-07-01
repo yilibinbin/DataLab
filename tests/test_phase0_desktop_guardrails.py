@@ -197,45 +197,39 @@ def test_statistics_direct_mode_attaches_source_row_ids(
     window: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import app_desktop.window_statistics_mixin as statistics_mixin
-
+    # Statistics now compute through the core session service, not a module-level
+    # compute_statistics(). Run the real path and spy on the display seam to
+    # confirm the parsed values/sigmas and that source_row_ids are attached to
+    # the result carried into the UI.
     window._apply_language("en")
     window.manual_data_edit.setPlainText("A\n1\n2\n")
     window._data_stack.setCurrentIndex(1)
     window.stats_value_column_edit.setText("A")
-    stats_result = {
-        "mean": mp.mpf("1.5"),
-        "std_mean": mp.mpf("0.5"),
-        "std": mp.mpf("0.7071067811865475"),
-        "v_min": mp.mpf("1"),
-        "v_max": mp.mpf("2"),
-        "method_label": "Arithmetic mean (sample)",
-        "dropped": 0,
-    }
     captured: dict[str, object] = {}
 
-    def fake_compute_statistics(
+    def fake_display_statistics_result(
+        result: dict[str, object],
+        value_col: str,
+        row_count: int,
+        *,
         values: list[mp.mpf],
         sigmas: list[mp.mpf | None],
-        stats_mode: str,
-        *,
-        use_sample: bool,
-        use_weighted_variance: bool,
-    ) -> dict[str, object]:
+        render_plots: bool = False,
+        units: object = None,
+    ) -> None:
+        captured["result"] = result
         captured["values"] = [str(value) for value in values]
         captured["sigmas"] = list(sigmas)
-        captured["stats_mode"] = stats_mode
-        captured["use_sample"] = use_sample
-        captured["use_weighted_variance"] = use_weighted_variance
-        return stats_result
 
-    monkeypatch.setattr(statistics_mixin, "compute_statistics", fake_compute_statistics)
+    monkeypatch.setattr(window, "_display_statistics_result", fake_display_statistics_result)
 
     window._run_statistics_mode(False, "")
 
     assert captured["values"] == ["1.0", "2.0"]
     assert captured["sigmas"] == [None, None]
-    assert stats_result["source_row_ids"] == ("1", "2")
+    result = captured["result"]
+    assert isinstance(result, dict)
+    assert result["source_row_ids"] == ("1", "2")
 
 
 def test_statistics_display_result_routes_current_csv_plot_and_snapshot(
@@ -264,11 +258,13 @@ def test_statistics_display_result_routes_current_csv_plot_and_snapshot(
         plot_sigmas: list[mp.mpf | None] | None,
         plot_result: dict[str, object],
         batch_idx: int | None = None,
+        value_unit: str | None = None,
     ) -> list[bytes]:
         captured["plot_values"] = list(plot_values)
         captured["plot_sigmas"] = list(plot_sigmas or [])
         captured["plot_result"] = plot_result
         captured["plot_batch_idx"] = batch_idx
+        captured["plot_value_unit"] = value_unit
         return [b"\x89PNG\r\n\x1a\nstats-1", b"\x89PNG\r\n\x1a\nstats-2"]
 
     def fake_save_batch_figure(plot_bytes: bytes, _label: str, idx: int, *, prefix: str) -> Path:

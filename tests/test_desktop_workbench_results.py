@@ -599,6 +599,7 @@ def test_fit_batches_tabular_success_clears_running_state(qtbot: Any, monkeypatc
         ),
         expression="A*x",
         fit_result=SimpleNamespace(params={"A": "1"}),
+        units=None,
     )
 
     window._on_fit_batches_finished([SimpleNamespace(index=1, kind="fit", fit_payload=payload, error=None, captured_log="")])
@@ -846,6 +847,7 @@ def test_fit_batch_success_handler_exception_marks_result_failed(qtbot: Any, mon
         job=SimpleNamespace(model_expr="A*x", render_plots=False),
         expression="A*x",
         fit_result=SimpleNamespace(params={"A": "1"}, details={}),
+        units=None,
     )
 
     window._on_fit_batches_finished(
@@ -885,6 +887,7 @@ def test_fit_success_post_processing_error_keeps_success_overview(qtbot: Any, mo
             ),
             fit_result=SimpleNamespace(params={"A": "1"}, details={}),
             expression="A*x",
+            units=None,
             logs=[],
             warnings=[],
         )
@@ -917,6 +920,7 @@ def test_fit_batch_post_processing_error_keeps_success_overview(qtbot: Any, monk
         job=SimpleNamespace(model_expr="A*x", render_plots=False, headers=[], data_rows=[], sigma_rows=[]),
         expression="A*x",
         fit_result=SimpleNamespace(params={"A": "1"}, details={}),
+        units=None,
     )
 
     window._on_fit_batches_finished(

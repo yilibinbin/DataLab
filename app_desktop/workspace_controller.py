@@ -1982,10 +1982,10 @@ def _restore_workspace_contents(window: Any, manifest: dict[str, Any], attachmen
             semantic_outputs = _render_semantic_snapshot_outputs(semantic_snapshot)
         if semantic_outputs is not None and hasattr(window, "_set_result_text"):
             result_text, semantic_csv_rows, semantic_csv_headers = semantic_outputs
-            window.result_edit.setPlainText(result_text)
-            window._last_result_text = result_text
-            window._last_result_text_format = "plain"
-            window._last_result_rendered_text = window.result_edit.toPlainText()
+            # Route through _set_result_text so the restored result renders with
+            # the same markdown display as the live run; setting plain text here
+            # left toPlainText() returning raw markdown, breaking round-trip.
+            window._set_result_text(result_text)
         else:
             result_text = str(snapshot.get("markdown") or "")
         if semantic_outputs is None and snapshot.get("markdown_format") == "markdown" and hasattr(window, "_set_result_text"):
