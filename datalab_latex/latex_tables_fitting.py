@@ -44,8 +44,13 @@ def build_fitting_comparison_latex_block(
         f"\\begin{{tabular}}{{{col_spec}}}",
         "\\toprule",
         (
+            # The six metric columns are siunitx S (or dcolumn d) columns, which
+            # parse cell content as a number; wrap the non-numeric titles in
+            # \multicolumn{1}{c}{...} so the header row does not break compilation.
             "Order & Model & Status & Params & "
-            "$\\chi^2$ & Reduced $\\chi^2$ & AIC & BIC & RMSE & $R^2$ & Warnings & Error \\\\"
+            "\\multicolumn{1}{c}{$\\chi^2$} & \\multicolumn{1}{c}{Reduced $\\chi^2$} & "
+            "\\multicolumn{1}{c}{AIC} & \\multicolumn{1}{c}{BIC} & "
+            "\\multicolumn{1}{c}{RMSE} & \\multicolumn{1}{c}{$R^2$} & Warnings & Error \\\\"
         ),
         "\\midrule",
     ]

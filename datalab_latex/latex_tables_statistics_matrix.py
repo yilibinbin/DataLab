@@ -76,7 +76,10 @@ def _matrix_table_block(
         "\\begin{threeparttable}",
         f"\\begin{{tabular}}{{{column_spec}}}",
         "\\toprule",
-        " & ".join([""] + [latex_escape(column) for column in columns]) + r" \\",
+        # Column names head siunitx S (or dcolumn d) columns, which parse cell
+        # content as a number; wrap them in \multicolumn{1}{c}{...} so the header
+        # row does not break LaTeX compilation.
+        " & ".join([""] + [f"\\multicolumn{{1}}{{c}}{{{latex_escape(column)}}}" for column in columns]) + r" \\",
         "\\midrule",
     ]
     lines = [line for line in lines if line]
