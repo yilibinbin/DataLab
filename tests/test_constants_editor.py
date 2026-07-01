@@ -440,13 +440,15 @@ def test_bracket_constant_survives_switch_from_root_to_custom_fit(qtbot):
     assert win.custom_constants_editor.constants_dict(validate=True) == {"K": "1.23(4)"}
 
 
-def test_error_constants_file_hiding_does_not_leak_to_other_constant_modes(qtbot):
+def test_constants_editor_numeric_mode_tracks_the_active_mode(qtbot):
+    # The workbench redesign removed the error-mode "use constants file" checkbox
+    # (use_constants_file_checkbox); this test now covers the surviving contract:
+    # switching modes keeps the shared input_constants_editor visible and updates
+    # its numeric mode (uncertainty for root_solving, mpmath for custom fitting).
     win = _make_main_window(qtbot)
     win.mode_combo.setCurrentIndex(win.mode_combo.findData("error"))
-    win.use_constants_file_checkbox.setChecked(True)
     QApplication.processEvents()
-
-    assert not win.input_constants_editor.inputs_visible()
+    assert win.input_constants_editor.inputs_visible()
 
     win.mode_combo.setCurrentIndex(win.mode_combo.findData("root_solving"))
     QApplication.processEvents()
