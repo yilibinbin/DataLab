@@ -27,21 +27,40 @@ def _read(path: str) -> str:
 # requirements files
 
 
+def _pointer_extras(filename: str) -> set[str]:
+    """Return the set of extras from a requirements file's `-e .[a,b]` pointer,
+    ignoring comment lines (so a comment mentioning 'mcmc' can't false-pass)."""
+    import re
+
+    for raw in _read(filename).splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.match(r"-e \.\[([a-z,]+)\]$", line)
+        if match:
+            return set(match.group(1).split(","))
+    return set()
+
+
 def test_gui_requirements_pulls_in_mcmc() -> None:
     """Desktop pip install must pull in MCMC deps. Since P2-2 the requirements
     files are thin pointers to pyproject extras, so the MCMC deps come via the
     [mcmc] extra (whose contents are pinned by
     test_pyproject_mcmc_extra_declares_emcee_and_corner)."""
-    text = _read("gui_requirements.txt")
-    assert "mcmc" in text, "gui_requirements.txt must include the [mcmc] extra"
+    assert "mcmc" in _pointer_extras("gui_requirements.txt"), (
+        "gui_requirements.txt must point at the [mcmc] extra"
+    )
 
 
 def test_gui_requirements_pulls_in_scipy_via_core() -> None:
-    # scipy is a core dependency, so any `-e .[...]` pointer installs it.
+    # scipy is a core dependency, so any `-e .[...]` pointer installs it — assert
+    # the file IS such a pointer, and that core declares scipy.
+    assert _pointer_extras("gui_requirements.txt"), "gui_requirements.txt must be an -e .[...] pointer"
     assert '"scipy>=' in _read("pyproject.toml"), "pyproject core deps must include scipy"
 
 
 def test_web_requirements_pulls_in_scipy_via_core() -> None:
+    assert _pointer_extras("web_requirements.txt"), "web_requirements.txt must be an -e .[...] pointer"
     assert '"scipy>=' in _read("pyproject.toml"), "pyproject core deps must include scipy"
 
 
@@ -53,8 +72,9 @@ def test_pyproject_core_dependencies_declare_scipy() -> None:
 def test_web_requirements_pulls_in_mcmc() -> None:
     """Web pip install must also pull in MCMC deps so the web 'Refine with MCMC'
     toggle actually works. Delivered via the [mcmc] extra since P2-2."""
-    text = _read("web_requirements.txt")
-    assert "mcmc" in text, "web_requirements.txt must include the [mcmc] extra"
+    assert "mcmc" in _pointer_extras("web_requirements.txt"), (
+        "web_requirements.txt must point at the [mcmc] extra"
+    )
 
 
 def test_pyproject_mcmc_extra_declares_emcee_and_corner() -> None:

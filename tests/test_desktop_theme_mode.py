@@ -34,6 +34,26 @@ def test_system_theme_detection_is_cross_platform():
     assert result in (True, False, None)
 
 
+def test_system_theme_detection_reads_qt_color_scheme(monkeypatch):
+    """The cross-platform path must actually consult Qt's colorScheme() and map
+    Light->True / Dark->False — not silently fall through to the Windows
+    registry. This fails if the Qt import is wrong (e.g. QtGui vs QtCore) or the
+    branch is unreachable, which a tri-state-only check would miss."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    import app_desktop.resources as resources
+
+    app = QApplication.instance() or QApplication([])
+    hints = app.styleHints()
+
+    monkeypatch.setattr(hints, "colorScheme", lambda: Qt.ColorScheme.Dark, raising=False)
+    assert resources._detect_system_light_mode() is False
+
+    monkeypatch.setattr(hints, "colorScheme", lambda: Qt.ColorScheme.Light, raising=False)
+    assert resources._detect_system_light_mode() is True
+
+
 def test_theme_menu_offers_auto_light_dark(qtbot):
     win = _make_window()
     qtbot.addWidget(win)

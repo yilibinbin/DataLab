@@ -24,12 +24,28 @@ def test_execute_calc_job_dispatches_to_per_mode_handlers():
 
 def test_mode_dispatch_is_a_thin_branch():
     # The top-level dispatch must be a small if/elif over job.mode calling the
-    # handlers — not the old inlined logic. Assert each branch is a one-line call.
+    # handlers — not the old inlined logic. Assert each mode branch's body is a
+    # single call to its handler (real extraction), so the dispatch can't quietly
+    # re-inline the logic while keeping the handler defs around.
     import app_desktop.workers_core as workers_core
 
-    source = inspect.getsource(workers_core._execute_calc_job)
-    assert 'if job.mode == "extrapolation":' in source
-    assert 'elif job.mode == "error":' in source
-    assert 'elif job.mode == "statistics":' in source
-    # The unsupported-mode guard is preserved.
-    assert "Unsupported mode for async calculation" in source
+    source = inspect.getsource(workers_core._execute_calc_job).splitlines()
+
+    def _branch_body(header_substr: str) -> list[str]:
+        for i, line in enumerate(source):
+            if header_substr in line:
+                body = []
+                header_indent = len(line) - len(line.lstrip())
+                for follow in source[i + 1:]:
+                    if not follow.strip():
+                        continue
+                    if len(follow) - len(follow.lstrip()) <= header_indent:
+                        break
+                    body.append(follow.strip())
+                return body
+        raise AssertionError(f"branch not found: {header_substr}")
+
+    assert _branch_body('if job.mode == "extrapolation":') == ["_run_extrapolation_mode(applied_precision)"]
+    assert _branch_body('elif job.mode == "error":') == ["_run_error_mode(applied_precision)"]
+    assert _branch_body('elif job.mode == "statistics":') == ["_run_statistics_mode(applied_precision)"]
+    assert "Unsupported mode for async calculation" in "\n".join(source)

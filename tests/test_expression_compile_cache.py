@@ -60,3 +60,28 @@ def test_compiled_evaluator_still_blocks_attribute_access():
 def test_compile_reports_parse_errors():
     with pytest.raises(ValueError):
         compile_expression("a +* b")
+
+
+def test_fitting_model_callable_compiles_once_not_per_evaluation(monkeypatch):
+    # P1-1's payoff is that the fit model callable parses the expression ONCE
+    # (via compile_expression) rather than per residual/gradient evaluation.
+    # This fails if _build_safe_eval_callable is reverted to call safe_eval per
+    # call, which the parse cache would otherwise mask.
+    import fitting.model_parser as model_parser
+
+    calls: list[str] = []
+    real_compile = model_parser.compile_expression
+
+    def _spy(expression):
+        calls.append(expression)
+        return real_compile(expression)
+
+    monkeypatch.setattr(model_parser, "compile_expression", _spy)
+
+    caller = model_parser._build_safe_eval_callable("a*x + b", ["x"], ["a", "b"], {})
+    assert calls == ["a*x + b"], "expression must be compiled exactly once at build time"
+
+    # Many evaluations, still only the one compile.
+    for i in range(20):
+        caller((mp.mpf(i),), (mp.mpf("2"), mp.mpf("1")))
+    assert calls == ["a*x + b"], "compile_expression must not be called per evaluation"

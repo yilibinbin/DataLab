@@ -62,6 +62,23 @@ def test_invalid_web_concurrency_falls_back_to_auto(monkeypatch):
     assert conf._resolve_workers() == 5  # 2*2+1
 
 
+def test_web_concurrency_override_still_honors_floor_of_two(monkeypatch):
+    # The floor-of-2 invariant must hold even on an explicit override, or
+    # WEB_CONCURRENCY=1 silently reintroduces the single-worker blocking bug.
+    monkeypatch.setenv("WEB_CONCURRENCY", "1")
+    conf = _load_conf()
+    assert conf._resolve_workers() == 2
+
+
+def test_int_env_falls_back_on_invalid_value(monkeypatch):
+    # A typo in DATALAB_WORKER_TIMEOUT must not crash gunicorn config load.
+    conf = _load_conf()
+    monkeypatch.setenv("DATALAB_WORKER_TIMEOUT", "12o")
+    assert conf._int_env("DATALAB_WORKER_TIMEOUT", 120) == 120
+    monkeypatch.setenv("DATALAB_WORKER_TIMEOUT", "45")
+    assert conf._int_env("DATALAB_WORKER_TIMEOUT", 120) == 45
+
+
 def test_sync_worker_class(monkeypatch):
     # mpmath fits are CPU-bound and hold the worker; async workers add nothing.
     conf = _load_conf()

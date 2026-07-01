@@ -206,8 +206,10 @@ def test_light_theme_link_colour_meets_wcag_aa():
     light_bg = re.search(r"--bg:\s*(#[0-9a-fA-F]{6})", light_vars.group(1))
     assert light_bg, "light theme --bg must be a hex colour for this check"
 
+    # Match the light-theme link/emphasis override regardless of any :not(...)
+    # scoping refinements on the anchor selector.
     override = re.search(
-        r"\.theme-light a,\s*\.theme-light td\.strong\s*{[^}]*color:\s*(#[0-9a-fA-F]{6})",
+        r"\.theme-light a[^,{]*,\s*\.theme-light td\.strong\s*{[^}]*color:\s*(#[0-9a-fA-F]{6})",
         text,
         re.DOTALL,
     )

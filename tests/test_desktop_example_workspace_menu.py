@@ -47,18 +47,21 @@ def test_workspace_and_run_keyboard_shortcuts_are_installed(qtbot):
     _allow_discard(win)
     qtbot.addWidget(win)
 
-    installed = {
+    # Collect installed shortcuts as a list — QKeySequence is not reliably
+    # hashable in PySide6 (putting it in a set can segfault), so compare by
+    # equality against the list instead.
+    installed = [
         action.shortcut()
         for action in win.findChildren(QAction)
         if not action.shortcut().isEmpty()
-    }
+    ]
     for std in (
         QKeySequence.StandardKey.New,
         QKeySequence.StandardKey.Open,
         QKeySequence.StandardKey.Save,
         QKeySequence.StandardKey.SaveAs,
     ):
-        assert QKeySequence(std) in installed, f"missing shortcut for {std}"
+        assert any(seq == QKeySequence(std) for seq in installed), f"missing shortcut for {std}"
 
     # The run button carries the execute shortcut and runs/stops on trigger.
     assert not win.run_button.shortcut().isEmpty()

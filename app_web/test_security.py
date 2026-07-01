@@ -358,11 +358,20 @@ class TestSecurityHeaders:
 
     def test_katex_cdn_assets_have_sri(self, client):
         """P2-7: the KaTeX CDN <script>/<link> must carry SRI integrity hashes so
-        a compromised CDN can't inject arbitrary JS/CSS."""
+        a compromised CDN can't inject arbitrary JS/CSS. Bind the assertion to
+        the actual KaTeX tags — a loose count could pass if two unrelated assets
+        had integrity while the KaTeX tags did not."""
+        import re
+
         html = client.get('/').data.decode()
-        # Both the script and stylesheet reference jsdelivr with an integrity attr.
-        assert html.count('integrity="sha384-') >= 2, "KaTeX CDN assets missing SRI"
-        assert 'cdn.jsdelivr.net/npm/katex' in html
+        katex_tags = re.findall(
+            r'<(?:script|link)\b(?=[^>]*(?:src|href)="[^"]*cdn\.jsdelivr\.net/npm/katex)[^>]*>',
+            html,
+        )
+        assert len(katex_tags) >= 2, "expected KaTeX CDN script and stylesheet tags"
+        assert all('integrity="sha384-' in tag for tag in katex_tags), (
+            "KaTeX CDN assets missing SRI"
+        )
 
 
 # ============================================================
