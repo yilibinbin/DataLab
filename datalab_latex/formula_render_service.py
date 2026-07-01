@@ -99,6 +99,27 @@ _SAFE_LATEX_ENVIRONMENTS: Final = frozenset(
 )
 _MAX_SOURCE_LENGTH: Final = 8000
 
+# Non-ASCII runs (CJK etc.) that must not sit bare inside a mathtext $...$ span:
+# matplotlib's math font has no CJK glyphs and would substitute tofu boxes.
+_MATHTEXT_NON_ASCII_RUN_RE: Final = re.compile(r"[^\x00-\x7f]+")
+# Full-width punctuation → ASCII so it renders in the math font instead of tofu.
+_FULL_WIDTH_PUNCT_MAP: Final = str.maketrans("（）［］｛｝，：；．　", "()[]{},:;. ")
+
+
+def _protect_non_ascii_for_mathtext(latex: str) -> str:
+    """Make a LaTeX string safe for matplotlib mathtext ($...$) rendering.
+
+    Normalizes full-width punctuation to ASCII, then wraps each remaining
+    non-ASCII run (e.g. a Chinese identifier) in ``\\text{...}`` so it renders
+    with the regular CJK-capable font rather than the CJK-less math font. Real
+    math (``\\cdot``, ``x^{2}``, ``\\chi``) stays in math mode untouched. Only
+    the mathtext field needs this; the plain ``latex`` field stays raw because
+    real LaTeX handles CJK via the document's CJK package.
+    """
+
+    latex = latex.translate(_FULL_WIDTH_PUNCT_MAP)
+    return _MATHTEXT_NON_ASCII_RUN_RE.sub(lambda match: rf"\text{{{match.group(0)}}}", latex)
+
 
 def clear_formula_render_cache() -> None:
     _render_formula_cached.cache_clear()
@@ -226,7 +247,7 @@ def _build_formula_metadata(
             source=source,
             language=language,
             latex=latex,
-            mathtext=f"${latex}$",
+            mathtext=f"${_protect_non_ascii_for_mathtext(latex)}$",
             fallback_text=fallback_text,
         )
     except Exception as exc:  # noqa: BLE001 - structured preview fallback

@@ -130,6 +130,39 @@ def test_render_formula_metadata_does_not_render_png(monkeypatch: pytest.MonkeyP
     assert result.mathtext.startswith("$")
 
 
+def test_mathtext_protects_cjk_identifiers_from_math_font() -> None:
+    """CJK/full-width chars inside $...$ render as tofu boxes because matplotlib's
+    mathtext font has no CJK glyphs. The mathtext field must wrap non-ASCII runs
+    in \\text{...} (which uses the regular CJK-capable font) so a Chinese-named
+    formula previews correctly. The plain `latex` field stays raw (real LaTeX
+    handles CJK via the document's CJK package).
+    """
+    import re
+
+    from datalab_latex.formula_render_service import RenderRequest, render_formula_metadata
+
+    result = render_formula_metadata(RenderRequest(source="质量 * 加速度"))
+
+    assert result.ok
+    # No bare CJK directly inside the math span — it must be wrapped in \text{}.
+    assert r"\text{质量}" in result.mathtext
+    assert r"\text{加速度}" in result.mathtext
+    # A CJK char must never sit outside a \text{...} inside the mathtext.
+    stripped = re.sub(r"\\text\{[^}]*\}", "", result.mathtext)
+    assert not re.search(r"[一-鿿]", stripped), stripped
+    # The math operator stays in math mode.
+    assert r"\cdot" in result.mathtext
+
+
+def test_mathtext_normalizes_full_width_punctuation() -> None:
+    from datalab_latex.formula_render_service import RenderRequest, render_formula_metadata
+
+    result = render_formula_metadata(RenderRequest(source="f(a) + g(b)"))
+    # ASCII case stays ASCII (sanity), and full-width variants would be normalized.
+    assert result.ok
+    assert "（" not in result.mathtext and "）" not in result.mathtext
+
+
 def test_render_service_accepts_datalab_python_and_mathematica_sources() -> None:
     from datalab_latex.formula_render_service import (
         InputLanguage,
