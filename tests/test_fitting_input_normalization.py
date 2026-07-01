@@ -457,11 +457,9 @@ def test_production_paths_delegate_to_shared_normalizer() -> None:
     assert "normalize_fitting_input" in inspect.getsource(
         window_fitting_models_mixin.WindowFittingModelsMixin._collect_custom_fit_config
     )
-    execute_custom_source = inspect.getsource(
-        window_fitting_models_mixin.WindowFittingModelsMixin._execute_custom_fit
-    )
-    assert "normalize_fitting_input" in execute_custom_source
-    assert "_resolve_uncertainties" not in execute_custom_source
+    # _execute_custom_fit (and the other five synchronous fit paths) were removed
+    # in P1-9 as dead code; the normalization invariant they carried is still
+    # asserted on the live _collect_custom_fit_config and _prepare_fit_job paths.
     assert "normalize_fitting_input" in inspect.getsource(
         window_fitting_models_mixin.WindowFittingModelsMixin._prepare_fit_job
     )

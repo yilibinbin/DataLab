@@ -7,21 +7,18 @@ polynomial / inverse / Padé / power-limit templates, self-consistent
 models, worker thread setup (``_execute_fit_async``), and the central
 dispatcher ``_run_fitting_mode``.
 
-Methods MOVED here from window_fitting_mixin.py (line numbers
-refer to the pre-Phase-7 monolith and are frozen as one-time
-migration context — they will NOT be kept in sync; see ``git log``
-for canonical history):
-- _execute_custom_fit                (was line 579)
-- _run_linear_definition_fit         (was line 731)
-- _execute_custom_polynomial_model   (was line 831)
-- _execute_inverse_model             (was line 861)
-- _execute_linear_named_model        (was line 890)
-- _execute_template_custom_fit       (was line 909)
-- _execute_power_limit_model         (was line 1023)
-- _execute_pade_model                (was line 1026)
-- _prepare_fit_job                   (was line 1307)
-- _execute_fit_async                 (was line 1385)
-- _run_fitting_mode                  (was line 1808)
+Core fit-mode entry points owned by this mixin:
+- _execute_template_custom_fit  (power-limit / Padé templates)
+- _prepare_fit_job              (builds the FitJob from the dataset)
+- _execute_fit_async           (worker-thread setup)
+- _run_fitting_mode            (central dispatcher)
+
+Removed (P1-9): six synchronous fit paths — _execute_custom_fit,
+_execute_custom_polynomial_model, _execute_inverse_model,
+_execute_linear_named_model, _execute_power_limit_model,
+_execute_pade_model — plus their private helper _run_linear_definition_fit.
+They were dead code (no callers) superseded by the async worker path
+(_execute_fit_async) and the core run_fitting path; see ``git log``.
 
 Methods provided by sibling mixins (resolved via Python MRO):
 - ``self._tr`` — bilingual (host class)
@@ -67,7 +64,6 @@ from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any, TypedDict, cast
 
-import mpmath as mp
 
 from PySide6.QtWidgets import QMessageBox
 
@@ -77,16 +73,8 @@ from data_extrapolation_latex_latest import _dual_msg
 from fitting import (
     ImplicitModelDefinition,
     ImplicitSolveOptions,
-    build_model_specification,
-    build_parameter_state,
     fit_custom_model,
     render_fitting_overview,
-)
-from fitting.auto_models import (
-    AutoModelDefinition,
-    build_inverse_series_definition,
-    build_polynomial_definition,
-    fit_linear_model,
 )
 
 from app_desktop.fitting_input_normalization import (
@@ -182,350 +170,6 @@ class WindowFittingModelsMixin:
             "parameter_names": list(parameter_names),
             "constants": constants,
         }
-
-    def _execute_custom_fit(
-        self,
-        dataset: tuple[list[str], list[tuple[mp.mpf, ...]], list[tuple[mp.mpf | None, ...]]],
-        generate_latex: bool,
-        output_path: str,
-        batch_tag: str = "",
-        verbose: bool = False,
-    ) -> str | None:
-        try:
-            headers, data_rows, sigma_rows = dataset
-            variable_map = self._collect_variable_mapping(headers)
-            target_column = self.fit_target_edit.text().strip()
-            if not target_column:
-                raise ValueError(_dual_msg("请指定目标列。", "Please specify the target column."))
-            custom_config = self._collect_custom_fit_config(
-                validate_parameters=True,
-                variable_names=list(variable_map.keys()),
-            )
-            normalized = normalize_fitting_input(
-                model_type="custom",
-                expression=str(custom_config["expression"]),
-                variable_names=list(variable_map.keys()),
-                target_column=target_column,
-                parameters=ParameterInput(),
-                worker_request=WorkerInputRequest(
-                    headers=headers,
-                    data_rows=data_rows,
-                    sigma_rows=sigma_rows,
-                    variable_mapping=variable_map,
-                ),
-                weighted=self.fit_weighted_checkbox.isChecked(),
-                validate=False,
-            )
-            worker_input = normalized.worker_input
-            if worker_input is None:
-                raise ValueError(_dual_msg("无法准备拟合数据。", "Could not prepare fitting data."))
-            target_series = list(worker_input.target_series)
-            sigma_series = list(worker_input.sigma_series)
-            weights = list(worker_input.weights) if worker_input.weights is not None else None
-            variable_data = {key: list(values) for key, values in worker_input.variable_data.items()}
-            variable_map = dict(worker_input.variable_map)
-            model_expr = str(custom_config["expression"])
-            constants = custom_config["constants"]
-            parameter_config = custom_config["parameter_config"]
-            parameter_names = custom_config["parameter_names"]
-            precision = self._read_precision()
-            if verbose:
-                self._append_log(f"[fit] custom model: expr={model_expr} target={target_column} variables={variable_map}")
-                self._append_log(f"[fit] n_points={len(target_series)} precision={precision}")
-                self._append_log(f"[fit] initial_params={parameter_config}")
-            with _mp_precision_guard(precision):
-                self._set_fit_output_precision(precision)
-                model_spec = build_model_specification(
-                    model_expr,
-                    list(variable_map.keys()),
-                    parameter_names,
-                    constants,
-                )
-                parameter_state = build_parameter_state(parameter_config, parameter_names)
-                fit_result = fit_custom_model(
-                    model_spec,
-                    parameter_state,
-                    variable_data,
-                    target_series,
-                    precision=precision,
-                    weights=weights,
-                    data_sigmas=sigma_series,
-                )
-            if verbose:
-                self._append_log(f"[fit] params={fit_result.params}")
-                self._append_log(f"[fit] chi2={fit_result.chi2} reduced_chi2={fit_result.reduced_chi2} r2={fit_result.r2}")
-            substituted = self._build_substituted_expression(model_expr, fit_result.params)
-            fit_result.details["expression"] = model_expr
-            fit_result.details["substituted_expression"] = substituted
-            summary = self._format_fit_result_text(fit_result, model_expr, substituted)
-            self._set_result_text(summary, final_result=True)
-            tag = f"{batch_tag} " if batch_tag else ""
-            self._append_log(tag + "自定义拟合完成。")
-            warning_detail = fit_result.details.get("boundary_warning")
-            if warning_detail:
-                self._append_log(warning_detail)
-            is_multidim = len(variable_map) > 1
-            if not variable_map:
-                primary_var = "x"
-                x_values = []
-            else:
-                primary_var = next(iter(variable_map.keys()))
-                x_values = [float(val) for val in variable_data.get(primary_var, [])]
-            y_values = [] if is_multidim else [float(val) for val in target_series]
-            fitted, residuals = ([], []) if is_multidim else self._build_standard_plot_series(fit_result)
-            comparison_data = [
-                (
-                    model_expr or "自定义",
-                    float(fit_result.aic),
-                    float(fit_result.bic),
-                    float(fit_result.r2),
-                )
-            ]
-            parameter_info = (
-                model_expr or "自定义",
-                fit_result.params,
-                fit_result.param_errors_total or fit_result.param_errors,
-            )
-            uncertainties = (
-                [float(s) if s is not None else 0.0 for s in sigma_series]
-                if (sigma_series and not is_multidim)
-                else None
-            )
-            log_scale = self._sanitize_log_scale(self._current_log_scale(), x_values, y_values)
-            plot_data = render_fitting_overview(
-                x_values,
-                y_values,
-                [] if is_multidim else [(model_expr or "拟合", fitted)],
-                [] if is_multidim else [(model_expr or "拟合", residuals)],
-                comparison=comparison_data,
-                parameter_info=parameter_info,
-                uncertainties=uncertainties,
-                show_curves=not is_multidim,
-                log_scale=log_scale,
-            )
-            self._image_mode = "fit"
-            self.current_fit_figures = []
-            self.current_fit_index = 0
-            self._update_result_plot(plot_data, final_result=True)
-            plot_job = SimpleNamespace(
-                model_type="custom",
-                poly_degree=0,
-                inverse_min=1,
-                inverse_max=1,
-                auto_identifier=None,
-                is_multidim=is_multidim,
-                label=model_expr or "custom",
-                x_series=variable_data.get(primary_var, []),
-                y_series=target_series,
-                sigma_series=sigma_series,
-                render_plots=True,
-            )
-            self._remember_last_result(
-                "fit_single",
-                {"fit_result": fit_result, "expression": model_expr, "substituted": substituted, "job": plot_job},
-            )
-            if generate_latex and output_path:
-                self._write_fitting_latex(
-                    headers,
-                    data_rows,
-                    sigma_rows,
-                    fit_result,
-                    model_expr,
-                    substituted,
-                    plot_data,
-                    output_path,
-                    self.dcolumn_checkbox.isChecked(),
-                )
-            self.tabs.setCurrentIndex(self.result_tab_index)
-            return summary
-        except Exception as exc:
-            localized = self._localize_text(str(exc))
-            QMessageBox.critical(
-                self,
-                self._tr("自定义拟合失败", "Custom Fit Failed"),
-                localized
-            )
-            log_msg = self._tr(f"自定义拟合失败: {localized}", f"Custom fit failed: {localized}")
-            self._append_log(log_msg)
-            return None
-
-    def _run_linear_definition_fit(
-        self,
-        definition: AutoModelDefinition,
-        headers: list[str],
-        data_rows: list[tuple[mp.mpf, ...]],
-        sigma_rows: list[tuple[mp.mpf | None, ...]],
-        x_series: list[mp.mpf],
-        y_series: list[mp.mpf],
-        sigma_series: list[mp.mpf | None],
-        weights: list[mp.mpf] | None,
-        generate_latex: bool,
-        output_path: str,
-    ):
-        fit_result = fit_linear_model(
-            definition,
-            x_series,
-            y_series,
-            precision=self._current_precision,
-            weights=weights,
-            data_sigmas=sigma_series,
-        )
-        expression = fit_result.details.get("expression")
-        substituted = (
-            self._build_substituted_expression(expression, fit_result.params)
-            if expression
-            else None
-        )
-        summary = self._format_fit_result_text(fit_result, expression, substituted)
-        self._set_result_text(summary, final_result=True)
-        self._append_log(f"{definition.label} 拟合完成。")
-        warning_detail = fit_result.details.get("boundary_warning")
-        if warning_detail:
-            self._append_log(warning_detail)
-        x_values = [float(val) for val in x_series]
-        y_values = [float(val) for val in y_series]
-        fitted_curve, residuals = self._build_linear_plot_series(
-            definition, fit_result, x_series, y_series
-        )
-        comparison_data = [
-            (
-                definition.label,
-                float(fit_result.aic),
-                float(fit_result.bic),
-                float(fit_result.r2),
-            )
-        ]
-        parameter_info = (
-            definition.label,
-            fit_result.params,
-            fit_result.param_errors_total or fit_result.param_errors,
-        )
-        uncertainties = (
-            [float(s) if s is not None else 0.0 for s in sigma_series] if sigma_series else None
-        )
-        log_scale = self._sanitize_log_scale(self._current_log_scale(), x_series, y_series)
-        plot_data = render_fitting_overview(
-            x_values,
-            y_values,
-            [(definition.label, fitted_curve)],
-            [(definition.label, residuals)],
-            comparison=comparison_data,
-            parameter_info=parameter_info,
-            uncertainties=uncertainties,
-            log_scale=log_scale,
-        )
-        self._image_mode = "fit"
-        self.current_fit_figures = []
-        self.current_fit_index = 0
-        self._update_result_plot(plot_data, final_result=True)
-        plot_job = SimpleNamespace(
-            model_type="auto",
-            poly_degree=0,
-            inverse_min=1,
-            inverse_max=1,
-            auto_identifier=getattr(definition, "identifier", None),
-            is_multidim=False,
-            label=definition.label,
-            x_series=x_series,
-            y_series=y_series,
-            sigma_series=sigma_series,
-            render_plots=True,
-        )
-        self._remember_last_result(
-            "fit_single",
-            {"fit_result": fit_result, "expression": expression, "substituted": substituted, "job": plot_job},
-        )
-        if generate_latex and output_path:
-            self._write_fitting_latex(
-                headers,
-                data_rows,
-                sigma_rows,
-                fit_result,
-                expression or "",
-                substituted or "",
-                plot_data,
-                output_path,
-                self.dcolumn_checkbox.isChecked(),
-            )
-        self.tabs.setCurrentIndex(self.result_tab_index)
-
-    def _execute_custom_polynomial_model(
-        self,
-        dataset: tuple[list[str], list[tuple[mp.mpf, ...]], list[tuple[mp.mpf | None, ...]]],
-        generate_latex: bool,
-        output_path: str,
-        batch_tag: str = "",
-    ):
-        try:
-            headers, data_rows, sigma_rows, x_series, y_series, sigma_series, weights = self._prepare_linear_fit_inputs(*dataset)
-            precision = self._read_precision()
-            with _mp_precision_guard(precision):
-                self._set_fit_output_precision(precision)
-                degree = self.poly_degree_spin.value()
-                definition = build_polynomial_definition(degree)
-                self._run_linear_definition_fit(
-                    definition, headers, data_rows, sigma_rows, x_series, y_series, sigma_series, weights, generate_latex, output_path
-                )
-            if batch_tag:
-                log_msg = self._tr(f"{batch_tag} 多项式拟合完成。", f"{batch_tag} Polynomial fit completed.")
-                self._append_log(log_msg)
-        except Exception as exc:
-            localized = self._localize_text(str(exc))
-            QMessageBox.critical(
-                self,
-                self._tr("多项式拟合失败", "Polynomial Fit Failed"),
-                localized
-            )
-            log_msg = self._tr(f"多项式拟合失败: {localized}", f"Polynomial fit failed: {localized}")
-            self._append_log(log_msg)
-
-    def _execute_inverse_model(
-        self,
-        dataset: tuple[list[str], list[tuple[mp.mpf, ...]], list[tuple[mp.mpf | None, ...]]],
-        generate_latex: bool,
-        output_path: str,
-        batch_tag: str = "",
-    ):
-        try:
-            headers, data_rows, sigma_rows, x_series, y_series, sigma_series, weights = self._prepare_linear_fit_inputs(*dataset)
-            precision = self._read_precision()
-            with _mp_precision_guard(precision):
-                self._set_fit_output_precision(precision)
-                definition = build_inverse_series_definition(*self._inverse_power_range())
-                self._run_linear_definition_fit(
-                    definition, headers, data_rows, sigma_rows, x_series, y_series, sigma_series, weights, generate_latex, output_path
-                )
-            if batch_tag:
-                log_msg = self._tr(f"{batch_tag} 1/x^p 拟合完成。", f"{batch_tag} 1/x^p fit completed.")
-                self._append_log(log_msg)
-        except Exception as exc:
-            localized = self._localize_text(str(exc))
-            QMessageBox.critical(
-                self,
-                self._tr("1/x^p 拟合失败", "1/x^p Fit Failed"),
-                localized
-            )
-            log_msg = self._tr(f"1/x^p 拟合失败: {localized}", f"1/x^p fit failed: {localized}")
-            self._append_log(log_msg)
-
-    def _execute_linear_named_model(self, identifier: str, label: str, dataset, generate_latex: bool, output_path: str, batch_tag: str = ""):
-        definition = self._auto_model_map.get(identifier)
-        if not definition:
-            raise ValueError(
-                _dual_msg(
-                    f"未找到模型 {label} ({identifier})。",
-                    f"Model not found: {label} ({identifier}).",
-                )
-            )
-        headers, data_rows, sigma_rows, x_series, y_series, sigma_series, weights = self._prepare_linear_fit_inputs(*dataset)
-        precision = self._read_precision()
-        with _mp_precision_guard(precision):
-            self._set_fit_output_precision(precision)
-            self._run_linear_definition_fit(
-                definition, headers, data_rows, sigma_rows, x_series, y_series, sigma_series, weights, generate_latex, output_path
-            )
-        if batch_tag:
-            self._append_log(f"{batch_tag} {label} 完成。")
 
     def _execute_template_custom_fit(self, template: str, label: str, dataset, generate_latex: bool, output_path: str, batch_tag: str = ""):
         try:
@@ -640,12 +284,6 @@ class WindowFittingModelsMixin:
             )
             log_msg = self._tr(f"{label} 拟合失败: {localized}", f"{label} fit failed: {localized}")
             self._append_log(log_msg)
-
-    def _execute_power_limit_model(self, dataset, generate_latex: bool, output_path: str, batch_tag: str = ""):
-        self._execute_template_custom_fit("power_limit", "幂律极限模型", dataset, generate_latex, output_path, batch_tag=batch_tag)
-
-    def _execute_pade_model(self, dataset, generate_latex: bool, output_path: str, batch_tag: str = ""):
-        self._execute_template_custom_fit("pade", "Padé 拟合", dataset, generate_latex, output_path, batch_tag=batch_tag)
 
     def _prepare_fit_job(self, dataset, generate_latex: bool, output_path: str, verbose: bool, render_plots: bool = True) -> FitJob:
         headers, data_rows, sigma_rows = dataset
