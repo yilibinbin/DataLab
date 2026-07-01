@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import mpmath as mp
 
@@ -306,4 +306,8 @@ def _required_sequence(payload: Mapping[str, Any], key: str) -> Sequence[Any]:
     value = payload[key]
     if isinstance(value, (str, bytes, bytearray, memoryview)) or not isinstance(value, Sequence):
         raise TypeError(f"fit_result.{key} must be a sequence.")
-    return cast(Sequence[Any], value)
+    # Annotate explicitly rather than cast(): older mypy sees the narrowed value
+    # as Any (needs the annotation), newer mypy flags a cast as redundant. The
+    # typed assignment satisfies both.
+    result: Sequence[Any] = value
+    return result

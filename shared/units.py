@@ -48,8 +48,9 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 try:
-    import pint as _pint  # noqa: F401
+    import pint  # noqa: F401
 
+    _pint: Any = pint
     HAS_PINT = True
 except ImportError:
     _pint = None
