@@ -99,6 +99,106 @@ _SAFE_LATEX_ENVIRONMENTS: Final = frozenset(
 )
 _MAX_SOURCE_LENGTH: Final = 8000
 
+# Non-ASCII runs (CJK etc.) that must not sit bare inside a mathtext $...$ span:
+# matplotlib's math font has no CJK glyphs and would substitute tofu boxes.
+_MATHTEXT_NON_ASCII_RUN_RE: Final = re.compile(r"[^\x00-\x7f]+")
+# Start of an existing ``\text{`` span (from e.g. a LaTeX-language source). The
+# closing brace is found by counting, not regex, so spans with inner braces
+# (``\text{质量_{a}}``) are matched at any nesting depth — a [^{}]* regex misses
+# them and re-wraps their CJK into unparseable ``\text{\text{...}}``.
+_MATHTEXT_TEXT_SPAN_START: Final = "\\text{"
+
+
+def _find_text_spans(latex: str) -> list[tuple[int, int]]:
+    """Return (start, end) ranges of top-level ``\\text{...}`` spans in ``latex``,
+    matching balanced braces at any depth. A ``\\text{`` with no closing brace
+    (malformed) is left unmatched so it flows through the outside transform."""
+
+    spans: list[tuple[int, int]] = []
+    index = 0
+    length = len(latex)
+    while True:
+        start = latex.find(_MATHTEXT_TEXT_SPAN_START, index)
+        if start == -1:
+            break
+        depth = 1
+        pos = start + len(_MATHTEXT_TEXT_SPAN_START)
+        while pos < length and depth > 0:
+            char = latex[pos]
+            if char == "\\":  # skip an escaped char (e.g. \{ \}) — not a delimiter
+                pos += 2
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            pos += 1
+        if depth == 0:
+            spans.append((start, pos))
+            index = pos
+        else:  # unbalanced \text{ — stop treating it as a span
+            index = start + len(_MATHTEXT_TEXT_SPAN_START)
+    return spans
+# Full-width punctuation and math operators → ASCII so they render in the math
+# font (and as real operators) instead of a tofu box inside a \text{} run.
+# Braces are escaped (\{ \}) not bare ({ }): bare braces are invisible TeX
+# grouping delimiters, so a full-width ｛x｝ must stay a *visible* literal brace.
+_FULL_WIDTH_PUNCT_MAP: Final = str.maketrans(
+    {
+        "（": "(",
+        "）": ")",
+        "［": "[",
+        "］": "]",
+        "｛": r"\{",
+        "｝": r"\}",
+        "，": ",",
+        "：": ":",
+        "；": ";",
+        "．": ".",
+        "　": " ",
+        "＋": "+",
+        "－": "-",
+        "＊": "*",
+        "／": "/",
+        "＝": "=",
+        "＜": "<",
+        "＞": ">",
+        "｜": "|",
+        "％": r"\%",
+    }
+)
+
+
+def _protect_non_ascii_for_mathtext(latex: str) -> str:
+    """Make a LaTeX string safe for matplotlib mathtext ($...$) rendering.
+
+    Normalizes full-width punctuation to ASCII, then wraps each remaining
+    non-ASCII run (e.g. a Chinese identifier) in ``\\text{...}`` so it renders
+    with the regular CJK-capable font rather than the CJK-less math font. Runs
+    already inside a ``\\text{...}`` span are left as-is — double-wrapping into
+    ``\\text{\\text{...}}`` is unparseable by matplotlib and would crash the
+    preview. Real math (``\\cdot``, ``x^{2}``, ``\\chi``) stays in math mode.
+    Only the mathtext field needs this; the plain ``latex`` field stays raw
+    because real LaTeX handles CJK via the document's CJK package.
+    """
+
+    def _transform_outside(segment: str) -> str:
+        # Normalize full-width punctuation, then wrap remaining non-ASCII runs.
+        # Done per outside-segment (NOT globally first): normalizing ｛→\{ before
+        # the span scan would inject a brace that shifts span boundaries and
+        # could re-nest \text{\text{...}}.
+        segment = segment.translate(_FULL_WIDTH_PUNCT_MAP)
+        return _MATHTEXT_NON_ASCII_RUN_RE.sub(lambda m: rf"\text{{{m.group(0)}}}", segment)
+
+    parts: list[str] = []
+    cursor = 0
+    for start, end in _find_text_spans(latex):
+        parts.append(_transform_outside(latex[cursor:start]))
+        parts.append(latex[start:end])  # already a \text{...} span — leave untouched
+        cursor = end
+    parts.append(_transform_outside(latex[cursor:]))
+    return "".join(parts)
+
 
 def clear_formula_render_cache() -> None:
     _render_formula_cached.cache_clear()
@@ -226,7 +326,7 @@ def _build_formula_metadata(
             source=source,
             language=language,
             latex=latex,
-            mathtext=f"${latex}$",
+            mathtext=f"${_protect_non_ascii_for_mathtext(latex)}$",
             fallback_text=fallback_text,
         )
     except Exception as exc:  # noqa: BLE001 - structured preview fallback

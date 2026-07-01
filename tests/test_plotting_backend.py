@@ -77,6 +77,25 @@ def test_cjk_font_properties_resolve_explicit_font_when_available():
     assert props.get_file()
 
 
+def test_cjk_mathtext_preserves_italic_and_bold_styles():
+    """The custom CJK mathtext fonts must keep the :italic / :bold style
+    modifiers, otherwise every math expression app-wide (not just CJK) loses the
+    italic-variable / bold distinction mathtext normally provides.
+    """
+    from shared.plotting import cjk_font_family, rcParams
+
+    if not cjk_font_family():
+        pytest.skip("No CJK-capable Matplotlib font available in this environment.")
+
+    assert rcParams["mathtext.fontset"] == "custom"
+    # Italic and bold math must carry the style modifier, not the plain family.
+    assert str(rcParams["mathtext.it"]).endswith(":italic"), rcParams["mathtext.it"]
+    assert str(rcParams["mathtext.bf"]).endswith(":bold"), rcParams["mathtext.bf"]
+    # Roman stays the plain family; fallback keeps Computer Modern for missing math glyphs.
+    assert ":" not in str(rcParams["mathtext.rm"])
+    assert rcParams["mathtext.fallback"] == "cm"
+
+
 def test_unicode_minus_disabled():
     """Axis labels must use ASCII minus so LaTeX exports (siunitx)
     don't trip over U+2212."""

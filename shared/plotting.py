@@ -178,6 +178,23 @@ if _resolved_family:
         _resolved_family,
         *[family for family in _CJK_FONT_FAMILIES if family != _resolved_family],
     ]
+    # Mathtext ($...$) uses its OWN font set, not font.family — its default has
+    # no CJK glyphs, so Chinese in a math span (e.g. a formula preview with a
+    # Chinese identifier, or \text{中文}) renders as tofu boxes. Point the custom
+    # mathtext fonts at the resolved CJK family (which carries Greek/常见数学
+    # symbols too) and keep Computer-Modern fallback for any math glyph the CJK
+    # font lacks. This is applied at import so every figure inherits it.
+    rcParams["mathtext.fontset"] = "custom"
+    # Keep the :italic / :bold style modifiers so math variables still render
+    # italic and bold math renders bold — assigning the plain family to every
+    # key would flatten that distinction for ALL math, not just CJK.
+    rcParams["mathtext.rm"] = _resolved_family
+    rcParams["mathtext.it"] = f"{_resolved_family}:italic"
+    rcParams["mathtext.bf"] = f"{_resolved_family}:bold"
+    rcParams["mathtext.cal"] = _resolved_family
+    rcParams["mathtext.sf"] = _resolved_family
+    rcParams["mathtext.tt"] = _resolved_family
+    rcParams["mathtext.fallback"] = "cm"
 else:
     rcParams["font.family"] = "sans-serif"
     rcParams["font.sans-serif"] = list(_CJK_FONT_FAMILIES)

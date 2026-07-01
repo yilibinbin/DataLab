@@ -130,6 +130,188 @@ def test_render_formula_metadata_does_not_render_png(monkeypatch: pytest.MonkeyP
     assert result.mathtext.startswith("$")
 
 
+def test_mathtext_protects_cjk_identifiers_from_math_font() -> None:
+    """CJK/full-width chars inside $...$ render as tofu boxes because matplotlib's
+    mathtext font has no CJK glyphs. The mathtext field must wrap non-ASCII runs
+    in \\text{...} (which uses the regular CJK-capable font) so a Chinese-named
+    formula previews correctly. The plain `latex` field stays raw (real LaTeX
+    handles CJK via the document's CJK package).
+    """
+    import re
+
+    from datalab_latex.formula_render_service import RenderRequest, render_formula_metadata
+
+    result = render_formula_metadata(RenderRequest(source="质量 * 加速度"))
+
+    assert result.ok
+    # No bare CJK directly inside the math span — it must be wrapped in \text{}.
+    assert r"\text{质量}" in result.mathtext
+    assert r"\text{加速度}" in result.mathtext
+    # A CJK char must never sit outside a \text{...} inside the mathtext.
+    stripped = re.sub(r"\\text\{[^}]*\}", "", result.mathtext)
+    assert not re.search(r"[一-鿿]", stripped), stripped
+    # The math operator stays in math mode.
+    assert r"\cdot" in result.mathtext
+
+
+def test_mathtext_normalizes_full_width_punctuation() -> None:
+    """Full-width punctuation must be normalized to ASCII in the mathtext span,
+    otherwise it renders as a tofu box. Feed real full-width chars so the test
+    fails if the normalization is removed.
+    """
+    from datalab_latex.formula_render_service import RenderRequest, render_formula_metadata
+
+    result = render_formula_metadata(RenderRequest(source="f（a）＋g［b］"))
+
+    assert result.ok
+    # Full-width brackets AND the full-width operator must normalize to ASCII so
+    # none of them leak into a \text{} tofu run.
+    for full_width in "（）［］＋":
+        assert full_width not in result.mathtext, result.mathtext
+    assert "(a)" in result.mathtext and "[b]" in result.mathtext
+    assert "+" in result.mathtext
+
+
+def test_mathtext_full_width_braces_stay_visible_not_grouping() -> None:
+    """Full-width braces ｛｝ must become VISIBLE escaped braces \\{ \\}, not raw
+    { } — raw braces are TeX grouping delimiters (invisible), so ｛b｝ would
+    silently vanish instead of rendering literal braces.
+    """
+    from datalab_latex.formula_render_service import RenderRequest, render_formula_metadata
+
+    result = render_formula_metadata(RenderRequest(source="a｛b｝c"))
+
+    assert result.ok
+    assert "｛" not in result.mathtext and "｝" not in result.mathtext
+    # Escaped (visible) braces, not bare grouping braces.
+    assert r"\{" in result.mathtext and r"\}" in result.mathtext
+    assert "a{b}c" not in result.mathtext
+
+
+def test_mathtext_does_not_double_wrap_existing_text_command() -> None:
+    """A LaTeX source that already wraps CJK in \\text{...} must not be wrapped
+    again — nested \\text{\\text{...}} is unparseable by matplotlib mathtext and
+    crashes the preview (ok=False, empty PNG).
+    """
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula_metadata,
+    )
+
+    result = render_formula_metadata(
+        RenderRequest(source=r"\text{质量} + 1", language=InputLanguage.LATEX)
+    )
+
+    assert result.ok
+    assert r"\text{\text" not in result.mathtext, result.mathtext
+    # The single \text{质量} is preserved, and no bare CJK leaks into math mode.
+    assert r"\text{质量}" in result.mathtext
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        r"\text{质量_{a}}",       # subscript group inside the span
+        r"\text{面积^{2}}",       # superscript group inside the span
+        r"\text{质量\{x\}}",      # escaped literal braces inside the span
+        r"\text{质量^{2}} + 度",  # nested-brace span AND bare CJK outside it
+        r"\text{a_{b_{c}}}",      # two levels of nesting
+    ],
+)
+def test_mathtext_nested_brace_text_span_is_not_re_wrapped(source: str) -> None:
+    """A pre-existing \\text{...} whose content has inner braces (sub/superscript
+    groups, escaped braces) must be recognized as ONE span at any nesting depth
+    and left untouched — the earlier [^{}]* regex missed it and re-wrapped its
+    CJK into \\text{\\text{...}}. The invariant here is 'no re-wrapping', not
+    'renders': matplotlib mathtext itself rejects _{}/^{} inside \\text{}, so
+    those inputs still fail to render (gracefully, ok=False) exactly as on main.
+    """
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula_metadata,
+    )
+
+    result = render_formula_metadata(
+        RenderRequest(source=source, language=InputLanguage.LATEX)
+    )
+
+    # The span is preserved as-is; never re-wrapped into nested \text{\text{...}}.
+    assert r"\text{\text" not in result.mathtext, result.mathtext
+
+
+def test_mathtext_text_span_with_escaped_braces_renders() -> None:
+    """A \\text{...} span with only escaped literal braces (no sub/superscript)
+    is valid mathtext and must render — verifies the brace-counting scanner
+    keeps such a span intact AND that it survives to a PNG.
+    """
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula,
+    )
+
+    result = render_formula(
+        RenderRequest(source=r"\text{质量\{x\}}", language=InputLanguage.LATEX)
+    )
+
+    assert result.ok, result.error_message
+    assert result.png_bytes.startswith(b"\x89PNG")
+    assert r"\text{\text" not in result.mathtext, result.mathtext
+
+
+def test_mathtext_full_width_brace_inside_existing_text_span_does_not_nest() -> None:
+    """Full-width braces inside an existing \\text{...} must not defeat the
+    double-wrap guard: normalizing ｛→\\{ before the span scan used to break span
+    matching and produce unparseable \\text{\\text{...}}. The span must stay a
+    single \\text{...}.
+    """
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula_metadata,
+    )
+
+    result = render_formula_metadata(
+        RenderRequest(source=r"\text{质量｛x｝}", language=InputLanguage.LATEX)
+    )
+
+    assert result.ok
+    assert r"\text{\text" not in result.mathtext, result.mathtext
+
+
+def test_render_latex_with_full_width_brace_in_text_span_produces_png() -> None:
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula,
+    )
+
+    result = render_formula(
+        RenderRequest(source=r"\text{质量｛x｝}", language=InputLanguage.LATEX)
+    )
+
+    assert result.ok, result.error_message
+    assert result.png_bytes.startswith(b"\x89PNG")
+
+
+def test_render_latex_with_text_command_produces_png_without_crash() -> None:
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula,
+    )
+
+    result = render_formula(
+        RenderRequest(source=r"\text{质量} + 1", language=InputLanguage.LATEX)
+    )
+
+    assert result.ok, result.error_message
+    assert result.png_bytes.startswith(b"\x89PNG")
+    assert "（" not in result.mathtext and "）" not in result.mathtext
+
+
 def test_render_service_accepts_datalab_python_and_mathematica_sources() -> None:
     from datalab_latex.formula_render_service import (
         InputLanguage,
