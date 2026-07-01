@@ -8,6 +8,8 @@ from typing import Callable, Sequence
 from mpmath import mp
 
 from shared.bilingual import _dual_msg
+from shared.parallel_backend import ParallelMapExecutor
+from shared.parallel_config import ParallelWorkload
 from shared.precision import precision_guard
 
 from .constraints import ParameterState
@@ -164,6 +166,94 @@ def _gradient_builder(
         return mp.mpf(2) * total
 
     return _gradient
+
+
+def _solve_seed_from_gradients(
+    gradient_funcs: tuple[Callable[..., mp.mpf], ...],
+    seed_variant: tuple[mp.mpf, ...],
+) -> tuple[mp.mpf, ...]:
+    """Root-find the gradient system from one seed. Extracted from the former
+    ``_solve_seed`` closure so it can run either in-process or in a pool worker;
+    the logic (tolerance / maxsteps tied to mp.dps) is unchanged."""
+    tol = mp.mpf(10) ** (-(mp.dps - 5))
+    maxsteps = max(50, mp.dps)
+    if len(gradient_funcs) == 1:
+        root = mp.findroot(gradient_funcs[0], seed_variant[0], tol=tol, maxsteps=maxsteps)
+        return (mp.mpf(root),)
+
+    def system(*values: mp.mpf) -> tuple[mp.mpf, ...]:
+        return tuple(func(*values) for func in gradient_funcs)
+
+    candidate = mp.findroot(system, tuple(seed_variant), tol=tol, maxsteps=maxsteps)
+    if isinstance(candidate, mp.matrix):
+        candidate = tuple(candidate)
+    if not isinstance(candidate, (tuple, list)):
+        candidate = (candidate,)
+    return tuple(mp.mpf(val) for val in candidate)
+
+
+@dataclass(frozen=True)
+class _SeedSolveTask:
+    """Picklable description of one seed-variant solve for a process pool.
+
+    Carries only serializable data — the model *recipe* (expression + names +
+    constants) rather than the closure-bearing ModelSpecification, plus the
+    parameter state, the data, and the seed. ``variant_index`` preserves the
+    original ordering so the deterministic best-χ² pick is unaffected by the
+    order results come back in.
+    """
+
+    variant_index: int
+    seed_variant: tuple[mp.mpf, ...]
+    expression: str
+    variables: tuple[str, ...]
+    parameters: tuple[str, ...]
+    constants: dict[str, str]
+    parameter_state: ParameterState
+    observations: tuple[dict[str, mp.mpf], ...]
+    targets: tuple[mp.mpf, ...]
+    weights: tuple[mp.mpf, ...] | None
+    precision: int
+
+
+@dataclass(frozen=True)
+class _SeedSolveResult:
+    variant_index: int
+    solution: tuple[mp.mpf, ...] | None
+    error: str | None = None
+
+
+def _solve_seed_variant_task(task: _SeedSolveTask) -> _SeedSolveResult:
+    """Top-level (picklable) worker: rebuild the model + gradients from the
+    recipe and root-find one seed under the requested precision. Returns the
+    solution or an error string; the caller does the (cheap) post-processing."""
+    from .model_parser import build_model_specification
+
+    try:
+        with precision_guard(task.precision):
+            model = build_model_specification(
+                task.expression,
+                list(task.variables),
+                list(task.parameters),
+                dict(task.constants),
+            )
+            observations = [dict(obs) for obs in task.observations]
+            targets = list(task.targets)
+            weights = list(task.weights) if task.weights is not None else None
+            gradient_funcs = tuple(
+                _gradient_builder(name, model, task.parameter_state, observations, targets, weights)
+                for name in task.parameter_state.free_params
+            )
+            solution = _solve_seed_from_gradients(gradient_funcs, task.seed_variant)
+        return _SeedSolveResult(variant_index=task.variant_index, solution=solution)
+    except Exception as exc:  # noqa: BLE001 - mirror the serial retry path
+        return _SeedSolveResult(variant_index=task.variant_index, solution=None, error=str(exc))
+
+
+def _dependent_defs_are_picklable(state: ParameterState) -> bool:
+    """Dependent/expression parameters carry a compiled callable that can't
+    cross a process boundary. When present, the seed solve stays in-process."""
+    return not getattr(state, "dependent_defs", None)
 
 
 def _compute_statistics(
@@ -500,43 +590,11 @@ def fit_custom_model(
             def _solve_seed(
                 seed_variant: tuple[mp.mpf, ...],
             ) -> tuple[mp.mpf, ...]:
-                # Scale convergence to the requested precision: mpmath's
-                # default maxsteps=10 silently caps iterations regardless of
-                # mp.dps, so fitting at dps=100 would otherwise stop ~10
-                # digits shy of the user's configured precision. Tie the
-                # tolerance to mp.dps and give findroot enough budget to
-                # actually converge.
-                tol = mp.mpf(10) ** (-(mp.dps - 5))
-                maxsteps = max(50, mp.dps)
-                if len(gradient_funcs) == 1:
-                    root = mp.findroot(
-                        gradient_funcs[0],
-                        seed_variant[0],
-                        tol=tol,
-                        maxsteps=maxsteps,
-                    )
-                    return (mp.mpf(root),)
+                return _solve_seed_from_gradients(gradient_funcs, seed_variant)
 
-                def system(*values: mp.mpf) -> tuple[mp.mpf, ...]:
-                    return tuple(func(*values) for func in gradient_funcs)
-
-                candidate = mp.findroot(
-                    system,
-                    tuple(seed_variant),
-                    tol=tol,
-                    maxsteps=maxsteps,
-                )
-                if isinstance(candidate, mp.matrix):
-                    candidate = tuple(candidate)
-                if not isinstance(candidate, (tuple, list)):
-                    candidate = (candidate,)
-                return tuple(mp.mpf(val) for val in candidate)
-
-            def _try_variant(seed_variant: tuple[mp.mpf, ...]) -> None:
-                nonlocal last_exc, variants_tried
-                variants_tried += 1
+            def _process_solution(solution: tuple[mp.mpf, ...]) -> None:
+                nonlocal last_exc
                 try:
-                    solution = _solve_seed(seed_variant)
                     solved_params = parameter_state.compose(solution)
                     free_param_count = len(parameter_state.free_params)
                     (
@@ -607,20 +665,88 @@ def fit_custom_model(
                 except Exception as exc:  # pragma: no cover - retry path
                     last_exc = exc
 
-            # Pass 1: historical seed variants (compatibility).
+            # Seed variants solve independently, so the expensive findroot step
+            # can run across a process pool (P1-6). Only the rebuildable-model
+            # case is safe to parallelize: model_factory closures and non-
+            # picklable dependent-parameter definitions can't cross a process
+            # boundary, so those fall back to the in-process solve. The executor
+            # itself also degrades to serial for small variant counts / few
+            # cores, so tiny fits pay no pool overhead.
+            can_parallelize = model_factory is None and _dependent_defs_are_picklable(parameter_state)
+
+            def _solve_variants(variants: list[tuple[mp.mpf, ...]]) -> list[tuple[mp.mpf, ...] | None]:
+                nonlocal variants_tried, last_exc
+                if not variants:
+                    return []
+                if not can_parallelize:
+                    solutions: list[tuple[mp.mpf, ...] | None] = []
+                    for variant in variants:
+                        variants_tried += 1
+                        try:
+                            solutions.append(_solve_seed(variant))
+                        except Exception as exc:  # noqa: BLE001 - retry path
+                            last_exc = exc
+                            solutions.append(None)
+                    return solutions
+                tasks = [
+                    _SeedSolveTask(
+                        variant_index=index,
+                        seed_variant=variant,
+                        expression=current_model.expression,
+                        variables=tuple(current_model.variables),
+                        parameters=tuple(current_model.parameters),
+                        constants=dict(current_model.constants),
+                        parameter_state=parameter_state,
+                        observations=tuple(dict(obs) for obs in observations),
+                        targets=tuple(current_targets),
+                        weights=tuple(applied_weights) if applied_weights is not None else None,
+                        precision=mp.dps,
+                    )
+                    for index, variant in enumerate(variants)
+                ]
+                executor = ParallelMapExecutor()
+                results = executor.map_pure(
+                    _solve_seed_variant_task,
+                    tasks,
+                    workload=ParallelWorkload.CPU_MPMATH,
+                )
+                variants_tried += len(variants)
+                ordered: dict[int, _SeedSolveResult] = {res.variant_index: res for res in results}
+                solutions = []
+                for index in range(len(variants)):
+                    res = ordered.get(index)
+                    if res is None or res.solution is None:
+                        if res is not None and res.error:
+                            last_exc = ValueError(res.error)
+                        solutions.append(None)
+                    else:
+                        solutions.append(res.solution)
+                return solutions
+
+            # Pass 1: historical seed variants (compatibility). Solve (possibly
+            # in parallel), then process each solution in original order so the
+            # deterministic best-χ² pick is identical to the serial path.
             attempted_keys: set[tuple[str, ...]] = set()
+            pass1_variants: list[tuple[mp.mpf, ...]] = []
             for seed_variant in _generate_seed_variants(seed):
                 attempted_keys.add(tuple(mp.nstr(v, 60) for v in seed_variant))
-                _try_variant(seed_variant)
+                pass1_variants.append(seed_variant)
+            for solution in _solve_variants(pass1_variants):
+                if solution is not None:
+                    _process_solution(solution)
 
             # Pass 2: deterministic fallback variants, only if nothing worked.
             if not candidates:
+                pass2_variants: list[tuple[mp.mpf, ...]] = []
                 for seed_variant in _generate_seed_variants_fallback(seed):
                     key = tuple(mp.nstr(v, 60) for v in seed_variant)
                     if key in attempted_keys:
                         continue
                     attempted_keys.add(key)
-                    _try_variant(seed_variant)
+                    pass2_variants.append(seed_variant)
+                for solution in _solve_variants(pass2_variants):
+                    if solution is not None:
+                        _process_solution(solution)
 
             if not candidates:
                 if last_exc:

@@ -366,18 +366,22 @@ must re-enter `precision_guard` — and the variant count is typically only 5–
 so the parallel speedup ceiling is small while the correctness blast radius (the
 precision-critical numerical core) is large.
 
-*How to actually root-fix it:* make one variant solve a **pure, top-level,
-picklable function** `solve_seed_variant(model_spec, seed, data, precision) ->
-SerializableFitComputation` — i.e. pass the *serializable model specification and
-data*, rebuild the evaluator inside the worker, and enter `precision_guard(dps)`
-there. Then map it with the existing `shared.parallel_backend.ParallelMapExecutor`
-(process mode, `min_process_tasks` gating so small variant counts stay
-sequential). That is a real, safe win — but it is a **medium refactor of the
-numerical core** (extract the closure into a pure function, make
-`_FitComputation` serializable, add a determinism test that parallel == serial
-best-χ²) and should be done *with* its own test harness, not bolted onto the
-current closure. It is deferred until that refactor is scheduled, precisely so it
-doesn't risk silent precision corruption in the meantime.
+**Root-fix applied — the medium refactor (done).** The former `_solve_seed`
+closure is now a pure, top-level, **picklable** worker: `_solve_seed_variant_task`
+takes a `_SeedSolveTask` carrying only the model *recipe* (expression + names +
+constants, not the closure-bearing `ModelSpecification`) plus the parameter
+state, data, and seed; it rebuilds the model and gradient system inside the
+worker under `precision_guard`, then root-finds. `_run_once` maps the variants
+with `ParallelMapExecutor` (`CPU_MPMATH` workload) — the executor's own
+`min_process_tasks` / worker-budget gating keeps small fits serial, and the
+solve→process split keeps the (cheap) statistics/covariance post-processing in
+the main process. Parallelism is guarded to the safe case (`model_factory is
+None`, no non-picklable dependent-parameter defs); anything else falls back to
+the in-process solve, as does a failed picklability check. A determinism test
+(`tests/test_hp_fitter_seed_parallel.py`) proves a process-pool run yields
+bit-identical solutions to a serial run, so the best-χ² pick can never diverge
+across machines. 295 fitting tests pass with the refactor; mp.dps is re-entered
+inside each worker so concurrent solves cannot corrupt each other's precision.
 
 ---
 
