@@ -14,7 +14,6 @@ from ._payload import normalize_json_payload
 from .results import AnalysisRow, analysis_rows_from_json, analysis_rows_to_json
 from .statistics_grouped import GROUPED_WORKFLOW_MODE, statistics_grouped_payload_from_snapshot
 from .statistics_time_series import TIME_SERIES_WORKFLOW_MODE, time_series_payload_from_snapshot
-from .uncertainty_budget import UncertaintyBudgetRow, extract_uncertainty_budget
 
 HISTORY_COMPARISON_SCHEMA = "datalab.history.compare.v1"
 HISTORY_COMPARISON_SCHEMA_VERSION = 1
@@ -280,6 +279,11 @@ def _build_history_comparison(request: HistoryComparisonRequest) -> HistoryCompa
             diagnostics=diagnostics,
             metadata_rows=metadata_rows,
         )
+    # Lazy import to keep the split cycle-free: history_compare_budget imports the
+    # shared formatting helpers from this module at its top level, so this import
+    # must resolve at call time (after both modules have loaded), not at module top.
+    from .history_compare_budget import _compare_budget_rows
+
     budget_rows, budget_diagnostics = _compare_budget_rows(
         left_snapshot,
         right_snapshot,
@@ -1060,124 +1064,6 @@ def _bootstrap_ci_interval_token(interval_key: tuple[str, str]) -> str:
 def _encoded_key_component(value: str) -> str:
     encoded = base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
     return encoded or "_"
-
-
-def _compare_budget_rows(
-    left: Mapping[str, Any],
-    right: Mapping[str, Any],
-    *,
-    left_label: str,
-    right_label: str,
-    left_id: str | None,
-    right_id: str | None,
-) -> tuple[list[AnalysisRow], list[AnalysisRow]]:
-    left_budget = extract_uncertainty_budget(left, source_snapshot_id=left_id or left_label)
-    right_budget = extract_uncertainty_budget(right, source_snapshot_id=right_id or right_label)
-    diagnostics = [
-        _budget_extraction_diagnostic(row, side="left", label=left_label) for row in left_budget.diagnostics
-    ]
-    diagnostics.extend(
-        _budget_extraction_diagnostic(row, side="right", label=right_label) for row in right_budget.diagnostics
-    )
-    if not left_budget.rows and not right_budget.rows:
-        return [], diagnostics
-
-    rows: list[AnalysisRow] = []
-    left_rows = {_budget_match_key(row): row for row in left_budget.rows}
-    right_rows = {_budget_match_key(row): row for row in right_budget.rows}
-    for match_key in sorted(set(left_rows) | set(right_rows)):
-        left_row = left_rows.get(match_key)
-        right_row = right_rows.get(match_key)
-        if left_row is None or right_row is None:
-            rows.append(_missing_budget_row(match_key, left_row, right_row))
-            continue
-        for field in ("value", "uncertainty", "percent", "cumulative_percent"):
-            left_raw = getattr(left_row, field)
-            right_raw = getattr(right_row, field)
-            if left_raw is None and right_raw is None:
-                continue
-            if left_raw is None or right_raw is None:
-                rows.append(_missing_budget_field(match_key, field, missing_side="left" if left_raw is None else "right"))
-                continue
-            left_value = _parse_number(left_raw, percent=field in {"percent", "cumulative_percent"})
-            right_value = _parse_number(right_raw, percent=field in {"percent", "cumulative_percent"})
-            if left_value is None or right_value is None:
-                rows.append(
-                    _diagnostic(
-                        f"budget.{_budget_match_token(match_key)}.{field}.non_numeric",
-                        (
-                            f"non-numeric budget field {field!r} on "
-                            f"{_invalid_budget_sides(left_value, right_value)} for {match_key[1]!r}"
-                        ),
-                    )
-                )
-                continue
-            _append_delta_from_values(
-                left_value,
-                right_value,
-                key=f"budget.{right_row.category}.{_budget_source_token(right_row)}.{field}",
-                label_key="history.compare.budget_delta",
-                left_raw=left_raw,
-                right_raw=right_raw,
-                left_label=left_label,
-                right_label=right_label,
-                rows=rows,
-            )
-    return rows, diagnostics
-
-
-def _missing_budget_field(match_key: tuple[str, str], field: str, *, missing_side: str) -> AnalysisRow:
-    return _diagnostic(
-        f"budget.{_budget_match_token(match_key)}.{field}.missing",
-        f"budget field {field!r} is missing on {missing_side} for {match_key[1]!r}",
-    )
-
-
-def _invalid_budget_sides(left_value: mp.mpf | None, right_value: mp.mpf | None) -> str:
-    sides: list[str] = []
-    if left_value is None:
-        sides.append("left")
-    if right_value is None:
-        sides.append("right")
-    return " and ".join(sides) or "unknown side"
-
-
-def _budget_extraction_diagnostic(row: AnalysisRow, *, side: str, label: str) -> AnalysisRow:
-    return _diagnostic(
-        f"history.compare.budget.{side}.{row.key}",
-        f"{label}: {_cell(row.value or row.message_key or row.key)}",
-        severity=row.severity,
-    )
-
-
-def _missing_budget_row(
-    match_key: tuple[str, str],
-    left_row: UncertaintyBudgetRow | None,
-    right_row: UncertaintyBudgetRow | None,
-) -> AnalysisRow:
-    side = "left" if left_row is None else "right"
-    category, source = match_key
-    return _diagnostic(
-        f"budget.{_safe_key_token(category)}.{_safe_key_token(source)}.missing",
-        f"budget row {source!r} is missing on {side}",
-    )
-
-
-def _budget_match_key(row: UncertaintyBudgetRow) -> tuple[str, str]:
-    return row.category, row.source_key or row.label_key
-
-
-def _budget_match_token(match_key: tuple[str, str]) -> str:
-    category, source = match_key
-    return f"{_safe_key_token(category)}.{_safe_key_token(source)}"
-
-
-def _budget_row_token(row: UncertaintyBudgetRow) -> str:
-    return f"{_safe_key_token(row.category)}.{_safe_key_token(row.source_key or row.label_key)}"
-
-
-def _budget_source_token(row: UncertaintyBudgetRow) -> str:
-    return _safe_key_token(row.source_key or row.label_key)
 
 
 def _safe_key_token(value: object) -> str:

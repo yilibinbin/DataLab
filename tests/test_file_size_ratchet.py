@@ -34,7 +34,7 @@ _BASELINE: dict[str, int] = {
     "shared/plotting.py": 2045,
     "app_desktop/workspace_controller.py": 2040,
     "app_desktop/window_statistics_mixin.py": 1921,
-    "datalab_core/history_compare.py": 1879,
+    "datalab_core/history_compare.py": 1765,
     "datalab_core/statistics_hypothesis.py": 1504,
     "shared/ui_specs.py": 1203,
     "datalab_core/statistics_grouped.py": 1200,
