@@ -1,270 +1,71 @@
+"""LaTeX-facing view over the single shared safe-eval engine.
+
+Historically this module carried a byte-for-byte copy of
+``shared.expression_engine`` so LaTeX callers could import ``safe_eval`` and its
+whitelist without depending on the shared package.  The duplication meant a
+math function added to one allowlist silently drifted from the other (P0-3).
+
+There is now exactly one implementation: everything is re-exported from
+``shared.expression_engine`` so the two modules resolve to the *same* objects
+(the allowlists are identical by identity, verified by an engine-parity test).
+The only LaTeX-specific behavior — ``format_latex_formula`` actually rendering a
+display string — is overridden below to route through the render service, which
+the LaTeX-independent shared engine deliberately leaves as a passthrough.
+"""
+
 from __future__ import annotations
-
-import ast
-import re
-from typing import Any, Callable, cast
-
-from mpmath import mp
 
 from datalab_latex import formula_render_service
 
-# Canonical bilingual message helpers live in shared.bilingual so every
-# frontend/worker/scientific module resolves _dual_msg to the same function
-# object. Re-exported here for backward compatibility — data_extrapolation_
-# latex_latest auto-re-exports this module's public symbols, so existing
-# callers of `from data_extrapolation_latex_latest import _dual_msg` keep
-# working without change.
+# Bilingual helpers re-exported for backward compatibility (data_extrapolation_
+# latex_latest auto-re-exports this module's public symbols). Import from their
+# origin so mypy --strict sees them as explicit exports.
 from shared.bilingual import _dual_msg, _split_dual  # noqa: F401  (re-export)
 
+# The single source of truth. Re-export the full public + private surface so
+# existing callers (fitting.symbolic_export imports _ALLOWED_FUNCTIONS,
+# _ALLOWED_CONSTANTS, _ast_metrics, _normalize_expression; several tests reach
+# for other underscore-prefixed helpers) keep resolving to the same objects.
+from shared.expression_engine import (  # noqa: F401  (re-export)
+    MAX_AST_DEPTH,
+    MAX_AST_NODES,
+    _ALLOWED_CONSTANTS,
+    _ALLOWED_FUNCTIONS,
+    _ast_metrics,
+    _detect_lowercase_allowed_function_calls,
+    _evaluate_ast,
+    _mp,
+    _mp_numeric_literal,
+    _normalize_expression,
+    _resolve_callable,
+    _resolve_name,
+    list_allowed_functions,
+    safe_eval,
+)
 
-MAX_AST_DEPTH = 400
-MAX_AST_NODES = 50_000
-
-
-def _mp(value: object) -> mp.mpf:
-    """Convert arbitrary values to mp.mpf with minimal precision loss."""
-    if isinstance(value, mp.mpf):
-        return value
-    if isinstance(value, (int, float)):
-        return mp.mpf(value)
-    try:
-        return mp.mpf(value)
-    except Exception:
-        return mp.mpf(str(value))
-
-
-_ALLOWED_CONSTANTS: dict[str, mp.mpf] = {
-    "Pi": mp.pi,
-    "E": mp.e,
-}
-
-_ALLOWED_FUNCTIONS: dict[str, Callable[..., Any]] = {
-    # Basic
-    "Sin": mp.sin,
-    "Cos": mp.cos,
-    "Tan": mp.tan,
-    "Asin": mp.asin,
-    "Acos": mp.acos,
-    "Atan": mp.atan,
-    "Sinh": mp.sinh,
-    "Cosh": mp.cosh,
-    "Tanh": mp.tanh,
-    "Asinh": mp.asinh,
-    "Acosh": mp.acosh,
-    "Atanh": mp.atanh,
-    # Exponential/log
-    "Exp": mp.exp,
-    "Log": mp.log,
-    "Ln": mp.log,
-    "Log10": mp.log10,
-    "Sqrt": mp.sqrt,
-    "Power": mp.power,
-    # Common
-    "Abs": mp.fabs,
-    "Erf": mp.erf,
-    "Gamma": mp.gamma,
-    # Special
-    "Zeta": mp.zeta,
-    "Hyp0f1": mp.hyp0f1,
-    "Hyp1f1": mp.hyp1f1,
-    "Hyp2f1": mp.hyp2f1,
-    "PolyLog": mp.polylog,
-    "BesselJ": mp.besselj,
-    "BesselY": mp.bessely,
-    "Airy": mp.airyai,
-}
-
-_BINARY_OPERATORS: dict[
-    type[ast.operator], Callable[[Any, Any], Any]
-] = {
-    ast.Add: lambda a, b: a + b,
-    ast.Sub: lambda a, b: a - b,
-    ast.Mult: lambda a, b: a * b,
-    ast.Div: lambda a, b: a / b,
-    ast.Pow: lambda a, b: mp.power(a, b),
-    ast.Mod: lambda a, b: a % b,
-}
-
-_UNARY_OPERATORS: dict[
-    type[ast.unaryop], Callable[[Any], Any]
-] = {
-    ast.UAdd: lambda a: a,
-    ast.USub: lambda a: -a,
-}
-
-
-def list_allowed_functions() -> dict[str, list[str]]:
-    """Public helper for UIs: report the allowlist used by safe_eval."""
-    return {
-        "functions": sorted(_ALLOWED_FUNCTIONS.keys(), key=str.lower),
-        "constants": sorted(_ALLOWED_CONSTANTS.keys(), key=str.lower),
-    }
-
-
-def _normalize_expression(expr: str) -> str:
-    """Convert Mathematica-style syntax to a Python-evaluable expression."""
-    # Replace Mathematica-style brackets: f[x] -> f(x)
-    normalized = re.sub(r"([A-Za-z][A-Za-z0-9_]*)\s*\[", r"\1(", expr)
-    normalized = normalized.replace("]", ")")
-    # Caret to Python power
-    normalized = normalized.replace("^", "**")
-    return normalized
-
-
-def _ast_metrics(root: ast.AST) -> tuple[int, int]:
-    max_depth = 0
-    node_count = 0
-    stack: list[tuple[ast.AST, int]] = [(root, 1)]
-    while stack:
-        node, depth = stack.pop()
-        node_count += 1
-        if depth > max_depth:
-            max_depth = depth
-        for child in ast.iter_child_nodes(node):
-            stack.append((child, depth + 1))
-    return max_depth, node_count
-
-
-def _detect_lowercase_allowed_function_calls(expression: str) -> set[str]:
-    """Return lowercase function names that match the allowlist but are not capitalized."""
-    allowed_lower = {name.lower() for name in _ALLOWED_FUNCTIONS}
-    matches = re.findall(r"\b([a-z][a-zA-Z0-9_]*)\s*[\[(]", expression or "")
-    return {name for name in matches if name.lower() in allowed_lower}
-
-
-def _resolve_name(name: str, variables: dict[str, object]) -> object | None:
-    """Resolve a bare name to a variable/constant/function, or None if unknown.
-
-    Returns ``object | None`` (not ``Any``) so callers must check the
-    ``None`` sentinel; the single widening point is the ``cast(...)``
-    in ``_resolve_callable`` after its ``callable()`` guard.
-    """
-    if name in variables:
-        return variables[name]
-    if name in _ALLOWED_CONSTANTS:
-        # mp.mpf is Any (no stubs); cast restores the narrower contract.
-        return cast(object, _ALLOWED_CONSTANTS[name])
-    if name in _ALLOWED_FUNCTIONS:
-        return cast(object, _ALLOWED_FUNCTIONS[name])
-    return None
-
-
-def safe_eval(expression: str, var_dict: dict[str, object]) -> Any:
-    """
-    Safely evaluate a mathematical expression with given variables.
-
-    Notes:
-    - Uses an AST allowlist (no attribute access, no kwargs, no comprehensions).
-    - Enforces a maximum AST depth/node count to prevent recursion/CPU abuse.
-    """
-    bad_calls = _detect_lowercase_allowed_function_calls(expression)
-    if bad_calls:
-        bad_names = ", ".join(sorted(bad_calls))
-        raise ValueError(
-            _dual_msg(
-                f"函数名需首字母大写（Mathematica 风格），检测到: {bad_names}",
-                f"Function names must be capitalized (Mathematica style), found: {bad_names}",
-            )
-        )
-
-    expr = _normalize_expression(expression)
-    try:
-        tree = ast.parse(expr, mode="eval")
-    except (SyntaxError, RecursionError, MemoryError) as exc:
-        # RecursionError is raised by CPython's ast.parse when the expression
-        # tree exceeds the interpreter recursion limit (e.g. pathological
-        # 10k+ term sums); MemoryError can occur on extremely large inputs.
-        # Surface both as a clean bilingual ValueError rather than leaking
-        # an untrusted RecursionError up the stack.
-        raise ValueError(
-            _dual_msg(
-                f"无法解析表达式 '{expression}': {exc}",
-                f"Failed to parse expression '{expression}': {exc}",
-            )
-        ) from exc
-
-    depth, nodes = _ast_metrics(tree)
-    if depth > MAX_AST_DEPTH or nodes > MAX_AST_NODES:
-        raise ValueError(
-            _dual_msg(
-                "表达式过于复杂（嵌套过深或节点过多）。请简化表达式。",
-                "Expression is too complex (nesting too deep or too many nodes). Please simplify it.",
-            )
-        )
-
-    variables = {name: _mp(value) for name, value in (var_dict or {}).items()}
-    return _evaluate_ast(tree.body, variables, expr)
-
-
-def _evaluate_ast(node: ast.AST, variables: dict[str, object], source: str) -> Any:
-    if isinstance(node, ast.Expression):
-        return _evaluate_ast(node.body, variables, source)
-    if isinstance(node, ast.Attribute):
-        raise ValueError(_dual_msg("不支持的属性访问。", "Attribute access is not supported."))
-    if isinstance(node, ast.Constant):
-        if isinstance(node.value, bool):
-            raise ValueError(_dual_msg("不支持的常量类型。", "Unsupported constant type."))
-        if isinstance(node.value, (int, float)):
-            return _mp_numeric_literal(node, source)
-        raise ValueError(_dual_msg("不支持的常量类型。", "Unsupported constant type."))
-    if isinstance(node, ast.Name):
-        resolved = _resolve_name(node.id, variables)
-        if resolved is not None:
-            return resolved
-        raise ValueError(_dual_msg(f"未知变量或函数: {node.id}", f"Unknown variable or function: {node.id}"))
-    if isinstance(node, ast.BinOp):
-        left = _evaluate_ast(node.left, variables, source)
-        right = _evaluate_ast(node.right, variables, source)
-        bin_op_type = type(node.op)
-        if bin_op_type in _BINARY_OPERATORS:
-            return _BINARY_OPERATORS[bin_op_type](left, right)
-        raise ValueError(_dual_msg(f"不支持的二元操作: {bin_op_type}", f"Unsupported binary operator: {bin_op_type}"))
-    if isinstance(node, ast.UnaryOp):
-        operand = _evaluate_ast(node.operand, variables, source)
-        un_op_type = type(node.op)
-        if un_op_type in _UNARY_OPERATORS:
-            return _UNARY_OPERATORS[un_op_type](operand)
-        raise ValueError(_dual_msg(f"不支持的单目操作: {un_op_type}", f"Unsupported unary operator: {un_op_type}"))
-    if isinstance(node, ast.Call):
-        func = _resolve_callable(node.func, variables)
-        if node.keywords:
-            raise ValueError(_dual_msg("不支持带关键字参数的函数。", "Keyword arguments are not supported."))
-        args = [_evaluate_ast(arg, variables, source) for arg in node.args]
-        return func(*args)
-    raise ValueError(_dual_msg(f"不支持的语法节点: {type(node)}", f"Unsupported syntax node: {type(node)}"))
-
-
-def _mp_numeric_literal(node: ast.Constant, source: str) -> mp.mpf:
-    """Convert numeric literals from source text, not Python's rounded AST value."""
-    if isinstance(node.value, int):
-        return _mp(node.value)
-    text = ast.get_source_segment(source, node)
-    if text:
-        return mp.mpf(text.replace("_", ""))
-    raise ValueError(
-        _dual_msg(
-            "无法恢复数值字面量的原始文本，已拒绝避免精度损失。",
-            "Numeric literal source text is unavailable; refusing to avoid precision loss.",
-        )
-    )
-
-
-def _resolve_callable(
-    func_node: ast.AST, variables: dict[str, object]
-) -> Callable[..., Any]:
-    if isinstance(func_node, ast.Name):
-        func_value = _resolve_name(func_node.id, variables)
-        if func_value is not None and callable(func_value):
-            # ``func_value`` is ``Any`` because the lookup tables hold
-            # untyped mpmath callables — the ``callable()`` check has
-            # narrowed the runtime type but mypy doesn't know that.
-            # Hence the explicit cast to satisfy the return contract.
-            return cast(Callable[..., Any], func_value)
-    raise ValueError(_dual_msg(f"不支持的函数调用: {ast.dump(func_node)}", f"Unsupported function call: {ast.dump(func_node)}"))
+# Explicit re-export list so mypy --strict treats these names as exported
+# attributes of this module (consumers import several of them by name).
+__all__ = [
+    "MAX_AST_DEPTH",
+    "MAX_AST_NODES",
+    "_ALLOWED_CONSTANTS",
+    "_ALLOWED_FUNCTIONS",
+    "_ast_metrics",
+    "_detect_lowercase_allowed_function_calls",
+    "_dual_msg",
+    "_evaluate_ast",
+    "_mp",
+    "_mp_numeric_literal",
+    "_normalize_expression",
+    "_resolve_callable",
+    "_resolve_name",
+    "_split_dual",
+    "format_latex_formula",
+    "list_allowed_functions",
+    "safe_eval",
+]
 
 
 def format_latex_formula(formula_str: str) -> str:
-    """
-    Format a formula string for LaTeX display through the shared render service.
-    """
+    """Format a formula string for LaTeX display through the shared render service."""
     return formula_render_service.format_formula_latex(formula_str)

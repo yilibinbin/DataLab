@@ -90,6 +90,33 @@ def test_expression_registry_normalization_matches_consumers() -> None:
     assert expression_to_latex(source) == r"\sin\left(x\right)^{2} + \sqrt{A}"
 
 
+def test_latex_engine_is_a_shim_over_the_shared_engine() -> None:
+    # P0-3: the two safe-eval engines were collapsed to one. The LaTeX-facing
+    # module must now re-export the *same objects* from shared.expression_engine
+    # (not a copy), so an allowlist change can never drift between the two.
+    import datalab_latex.expression_engine as latex_engine
+    import shared.expression_engine as shared_engine
+
+    for name in (
+        "safe_eval",
+        "list_allowed_functions",
+        "_ALLOWED_FUNCTIONS",
+        "_ALLOWED_CONSTANTS",
+        "_normalize_expression",
+        "_ast_metrics",
+        "_detect_lowercase_allowed_function_calls",
+        "MAX_AST_DEPTH",
+        "MAX_AST_NODES",
+    ):
+        assert getattr(latex_engine, name) is getattr(shared_engine, name), name
+
+    # The one deliberate difference: LaTeX rendering routes through the render
+    # service, while the shared engine stays LaTeX-independent (passthrough).
+    assert latex_engine.format_latex_formula is not shared_engine.format_latex_formula
+    assert latex_engine.format_latex_formula("sin(x)+a*x^2").strip()
+    assert shared_engine.format_latex_formula("sin(x)+a*x^2") == "sin(x)+a*x^2"
+
+
 def test_lowercase_allowed_function_call_detection_matches_engines() -> None:
     from datalab_latex.expression_engine import _detect_lowercase_allowed_function_calls as latex_detect
     from shared.expression_engine import _detect_lowercase_allowed_function_calls as shared_detect
