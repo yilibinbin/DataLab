@@ -331,19 +331,23 @@ channel), (c) add pickle round-trips of mpmath objects on every request, and (d)
 contradict a documented, tested design. Net: more code, more failure modes, no
 real concurrency gain over `-w N`.
 
-*How to actually root-fix it (if single-worker concurrency is ever a hard
-requirement):* the true fix is **not** an in-worker pool — it is to make the
-compute itself not depend on process-global `mp.dps`. Two real options:
-1. **Deployment (recommended, zero code):** document `-w $(nproc)` as the
-   default and add an autoscaling note; this *is* the root fix for "one user's
-   fit blocks another" because each user lands on a free worker.
-2. **Code (only if you must serve heavy concurrency from one process):** replace
-   mpmath's global `mp.dps` with **per-call `mpf` contexts** (`mpmath.mp` →
-   thread-local `mpmath.workprec` contexts, or migrate hot paths to `gmpy2`
-   contexts that are not process-global). That removes the *reason* the lock
-   exists, letting threads run truly concurrently. This is an XL change touching
-   every `precision_guard` site and is only worth it if horizontal scaling is
-   off the table — which for this tool it is not.
+**Root-fix applied — deployment layer (done).** Added `gunicorn.conf.py`, which
+sizes workers from the CPU count (`2*cores+1`, ceiling 16) with a **hard floor of
+2**, overridable via `WEB_CONCURRENCY`. Both deployment guides now recommend
+`gunicorn -c gunicorn.conf.py` as the primary command and explain *why* multiple
+worker processes (not threads) are the concurrency mechanism for a process-global
+`mp.dps`. The systemd unit also sets `DATALAB_TRUST_PROXY_HEADERS=1` so the
+per-IP rate limiter sees real client IPs behind the documented nginx proxy. The
+floor-of-2 is the load-bearing invariant — it makes "one user's long fit blocks
+everyone" structurally impossible out of the box — and is pinned by
+`tests/test_gunicorn_config.py`.
+
+*If single-process heavy concurrency were ever a hard requirement* (it is not, for
+a tool that scales horizontally), the deeper code fix would be to drop mpmath's
+process-global `mp.dps` for per-call contexts (`mpmath.workprec`, or `gmpy2`
+contexts) so threads run truly concurrently — an XL change touching every
+`precision_guard` site. Not pursued: the deployment fix fully addresses the
+concern.
 
 ### P1-6 — parallelize seed-variant solves: **not recommended without a refactor**
 
