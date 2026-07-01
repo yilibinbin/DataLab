@@ -512,7 +512,11 @@ def test_web_post_fit_route_renders_comparison_table_without_single_fit_cards(cl
     assert "Linear" in html
     assert "COMPARISON_LATEX" in html
     assert 'serverFitCsvData = "candidate_id,order\\nlinear,1\\n";' in html
-    assert "fitCsvFilename = 'fitting_comparison_results.csv';" in html
+    # The template resolves the CSV filename client-side: fitCsvIsComparison is
+    # rendered true for a comparison result, and the ternary then selects the
+    # comparison filename. Assert both halves rather than a server-side literal.
+    assert "const fitCsvIsComparison = true;" in html
+    assert "fitCsvIsComparison ? 'fitting_comparison_results.csv' : 'fit_results.csv'" in html
     assert 'data-i18n="fit.paramsLabel"' not in html
     assert 'data-i18n="fit.metricsLabel"' not in html
     assert "winner" not in html.lower()

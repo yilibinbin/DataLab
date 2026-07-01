@@ -317,6 +317,9 @@ Internal-only allowlist for this baseline:
   P0.1 tests only to freeze current behavior before migration.
 - No new P1/P2 statistics metrics, public result keys, GUI controls, or
   visible output behavior are allowed in P0.1.
+- The release gate treats any pre-existing untracked test files as known prior
+  work (not P0.1 regressions); every test path this matrix references must be
+  tracked in git.
 
 ### P0.5 Shared Statistics Serialization Routing
 
