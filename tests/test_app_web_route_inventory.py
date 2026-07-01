@@ -21,6 +21,7 @@ EXPECTED_ROUTES = (
     ("/docs/<page>/", ("GET",), "docs.docs_page"),
     ("/error", ("GET", "POST"), "pages.error"),
     ("/fit", ("GET", "POST"), "pages.fit"),
+    ("/roots", ("GET", "POST"), "pages.root_solving"),
     ("/stats", ("GET", "POST"), "pages.stats"),
 )
 

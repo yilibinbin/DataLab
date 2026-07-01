@@ -45,6 +45,10 @@ SAMPLE_STATS_DATA = """A
 1152842742.721(9)
 """
 
+SAMPLE_ROOT_EQUATIONS = "x**2 - 2"
+
+SAMPLE_ROOT_UNKNOWNS = "x = 1"
+
 
 def _error_key_for_exception(exc: Exception) -> str:
     msg = str(exc) or ""
@@ -93,6 +97,12 @@ def _run_statistics(data_text, form, *, lang: str):
     from ..logic.statistics import _run_statistics as run
 
     return run(data_text, form, lang=lang)
+
+
+def _run_root_solving(form, *, lang: str):
+    from ..logic.root_solving import _run_root_solving as run
+
+    return run(form, lang=lang)
 
 
 @bp.route("/", methods=["GET", "POST"])
@@ -273,3 +283,32 @@ def stats():
         except Exception as exc:  # pragma: no cover
             flash(f"i18n:{_error_key_for_exception(exc)}", "error")
     return render_template("stats.html", **context)
+
+
+@bp.route("/roots", methods=["GET", "POST"])
+@csrf_protect
+def root_solving():
+    context: dict[str, object] = {
+        "sample_equations": SAMPLE_ROOT_EQUATIONS,
+        "sample_unknowns": SAMPLE_ROOT_UNKNOWNS,
+        "result": None,
+        "warnings": [],
+        "active_page": "root_solving",
+        "root_mode": request.form.get("root_mode", "scalar"),
+        "root_uncertainty_method": request.form.get("root_uncertainty_method", "off"),
+    }
+    if request.method == "POST":
+        form = request.form
+        if not (form.get("root_equations") or "").strip():
+            flash("i18n:errors.missing_equations", "error")
+            return render_template("roots.html", **context)
+        if not (form.get("root_unknowns") or "").strip():
+            flash("i18n:errors.missing_unknowns", "error")
+            return render_template("roots.html", **context)
+        try:
+            lang = get_lang()
+            result = _run_root_solving(form, lang=lang)
+            context.update(result=result, warnings=result.warnings)
+        except Exception as exc:  # pragma: no cover
+            flash(f"i18n:{_error_key_for_exception(exc)}", "error")
+    return render_template("roots.html", **context)

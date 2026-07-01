@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow" data-i18n="roots.eyebrow">求根 / 方程组</p>
+    <h1 data-i18n="roots.title">高精度求解单个方程或方程组的根。</h1>
+    <p class="lede" data-i18n="roots.subtitle">支持单方程（标量）与方程组（联立）求解，可选不确定度传播，基于 mpmath 高精度。</p>
+    <div class="hero-actions">
+      <span class="chip" data-i18n="roots.chip1">标量 / 联立</span>
+      <span class="chip" data-i18n="roots.chip2">mpmath 精度</span>
+      <span class="chip" data-i18n="roots.chip3">不确定度传播</span>
+    </div>
+  </div>
+</section>
+
+<form class="panel" method="post" novalidate>
+  <!-- CSRF Protection -->
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="label" data-i18n="roots.equationsLabel">方程</div>
+          <div class="muted" data-i18n="roots.equationsHint">每行一个方程，写成 <code>= 0</code> 的左端表达式（如 <code>x**2 - 2</code>）。</div>
+        </div>
+      </div>
+      <label class="field-label" for="root_equations" data-i18n="roots.equationsLabel">方程</label>
+      <textarea id="root_equations" name="root_equations" rows="4" data-i18n-placeholder="roots.equationsPlaceholder" placeholder="x**2 - 2">{{ request.form.get('root_equations', sample_equations) }}</textarea>
+      <div class="hint" data-i18n="roots.equationsExample">方程组示例：<code>x + y - 3</code> 与 <code>x - y - 1</code>（每行一个）。</div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="label" data-i18n="roots.unknownsLabel">未知量</div>
+          <div class="muted" data-i18n="roots.unknownsHint">每行一个未知量与初值，格式 <code>名称 = 初值</code>。</div>
+        </div>
+      </div>
+      <label class="field-label" for="root_unknowns" data-i18n="roots.unknownsLabel">未知量</label>
+      <textarea id="root_unknowns" name="root_unknowns" rows="4" data-i18n-placeholder="roots.unknownsPlaceholder" placeholder="x = 1">{{ request.form.get('root_unknowns', sample_unknowns) }}</textarea>
+      <div class="hint" data-i18n="roots.unknownsExample">示例：<code>x = 1</code>；方程组则每个未知量一行，如 <code>x = 0</code> 与 <code>y = 0</code>。</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="label" data-i18n="roots.modeLabel">求解模式</div>
+          <div class="muted" data-i18n="roots.modeHint">选择单方程或方程组求解。</div>
+        </div>
+      </div>
+      <label class="field-label" for="root_mode" data-i18n="roots.modeLabel">求解模式</label>
+      <select id="root_mode" name="root_mode">
+        <option value="scalar" {% if root_mode == 'scalar' %}selected{% endif %} data-i18n="roots.modeScalar">单方程（标量）</option>
+        <option value="system" {% if root_mode == 'system' %}selected{% endif %} data-i18n="roots.modeSystem">方程组（联立）</option>
+      </select>
+
+      <label class="field-label" for="root_uncertainty_method" data-i18n="roots.uncertaintyLabel">不确定度方法</label>
+      <select id="root_uncertainty_method" name="root_uncertainty_method">
+        <option value="off" {% if root_uncertainty_method == 'off' %}selected{% endif %} data-i18n="roots.uncertaintyOff">关闭</option>
+        <option value="taylor" {% if root_uncertainty_method == 'taylor' %}selected{% endif %} data-i18n="roots.uncertaintyTaylor">泰勒展开</option>
+        <option value="monte_carlo" {% if root_uncertainty_method == 'monte_carlo' %}selected{% endif %} data-i18n="roots.uncertaintyMonteCarlo">蒙特卡洛</option>
+      </select>
+      <div class="hint" data-i18n="roots.uncertaintyHint">仅当方程含带不确定度的常量时生效。</div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="label" data-i18n="extrap.sectionPrecision">数值精度与输出</div>
+          <div class="muted" data-i18n="extrap.precisionHint">精度控制和显示参数。</div>
+        </div>
+      </div>
+      <label class="field-label" for="root_mp_precision" data-i18n="extrap.mpPrecisionLabel">多精度 mp.dps（可选）</label>
+      <input id="root_mp_precision" name="root_mp_precision" type="number" placeholder="16" value="{{ request.form.get('root_mp_precision', '') }}">
+
+      <label class="field-label" for="root_display_digits" data-i18n="roots.displayDigitsLabel">结果显示位数</label>
+      <input id="root_display_digits" name="root_display_digits" type="number" placeholder="12" value="{{ request.form.get('root_display_digits', '') }}">
+
+      <label class="field-label" for="root_uncertainty_digits" data-i18n="extrap.resultDigitsLabel">结果不确定度有效位数</label>
+      <input id="root_uncertainty_digits" name="root_uncertainty_digits" type="number" placeholder="1" value="{{ request.form.get('root_uncertainty_digits', '') }}">
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" type="submit" data-i18n="roots.btnSubmit">求解方程</button>
+    <span class="muted" data-i18n="roots.submitHint">从给定初值出发数值求根。</span>
+  </div>
+</form>
+
+{% if result %}
+<section class="results">
+  <div class="results-header">
+    <div>
+      <h2><span data-i18n="roots.resultsTitlePrefix">求根结果 · 模式：</span>{{ result.mode }}</h2>
+      <p class="muted">
+        mp.dps: {% if result.mp_precision %}{{ result.mp_precision }}{% else %}<span data-i18n="label.default">默认</span>{% endif %}
+        {% if result.backend %} · <span data-i18n="roots.backend">后端</span>: {{ result.backend }}{% endif %}
+      </p>
+    </div>
+    {% if warnings %}
+      <div class="pill warn"><span data-i18n="extrap.warningCount">提示</span> {{ warnings|length }}</div>
+    {% endif %}
+  </div>
+
+  {% if warnings %}
+    <ul class="warning-list">
+      {% for w in warnings %}
+        <li data-dual-text="{{ w }}">{{ w }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if result.failure %}
+    <div class="flash error" data-dual-text="{{ result.failure }}">{{ result.failure }}</div>
+  {% endif %}
+
+  {% if result.roots %}
+  <div class="grid">
+    <div class="card">
+      <div class="card-header"><div class="label" data-i18n="roots.rootsLabel">根</div></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th data-i18n="roots.colName">未知量</th>
+              <th data-i18n="roots.colValue">值</th>
+              <th data-i18n="roots.colUncertainty">不确定度</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for root in result.roots %}
+              <tr>
+                <td>{{ root.name }}</td>
+                <td class="strong">{{ root.value }}</td>
+                <td>{{ root.uncertainty }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="latex-block">
+    <div class="label" data-i18n="roots.latexLabel">LaTeX</div>
+    <div class="md-output"><pre><button type="button" class="copy-btn" data-i18n="btn.copyCode" onclick="var btn=this;navigator.clipboard.writeText(btn.parentElement.querySelector('code').textContent).then(function(){var orig=btn.textContent;btn.textContent='✓';setTimeout(function(){btn.textContent=orig},1500)}).catch(function(e){console.warn('Clipboard failed:',e)})">复制</button><code class="lang-latex">{{ result.latex_text }}</code></pre></div>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

@@ -33,6 +33,7 @@
       <a href="{{ url_for('pages.error') }}" class="{% if active_page == 'error' %}active{% endif %}" data-i18n="nav.uncertainty">误差传递</a>
       <a href="{{ url_for('pages.fit') }}" class="{% if active_page == 'fit' %}active{% endif %}" data-i18n="nav.fitting">拟合</a>
       <a href="{{ url_for('pages.stats') }}" class="{% if active_page == 'stats' %}active{% endif %}" data-i18n="nav.statistics">统计</a>
+      <a href="{{ url_for('pages.root_solving') }}" class="{% if active_page == 'root_solving' %}active{% endif %}" data-i18n="nav.rootSolving">求根</a>
       <a href="{{ url_for('docs.docs_index') }}" data-docs-entry="1" class="{% if active_page == 'docs' %}active{% endif %} muted" data-i18n-title="nav.docsTitle" title="查看文档" data-i18n="nav.docs">文档</a>
     </nav>
     <div class="top-actions">
