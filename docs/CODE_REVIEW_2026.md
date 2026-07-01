@@ -383,6 +383,30 @@ bit-identical solutions to a serial run, so the best-χ² pick can never diverge
 across machines. 295 fitting tests pass with the refactor; mp.dps is re-entered
 inside each worker so concurrent solves cannot corrupt each other's precision.
 
+### P2-5 — dependency inversions: **partially untangled + guarded**
+
+The `datalab_latex → datalab_core` inversion had three edges. A workflow recon
+mapped them and corrected a key point: the inverted functions are *also* called
+inside `datalab_core`, so their destination is `shared/`, not `datalab_latex/`.
+
+- **Stage A (done):** the grouped and matrix renderers re-ran
+  `validate_statistics_*_payload`, which the core already runs upstream before the
+  payload reaches the renderer. Dropped the redundant re-validation — **2 of 3
+  edges removed** with zero behavior change.
+- **Stage B (deferred, tracked):** the last edge is `latex_tables_common.py`
+  importing five UI-neutral statistics *display* helpers. Relocating them to
+  `shared/statistics_display.py` is a ~250-line move of core schema tables
+  (`_STATISTICS_METRIC_ROWS` and its derived constants have 40+ internal callers),
+  so it is a real medium refactor with re-export ripple and no functional benefit
+  (the edge is directional-only — no cycle, no failing test, no mypy error). It is
+  documented as a known exception and left for a focused follow-up.
+- **Guard (done):** `tests/test_layering_latex_no_core_imports.py` statically
+  asserts datalab_latex does not import datalab_core, with `latex_tables_common`
+  the single tracked exception, so the boundary can't silently erode further.
+- `statistics_utils.py` (repo root) is reclassified in `docs/ARCHITECTURE.md` as a
+  frontend-glue bridge (a LaTeX generator consuming both core + latex), not
+  compute — its name predates the layering split.
+
 ---
 
 ## Appendix A — External cross-check: Codex (gpt-5.5)
