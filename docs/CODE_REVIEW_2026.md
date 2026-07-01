@@ -303,6 +303,80 @@ Effort key: S ≤ ½ day · M ≈ 1–3 days · L ≈ 1–2 weeks · XL = multi-
 
 ---
 
+## Execution log & two deliberate non-executions (P1-2, P1-6)
+
+**P0 — all 6 done** (`050df51`, `997cf96`, `3693169`, `f84960d`, `10ee11c`, `0b72c62`).
+**P1 — P1-1/P1-3/P1-4/P1-5/P1-7/P1-8/P1-9/P1-10 done.** P1-2 and P1-6 were
+deliberately **not** implemented as written. Both concerns are real but the
+roadmap wording prescribes a fix that is worse than the disease; the honest
+engineering call is documented here, with what a genuine ("根治") fix would take.
+
+### P1-2 — web mpmath process pool: **not recommended as specified**
+
+*The finding (Gemini):* `app_web/security.py` guards all mpmath compute with a
+process-global `_mpmath_lock` (`mpmath_synchronized`), so within one WSGI worker
+only one fit runs at a time — a long fit blocks other users *in that worker*.
+
+*Why the prescribed fix is wrong:* the codebase **already** solves this by the
+standard mechanism, and says so. `app_web/blueprints/sse.py` documents it
+verbatim — *"Real deployments scale by adding worker processes, not threads"* —
+and `docs/DATALAB_WEB_GUIDE.md` ships the production command `gunicorn -w 4`
+(and `-w 9` under load). Each gunicorn worker is a separate OS process with its
+**own** `mp.dps`; there is no cross-process lock. The per-worker lock is
+*correct* — it protects the one piece of process-global state mpmath exposes.
+Dropping an in-process `ProcessPoolExecutor` inside each worker would (a)
+duplicate what `-w N` already provides, (b) break SSE progress streaming (you
+can't stream `mp.workdps` progress out of a pool subprocess without a second IPC
+channel), (c) add pickle round-trips of mpmath objects on every request, and (d)
+contradict a documented, tested design. Net: more code, more failure modes, no
+real concurrency gain over `-w N`.
+
+*How to actually root-fix it (if single-worker concurrency is ever a hard
+requirement):* the true fix is **not** an in-worker pool — it is to make the
+compute itself not depend on process-global `mp.dps`. Two real options:
+1. **Deployment (recommended, zero code):** document `-w $(nproc)` as the
+   default and add an autoscaling note; this *is* the root fix for "one user's
+   fit blocks another" because each user lands on a free worker.
+2. **Code (only if you must serve heavy concurrency from one process):** replace
+   mpmath's global `mp.dps` with **per-call `mpf` contexts** (`mpmath.mp` →
+   thread-local `mpmath.workprec` contexts, or migrate hot paths to `gmpy2`
+   contexts that are not process-global). That removes the *reason* the lock
+   exists, letting threads run truly concurrently. This is an XL change touching
+   every `precision_guard` site and is only worth it if horizontal scaling is
+   off the table — which for this tool it is not.
+
+### P1-6 — parallelize seed-variant solves: **not recommended without a refactor**
+
+*The finding:* `fitting/hp_fitter.py::_run_once` tries N deterministic seed
+variants sequentially (`_generate_seed_variants`, then a fallback set) and keeps
+the best by χ². These solves are independent, so "parallelize them" looks free.
+
+*Why it isn't free:* the per-variant solve is a **closure** (`_solve_seed` /
+`_try_variant`) that captures `gradient_funcs` (which wrap compiled model
+evaluators), mutates `candidates`/`last_exc` via `nonlocal`, and returns
+`_FitComputation` objects holding mpmath values and closures. That state is
+**not picklable**, so a `ProcessPoolExecutor` can't take it without a rewrite;
+and a *thread* pool buys nothing because mpmath is CPU-bound under the GIL. On
+top of that, `mp.findroot` reads process-global `mp.dps`, so any process worker
+must re-enter `precision_guard` — and the variant count is typically only 5–15,
+so the parallel speedup ceiling is small while the correctness blast radius (the
+precision-critical numerical core) is large.
+
+*How to actually root-fix it:* make one variant solve a **pure, top-level,
+picklable function** `solve_seed_variant(model_spec, seed, data, precision) ->
+SerializableFitComputation` — i.e. pass the *serializable model specification and
+data*, rebuild the evaluator inside the worker, and enter `precision_guard(dps)`
+there. Then map it with the existing `shared.parallel_backend.ParallelMapExecutor`
+(process mode, `min_process_tasks` gating so small variant counts stay
+sequential). That is a real, safe win — but it is a **medium refactor of the
+numerical core** (extract the closure into a pure function, make
+`_FitComputation` serializable, add a determinism test that parallel == serial
+best-χ²) and should be done *with* its own test harness, not bolted onto the
+current closure. It is deferred until that refactor is scheduled, precisely so it
+doesn't risk silent precision corruption in the meantime.
+
+---
+
 ## Appendix A — External cross-check: Codex (gpt-5.5)
 
 Codex verified all 29 swarm HIGH/MEDIUM findings (CONFIRM/PARTIAL/REFUTE) and added 6 missed findings. Full table in the review body above (confidence marks). **One Codex error was caught and corrected by direct verification:** Codex REFUTED the "12 mypy errors" claim, but a direct `mypy` run confirms exactly 12 errors — the swarm was right (see §1 Verification note).
