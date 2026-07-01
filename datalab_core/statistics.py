@@ -2513,7 +2513,7 @@ def _snapshot_numeric_text(value: Any, *, precision_digits: int | None) -> str |
         raise TypeError("JSON floats are not allowed in statistics snapshot numeric values.")
     try:
         digits = max(1, precision_digits or mp.mp.dps)
-        with mp.workdps(digits):
+        with precision_guard(digits):
             text = str(mp.nstr(mp.mpf(value), n=digits))
     except Exception:
         text = str(value)

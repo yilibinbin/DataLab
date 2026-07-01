@@ -39,7 +39,6 @@ def test_workspace_round_trips_implicit_fit_config(qtbot, tmp_path: Path) -> Non
     source._reset_implicit_constants_rows({"unit": "1"})
     source.implicit_constants_editor.use_text_view(True)
     source.implicit_constants_editor.set_raw_text("unit 1\n")
-    source.implicit_constants_editor.setChecked(False)
 
     path = tmp_path / "implicit.datalab"
     assert source._save_workspace_to_path(path)
@@ -57,11 +56,13 @@ def test_workspace_round_trips_implicit_fit_config(qtbot, tmp_path: Path) -> Non
     assert restored.implicit_max_iterations_spin.value() == 123
     assert restored.implicit_timeout_spin.value() == 420
     assert restored.implicit_method_combo.currentData() == "root"
-    assert not restored.implicit_constants_editor.isChecked()
+    # The workbench constants editor no longer has an enable checkbox; a
+    # non-empty editor is active, so its content round-trips and feeds the fit.
+    assert restored.implicit_constants_editor.isChecked()
     assert restored.implicit_constants_editor.using_text_view()
     assert restored.implicit_constants_editor.raw_text() == "unit 1\n"
     assert restored.implicit_constants_editor.constants_dict(validate=False) == {"unit": "1"}
-    assert restored._collect_implicit_constants() == {}
+    assert restored._collect_implicit_constants() == {"unit": "1"}
     assert restored.implicit_params_table.orphan_names() == {"old"}
     assert {"name": "old", "initial": "9", "fixed": "", "min": "", "max": ""} in restored.implicit_params_table.rows()
     assert {"name": "old", "initial": "9", "fixed": "", "min": "", "max": ""} not in restored.implicit_params_table.compute_rows()

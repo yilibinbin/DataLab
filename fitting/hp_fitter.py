@@ -672,7 +672,17 @@ def fit_custom_model(
             # boundary, so those fall back to the in-process solve. The executor
             # itself also degrades to serial for small variant counts / few
             # cores, so tiny fits pay no pool overhead.
-            can_parallelize = model_factory is None and _dependent_defs_are_picklable(parameter_state)
+            #
+            # Implicit specs are also excluded: the worker rebuilds the model
+            # from a text recipe via build_model_specification(), which produces
+            # a generic evaluator with no per-point closure to solve the implicit
+            # variable (u/delta), so the output expression would raise "Unknown
+            # variable". The serial branch keeps the real implicit closure.
+            can_parallelize = (
+                model_factory is None
+                and _dependent_defs_are_picklable(parameter_state)
+                and getattr(current_model, "implicit_definition", None) is None
+            )
 
             def _solve_variants(variants: list[tuple[mp.mpf, ...]]) -> list[tuple[mp.mpf, ...] | None]:
                 nonlocal variants_tried, last_exc

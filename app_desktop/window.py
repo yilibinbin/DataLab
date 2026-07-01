@@ -1737,15 +1737,26 @@ class ExtrapolationWindow(
                 self._mark_workspace_dirty()
 
     def _raw_constant_names_from_editor(self, editor: object | None) -> tuple[str, ...]:
-        if editor is None:
+        # Collect declared constant *names* so parameter detection can exclude
+        # them — independent of value. A constant with a blank/invalid value is
+        # still a declared constant (the "bypasses invalid constant values"
+        # contract), so we must not route through constants_dict(), which drops
+        # empty-valued rows.
+        if editor is None or not getattr(editor, "isChecked", lambda: False)():
             return ()
-        constants_dict = getattr(editor, "constants_dict", None)
-        if constants_dict is None:
-            return ()
-        try:
-            return tuple(constants_dict(validate=False).keys())
-        except Exception:
-            return ()
+        names: list[str] = []
+        seen: set[str] = set()
+        for row in getattr(editor, "rows", lambda: [])():
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "").strip()
+            if not name or name in seen:
+                continue
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+                continue
+            seen.add(name)
+            names.append(name)
+        return tuple(names)
 
     def _active_root_data_headers(self) -> tuple[str, ...]:
         try:
