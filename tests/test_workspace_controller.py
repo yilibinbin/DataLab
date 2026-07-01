@@ -1346,7 +1346,9 @@ def test_workspace_restores_statistics_text_and_csv_from_semantic_snapshot(qtbot
     qtbot.addWidget(target)
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
-    restored_text = target.result_edit.toPlainText()
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
     metrics = {str(row["metric"]): row for row in target._csv_rows}
     assert "=== Statistics ===" in restored_text
     assert "Mode: weighted_sigma" in restored_text
@@ -1405,7 +1407,9 @@ def test_workspace_restores_fitting_comparison_rows_from_semantic_snapshot(qtbot
     qtbot.addWidget(target)
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
-    restored_text = target.result_edit.toPlainText()
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
     assert "Selected Fit Comparison" in restored_text
     assert "Linear | success" in restored_text
     assert target._csv_headers == COMPARISON_TABLE_HEADERS
@@ -1467,7 +1471,9 @@ def test_workspace_restores_root_rows_from_semantic_snapshot(qtbot, monkeypatch)
     qtbot.addWidget(target)
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
-    restored_text = target.result_edit.toPlainText()
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
     assert "stale rendered root cache" not in restored_text
     assert "| input_row_index | root_index | A | name | value | classification_tags | backend |" in restored_text
     assert target._csv_headers[:3] == ["input_row_index", "root_index", "A"]
@@ -1560,7 +1566,9 @@ def test_workspace_restores_error_rows_from_uncertainty_semantic_snapshot(qtbot)
     qtbot.addWidget(target)
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
-    restored_text = target.result_edit.toPlainText()
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
     assert "## Error Propagation Results" in restored_text
     assert "**Formula**: `A + B`" in restored_text
     assert "**Rows**: 2" in restored_text
@@ -2000,7 +2008,9 @@ def test_workspace_restores_weighted_consistency_rows_from_semantic_snapshot(qtb
     qtbot.addWidget(target)
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
-    restored_text = target.result_edit.toPlainText()
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
     metrics = {str(row["metric"]): row for row in target._csv_rows}
     assert "Weighted chi-square |" in restored_text
     assert "Weighted consistency dof | 2" in restored_text
@@ -2053,7 +2063,9 @@ def test_workspace_restores_confidence_interval_rows_from_semantic_snapshot(qtbo
     qtbot.addWidget(target)
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
-    restored_text = target.result_edit.toPlainText()
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
     metrics = {str(row["metric"]): row for row in target._csv_rows}
     assert "Mean CI lower | 0.445739743239121" in restored_text
     assert metrics["mean_ci_lower"]["value"] == "0.445739743239121"
@@ -2107,7 +2119,9 @@ def test_workspace_restores_descriptive_statistics_rows_from_semantic_snapshot(q
     qtbot.addWidget(target)
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
-    restored_text = target.result_edit.toPlainText()
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
     assert target.stats_trim_fraction_edit.text() == "0.25"
     assert "Trimmed mean | 2.5" in restored_text
     assert "Median | 2.5" in restored_text
@@ -2156,7 +2170,9 @@ def test_workspace_restores_outlier_row_flags_from_semantic_snapshot(qtbot) -> N
     qtbot.addWidget(target)
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
-    restored_text = target.result_edit.toPlainText()
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
     metrics = {str(row["metric"]): row for row in target._csv_rows}
     assert "Sigma outlier | 10.0 | source row r3; metric sigma; absolute residual exceeds 3 sigma" in restored_text
     assert metrics["outlier.sigma.1"]["value"] == "10.0"
