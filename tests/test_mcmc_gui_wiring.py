@@ -224,17 +224,23 @@ def test_render_corner_plot_accepts_mcmc_result():
 
 
 def test_gui_requirements_declares_emcee():
-    """gui_requirements.txt must list emcee + numpy + corner so the
-    desktop install gives users MCMC out of the box."""
+    """The desktop install must give users MCMC (emcee + numpy + corner) out of
+    the box. Since P2-2 gui_requirements.txt is a thin pointer to pyproject
+    extras, so this is delivered via the [mcmc] extra — whose contents are pinned
+    by test_pyproject_mcmc_extra_still_lists_deps below."""
     from pathlib import Path
 
     reqs = (
         Path(__file__).resolve().parent.parent / "gui_requirements.txt"
     ).read_text(encoding="utf-8")
-    for needle in ("emcee", "numpy", "corner"):
-        assert needle in reqs, (
-            f"gui_requirements.txt must include {needle} for MCMC support"
-        )
+    non_comment = [
+        line.strip()
+        for line in reqs.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert any("mcmc" in line for line in non_comment), (
+        "gui_requirements.txt must include the [mcmc] extra for MCMC support"
+    )
 
 
 def test_pyproject_mcmc_extra_still_lists_deps():

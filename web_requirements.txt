@@ -1,21 +1,7 @@
-Flask>=3.0.0
-Pillow>=10.3.0
-mpmath>=1.3.0
-sympy>=1.13.0
-matplotlib>=3.10.0
-scipy>=1.14.0
-mistune>=2.0.0
-waitress>=3.0.0
-# Phase 3 #17 — real-time collaboration sessions. Pure-Python
-# implementation; no Redis / Celery dependency required for
-# single-process deployments.
-flask-socketio>=5.3
-# Phase 3 #14 — CLI batch YAML loader (shared with desktop).
-pyyaml>=6.0
-# Phase 3 #12 — MCMC posterior refinement for explicit fitting flows.
-# emcee falls behind a
-# ``HAS_EMCEE`` runtime guard, so the web stack still imports cleanly
-# without these — but with them the "Refine with MCMC" toggle actually
-# works, matching the desktop behaviour.
-emcee>=3.1
-corner>=2.2
+# Web app install. The single source of truth is pyproject.toml — this file is a
+# thin pointer to the matching extras so the two can't drift (P2-2).
+# `.[web,collab,mcmc]` = core deps + Flask/mistune/waitress + flask-socketio
+# (real-time collaboration) + MCMC (numpy/emcee/corner), so the web
+# "Refine with MCMC" toggle works. emcee stays behind a HAS_EMCEE runtime guard,
+# so the stack still imports cleanly if these are absent.
+-e .[web,collab,mcmc]

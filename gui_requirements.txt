@@ -1,17 +1,6 @@
-certifi>=2024.7.4
-Pillow>=10.3.0
-mpmath>=1.3.0
-PySide6>=6.7.0
-sympy>=1.13.0
-matplotlib>=3.10.0
-scipy>=1.14.0
-# MCMC posterior refinement (Phase 3 #12). Kept in the default
-# desktop install so the GUI checkbox is enabled out of the box;
-# the Web stack keeps these optional (pyproject [mcmc] extra).
-numpy>=1.26
-emcee>=3.1
-corner>=2.2
-# YAML config for the CLI batch mode (Phase 3 #14).
-pyyaml>=6.0
-# Ed25519 verification for DataLab's application-level update signing.
-cryptography>=42.0
+# Desktop GUI install. The single source of truth is pyproject.toml — this file
+# is a thin pointer to the matching extras so the two can't drift (P2-2).
+# `.[desktop,mcmc]` = core deps (mpmath/sympy/scipy/Pillow/certifi/pyyaml/
+# cryptography) + PySide6 + MCMC (numpy/emcee/corner), so the GUI's
+# "Refine with MCMC" checkbox works out of the box.
+-e .[desktop,mcmc]

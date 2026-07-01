@@ -27,21 +27,22 @@ def _read(path: str) -> str:
 # requirements files
 
 
-def test_gui_requirements_declares_emcee_and_corner() -> None:
-    """Desktop pip install must pull in MCMC deps."""
+def test_gui_requirements_pulls_in_mcmc() -> None:
+    """Desktop pip install must pull in MCMC deps. Since P2-2 the requirements
+    files are thin pointers to pyproject extras, so the MCMC deps come via the
+    [mcmc] extra (whose contents are pinned by
+    test_pyproject_mcmc_extra_declares_emcee_and_corner)."""
     text = _read("gui_requirements.txt")
-    assert "emcee" in text, "gui_requirements.txt must list emcee"
-    assert "corner" in text, "gui_requirements.txt must list corner"
+    assert "mcmc" in text, "gui_requirements.txt must include the [mcmc] extra"
 
 
-def test_gui_requirements_declares_scipy() -> None:
-    text = _read("gui_requirements.txt")
-    assert "scipy>=" in text, "gui_requirements.txt must install scipy for frozen precision-16 paths"
+def test_gui_requirements_pulls_in_scipy_via_core() -> None:
+    # scipy is a core dependency, so any `-e .[...]` pointer installs it.
+    assert '"scipy>=' in _read("pyproject.toml"), "pyproject core deps must include scipy"
 
 
-def test_web_requirements_declares_scipy() -> None:
-    text = _read("web_requirements.txt")
-    assert "scipy>=" in text, "web_requirements.txt must install scipy for precision-16 backend paths"
+def test_web_requirements_pulls_in_scipy_via_core() -> None:
+    assert '"scipy>=' in _read("pyproject.toml"), "pyproject core deps must include scipy"
 
 
 def test_pyproject_core_dependencies_declare_scipy() -> None:
@@ -49,13 +50,11 @@ def test_pyproject_core_dependencies_declare_scipy() -> None:
     assert '"scipy>=' in text, "pyproject.toml core dependencies must include scipy"
 
 
-def test_web_requirements_declares_emcee_and_corner() -> None:
-    """Web pip install must also pull in MCMC deps so the web 'Refine
-    with MCMC' toggle actually works (was missing pre-Phase-7-followup,
-    silent feature-loss on web deployments)."""
+def test_web_requirements_pulls_in_mcmc() -> None:
+    """Web pip install must also pull in MCMC deps so the web 'Refine with MCMC'
+    toggle actually works. Delivered via the [mcmc] extra since P2-2."""
     text = _read("web_requirements.txt")
-    assert "emcee" in text, "web_requirements.txt must list emcee"
-    assert "corner" in text, "web_requirements.txt must list corner"
+    assert "mcmc" in text, "web_requirements.txt must include the [mcmc] extra"
 
 
 def test_pyproject_mcmc_extra_declares_emcee_and_corner() -> None:
