@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
@@ -512,6 +513,29 @@ def _is_identifier(value: str) -> bool:
     return bool(_IDENTIFIER_RE.fullmatch((value or "").strip()))
 
 
+def _reject_unsafe_formula_ast(formula_str: str) -> None:
+    """Reject sandbox-escape gadgets before the formula reaches ``parse_expr``.
+
+    ``parse_expr`` will happily evaluate attribute access (``sqrt(1).__class__``)
+    and subscripting, which are the first rungs of a SymPy sandbox escape.  Mirror
+    the security-critical checks in ``shared.symbolic_math._validate_symbolic_ast``
+    here, but without its capitalized-function whitelist so lowercase names
+    (``sin``/``cos``/…) that this formatter accepts keep working.  ``^`` is a valid
+    formula operator but not valid Python, so translate it to ``**`` for the AST
+    check only — the real parse still applies ``convert_xor`` to the raw string.
+    """
+    try:
+        tree = ast.parse(formula_str.replace("^", "**"), mode="eval")
+    except SyntaxError:
+        # Let parse_expr surface the syntax error with its own message.
+        return
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute | ast.Subscript | ast.Lambda | ast.NamedExpr):
+            raise ValueError("Unsupported formula syntax.")
+        if isinstance(node, ast.Name) and "__" in node.id:
+            raise ValueError("Unsupported formula name.")
+
+
 def _format_latex_formula_sympy(formula_str: str) -> str:
     """Primary LaTeX formatter for compute formulas.
 
@@ -519,6 +543,8 @@ def _format_latex_formula_sympy(formula_str: str) -> str:
     LaTeX output do not grow separate formatter ownership again.  Imports stay
     local to avoid making ordinary preview-service import do SymPy setup work.
     """
+    _reject_unsafe_formula_ast(formula_str)
+
     import sympy as sp
     from sympy.parsing.sympy_parser import convert_xor, parse_expr, standard_transformations
 

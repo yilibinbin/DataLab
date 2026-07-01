@@ -434,3 +434,22 @@ def test_render_service_returns_structured_error_for_bad_input() -> None:
     assert result.png_bytes == b""
     assert result.fallback_text == "A + )"
     assert result.error_message
+
+
+def test_sympy_formatter_rejects_attribute_access_gadget() -> None:
+    # P0-2: the SymPy formatter parses arbitrary expressions with parse_expr. Without an
+    # AST pre-check, attribute-access gadgets (e.g. `.__class__`) slip through and render
+    # to an object repr instead of being rejected — the first rung of a sandbox escape.
+    from datalab_latex.formula_render_service import _format_latex_formula_sympy
+
+    with pytest.raises(ValueError):
+        _format_latex_formula_sympy("sqrt(1).__class__")
+
+
+def test_sympy_formatter_still_renders_ordinary_lowercase_formula() -> None:
+    # Regression guard: the renderer accepts lowercase function names (sin, cos, ...),
+    # so the AST hardening must not reject legitimate formulas.
+    from datalab_latex.formula_render_service import _format_latex_formula_sympy
+
+    out = _format_latex_formula_sympy("sin(x) + a*x^2")
+    assert isinstance(out, str) and out.strip()
