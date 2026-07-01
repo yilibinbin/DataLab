@@ -34,6 +34,37 @@ def test_example_workspace_menu_action_exists(qtbot):
     assert "example" in menu_text or "示例" in menu_text
 
 
+def test_workspace_and_run_keyboard_shortcuts_are_installed(qtbot):
+    """P1-7: the primary actions carry standard keyboard shortcuts (a11y /
+    discoverability). Standard keys auto-map per platform, so assert against
+    QKeySequence.StandardKey rather than a hard-coded string."""
+    from PySide6.QtGui import QAction, QKeySequence
+
+    from app_desktop.window import ExtrapolationWindow
+
+    QApplication.instance() or QApplication([])
+    win = ExtrapolationWindow()
+    _allow_discard(win)
+    qtbot.addWidget(win)
+
+    installed = {
+        action.shortcut()
+        for action in win.findChildren(QAction)
+        if not action.shortcut().isEmpty()
+    }
+    for std in (
+        QKeySequence.StandardKey.New,
+        QKeySequence.StandardKey.Open,
+        QKeySequence.StandardKey.Save,
+        QKeySequence.StandardKey.SaveAs,
+    ):
+        assert QKeySequence(std) in installed, f"missing shortcut for {std}"
+
+    # The run button carries the execute shortcut and runs/stops on trigger.
+    assert not win.run_button.shortcut().isEmpty()
+    assert win.run_button.shortcut() == QKeySequence("Ctrl+Return")
+
+
 def test_open_example_workspace_uses_current_language_for_menu_labels(qtbot, monkeypatch):
     from app_desktop.window import ExtrapolationWindow, list_example_menu_entries, list_example_workspaces
 

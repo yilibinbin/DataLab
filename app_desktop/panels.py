@@ -13,7 +13,7 @@ from collections.abc import Callable
 import weakref
 
 from PySide6.QtCore import Qt, QObject, QEvent
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -206,12 +206,16 @@ def build_menu(self):
 
     new_workspace_action = QAction("新建工作区", self)
     new_workspace_action.setMenuRole(QAction.NoRole)
+    # Standard shortcuts auto-map to the platform convention (⌘ on macOS,
+    # Ctrl elsewhere) and render in the menu automatically (a11y / discoverability).
+    new_workspace_action.setShortcut(QKeySequence.StandardKey.New)
     new_workspace_action.triggered.connect(self.new_workspace)
     file_menu.addAction(new_workspace_action)
     self._register_text(new_workspace_action, "新建工作区", "New Workspace", "setText")
 
     open_workspace_action = QAction("打开工作区…", self)
     open_workspace_action.setMenuRole(QAction.NoRole)
+    open_workspace_action.setShortcut(QKeySequence.StandardKey.Open)
     open_workspace_action.triggered.connect(self.open_workspace)
     file_menu.addAction(open_workspace_action)
     self._register_text(open_workspace_action, "打开工作区…", "Open Workspace…", "setText")
@@ -226,12 +230,14 @@ def build_menu(self):
 
     save_workspace_action = QAction("保存工作区", self)
     save_workspace_action.setMenuRole(QAction.NoRole)
+    save_workspace_action.setShortcut(QKeySequence.StandardKey.Save)
     save_workspace_action.triggered.connect(self.save_workspace)
     file_menu.addAction(save_workspace_action)
     self._register_text(save_workspace_action, "保存工作区", "Save Workspace", "setText")
 
     save_workspace_as_action = QAction("工作区另存为…", self)
     save_workspace_as_action.setMenuRole(QAction.NoRole)
+    save_workspace_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
     save_workspace_as_action.triggered.connect(self.save_workspace_as)
     file_menu.addAction(save_workspace_as_action)
     self._register_text(save_workspace_as_action, "工作区另存为…", "Save Workspace As…", "setText")
@@ -1105,6 +1111,10 @@ def build_left_panel(self):
     self.run_button.setObjectName("run_button")
     self.run_button.setProperty("datalab_primary_run_button", True)
     self.run_button.setProperty("datalab_run_state", "run")
+    # Ctrl/⌘+Return is the standard "execute" shortcut; a button shortcut fires
+    # the click, so it runs or stops depending on the button's current state.
+    self.run_button.setShortcut(QKeySequence("Ctrl+Return"))
+    self.run_button.setToolTip(self._tr("开始执行 (Ctrl+Return)", "Run (Ctrl+Return)"))
     self._register_text(self.run_button, "开始执行", "Run")
     self.run_button.clicked.connect(lambda _checked=False: self.run_calculation())
     self.run_section_layout.addWidget(self.run_button)
