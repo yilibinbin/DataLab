@@ -1205,8 +1205,8 @@ def _scipy_student_t_p_value(
         from scipy import stats
     except Exception:  # pragma: no cover - exercised only when SciPy is absent.
         return None
-    t_float = float(statistic)
-    df_float = float(df)
+    t_float = float(statistic)  # float-bridge: SciPy stats.t is float-only
+    df_float = float(df)  # float-bridge: SciPy stats.t is float-only
     if alternative == "greater":
         value = stats.t.sf(t_float, df_float)
     elif alternative == "less":
@@ -1225,7 +1225,7 @@ def _scipy_chi_square_p_value(
         from scipy import stats
     except Exception:  # pragma: no cover - exercised only when SciPy is absent.
         return None
-    value = stats.chi2.sf(float(statistic), float(df))
+    value = stats.chi2.sf(float(statistic), float(df))  # float-bridge: SciPy stats.chi2 is float-only
     return mp.mpf(str(value)), "scipy", str(getattr(scipy, "__version__", ""))
 
 

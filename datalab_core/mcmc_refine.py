@@ -90,17 +90,17 @@ def _estimate_rmse(targets: Sequence[Any], fit_result: Any) -> float:
     if residuals:
         try:
             count = len(residuals)
-            ss = sum(float(residual) ** 2 for residual in residuals)
-            return max(1e-8, float((ss / max(1, count)) ** 0.5))
+            ss = sum(float(residual) ** 2 for residual in residuals)  # float-bridge: emcee proposal scaling
+            return max(1e-8, float((ss / max(1, count)) ** 0.5))  # float-bridge: emcee proposal scaling
         except Exception:  # noqa: BLE001
             pass
     try:
-        values = [float(value) for value in targets]
+        values = [float(value) for value in targets]  # float-bridge: emcee proposal scaling
         if len(values) < 2:
             return 1.0
         mean = sum(values) / len(values)
         variance = sum((value - mean) ** 2 for value in values) / len(values)
-        return max(1e-8, float(variance**0.5))
+        return max(1e-8, float(variance**0.5))  # float-bridge: emcee proposal scaling
     except Exception:  # noqa: BLE001
         return 1.0
 
@@ -138,28 +138,28 @@ def refine_fit_with_mcmc(
         _logger.info("MCMC refinement skipped: likelihood weights length mismatch")
         return
 
-    initial_guess = [float(fit_result.params[name]) for name in param_names]
+    initial_guess = [float(fit_result.params[name]) for name in param_names]  # float-bridge: emcee walker seeds
     rmse = _estimate_rmse(targets, fit_result)
 
     def _log_probability(theta: Sequence[object]) -> float:
         if not param_names or rmse <= 0:
-            return float("-inf")
+            return float("-inf")  # float-bridge: emcee log-prob sentinel
         try:
             new_params = _params_from_theta(theta, param_names, base_params)
             residuals_sq = 0.0
             for index, (observation, target) in enumerate(zip(observations, targets)):
                 _set_evaluator_point_index(evaluator, index)
-                pred = float(_evaluate_prediction(evaluator, new_params, observation))
+                pred = float(_evaluate_prediction(evaluator, new_params, observation))  # float-bridge: emcee log-prob
                 if not math.isfinite(pred):
-                    return float("-inf")
-                residual = float(target) - pred
-                weight = float(likelihood_weights[index]) if likelihood_weights is not None else 1.0
+                    return float("-inf")  # float-bridge: emcee log-prob sentinel
+                residual = float(target) - pred  # float-bridge: emcee log-prob
+                weight = float(likelihood_weights[index]) if likelihood_weights is not None else 1.0  # float-bridge: emcee log-prob
                 residuals_sq += weight * (residual**2)
                 if not math.isfinite(residuals_sq):
-                    return float("-inf")
+                    return float("-inf")  # float-bridge: emcee log-prob sentinel
             return -0.5 * residuals_sq / (rmse**2)
         except (TypeError, ValueError, ArithmeticError, OverflowError, KeyError):
-            return float("-inf")
+            return float("-inf")  # float-bridge: emcee log-prob sentinel
 
     proposal_scale = max(1e-4, rmse * 1e-2)
     pre_flight_lps = [_log_probability(initial_guess)]
