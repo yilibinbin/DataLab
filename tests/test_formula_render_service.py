@@ -209,6 +209,58 @@ def test_mathtext_does_not_double_wrap_existing_text_command() -> None:
     assert r"\text{质量}" in result.mathtext
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        r"\text{质量_{a}}",       # subscript group inside the span
+        r"\text{面积^{2}}",       # superscript group inside the span
+        r"\text{质量\{x\}}",      # escaped literal braces inside the span
+        r"\text{质量^{2}} + 度",  # nested-brace span AND bare CJK outside it
+        r"\text{a_{b_{c}}}",      # two levels of nesting
+    ],
+)
+def test_mathtext_nested_brace_text_span_is_not_re_wrapped(source: str) -> None:
+    """A pre-existing \\text{...} whose content has inner braces (sub/superscript
+    groups, escaped braces) must be recognized as ONE span at any nesting depth
+    and left untouched — the earlier [^{}]* regex missed it and re-wrapped its
+    CJK into \\text{\\text{...}}. The invariant here is 'no re-wrapping', not
+    'renders': matplotlib mathtext itself rejects _{}/^{} inside \\text{}, so
+    those inputs still fail to render (gracefully, ok=False) exactly as on main.
+    """
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula_metadata,
+    )
+
+    result = render_formula_metadata(
+        RenderRequest(source=source, language=InputLanguage.LATEX)
+    )
+
+    # The span is preserved as-is; never re-wrapped into nested \text{\text{...}}.
+    assert r"\text{\text" not in result.mathtext, result.mathtext
+
+
+def test_mathtext_text_span_with_escaped_braces_renders() -> None:
+    """A \\text{...} span with only escaped literal braces (no sub/superscript)
+    is valid mathtext and must render — verifies the brace-counting scanner
+    keeps such a span intact AND that it survives to a PNG.
+    """
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula,
+    )
+
+    result = render_formula(
+        RenderRequest(source=r"\text{质量\{x\}}", language=InputLanguage.LATEX)
+    )
+
+    assert result.ok, result.error_message
+    assert result.png_bytes.startswith(b"\x89PNG")
+    assert r"\text{\text" not in result.mathtext, result.mathtext
+
+
 def test_mathtext_full_width_brace_inside_existing_text_span_does_not_nest() -> None:
     """Full-width braces inside an existing \\text{...} must not defeat the
     double-wrap guard: normalizing ｛→\\{ before the span scan used to break span

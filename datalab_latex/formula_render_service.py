@@ -102,9 +102,43 @@ _MAX_SOURCE_LENGTH: Final = 8000
 # Non-ASCII runs (CJK etc.) that must not sit bare inside a mathtext $...$ span:
 # matplotlib's math font has no CJK glyphs and would substitute tofu boxes.
 _MATHTEXT_NON_ASCII_RUN_RE: Final = re.compile(r"[^\x00-\x7f]+")
-# Existing ``\text{...}`` spans (e.g. from a LaTeX-language source) — their
-# contents are already text-mode, so they must be left untouched.
-_MATHTEXT_TEXT_SPAN_RE: Final = re.compile(r"\\text\{[^{}]*\}")
+# Start of an existing ``\text{`` span (from e.g. a LaTeX-language source). The
+# closing brace is found by counting, not regex, so spans with inner braces
+# (``\text{质量_{a}}``) are matched at any nesting depth — a [^{}]* regex misses
+# them and re-wraps their CJK into unparseable ``\text{\text{...}}``.
+_MATHTEXT_TEXT_SPAN_START: Final = "\\text{"
+
+
+def _find_text_spans(latex: str) -> list[tuple[int, int]]:
+    """Return (start, end) ranges of top-level ``\\text{...}`` spans in ``latex``,
+    matching balanced braces at any depth. A ``\\text{`` with no closing brace
+    (malformed) is left unmatched so it flows through the outside transform."""
+
+    spans: list[tuple[int, int]] = []
+    index = 0
+    length = len(latex)
+    while True:
+        start = latex.find(_MATHTEXT_TEXT_SPAN_START, index)
+        if start == -1:
+            break
+        depth = 1
+        pos = start + len(_MATHTEXT_TEXT_SPAN_START)
+        while pos < length and depth > 0:
+            char = latex[pos]
+            if char == "\\":  # skip an escaped char (e.g. \{ \}) — not a delimiter
+                pos += 2
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            pos += 1
+        if depth == 0:
+            spans.append((start, pos))
+            index = pos
+        else:  # unbalanced \text{ — stop treating it as a span
+            index = start + len(_MATHTEXT_TEXT_SPAN_START)
+    return spans
 # Full-width punctuation and math operators → ASCII so they render in the math
 # font (and as real operators) instead of a tofu box inside a \text{} run.
 # Braces are escaped (\{ \}) not bare ({ }): bare braces are invisible TeX
@@ -151,17 +185,17 @@ def _protect_non_ascii_for_mathtext(latex: str) -> str:
     def _transform_outside(segment: str) -> str:
         # Normalize full-width punctuation, then wrap remaining non-ASCII runs.
         # Done per outside-segment (NOT globally first): normalizing ｛→\{ before
-        # the span scan would inject a brace that breaks _MATHTEXT_TEXT_SPAN_RE,
-        # defeating the double-wrap guard and re-nesting \text{\text{...}}.
+        # the span scan would inject a brace that shifts span boundaries and
+        # could re-nest \text{\text{...}}.
         segment = segment.translate(_FULL_WIDTH_PUNCT_MAP)
         return _MATHTEXT_NON_ASCII_RUN_RE.sub(lambda m: rf"\text{{{m.group(0)}}}", segment)
 
     parts: list[str] = []
     cursor = 0
-    for span in _MATHTEXT_TEXT_SPAN_RE.finditer(latex):
-        parts.append(_transform_outside(latex[cursor:span.start()]))
-        parts.append(span.group(0))  # already a \text{...} span — leave untouched
-        cursor = span.end()
+    for start, end in _find_text_spans(latex):
+        parts.append(_transform_outside(latex[cursor:start]))
+        parts.append(latex[start:end])  # already a \text{...} span — leave untouched
+        cursor = end
     parts.append(_transform_outside(latex[cursor:]))
     return "".join(parts)
 
