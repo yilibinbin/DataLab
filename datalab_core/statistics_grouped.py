@@ -7,6 +7,7 @@ from typing import Any
 
 import mpmath as mp
 
+from shared.bilingual import _dual_msg
 from shared.parsing import clean_tabular_cell
 from shared.precision import precision_guard
 from shared.unit_annotations import first_unit_annotation_text
@@ -84,7 +85,7 @@ def run_statistics_grouped(
         use_weighted_variance = _bool_option(inputs.get("use_weighted_variance"), default=True)
         trim_fraction = inputs.get("trim_fraction")
         if trim_fraction is not None and not isinstance(trim_fraction, str):
-            raise ValueError("trim_fraction must be a numeric string or null.")
+            raise ValueError(_dual_msg("trim_fraction 必须是数字字符串或 null。", "trim_fraction must be a numeric string or null."))
 
         group_index = headers.index(group_column)
         value_indexes = {column: headers.index(column) for column in value_columns}
@@ -216,7 +217,7 @@ def run_statistics_grouped(
             )
 
         if not output_groups:
-            raise ValueError("grouped statistics found no nonblank groups.")
+            raise ValueError(_dual_msg("分组统计未找到任何非空分组。", "grouped statistics found no nonblank groups."))
         payload: dict[str, object] = {
             "schema": GROUPED_PAYLOAD_SCHEMA,
             "workflow_mode": GROUPED_WORKFLOW_MODE,
@@ -234,13 +235,13 @@ def run_statistics_grouped(
     validate_statistics_grouped_payload(payload)
     normalized = normalize_json_payload(payload, path="statistics_grouped_payload")
     if not isinstance(normalized, Mapping):
-        raise TypeError("statistics grouped payload must normalize to a mapping.")
+        raise TypeError(_dual_msg("分组统计载荷必须归一化为映射。", "statistics grouped payload must normalize to a mapping."))
     return dict(normalized)
 
 
 def validate_statistics_grouped_payload(payload: Mapping[str, Any]) -> None:
     if not isinstance(payload, Mapping):
-        raise TypeError("statistics grouped payload must be a mapping.")
+        raise TypeError(_dual_msg("分组统计载荷必须是映射。", "statistics grouped payload must be a mapping."))
     _reject_json_floats(payload, path="statistics_grouped_payload")
     _require_keys(
         payload,
@@ -260,30 +261,30 @@ def validate_statistics_grouped_payload(payload: Mapping[str, Any]) -> None:
         "statistics_grouped_payload",
     )
     if payload.get("schema") != GROUPED_PAYLOAD_SCHEMA:
-        raise ValueError("statistics grouped payload schema is unsupported.")
+        raise ValueError(_dual_msg("分组统计载荷的 schema 不受支持。", "statistics grouped payload schema is unsupported."))
     if payload.get("workflow_mode") != GROUPED_WORKFLOW_MODE:
-        raise ValueError("statistics grouped workflow_mode is unsupported.")
+        raise ValueError(_dual_msg("分组统计的 workflow_mode 不受支持。", "statistics grouped workflow_mode is unsupported."))
     _required_text(payload.get("stats_mode"), "stats_mode")
     _required_text(payload.get("group_column"), "group_column")
     value_columns = _required_text_list(payload.get("value_columns"), "value_columns")
     group_order = _required_text_list(payload.get("group_order"), "group_order")
     if len(set(value_columns)) != len(value_columns):
-        raise ValueError("statistics grouped value_columns must be unique.")
+        raise ValueError(_dual_msg("分组统计的 value_columns 必须唯一。", "statistics grouped value_columns must be unique."))
     if len(set(group_order)) != len(group_order):
-        raise ValueError("statistics grouped group_order must be unique.")
+        raise ValueError(_dual_msg("分组统计的 group_order 必须唯一。", "statistics grouped group_order must be unique."))
     row_count = _non_negative_int(payload.get("row_count"), field_name="row_count")
     source_row_ids = _required_source_row_ids(payload.get("source_row_ids"), field_name="source_row_ids")
     if len(source_row_ids) != row_count:
-        raise ValueError("statistics grouped source_row_ids must match row_count.")
+        raise ValueError(_dual_msg("分组统计的 source_row_ids 必须与 row_count 匹配。", "statistics grouped source_row_ids must match row_count."))
     groups = _required_sequence(payload.get("groups"), "groups")
     if len(groups) != len(group_order):
-        raise ValueError("statistics grouped groups must match group_order.")
+        raise ValueError(_dual_msg("分组统计的 groups 必须与 group_order 匹配。", "statistics grouped groups must match group_order."))
     seen_indexes: set[int] = set()
     for expected_index, group in enumerate(groups, 1):
         _validate_group(group, expected_index=expected_index, group_order=group_order, value_columns=value_columns)
         group_index = int(group["group_index"])
         if group_index in seen_indexes:
-            raise ValueError("statistics grouped group_index values must be unique.")
+            raise ValueError(_dual_msg("分组统计的 group_index 值必须唯一。", "statistics grouped group_index values must be unique."))
         seen_indexes.add(group_index)
     _validate_diagnostics(payload.get("diagnostics"))
     _positive_int(payload.get("precision_used"), field_name="precision_used")
@@ -299,7 +300,7 @@ def build_statistics_grouped_result_snapshot(
     validate_statistics_grouped_payload(payload)
     normalized_payload = normalize_json_payload(payload, path="statistics_grouped_snapshot.payload")
     if not isinstance(normalized_payload, Mapping):
-        raise TypeError("statistics grouped snapshot payload must normalize to a mapping.")
+        raise TypeError(_dual_msg("分组统计快照载荷必须归一化为映射。", "statistics grouped snapshot payload must normalize to a mapping."))
     payload_dict = {str(key): value for key, value in deepcopy(normalized_payload).items()}
     plots = [_plain_mapping(plot) for plot in plot_metadata]
     source = {
@@ -342,7 +343,7 @@ def build_statistics_grouped_result_snapshot(
     }
     normalized_snapshot = normalize_json_payload(snapshot, path="statistics_grouped_result_snapshot")
     if not isinstance(normalized_snapshot, Mapping):
-        raise TypeError("statistics grouped snapshot must normalize to a mapping.")
+        raise TypeError(_dual_msg("分组统计快照必须归一化为映射。", "statistics grouped snapshot must normalize to a mapping."))
     output = {str(key): value for key, value in deepcopy(normalized_snapshot).items()}
     validate_statistics_grouped_snapshot(output)
     return output
@@ -350,7 +351,7 @@ def build_statistics_grouped_result_snapshot(
 
 def validate_statistics_grouped_snapshot(snapshot: Mapping[str, Any]) -> None:
     if not isinstance(snapshot, Mapping):
-        raise TypeError("statistics grouped snapshot must be a mapping.")
+        raise TypeError(_dual_msg("分组统计快照必须是映射。", "statistics grouped snapshot must be a mapping."))
     _reject_json_floats(snapshot, path="statistics_grouped_snapshot")
     _require_keys(
         snapshot,
@@ -367,41 +368,41 @@ def validate_statistics_grouped_snapshot(snapshot: Mapping[str, Any]) -> None:
         "statistics_grouped_snapshot",
     )
     if snapshot.get("schema") != GROUPED_RESULT_SNAPSHOT_SCHEMA:
-        raise ValueError("statistics grouped snapshot schema is unsupported.")
+        raise ValueError(_dual_msg("分组统计快照的 schema 不受支持。", "statistics grouped snapshot schema is unsupported."))
     if snapshot.get("schema_version") != GROUPED_RESULT_SNAPSHOT_SCHEMA_VERSION:
-        raise ValueError("statistics grouped snapshot schema_version is unsupported.")
+        raise ValueError(_dual_msg("分组统计快照的 schema_version 不受支持。", "statistics grouped snapshot schema_version is unsupported."))
     if snapshot.get("family") != "statistics" or snapshot.get("mode") != GROUPED_WORKFLOW_MODE:
-        raise ValueError("statistics grouped snapshot family/mode is unsupported.")
+        raise ValueError(_dual_msg("分组统计快照的 family/mode 不受支持。", "statistics grouped snapshot family/mode is unsupported."))
     payload = _required_mapping(snapshot.get("statistics_grouped"), "statistics_grouped")
     validate_statistics_grouped_payload(payload)
     source = _required_mapping(snapshot.get("source"), "source")
     if source.get("group_column") != payload.get("group_column"):
-        raise ValueError("statistics grouped snapshot source group_column does not match payload.")
+        raise ValueError(_dual_msg("分组统计快照的 source group_column 与载荷不匹配。", "statistics grouped snapshot source group_column does not match payload."))
     if list(_required_text_list(source.get("value_columns"), "source.value_columns")) != list(
         _required_text_list(payload.get("value_columns"), "payload.value_columns")
     ):
-        raise ValueError("statistics grouped snapshot source value_columns do not match payload.")
+        raise ValueError(_dual_msg("分组统计快照的 source value_columns 与载荷不匹配。", "statistics grouped snapshot source value_columns do not match payload."))
     if list(_required_text_list(source.get("group_order"), "source.group_order")) != list(
         _required_text_list(payload.get("group_order"), "payload.group_order")
     ):
-        raise ValueError("statistics grouped snapshot source group_order does not match payload.")
+        raise ValueError(_dual_msg("分组统计快照的 source group_order 与载荷不匹配。", "statistics grouped snapshot source group_order does not match payload."))
     if source.get("group_count") != len(_required_text_list(payload.get("group_order"), "payload.group_order")):
-        raise ValueError("statistics grouped snapshot source group_count does not match payload.")
+        raise ValueError(_dual_msg("分组统计快照的 source group_count 与载荷不匹配。", "statistics grouped snapshot source group_count does not match payload."))
     for key in ("stats_mode", "row_count", "precision_used"):
         if source.get(key) != payload.get(key):
-            raise ValueError(f"statistics grouped snapshot source {key} does not match payload.")
+            raise ValueError(_dual_msg(f"分组统计快照的 source {key} 与载荷不匹配。", f"statistics grouped snapshot source {key} does not match payload."))
     if list(_required_source_row_ids(source.get("source_row_ids"), field_name="source.source_row_ids")) != list(
         _required_source_row_ids(payload.get("source_row_ids"), field_name="payload.source_row_ids")
     ):
-        raise ValueError("statistics grouped snapshot source_row_ids do not match payload.")
+        raise ValueError(_dual_msg("分组统计快照的 source_row_ids 与载荷不匹配。", "statistics grouped snapshot source_row_ids do not match payload."))
     groups = _required_sequence(snapshot.get("groups"), "groups")
     if list(groups) != list(_required_sequence(payload.get("groups"), "payload.groups")):
-        raise ValueError("statistics grouped snapshot groups do not match payload.")
+        raise ValueError(_dual_msg("分组统计快照的 groups 与载荷不匹配。", "statistics grouped snapshot groups do not match payload."))
     if snapshot.get("diagnostic_rows") is not None:
         analysis_rows_from_json(snapshot.get("diagnostic_rows"))
     compatibility = _required_mapping(snapshot.get("compatibility"), "compatibility")
     if compatibility.get("result_cache_kind") != GROUPED_RESULT_CACHE_KIND:
-        raise ValueError("statistics grouped snapshot compatibility kind is unsupported.")
+        raise ValueError(_dual_msg("分组统计快照的 compatibility kind 不受支持。", "statistics grouped snapshot compatibility kind is unsupported."))
 
 
 def statistics_grouped_payload_from_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
@@ -477,7 +478,7 @@ def render_statistics_grouped_payload_outputs(
                 )
                 continue
             if not isinstance(result, Mapping):
-                raise TypeError("statistics grouped column result must be a mapping.")
+                raise TypeError(_dual_msg("分组统计列结果必须是映射。", "statistics grouped column result must be a mapping."))
             render_rows = _standard_render_rows(result)
             row_units = {
                 str(row.get("key") or row.get("label_key") or "").strip(): _grouped_output_unit(
@@ -624,10 +625,10 @@ def _run_standard_statistics(
     if getattr(envelope, "status", None) is not ResultStatus.SUCCEEDED:
         payload = getattr(envelope, "payload", {})
         message = payload.get("message") if isinstance(payload, Mapping) else None
-        raise ValueError(str(message or "Grouped statistics standard request failed."))
+        raise ValueError(str(message or _dual_msg("分组统计的标准请求失败。", "Grouped statistics standard request failed.")))
     payload = getattr(envelope, "payload", None)
     if not isinstance(payload, Mapping):
-        raise TypeError("Grouped statistics standard request returned malformed payload.")
+        raise TypeError(_dual_msg("分组统计的标准请求返回了格式错误的载荷。", "Grouped statistics standard request returned malformed payload."))
     result = {str(key): value for key, value in payload.items()}
     _validate_standard_statistics_payload(result)
     return result, [str(item) for item in getattr(envelope, "warnings", ())]
@@ -642,13 +643,13 @@ def _parse_value_cell(
     try:
         uncertain = parse_uncertainty_format(value, precision=precision_digits)
     except Exception as exc:  # noqa: BLE001 - user numeric boundary.
-        raise ValueError(f"{field_name} is not a valid numeric value: {value!r}.") from exc
+        raise ValueError(_dual_msg(f"{field_name} 不是有效的数值：{value!r}。", f"{field_name} is not a valid numeric value: {value!r}.")) from exc
     parsed_value = mp.mpf(uncertain.value)
     parsed_uncertainty = mp.mpf(uncertain.uncertainty)
     if not mp.isfinite(parsed_value):
-        raise ValueError(f"{field_name} must be finite.")
+        raise ValueError(_dual_msg(f"{field_name} 必须为有限值。", f"{field_name} must be finite."))
     if not mp.isfinite(parsed_uncertainty):
-        raise ValueError(f"{field_name} uncertainty must be finite.")
+        raise ValueError(_dual_msg(f"{field_name} 的不确定度必须为有限值。", f"{field_name} uncertainty must be finite."))
     digit_count = max(16, int(precision_digits))
     sigma_text = mp.nstr(parsed_uncertainty, n=digit_count) if has_explicit_uncertainty(value) else None
     return mp.nstr(parsed_value, n=digit_count), sigma_text
@@ -658,12 +659,12 @@ def _value_columns(inputs: Mapping[str, Any], *, headers: tuple[str, ...]) -> tu
     raw = inputs.get("value_columns", inputs.get("columns", inputs.get("value_col")))
     columns = _text_sequence_or_csv(raw, field_name="value_columns")
     if not columns:
-        raise ValueError("grouped statistics require at least one value column.")
+        raise ValueError(_dual_msg("分组统计至少需要一个值列。", "grouped statistics require at least one value column."))
     if len(set(columns)) != len(columns):
-        raise ValueError("grouped statistics value columns must be unique.")
+        raise ValueError(_dual_msg("分组统计的值列必须唯一。", "grouped statistics value columns must be unique."))
     missing = [column for column in columns if column not in headers]
     if missing:
-        raise ValueError(f"Column not found: {missing[0]}.")
+        raise ValueError(_dual_msg(f"未找到该列：{missing[0]}。", f"Column not found: {missing[0]}."))
     return columns
 
 
@@ -678,7 +679,7 @@ def _text_sequence_or_csv(value: Any, *, field_name: str) -> tuple[str, ...]:
 def _required_column(value: Any, *, headers: tuple[str, ...], field_name: str) -> str:
     column = _required_text(value, field_name)
     if column not in headers:
-        raise ValueError(f"Column not found: {column}.")
+        raise ValueError(_dual_msg(f"未找到该列：{column}。", f"Column not found: {column}."))
     return column
 
 
@@ -686,36 +687,36 @@ def _optional_column(value: Any, *, headers: tuple[str, ...]) -> str:
     if value is None:
         return ""
     if not isinstance(value, str):
-        raise ValueError("sigma_column must be a string.")
+        raise ValueError(_dual_msg("sigma_column 必须是字符串。", "sigma_column must be a string."))
     column = value.strip()
     if not column:
         return ""
     if column not in headers:
-        raise ValueError(f"Column not found: {column}.")
+        raise ValueError(_dual_msg(f"未找到该列：{column}。", f"Column not found: {column}."))
     return column
 
 
 def _text_sequence(value: Any, *, field_name: str) -> tuple[str, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray, memoryview)):
-        raise ValueError(f"{field_name} must be a list of strings.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是字符串列表。", f"{field_name} must be a list of strings."))
     items = tuple(clean_tabular_cell(item) for item in value)
     if not all(items):
-        raise ValueError(f"{field_name} must not contain blank values.")
+        raise ValueError(_dual_msg(f"{field_name} 不得包含空值。", f"{field_name} must not contain blank values."))
     if len(set(items)) != len(items) and field_name == "headers":
-        raise ValueError("headers must be unique for grouped statistics.")
+        raise ValueError(_dual_msg("分组统计的 headers 必须唯一。", "headers must be unique for grouped statistics."))
     return items
 
 
 def _row_sequence(value: Any, *, field_name: str) -> tuple[tuple[str, ...], ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray, memoryview)):
-        raise ValueError(f"{field_name} must be a list of rows.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是行的列表。", f"{field_name} must be a list of rows."))
     rows: list[tuple[str, ...]] = []
     for index, row in enumerate(value, 1):
         if not isinstance(row, Sequence) or isinstance(row, (str, bytes, bytearray, memoryview)):
-            raise ValueError(f"{field_name}[{index}] must be a row.")
+            raise ValueError(_dual_msg(f"{field_name}[{index}] 必须是一行。", f"{field_name}[{index}] must be a row."))
         rows.append(tuple(clean_tabular_cell(cell) for cell in row))
     if not rows:
-        raise ValueError(f"{field_name} must contain at least one row.")
+        raise ValueError(_dual_msg(f"{field_name} 必须至少包含一行。", f"{field_name} must contain at least one row."))
     return tuple(rows)
 
 
@@ -724,23 +725,23 @@ def _source_row_ids(value: Any, *, count: int) -> tuple[str | int, ...]:
         return tuple(str(index) for index in range(1, count + 1))
     ids = _required_source_row_ids(value, field_name="source_row_ids")
     if len(ids) != count:
-        raise ValueError("source_row_ids must match row count.")
+        raise ValueError(_dual_msg("source_row_ids 必须与行数匹配。", "source_row_ids must match row count."))
     return ids
 
 
 def _required_source_row_ids(value: Any, *, field_name: str) -> tuple[str | int, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray, memoryview)):
-        raise ValueError(f"{field_name} must be a list of source row identifiers.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是源行标识符的列表。", f"{field_name} must be a list of source row identifiers."))
     ids: list[str | int] = []
     for index, item in enumerate(value):
         if isinstance(item, bool) or isinstance(item, float):
-            raise ValueError(f"{field_name}[{index}] must be a string or integer.")
+            raise ValueError(_dual_msg(f"{field_name}[{index}] 必须是字符串或整数。", f"{field_name}[{index}] must be a string or integer."))
         if isinstance(item, int):
             ids.append(item)
         elif isinstance(item, str) and item.strip():
             ids.append(item)
         else:
-            raise ValueError(f"{field_name}[{index}] must be a nonblank string or integer.")
+            raise ValueError(_dual_msg(f"{field_name}[{index}] 必须是非空字符串或整数。", f"{field_name}[{index}] must be a nonblank string or integer."))
     return tuple(ids)
 
 
@@ -748,7 +749,7 @@ def _text_option(value: Any, *, default: str, field_name: str) -> str:
     if value is None:
         return default
     if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a string.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是字符串。", f"{field_name} must be a string."))
     return value.strip() or default
 
 
@@ -756,7 +757,7 @@ def _bool_option(value: Any, *, default: bool) -> bool:
     if value is None:
         return default
     if not isinstance(value, bool):
-        raise TypeError("grouped statistics boolean options must be booleans.")
+        raise TypeError(_dual_msg("分组统计的布尔选项必须是布尔值。", "grouped statistics boolean options must be booleans."))
     return value
 
 
@@ -787,7 +788,7 @@ def _validate_group(
     value_columns: Sequence[str],
 ) -> None:
     if not isinstance(group, Mapping):
-        raise TypeError("statistics grouped group entries must be mappings.")
+        raise TypeError(_dual_msg("分组统计的 group 条目必须是映射。", "statistics grouped group entries must be mappings."))
     _require_keys(
         group,
         {"group", "group_index", "group_source_row_ids", "columns"},
@@ -795,25 +796,25 @@ def _validate_group(
     )
     label = _required_text(group.get("group"), "group")
     if label != group_order[expected_index - 1]:
-        raise ValueError("statistics grouped group order does not match groups.")
+        raise ValueError(_dual_msg("分组统计的 group order 与 groups 不匹配。", "statistics grouped group order does not match groups."))
     if _positive_int(group.get("group_index"), field_name="group_index") != expected_index:
-        raise ValueError("statistics grouped group_index values must be contiguous.")
+        raise ValueError(_dual_msg("分组统计的 group_index 值必须连续。", "statistics grouped group_index values must be contiguous."))
     _required_source_row_ids(group.get("group_source_row_ids"), field_name="group_source_row_ids")
     columns = _required_sequence(group.get("columns"), "columns")
     if len(columns) != len(value_columns):
-        raise ValueError("statistics grouped group columns must match value_columns.")
+        raise ValueError(_dual_msg("分组统计的 group columns 必须与 value_columns 匹配。", "statistics grouped group columns must match value_columns."))
     seen_columns: set[str] = set()
     for column in columns:
         _validate_group_column(column, value_columns=value_columns)
         name = str(column["value_column"])
         if name in seen_columns:
-            raise ValueError("statistics grouped value_column entries must be unique per group.")
+            raise ValueError(_dual_msg("分组统计的 value_column 条目在每个分组内必须唯一。", "statistics grouped value_column entries must be unique per group."))
         seen_columns.add(name)
 
 
 def _validate_group_column(column: Any, *, value_columns: Sequence[str]) -> None:
     if not isinstance(column, Mapping):
-        raise TypeError("statistics grouped column entries must be mappings.")
+        raise TypeError(_dual_msg("分组统计的 column 条目必须是映射。", "statistics grouped column entries must be mappings."))
     _require_keys(
         column,
         {
@@ -829,21 +830,21 @@ def _validate_group_column(column: Any, *, value_columns: Sequence[str]) -> None
     )
     value_column = _required_text(column.get("value_column"), "value_column")
     if value_column not in value_columns:
-        raise ValueError("statistics grouped column value_column is not selected.")
+        raise ValueError(_dual_msg("分组统计的 column value_column 未被选中。", "statistics grouped column value_column is not selected."))
     input_row_count = _non_negative_int(column.get("input_row_count"), field_name="input_row_count")
     row_count = _non_negative_int(column.get("row_count"), field_name="row_count")
     included = _required_source_row_ids(column.get("included_source_row_ids"), field_name="included_source_row_ids")
     skipped = _required_source_row_ids(column.get("skipped_source_row_ids"), field_name="skipped_source_row_ids")
     if len(included) != row_count:
-        raise ValueError("statistics grouped included_source_row_ids must match row_count.")
+        raise ValueError(_dual_msg("分组统计的 included_source_row_ids 必须与 row_count 匹配。", "statistics grouped included_source_row_ids must match row_count."))
     if len(included) + len(skipped) != input_row_count:
-        raise ValueError("statistics grouped included/skipped row IDs must match input_row_count.")
+        raise ValueError(_dual_msg("分组统计的 included/skipped 行 ID 必须与 input_row_count 匹配。", "statistics grouped included/skipped row IDs must match input_row_count."))
     result = column.get("result")
     if row_count == 0:
         if result is not None:
-            raise ValueError("statistics grouped empty column result must be null.")
+            raise ValueError(_dual_msg("分组统计的空列结果必须为 null。", "statistics grouped empty column result must be null."))
     elif not isinstance(result, Mapping):
-        raise TypeError("statistics grouped non-empty column result must be a mapping.")
+        raise TypeError(_dual_msg("分组统计的非空列结果必须是映射。", "statistics grouped non-empty column result must be a mapping."))
     else:
         _validate_standard_statistics_payload(result)
     _text_list(column.get("warnings"), "warnings")
@@ -856,7 +857,7 @@ def _validate_standard_statistics_payload(payload: Mapping[str, Any]) -> None:
     row_count = _non_negative_int(payload.get("row_count"), field_name="result.row_count")
     ids = _required_source_row_ids(payload.get("source_row_ids"), field_name="result.source_row_ids")
     if len(ids) != row_count:
-        raise ValueError("result.source_row_ids must match result.row_count.")
+        raise ValueError(_dual_msg("result.source_row_ids 必须与 result.row_count 匹配。", "result.source_row_ids must match result.row_count."))
     if "warning_codes" in payload:
         _text_list(payload.get("warning_codes"), "result.warning_codes")
     if "analysis_rows" in payload:
@@ -883,20 +884,20 @@ def _validate_standard_statistics_payload(payload: Mapping[str, Any]) -> None:
 
 def _numeric_string(value: Any, *, field_name: str) -> mp.mpf:
     if not isinstance(value, str):
-        raise TypeError(f"{field_name} must be a numeric string.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是数字字符串。", f"{field_name} must be a numeric string."))
     text = value.strip()
     if not text:
-        raise ValueError(f"{field_name} must not be blank.")
+        raise ValueError(_dual_msg(f"{field_name} 不得为空。", f"{field_name} must not be blank."))
     try:
         return mp.mpf(text)
     except Exception as exc:  # noqa: BLE001 - validation boundary for persisted payloads.
-        raise ValueError(f"{field_name} must be a valid numeric string.") from exc
+        raise ValueError(_dual_msg(f"{field_name} 必须是有效的数字字符串。", f"{field_name} must be a valid numeric string.")) from exc
 
 
 def _finite_numeric_string(value: Any, *, field_name: str) -> None:
     parsed = _numeric_string(value, field_name=field_name)
     if not mp.isfinite(parsed):
-        raise ValueError(f"{field_name} must be finite.")
+        raise ValueError(_dual_msg(f"{field_name} 必须为有限值。", f"{field_name} must be finite."))
 
 
 def _finite_numeric_string_or_text(value: str, *, field_name: str) -> None:
@@ -908,7 +909,7 @@ def _finite_numeric_string_or_text(value: str, *, field_name: str) -> None:
     except Exception:
         return
     if not mp.isfinite(parsed):
-        raise ValueError(f"{field_name} must be finite.")
+        raise ValueError(_dual_msg(f"{field_name} 必须为有限值。", f"{field_name} must be finite."))
 
 
 def _finite_mpf_or_none(value: Any) -> mp.mpf | None:
@@ -932,7 +933,7 @@ def _validate_outlier_flags(value: Any) -> None:
     flags = _required_sequence(value, "result.outlier_flags")
     for index, item in enumerate(flags):
         if not isinstance(item, Mapping):
-            raise TypeError(f"result.outlier_flags[{index}] must be a mapping.")
+            raise TypeError(_dual_msg(f"result.outlier_flags[{index}] 必须是映射。", f"result.outlier_flags[{index}] must be a mapping."))
         _require_keys(
             item,
             {"source_row_id", "value", "metric", "reason"},
@@ -1104,7 +1105,7 @@ def _cell_text(value: Any) -> str:
 def _plain_mapping(value: Mapping[str, Any]) -> dict[str, object]:
     normalized = normalize_json_payload(value, path="statistics_grouped_plain_mapping")
     if not isinstance(normalized, Mapping):
-        raise TypeError("plain mapping must normalize to a mapping.")
+        raise TypeError(_dual_msg("plain mapping 必须归一化为映射。", "plain mapping must normalize to a mapping."))
     return {str(key): nested for key, nested in deepcopy(normalized).items()}
 
 
@@ -1112,11 +1113,11 @@ def _text_list(value: Any, field_name: str) -> tuple[str, ...]:
     if value is None:
         return ()
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray, memoryview)):
-        raise TypeError(f"{field_name} must be a list of strings.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是字符串列表。", f"{field_name} must be a list of strings."))
     items: list[str] = []
     for index, item in enumerate(value):
         if not isinstance(item, str):
-            raise TypeError(f"{field_name}[{index}] must be a string.")
+            raise TypeError(_dual_msg(f"{field_name}[{index}] 必须是字符串。", f"{field_name}[{index}] must be a string."))
         items.append(item)
     return tuple(items)
 
@@ -1125,25 +1126,25 @@ def _validate_diagnostics(value: Any) -> None:
     diagnostics = _required_sequence(value, "diagnostics")
     for item in diagnostics:
         if not isinstance(item, Mapping):
-            raise TypeError("statistics grouped diagnostics must be mappings.")
+            raise TypeError(_dual_msg("分组统计的 diagnostics 必须是映射。", "statistics grouped diagnostics must be mappings."))
         severity = item.get("severity")
         code = item.get("code")
         message = item.get("message")
         if severity not in _DIAGNOSTIC_SEVERITIES:
-            raise ValueError("statistics grouped diagnostic severity is unsupported.")
+            raise ValueError(_dual_msg("分组统计的 diagnostic severity 不受支持。", "statistics grouped diagnostic severity is unsupported."))
         _required_text(code, "diagnostic.code")
         _required_text(message, "diagnostic.message")
 
 
 def _required_sequence(value: Any, field_name: str) -> tuple[Any, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray, memoryview)):
-        raise TypeError(f"{field_name} must be a list.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是列表。", f"{field_name} must be a list."))
     return tuple(value)
 
 
 def _required_mapping(value: Any, field_name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
-        raise TypeError(f"{field_name} must be a mapping.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是映射。", f"{field_name} must be a mapping."))
     return value
 
 
@@ -1153,44 +1154,44 @@ def _required_text_list(value: Any, field_name: str) -> tuple[str, ...]:
 
 def _required_text(value: Any, field_name: str) -> str:
     if not isinstance(value, str):
-        raise TypeError(f"{field_name} must be a string.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是字符串。", f"{field_name} must be a string."))
     text = value.strip()
     if not text:
-        raise ValueError(f"{field_name} must not be blank.")
+        raise ValueError(_dual_msg(f"{field_name} 不得为空。", f"{field_name} must not be blank."))
     return text
 
 
 def _bool_value(value: Any, *, field_name: str) -> bool:
     if not isinstance(value, bool):
-        raise TypeError(f"{field_name} must be a boolean.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是布尔值。", f"{field_name} must be a boolean."))
     return value
 
 
 def _require_keys(payload: Mapping[str, Any], keys: set[str], path: str) -> None:
     missing = sorted(key for key in keys if key not in payload)
     if missing:
-        raise ValueError(f"{path} is missing keys: {', '.join(missing)}.")
+        raise ValueError(_dual_msg(f"{path} 缺少键：{', '.join(missing)}。", f"{path} is missing keys: {', '.join(missing)}."))
 
 
 def _positive_int(value: Any, *, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{field_name} must be an integer.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是整数。", f"{field_name} must be an integer."))
     if value <= 0:
-        raise ValueError(f"{field_name} must be positive.")
+        raise ValueError(_dual_msg(f"{field_name} 必须为正数。", f"{field_name} must be positive."))
     return int(value)
 
 
 def _non_negative_int(value: Any, *, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{field_name} must be an integer.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是整数。", f"{field_name} must be an integer."))
     if value < 0:
-        raise ValueError(f"{field_name} must be non-negative.")
+        raise ValueError(_dual_msg(f"{field_name} 必须为非负数。", f"{field_name} must be non-negative."))
     return int(value)
 
 
 def _reject_json_floats(value: Any, *, path: str) -> None:
     if isinstance(value, float):
-        raise TypeError(f"JSON floats are not allowed at {path}.")
+        raise TypeError(_dual_msg(f"{path} 处不允许使用 JSON 浮点数。", f"JSON floats are not allowed at {path}."))
     if isinstance(value, Mapping):
         for key, nested in value.items():
             _reject_json_floats(nested, path=f"{path}.{key}")

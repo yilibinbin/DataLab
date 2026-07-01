@@ -9,6 +9,7 @@ import mpmath as mp
 from ._payload import normalize_json_payload
 from .results import AnalysisRow, analysis_rows_from_json
 from .statistics_compute import type7_quantile
+from shared.bilingual import _dual_msg
 from shared.precision import precision_guard
 from shared.unit_annotations import first_unit_annotation_text, normalize_display_only_family_units
 
@@ -52,9 +53,9 @@ def run_statistics_time_series(
     with precision_guard(precision_digits) as precision_used:
         value_list = [mp.mpf(value) for value in values]
         if not value_list:
-            raise ValueError("time-series statistics require at least one value.")
+            raise ValueError(_dual_msg("时间序列统计至少需要一个值。", "time-series statistics require at least one value."))
         if any(not mp.isfinite(value) for value in value_list):
-            raise ValueError("time-series statistics require finite values.")
+            raise ValueError(_dual_msg("时间序列统计要求所有值为有限值。", "time-series statistics require finite values."))
 
         options = normalize_statistics_time_series_options(inputs)
         row_ids = _source_row_ids(source_row_ids, len(value_list))
@@ -126,7 +127,7 @@ def run_statistics_time_series(
     validate_statistics_time_series_payload(payload)
     normalized = normalize_json_payload(payload, path="statistics_time_series_payload")
     if not isinstance(normalized, Mapping):
-        raise TypeError("statistics time-series payload must normalize to a mapping.")
+        raise TypeError(_dual_msg("统计时间序列载荷必须归一化为映射。", "statistics time-series payload must normalize to a mapping."))
     return dict(normalized)
 
 
@@ -138,18 +139,18 @@ def normalize_statistics_time_series_options(inputs: Mapping[str, Any]) -> TimeS
         field_name="series_method",
     )
     if method not in _SERIES_METHODS:
-        raise ValueError(f"Unsupported time-series method: {method}.")
+        raise ValueError(_dual_msg(f"不支持的时间序列方法：{method}。", f"Unsupported time-series method: {method}."))
 
     window_size = _positive_int_option(merged.get("window_size"), default=3, field_name="window_size")
     min_periods = _positive_int_option(merged.get("min_periods"), default=window_size, field_name="min_periods")
     if min_periods > window_size:
-        raise ValueError("min_periods must be less than or equal to window_size.")
+        raise ValueError(_dual_msg("min_periods 必须小于或等于 window_size。", "min_periods must be less than or equal to window_size."))
     alignment = _string_option(merged.get("alignment"), default="right", field_name="alignment")
     if alignment not in _ALIGNMENTS:
-        raise ValueError("alignment must be 'right' or 'center'.")
+        raise ValueError(_dual_msg("alignment 必须是 'right' 或 'center'。", "alignment must be 'right' or 'center'."))
     denominator = _string_option(merged.get("denominator"), default="sample", field_name="denominator")
     if denominator not in _DENOMINATORS:
-        raise ValueError("denominator must be 'sample' or 'population'.")
+        raise ValueError(_dual_msg("denominator 必须是 'sample' 或 'population'。", "denominator must be 'sample' or 'population'."))
 
     alpha: mp.mpf | None = None
     alpha_source: str | None = None
@@ -158,7 +159,7 @@ def normalize_statistics_time_series_options(inputs: Mapping[str, Any]) -> TimeS
         alpha_raw = _optional_text(merged.get("alpha"))
         span_raw = _optional_text(merged.get("span"))
         if bool(alpha_raw) == bool(span_raw):
-            raise ValueError("EWMA requires exactly one of alpha or span.")
+            raise ValueError(_dual_msg("EWMA 需要 alpha 或 span 中恰好一个。", "EWMA requires exactly one of alpha or span."))
         if alpha_raw:
             alpha = _parse_probability(alpha_raw, field_name="alpha")
             alpha_source = "alpha"
@@ -166,7 +167,7 @@ def normalize_statistics_time_series_options(inputs: Mapping[str, Any]) -> TimeS
         else:
             span = _parse_positive_mpf(span_raw or "", field_name="span")
             if span < 1:
-                raise ValueError("span must be greater than or equal to 1.")
+                raise ValueError(_dual_msg("span 必须大于或等于 1。", "span must be greater than or equal to 1."))
             alpha = mp.mpf("2") / (span + 1)
             alpha_source = "span"
             alpha_input = span_raw
@@ -186,7 +187,7 @@ def normalize_statistics_time_series_options(inputs: Mapping[str, Any]) -> TimeS
 
 def validate_statistics_time_series_payload(payload: Mapping[str, Any]) -> None:
     if not isinstance(payload, Mapping):
-        raise TypeError("statistics time-series payload must be a mapping.")
+        raise TypeError(_dual_msg("统计时间序列载荷必须是映射。", "statistics time-series payload must be a mapping."))
     _reject_json_floats(payload, path="statistics_time_series_payload")
     payload_without_optional = {key: value for key, value in payload.items() if key != "units"}
     _require_keys(
@@ -210,25 +211,25 @@ def validate_statistics_time_series_payload(payload: Mapping[str, Any]) -> None:
     if "units" in payload:
         normalize_display_only_family_units(payload.get("units"), family="statistics")
     if payload.get("schema") != TIME_SERIES_PAYLOAD_SCHEMA:
-        raise ValueError("statistics time-series payload schema is unsupported.")
+        raise ValueError(_dual_msg("统计时间序列载荷的 schema 不受支持。", "statistics time-series payload schema is unsupported."))
     if payload.get("workflow_mode") != TIME_SERIES_WORKFLOW_MODE:
-        raise ValueError("statistics time-series workflow_mode is unsupported.")
+        raise ValueError(_dual_msg("统计时间序列载荷的 workflow_mode 不受支持。", "statistics time-series workflow_mode is unsupported."))
     method = _required_text(payload.get("series_method"), "series_method")
     if method not in _SERIES_METHODS:
-        raise ValueError("statistics time-series method is unsupported.")
+        raise ValueError(_dual_msg("统计时间序列方法不受支持。", "statistics time-series method is unsupported."))
     if method in _ROLLING_METHODS:
         window = payload.get("window")
         if not isinstance(window, Mapping):
-            raise TypeError("rolling time-series payload requires window metadata.")
+            raise TypeError(_dual_msg("滚动时间序列载荷需要 window 元数据。", "rolling time-series payload requires window metadata."))
         _validate_window(window, method=method)
         if payload.get("ewma") is not None:
-            raise ValueError("rolling time-series payload must not include ewma metadata.")
+            raise ValueError(_dual_msg("滚动时间序列载荷不得包含 ewma 元数据。", "rolling time-series payload must not include ewma metadata."))
     else:
         if payload.get("window") is not None:
-            raise ValueError("EWMA time-series payload must not include window metadata.")
+            raise ValueError(_dual_msg("EWMA 时间序列载荷不得包含 window 元数据。", "EWMA time-series payload must not include window metadata."))
         ewma = payload.get("ewma")
         if not isinstance(ewma, Mapping):
-            raise TypeError("EWMA time-series payload requires ewma metadata.")
+            raise TypeError(_dual_msg("EWMA 时间序列载荷需要 ewma 元数据。", "EWMA time-series payload requires ewma metadata."))
         _validate_ewma(ewma)
 
     value_columns = _required_text_list(payload.get("value_columns"), "value_columns")
@@ -236,7 +237,7 @@ def validate_statistics_time_series_payload(payload: Mapping[str, Any]) -> None:
     assumptions = _required_mapping(payload.get("uncertainty_assumptions"), "uncertainty_assumptions")
     columns = _required_sequence(payload.get("columns"), "columns")
     if len(columns) != len(value_columns):
-        raise ValueError("time-series column count must match value_columns.")
+        raise ValueError(_dual_msg("时间序列列数必须与 value_columns 匹配。", "time-series column count must match value_columns."))
 
     for index, raw_column in enumerate(columns):
         column = _required_mapping(raw_column, f"columns[{index}]")
@@ -367,16 +368,16 @@ def _time_series_output_unit(units: Mapping[str, Any] | None, value_column: str)
 
 def validate_statistics_time_series_snapshot(snapshot: Mapping[str, Any]) -> None:
     if not isinstance(snapshot, Mapping):
-        raise TypeError("statistics time-series snapshot must be a mapping.")
+        raise TypeError(_dual_msg("统计时间序列快照必须是映射。", "statistics time-series snapshot must be a mapping."))
     _reject_json_floats(snapshot, path="statistics_time_series_snapshot")
     if snapshot.get("schema") != TIME_SERIES_RESULT_SNAPSHOT_SCHEMA:
-        raise ValueError("statistics time-series snapshot schema is unsupported.")
+        raise ValueError(_dual_msg("统计时间序列快照的 schema 不受支持。", "statistics time-series snapshot schema is unsupported."))
     if snapshot.get("schema_version") != TIME_SERIES_RESULT_SNAPSHOT_SCHEMA_VERSION:
-        raise ValueError("statistics time-series snapshot schema_version is unsupported.")
+        raise ValueError(_dual_msg("统计时间序列快照的 schema_version 不受支持。", "statistics time-series snapshot schema_version is unsupported."))
     if snapshot.get("family") != "statistics":
-        raise ValueError("statistics time-series snapshot family must be statistics.")
+        raise ValueError(_dual_msg("统计时间序列快照的 family 必须为 statistics。", "statistics time-series snapshot family must be statistics."))
     if snapshot.get("mode") != TIME_SERIES_WORKFLOW_MODE:
-        raise ValueError("statistics time-series snapshot mode is unsupported.")
+        raise ValueError(_dual_msg("统计时间序列快照的 mode 不受支持。", "statistics time-series snapshot mode is unsupported."))
     source = _required_mapping(snapshot.get("source"), "source")
     time_series = _required_sequence(snapshot.get("time_series"), "time_series")
     payload = _payload_from_snapshot(source, time_series)
@@ -450,7 +451,7 @@ def _ewma_points(
     precision_digits: int,
 ) -> list[dict[str, Any]]:
     if options.alpha is None:
-        raise ValueError("EWMA alpha was not normalized.")
+        raise ValueError(_dual_msg("EWMA alpha 未归一化。", "EWMA alpha was not normalized."))
     alpha = options.alpha
     points: list[dict[str, Any]] = []
     previous: mp.mpf | None = None
@@ -519,13 +520,13 @@ def _rolling_value(window_values: Sequence[mp.mpf], options: TimeSeriesOptions) 
     if options.series_method == "rolling_std":
         if options.denominator == "sample":
             if len(window_values) < 2:
-                raise ValueError("sample rolling standard deviation requires at least two values.")
+                raise ValueError(_dual_msg("样本滚动标准差至少需要两个值。", "sample rolling standard deviation requires at least two values."))
             denominator = len(window_values) - 1
         else:
             denominator = len(window_values)
         mean = mp.fsum(window_values) / len(window_values)
         return mp.sqrt(mp.fsum((value - mean) ** 2 for value in window_values) / denominator)
-    raise ValueError(f"Unsupported time-series method: {options.series_method}.")
+    raise ValueError(_dual_msg(f"不支持的时间序列方法：{options.series_method}。", f"Unsupported time-series method: {options.series_method}."))
 
 
 def _has_sufficient_window(window_values: Sequence[mp.mpf], options: TimeSeriesOptions) -> bool:
@@ -558,7 +559,7 @@ def _ewma_payload(options: TimeSeriesOptions, *, precision_digits: int) -> dict[
     if options.series_method != "ewma":
         return None
     if options.alpha is None or options.alpha_source is None or options.alpha_input is None:
-        raise ValueError("EWMA options were not normalized.")
+        raise ValueError(_dual_msg("EWMA 选项未归一化。", "EWMA options were not normalized."))
     return {
         "alpha": _mp_text(options.alpha, precision_digits),
         "parameter": options.alpha_source,
@@ -589,10 +590,10 @@ def _parse_optional_sigmas(
     try:
         items = _required_sequence(raw_sigmas, "sigmas")
         if len(items) != count:
-            raise ValueError("sigmas length must match values length.")
+            raise ValueError(_dual_msg("sigmas 的长度必须与 values 的长度一致。", "sigmas length must match values length."))
         sigmas = tuple(_parse_finite_mpf(item, field_name=f"sigmas[{index}]") for index, item in enumerate(items))
         if any(sigma < 0 for sigma in sigmas):
-            raise ValueError("sigma values must be non-negative.")
+            raise ValueError(_dual_msg("sigma 值必须为非负数。", "sigma values must be non-negative."))
     except (TypeError, ValueError) as exc:
         return None, sigma_column, [_diagnostic("invalid_sigma", str(exc), severity="warning")]
     return sigmas, sigma_column, []
@@ -603,7 +604,7 @@ def _time_labels(value: Any, count: int) -> tuple[str, ...]:
         return tuple(str(index + 1) for index in range(count))
     labels = _required_sequence(value, "time_labels")
     if len(labels) != count:
-        raise ValueError("time_labels length must match values length.")
+        raise ValueError(_dual_msg("time_labels 的长度必须与 values 的长度一致。", "time_labels length must match values length."))
     return tuple(str(label) for label in labels)
 
 
@@ -632,11 +633,11 @@ def _source_row_ids(source_row_ids: Sequence[str | int] | None, count: int) -> t
     if source_row_ids is None:
         return tuple(str(index + 1) for index in range(count))
     if len(source_row_ids) != count:
-        raise ValueError("source_row_ids length must match values length.")
+        raise ValueError(_dual_msg("source_row_ids 的长度必须与 values 的长度一致。", "source_row_ids length must match values length."))
     normalized: list[str | int] = []
     for value in source_row_ids:
         if isinstance(value, bool) or not isinstance(value, (str, int)):
-            raise TypeError("source row IDs must be strings or integers.")
+            raise TypeError(_dual_msg("source row ID 必须是字符串或整数。", "source row IDs must be strings or integers."))
         normalized.append(value)
     return tuple(normalized)
 
@@ -644,30 +645,30 @@ def _source_row_ids(source_row_ids: Sequence[str | int] | None, count: int) -> t
 def _parse_finite_mpf(value: Any, *, field_name: str) -> mp.mpf:
     parsed = _parse_mpf(value, field_name=field_name)
     if not mp.isfinite(parsed):
-        raise ValueError(f"{field_name} must be finite.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是有限值。", f"{field_name} must be finite."))
     return parsed
 
 
 def _parse_mpf(value: Any, *, field_name: str) -> mp.mpf:
     if isinstance(value, bool) or isinstance(value, float):
-        raise TypeError(f"{field_name} must be a numeric string or integer.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是数值字符串或整数。", f"{field_name} must be a numeric string or integer."))
     try:
         return mp.mpf(str(value).strip())
     except Exception as exc:  # noqa: BLE001 - user numeric boundary.
-        raise ValueError(f"{field_name} is not a valid number: {value!r}.") from exc
+        raise ValueError(_dual_msg(f"{field_name} 不是有效的数字：{value!r}。", f"{field_name} is not a valid number: {value!r}.")) from exc
 
 
 def _parse_positive_mpf(value: str, *, field_name: str) -> mp.mpf:
     parsed = _parse_finite_mpf(value, field_name=field_name)
     if parsed <= 0:
-        raise ValueError(f"{field_name} must be positive.")
+        raise ValueError(_dual_msg(f"{field_name} 必须为正数。", f"{field_name} must be positive."))
     return parsed
 
 
 def _parse_probability(value: str, *, field_name: str) -> mp.mpf:
     parsed = _parse_finite_mpf(value, field_name=field_name)
     if not (0 < parsed <= 1):
-        raise ValueError(f"{field_name} must satisfy 0 < {field_name} <= 1.")
+        raise ValueError(_dual_msg(f"{field_name} 必须满足 0 < {field_name} <= 1。", f"{field_name} must satisfy 0 < {field_name} <= 1."))
     return parsed
 
 
@@ -675,10 +676,10 @@ def _positive_int_option(value: Any, *, default: int, field_name: str) -> int:
     if value in (None, ""):
         return default
     if isinstance(value, bool) or isinstance(value, float):
-        raise TypeError(f"{field_name} must be an integer.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是整数。", f"{field_name} must be an integer."))
     parsed = int(str(value).strip())
     if parsed < 1:
-        raise ValueError(f"{field_name} must be at least 1.")
+        raise ValueError(_dual_msg(f"{field_name} 必须至少为 1。", f"{field_name} must be at least 1."))
     return parsed
 
 
@@ -692,14 +693,14 @@ def _bool_option(value: Any, *, default: bool) -> bool:
         return True
     if text in {"0", "false", "no", "off"}:
         return False
-    raise ValueError(f"Invalid boolean value: {value!r}.")
+    raise ValueError(_dual_msg(f"无效的布尔值：{value!r}。", f"Invalid boolean value: {value!r}."))
 
 
 def _string_option(value: Any, *, default: str, field_name: str) -> str:
     if value is None:
         return default
     if not isinstance(value, str):
-        raise TypeError(f"{field_name} must be text.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是文本。", f"{field_name} must be text."))
     return value.strip() or default
 
 
@@ -707,7 +708,7 @@ def _optional_text(value: Any) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise TypeError("option must be text.")
+        raise TypeError(_dual_msg("选项必须是文本。", "option must be text."))
     text = value.strip()
     return text or None
 
@@ -752,17 +753,17 @@ def _payload_from_snapshot(source: Mapping[str, Any], time_series: Sequence[Any]
     }
     normalized = normalize_json_payload(payload, path="statistics_time_series_snapshot_payload")
     if not isinstance(normalized, Mapping):
-        raise TypeError("statistics time-series snapshot payload must normalize to a mapping.")
+        raise TypeError(_dual_msg("统计时间序列快照载荷必须归一化为映射。", "statistics time-series snapshot payload must normalize to a mapping."))
     return dict(normalized)
 
 
 def _reject_json_floats(value: Any, *, path: str) -> None:
     if isinstance(value, float):
-        raise TypeError(f"JSON floats are not allowed at {path}.")
+        raise TypeError(_dual_msg(f"{path} 处不允许 JSON 浮点数。", f"JSON floats are not allowed at {path}."))
     if isinstance(value, Mapping):
         for key, item in value.items():
             if isinstance(key, float):
-                raise TypeError(f"JSON float keys are not allowed at {path}.")
+                raise TypeError(_dual_msg(f"{path} 处不允许 JSON 浮点数键。", f"JSON float keys are not allowed at {path}."))
             _reject_json_floats(item, path=f"{path}.{key}")
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray, memoryview)):
         for index, item in enumerate(value):
@@ -774,24 +775,24 @@ def _require_keys(mapping: Mapping[str, Any], expected: set[str], field_name: st
     extra = actual - expected
     missing = expected - actual
     if extra or missing:
-        raise ValueError(f"{field_name} keys mismatch; extra={sorted(extra)}, missing={sorted(missing)}.")
+        raise ValueError(_dual_msg(f"{field_name} 的键不匹配；多余={sorted(extra)}，缺失={sorted(missing)}。", f"{field_name} keys mismatch; extra={sorted(extra)}, missing={sorted(missing)}."))
 
 
 def _required_mapping(value: Any, field_name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
-        raise TypeError(f"{field_name} must be a mapping.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是映射。", f"{field_name} must be a mapping."))
     return value
 
 
 def _required_sequence(value: Any, field_name: str) -> Sequence[Any]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray, memoryview)):
-        raise TypeError(f"{field_name} must be a sequence.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是序列。", f"{field_name} must be a sequence."))
     return value
 
 
 def _required_text(value: Any, field_name: str) -> str:
     if not isinstance(value, str) or not value:
-        raise TypeError(f"{field_name} must be non-empty text.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是非空文本。", f"{field_name} must be non-empty text."))
     return value
 
 
@@ -826,63 +827,63 @@ def _validate_column(
         f"columns[{value_column}]",
     )
     if column.get("value_column") != value_column:
-        raise ValueError("column value_column must match root value_columns order.")
+        raise ValueError(_dual_msg("column 的 value_column 必须与根 value_columns 的顺序一致。", "column value_column must match root value_columns order."))
     source_row_ids = _required_sequence(column.get("source_row_ids"), "column.source_row_ids")
     points = _required_sequence(column.get("points"), "column.points")
     row_count = column.get("row_count")
     if not isinstance(row_count, int) or isinstance(row_count, bool):
-        raise TypeError("column row_count must be an integer.")
+        raise TypeError(_dual_msg("column 的 row_count 必须是整数。", "column row_count must be an integer."))
     column_index = column.get("column_index")
     if column_index is not None and (isinstance(column_index, bool) or not isinstance(column_index, int)):
-        raise TypeError("column_index must be an integer or null.")
+        raise TypeError(_dual_msg("column_index 必须是整数或 null。", "column_index must be an integer or null."))
     if row_count != len(source_row_ids) or row_count != len(points):
-        raise ValueError("column row_count, source_row_ids, and points length must match.")
+        raise ValueError(_dual_msg("column 的 row_count、source_row_ids 与 points 的长度必须一致。", "column row_count, source_row_ids, and points length must match."))
     sigma_column = column.get("sigma_column")
     if sigma_column not in (None, "") and sigma_columns.get(value_column) != sigma_column:
-        raise ValueError("column sigma_column must match root sigma_columns.")
+        raise ValueError(_dual_msg("column 的 sigma_column 必须与根 sigma_columns 一致。", "column sigma_column must match root sigma_columns."))
     assumption = column.get("uncertainty_assumption")
     if assumption not in (None, "") and assumptions.get(value_column) != assumption:
-        raise ValueError("column uncertainty_assumption must match root uncertainty_assumptions.")
+        raise ValueError(_dual_msg("column 的 uncertainty_assumption 必须与根 uncertainty_assumptions 一致。", "column uncertainty_assumption must match root uncertainty_assumptions."))
     if method != "rolling_mean" and assumption:
-        raise ValueError("only rolling_mean may carry propagated uncertainty assumptions.")
+        raise ValueError(_dual_msg("只有 rolling_mean 可携带传播的不确定度假设。", "only rolling_mean may carry propagated uncertainty assumptions."))
     for index, raw_point in enumerate(points):
         point = _required_mapping(raw_point, f"points[{index}]")
         _validate_point(point, expected_index=index + 1)
         if point.get("source_row_id") != source_row_ids[index]:
-            raise ValueError("point source_row_id must match column source_row_ids order.")
+            raise ValueError(_dual_msg("point 的 source_row_id 必须与 column source_row_ids 的顺序一致。", "point source_row_id must match column source_row_ids order."))
     _validate_diagnostics(column.get("diagnostics"), "column.diagnostics")
 
 
 def _validate_window(window: Mapping[str, Any], *, method: str) -> None:
     _require_keys(window, {"type", "size", "alignment", "min_periods", "denominator"}, "window")
     if window.get("type") != "row_count":
-        raise ValueError("time-series window type must be row_count.")
+        raise ValueError(_dual_msg("时间序列 window 的 type 必须为 row_count。", "time-series window type must be row_count."))
     for key in ("size", "min_periods"):
         value = window.get(key)
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-            raise TypeError(f"window.{key} must be a positive integer.")
+            raise TypeError(_dual_msg(f"window.{key} 必须是正整数。", f"window.{key} must be a positive integer."))
     if window["min_periods"] > window["size"]:
-        raise ValueError("window.min_periods must be <= window.size.")
+        raise ValueError(_dual_msg("window.min_periods 必须 <= window.size。", "window.min_periods must be <= window.size."))
     if window.get("alignment") not in _ALIGNMENTS:
-        raise ValueError("window.alignment is unsupported.")
+        raise ValueError(_dual_msg("window.alignment 不受支持。", "window.alignment is unsupported."))
     denominator = window.get("denominator")
     if method == "rolling_std":
         if denominator not in _DENOMINATORS:
-            raise ValueError("rolling_std requires a supported denominator.")
+            raise ValueError(_dual_msg("rolling_std 需要受支持的 denominator。", "rolling_std requires a supported denominator."))
     elif denominator is not None:
-        raise ValueError("non-std rolling methods must not set denominator.")
+        raise ValueError(_dual_msg("非 std 的滚动方法不得设置 denominator。", "non-std rolling methods must not set denominator."))
 
 
 def _validate_ewma(ewma: Mapping[str, Any]) -> None:
     _require_keys(ewma, {"alpha", "parameter", "parameter_value", "adjust"}, "ewma")
     alpha = _parse_probability(_required_text(ewma.get("alpha"), "ewma.alpha"), field_name="ewma.alpha")
     if not (0 < alpha <= 1):
-        raise ValueError("ewma.alpha must satisfy 0 < alpha <= 1.")
+        raise ValueError(_dual_msg("ewma.alpha 必须满足 0 < alpha <= 1。", "ewma.alpha must satisfy 0 < alpha <= 1."))
     if ewma.get("parameter") not in {"alpha", "span"}:
-        raise ValueError("ewma.parameter is unsupported.")
+        raise ValueError(_dual_msg("ewma.parameter 不受支持。", "ewma.parameter is unsupported."))
     _required_text(ewma.get("parameter_value"), "ewma.parameter_value")
     if not isinstance(ewma.get("adjust"), bool):
-        raise TypeError("ewma.adjust must be boolean.")
+        raise TypeError(_dual_msg("ewma.adjust 必须是布尔值。", "ewma.adjust must be boolean."))
 
 
 def _validate_point(point: Mapping[str, Any], *, expected_index: int) -> None:
@@ -904,20 +905,20 @@ def _validate_point(point: Mapping[str, Any], *, expected_index: int) -> None:
         f"points[{expected_index}]",
     )
     if point.get("index") != expected_index:
-        raise ValueError("point indexes must be 1-based and ordered.")
+        raise ValueError(_dual_msg("point 索引必须从 1 开始并保持有序。", "point indexes must be 1-based and ordered."))
     if not isinstance(point.get("time"), str):
-        raise TypeError("point time must be text.")
+        raise TypeError(_dual_msg("point 的 time 必须是文本。", "point time must be text."))
     if isinstance(point.get("source_row_id"), bool) or not isinstance(point.get("source_row_id"), (str, int)):
-        raise TypeError("point source_row_id must be a string or integer.")
+        raise TypeError(_dual_msg("point 的 source_row_id 必须是字符串或整数。", "point source_row_id must be a string or integer."))
     _numeric_text(point.get("observed_value"), "point.observed_value")
     if point.get("observed_uncertainty") is not None:
         _numeric_text(point.get("observed_uncertainty"), "point.observed_uncertainty")
     status = point.get("status")
     if status not in _POINT_STATUSES:
-        raise ValueError("point status is unsupported.")
+        raise ValueError(_dual_msg("point 的 status 不受支持。", "point status is unsupported."))
     if status == "insufficient_window":
         if point.get("value") is not None:
-            raise ValueError("insufficient_window points must have null value.")
+            raise ValueError(_dual_msg("insufficient_window 的 point 必须具有 null value。", "insufficient_window points must have null value."))
     else:
         _numeric_text(point.get("value"), "point.value")
     if point.get("uncertainty") is not None:
@@ -925,10 +926,10 @@ def _validate_point(point: Mapping[str, Any], *, expected_index: int) -> None:
     window_ids = _required_sequence(point.get("window_source_row_ids"), "point.window_source_row_ids")
     skipped_ids = _required_sequence(point.get("skipped_source_row_ids"), "point.skipped_source_row_ids")
     if len(window_ids) != point.get("window_size_effective"):
-        raise ValueError("window_size_effective must match window_source_row_ids length.")
+        raise ValueError(_dual_msg("window_size_effective 必须与 window_source_row_ids 的长度一致。", "window_size_effective must match window_source_row_ids length."))
     for item in list(window_ids) + list(skipped_ids):
         if isinstance(item, bool) or not isinstance(item, (str, int)):
-            raise TypeError("point source row IDs must be strings or integers.")
+            raise TypeError(_dual_msg("point 的 source row ID 必须是字符串或整数。", "point source row IDs must be strings or integers."))
 
 
 def _validate_diagnostics(value: Any, field_name: str) -> None:
@@ -943,7 +944,7 @@ def _validate_diagnostics(value: Any, field_name: str) -> None:
 
 def _numeric_text(value: Any, field_name: str) -> None:
     if not isinstance(value, str):
-        raise TypeError(f"{field_name} must be numeric text.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是数值文本。", f"{field_name} must be numeric text."))
     parsed = mp.mpf(value)
     if not mp.isfinite(parsed):
-        raise ValueError(f"{field_name} must be finite numeric text.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是有限的数值文本。", f"{field_name} must be finite numeric text."))

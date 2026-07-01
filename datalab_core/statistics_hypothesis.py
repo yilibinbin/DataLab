@@ -7,6 +7,7 @@ from typing import Any
 
 import mpmath as mp
 
+from shared.bilingual import _dual_msg
 from shared.unit_annotations import first_unit_annotation_text, normalize_display_only_family_units
 from shared.precision import precision_guard
 
@@ -99,9 +100,9 @@ def run_statistics_hypothesis(
     options = _normalize_options(inputs)
     value_list = [mp.mpf(value) for value in values]
     if not value_list:
-        raise ValueError("hypothesis test values must contain at least one value.")
+        raise ValueError(_dual_msg("假设检验数值至少需要包含一个值。", "hypothesis test values must contain at least one value."))
     if any(not mp.isfinite(value) for value in value_list):
-        raise ValueError("hypothesis test values must be finite.")
+        raise ValueError(_dual_msg("假设检验数值必须是有限值。", "hypothesis test values must be finite."))
 
     with precision_guard(precision_digits) as precision_used:
         if options.test_kind == "one_sample_t":
@@ -178,7 +179,7 @@ def run_statistics_hypothesis(
                 ),
             )
         else:  # Defensive guard; _normalize_options rejects this path.
-            raise ValueError(f"Unsupported hypothesis test kind: {options.test_kind}.")
+            raise ValueError(_dual_msg(f"不支持的假设检验类型：{options.test_kind}。", f"Unsupported hypothesis test kind: {options.test_kind}."))
 
     payload["analysis_rows"] = analysis_rows_to_json(
         statistics_hypothesis_analysis_rows_from_payload(payload)
@@ -186,79 +187,79 @@ def run_statistics_hypothesis(
     validate_statistics_hypothesis_payload(payload)
     normalized = normalize_json_payload(payload, path="statistics_hypothesis_payload")
     if not isinstance(normalized, Mapping):
-        raise TypeError("statistics hypothesis payload must normalize to a mapping.")
+        raise TypeError(_dual_msg("统计假设检验载荷必须归一化为一个映射。", "statistics hypothesis payload must normalize to a mapping."))
     return dict(normalized)
 
 
 def validate_statistics_hypothesis_payload(payload: Mapping[str, Any]) -> None:
     if not isinstance(payload, Mapping):
-        raise TypeError("hypothesis payload must be a mapping.")
+        raise TypeError(_dual_msg("假设检验载荷必须是一个映射。", "hypothesis payload must be a mapping."))
     _reject_json_floats(payload, path="hypothesis_payload")
     _reject_unknown_keys(payload, _PAYLOAD_KEYS, path="hypothesis_payload")
     if "units" in payload:
         normalize_display_only_family_units(payload.get("units"), family="statistics")
 
     if payload.get("schema") != HYPOTHESIS_PAYLOAD_SCHEMA:
-        raise ValueError("hypothesis payload schema is unsupported.")
+        raise ValueError(_dual_msg("假设检验载荷的 schema 不受支持。", "hypothesis payload schema is unsupported."))
     if payload.get("workflow_mode") != HYPOTHESIS_WORKFLOW_MODE:
-        raise ValueError("hypothesis payload workflow_mode is unsupported.")
+        raise ValueError(_dual_msg("假设检验载荷的 workflow_mode 不受支持。", "hypothesis payload workflow_mode is unsupported."))
     test_kind = _choice(payload.get("test_kind"), _SUPPORTED_TEST_KINDS, "test_kind")
     _choice(payload.get("alternative"), _SUPPORTED_ALTERNATIVES, "alternative")
     alpha = _finite_numeric_string(payload.get("alpha"), field_name="alpha")
     if not (mp.mpf("0") < alpha < mp.mpf("1")):
-        raise ValueError("alpha must be in (0, 1).")
+        raise ValueError(_dual_msg("alpha 必须在 (0, 1) 区间内。", "alpha must be in (0, 1)."))
     backend = _choice(payload.get("backend"), _SUPPORTED_BACKENDS, "backend")
     if "backend_version" in payload:
         _optional_text(payload.get("backend_version"), "backend_version")
     precision_used = _positive_int(payload.get("precision_used"), field_name="precision_used")
     if backend == "scipy" and precision_used > 16:
-        raise ValueError("scipy backend is allowed only when precision_used <= 16.")
+        raise ValueError(_dual_msg("仅当 precision_used <= 16 时才允许使用 scipy 后端。", "scipy backend is allowed only when precision_used <= 16."))
     if test_kind == "sign_test" and backend != "mpmath":
-        raise ValueError("sign_test payloads must use the mpmath backend.")
+        raise ValueError(_dual_msg("sign_test 载荷必须使用 mpmath 后端。", "sign_test payloads must use the mpmath backend."))
 
     inputs = _required_mapping(payload.get("inputs"), "inputs")
     _reject_unknown_keys(inputs, _INPUT_KEYS, path="hypothesis_payload.inputs")
     value_columns = _required_text_sequence(inputs.get("value_columns"), "inputs.value_columns")
     if test_kind in {"one_sample_t", "sign_test"} and len(value_columns) != 1:
-        raise ValueError(f"{test_kind} requires exactly one value column.")
+        raise ValueError(_dual_msg(f"{test_kind} 需要且仅需要一个数值列。", f"{test_kind} requires exactly one value column."))
     if test_kind in {"paired_t", "welch_t"} and len(value_columns) != 2:
-        raise ValueError(f"{test_kind} requires exactly two value columns.")
+        raise ValueError(_dual_msg(f"{test_kind} 需要且仅需要两个数值列。", f"{test_kind} requires exactly two value columns."))
     if test_kind == "chi_square_gof" and not (1 <= len(value_columns) <= 2):
-        raise ValueError("chi_square_gof requires one observed column and optional expected column.")
+        raise ValueError(_dual_msg("chi_square_gof 需要一个观测列和一个可选的期望列。", "chi_square_gof requires one observed column and optional expected column."))
     if test_kind == "sign_test" and len(value_columns) != 1:
-        raise ValueError("one-sample sign_test requires exactly one value column.")
+        raise ValueError(_dual_msg("单样本 sign_test 需要且仅需要一个数值列。", "one-sample sign_test requires exactly one value column."))
     source_row_ids = _source_row_ids(inputs.get("source_row_ids"), field_name="inputs.source_row_ids")
     source_row_ids_b: tuple[str | int, ...] = ()
     if "source_row_ids_b" in inputs:
         if test_kind not in {"paired_t", "welch_t"}:
-            raise ValueError("source_row_ids_b is supported only for paired_t and welch_t.")
+            raise ValueError(_dual_msg("source_row_ids_b 仅支持 paired_t 和 welch_t。", "source_row_ids_b is supported only for paired_t and welch_t."))
         source_row_ids_b = _source_row_ids(inputs.get("source_row_ids_b"), field_name="inputs.source_row_ids_b")
     null_parameters = _required_mapping(inputs.get("null_parameters"), "inputs.null_parameters")
     for key, value in null_parameters.items():
         _required_text(key, "inputs.null_parameters.<key>")
         _finite_numeric_string(value, field_name=f"inputs.null_parameters.{key}")
     if test_kind == "one_sample_t" and set(null_parameters) != {"mu0"}:
-        raise ValueError("one_sample_t requires null parameter mu0.")
+        raise ValueError(_dual_msg("one_sample_t 需要原假设参数 mu0。", "one_sample_t requires null parameter mu0."))
     if test_kind in {"paired_t", "welch_t"} and set(null_parameters) != {"delta0"}:
-        raise ValueError(f"{test_kind} requires null parameter delta0.")
+        raise ValueError(_dual_msg(f"{test_kind} 需要原假设参数 delta0。", f"{test_kind} requires null parameter delta0."))
     if test_kind == "sign_test":
         if inputs.get("sign_mode") != "one_sample":
-            raise ValueError("sign_test first slice supports only sign_mode='one_sample'.")
+            raise ValueError(_dual_msg("sign_test 的第一个分片仅支持 sign_mode='one_sample'。", "sign_test first slice supports only sign_mode='one_sample'."))
         if set(null_parameters) != {"m0"}:
-            raise ValueError("sign_test requires null parameter m0.")
+            raise ValueError(_dual_msg("sign_test 需要原假设参数 m0。", "sign_test requires null parameter m0."))
     elif "sign_mode" in inputs:
-        raise ValueError("sign_mode is supported only for sign_test.")
+        raise ValueError(_dual_msg("sign_mode 仅支持 sign_test。", "sign_mode is supported only for sign_test."))
     if test_kind == "chi_square_gof" and set(null_parameters) != set():
-        raise ValueError("chi_square_gof does not accept null parameters.")
+        raise ValueError(_dual_msg("chi_square_gof 不接受原假设参数。", "chi_square_gof does not accept null parameters."))
     if test_kind != "chi_square_gof" and (
         "expected_source" in inputs or "fitted_parameter_count" in inputs
     ):
-        raise ValueError("expected_source and fitted_parameter_count are supported only for chi_square_gof.")
+        raise ValueError(_dual_msg("expected_source 和 fitted_parameter_count 仅支持 chi_square_gof。", "expected_source and fitted_parameter_count are supported only for chi_square_gof."))
     if test_kind == "chi_square_gof":
         if "expected_source" not in inputs:
-            raise ValueError("chi_square_gof inputs require expected_source.")
+            raise ValueError(_dual_msg("chi_square_gof 输入需要 expected_source。", "chi_square_gof inputs require expected_source."))
         if "fitted_parameter_count" not in inputs:
-            raise ValueError("chi_square_gof inputs require fitted_parameter_count.")
+            raise ValueError(_dual_msg("chi_square_gof 输入需要 fitted_parameter_count。", "chi_square_gof inputs require fitted_parameter_count."))
     if "fitted_parameter_count" in inputs:
         _nonnegative_int(inputs.get("fitted_parameter_count"), field_name="inputs.fitted_parameter_count")
     if "expected_source" in inputs:
@@ -268,19 +269,19 @@ def validate_statistics_hypothesis_payload(payload: Mapping[str, Any]) -> None:
     _reject_unknown_keys(result, _RESULT_KEYS, path="hypothesis_payload.result")
     statistic_name = _required_text(result.get("statistic_name"), "result.statistic_name")
     if test_kind == "one_sample_t" and statistic_name != "t":
-        raise ValueError("one_sample_t statistic_name must be 't'.")
+        raise ValueError(_dual_msg("one_sample_t 的 statistic_name 必须为 't'。", "one_sample_t statistic_name must be 't'."))
     if test_kind in {"paired_t", "welch_t"} and statistic_name != "t":
-        raise ValueError(f"{test_kind} statistic_name must be 't'.")
+        raise ValueError(_dual_msg(f"{test_kind} 的 statistic_name 必须为 't'。", f"{test_kind} statistic_name must be 't'."))
     if test_kind == "sign_test" and statistic_name != "positive_count":
-        raise ValueError("sign_test statistic_name must be 'positive_count'.")
+        raise ValueError(_dual_msg("sign_test 的 statistic_name 必须为 'positive_count'。", "sign_test statistic_name must be 'positive_count'."))
     if test_kind == "chi_square_gof" and statistic_name != "chi_square":
-        raise ValueError("chi_square_gof statistic_name must be 'chi_square'.")
+        raise ValueError(_dual_msg("chi_square_gof 的 statistic_name 必须为 'chi_square'。", "chi_square_gof statistic_name must be 'chi_square'."))
     if test_kind != "welch_t" and ("sample_size_a" in result or "sample_size_b" in result):
-        raise ValueError("sample_size_a/sample_size_b are supported only for welch_t.")
+        raise ValueError(_dual_msg("sample_size_a/sample_size_b 仅支持 welch_t。", "sample_size_a/sample_size_b are supported only for welch_t."))
     if test_kind != "sign_test" and any(
         key in result for key in ("positive_count", "negative_count", "tie_count", "effective_n")
     ):
-        raise ValueError("sign count fields are supported only for sign_test.")
+        raise ValueError(_dual_msg("符号计数字段仅支持 sign_test。", "sign count fields are supported only for sign_test."))
     if test_kind != "chi_square_gof" and any(
         key in result
         for key in (
@@ -291,45 +292,45 @@ def validate_statistics_hypothesis_payload(payload: Mapping[str, Any]) -> None:
             "fitted_parameter_count",
         )
     ):
-        raise ValueError("chi-square result fields are supported only for chi_square_gof.")
+        raise ValueError(_dual_msg("卡方结果字段仅支持 chi_square_gof。", "chi-square result fields are supported only for chi_square_gof."))
     _finite_numeric_string(result.get("statistic"), field_name="result.statistic")
     if "degrees_of_freedom" in result:
         df = _finite_numeric_string(result.get("degrees_of_freedom"), field_name="result.degrees_of_freedom")
         if df <= 0:
-            raise ValueError("degrees_of_freedom must be > 0.")
+            raise ValueError(_dual_msg("degrees_of_freedom 必须大于 0。", "degrees_of_freedom must be > 0."))
     p_value_raw = result.get("p_value")
     if p_value_raw is not None:
         p_value = _finite_numeric_string(p_value_raw, field_name="result.p_value")
         if not (mp.mpf("0") <= p_value <= mp.mpf("1")):
-            raise ValueError("p_value must be in [0, 1].")
+            raise ValueError(_dual_msg("p_value 必须在 [0, 1] 区间内。", "p_value must be in [0, 1]."))
         if "reject_null" in result and not isinstance(result.get("reject_null"), bool):
-            raise TypeError("result.reject_null must be a boolean when present.")
+            raise TypeError(_dual_msg("存在 result.reject_null 时它必须是布尔值。", "result.reject_null must be a boolean when present."))
     elif "reject_null" in result:
-        raise ValueError("reject_null must be omitted when p_value is unavailable.")
+        raise ValueError(_dual_msg("当 p_value 不可用时必须省略 reject_null。", "reject_null must be omitted when p_value is unavailable."))
     sample_size = _nonnegative_int(result.get("sample_size"), field_name="result.sample_size")
     if len(source_row_ids) != sample_size:
-        raise ValueError("inputs.source_row_ids length must match result.sample_size.")
+        raise ValueError(_dual_msg("inputs.source_row_ids 的长度必须与 result.sample_size 匹配。", "inputs.source_row_ids length must match result.sample_size."))
     if "sample_size_a" in result:
         _nonnegative_int(result.get("sample_size_a"), field_name="result.sample_size_a")
     if "sample_size_b" in result:
         sample_size_b = _nonnegative_int(result.get("sample_size_b"), field_name="result.sample_size_b")
         if len(source_row_ids_b) != sample_size_b:
-            raise ValueError("inputs.source_row_ids_b length must match result.sample_size_b.")
+            raise ValueError(_dual_msg("inputs.source_row_ids_b 的长度必须与 result.sample_size_b 匹配。", "inputs.source_row_ids_b length must match result.sample_size_b."))
     if test_kind == "paired_t":
         if not source_row_ids_b:
-            raise ValueError("paired_t inputs require source_row_ids_b.")
+            raise ValueError(_dual_msg("paired_t 输入需要 source_row_ids_b。", "paired_t inputs require source_row_ids_b."))
         if source_row_ids_b != source_row_ids:
-            raise ValueError("paired_t source_row_ids_b must exactly match source_row_ids.")
+            raise ValueError(_dual_msg("paired_t 的 source_row_ids_b 必须与 source_row_ids 完全匹配。", "paired_t source_row_ids_b must exactly match source_row_ids."))
     if "category_count" in result:
         _nonnegative_int(result.get("category_count"), field_name="result.category_count")
     if "total_observed" in result:
         total_observed = _finite_numeric_string(result.get("total_observed"), field_name="result.total_observed")
         if total_observed <= 0:
-            raise ValueError("result.total_observed must be > 0.")
+            raise ValueError(_dual_msg("result.total_observed 必须大于 0。", "result.total_observed must be > 0."))
     if "expected_source" in result:
         _choice(result.get("expected_source"), {"counts", "probabilities"}, "result.expected_source")
     if "probability_normalized" in result and not isinstance(result.get("probability_normalized"), bool):
-        raise TypeError("result.probability_normalized must be a boolean.")
+        raise TypeError(_dual_msg("result.probability_normalized 必须是布尔值。", "result.probability_normalized must be a boolean."))
     if "fitted_parameter_count" in result:
         _nonnegative_int(result.get("fitted_parameter_count"), field_name="result.fitted_parameter_count")
     for count_field in ("positive_count", "negative_count", "tie_count", "effective_n"):
@@ -338,57 +339,57 @@ def validate_statistics_hypothesis_payload(payload: Mapping[str, Any]) -> None:
     if test_kind == "sign_test":
         for count_field in ("positive_count", "negative_count", "tie_count", "effective_n"):
             if count_field not in result:
-                raise ValueError(f"sign_test result requires {count_field}.")
+                raise ValueError(_dual_msg(f"sign_test 结果需要 {count_field}。", f"sign_test result requires {count_field}."))
         if int(result["effective_n"]) <= 0:
-            raise ValueError("sign_test effective_n must be positive.")
+            raise ValueError(_dual_msg("sign_test 的 effective_n 必须为正。", "sign_test effective_n must be positive."))
         if (
             int(result["positive_count"])
             + int(result["negative_count"])
             + int(result["tie_count"])
             != sample_size
         ):
-            raise ValueError("sign_test counts must add up to result.sample_size.")
+            raise ValueError(_dual_msg("sign_test 各计数之和必须等于 result.sample_size。", "sign_test counts must add up to result.sample_size."))
         if int(result["positive_count"]) + int(result["negative_count"]) != int(result["effective_n"]):
-            raise ValueError("sign_test effective_n must equal positive_count + negative_count.")
+            raise ValueError(_dual_msg("sign_test 的 effective_n 必须等于 positive_count + negative_count。", "sign_test effective_n must equal positive_count + negative_count."))
     if test_kind in {"one_sample_t", "paired_t"}:
         if sample_size < 2:
-            raise ValueError(f"{test_kind} result.sample_size must be at least 2.")
+            raise ValueError(_dual_msg(f"{test_kind} 的 result.sample_size 必须至少为 2。", f"{test_kind} result.sample_size must be at least 2."))
         df_raw = result.get("degrees_of_freedom")
         if df_raw is None:
-            raise ValueError(f"{test_kind} result requires degrees_of_freedom.")
+            raise ValueError(_dual_msg(f"{test_kind} 结果需要 degrees_of_freedom。", f"{test_kind} result requires degrees_of_freedom."))
         df = _finite_numeric_string(df_raw, field_name="result.degrees_of_freedom")
         if df != sample_size - 1:
-            raise ValueError(f"{test_kind} degrees_of_freedom must equal sample_size - 1.")
+            raise ValueError(_dual_msg(f"{test_kind} 的 degrees_of_freedom 必须等于 sample_size - 1。", f"{test_kind} degrees_of_freedom must equal sample_size - 1."))
     if test_kind == "welch_t":
         sample_size_a = _nonnegative_int(result.get("sample_size_a"), field_name="result.sample_size_a")
         sample_size_b = _nonnegative_int(result.get("sample_size_b"), field_name="result.sample_size_b")
         if sample_size_a < 2 or sample_size_b < 2:
-            raise ValueError("welch_t sample sizes must both be at least 2.")
+            raise ValueError(_dual_msg("welch_t 的两个样本量都必须至少为 2。", "welch_t sample sizes must both be at least 2."))
         if sample_size != sample_size_a:
-            raise ValueError("welch_t result.sample_size must equal sample_size_a.")
+            raise ValueError(_dual_msg("welch_t 的 result.sample_size 必须等于 sample_size_a。", "welch_t result.sample_size must equal sample_size_a."))
         df_raw = result.get("degrees_of_freedom")
         if df_raw is None or _finite_numeric_string(df_raw, field_name="result.degrees_of_freedom") <= 0:
-            raise ValueError("welch_t requires positive degrees_of_freedom.")
+            raise ValueError(_dual_msg("welch_t 需要正的 degrees_of_freedom。", "welch_t requires positive degrees_of_freedom."))
     if test_kind == "chi_square_gof":
         if result.get("expected_source") != inputs.get("expected_source"):
-            raise ValueError("chi_square_gof result expected_source must match inputs.")
+            raise ValueError(_dual_msg("chi_square_gof 结果的 expected_source 必须与 inputs 匹配。", "chi_square_gof result expected_source must match inputs."))
         if result.get("fitted_parameter_count") != inputs.get("fitted_parameter_count"):
-            raise ValueError("chi_square_gof result fitted_parameter_count must match inputs.")
+            raise ValueError(_dual_msg("chi_square_gof 结果的 fitted_parameter_count 必须与 inputs 匹配。", "chi_square_gof result fitted_parameter_count must match inputs."))
         category_count = _nonnegative_int(result.get("category_count"), field_name="result.category_count")
         fitted_parameter_count = _nonnegative_int(
             result.get("fitted_parameter_count"),
             field_name="result.fitted_parameter_count",
         )
         if category_count < 2:
-            raise ValueError("chi_square_gof category_count must be at least 2.")
+            raise ValueError(_dual_msg("chi_square_gof 的 category_count 必须至少为 2。", "chi_square_gof category_count must be at least 2."))
         if sample_size != category_count:
-            raise ValueError("chi_square_gof result.sample_size must equal category_count.")
+            raise ValueError(_dual_msg("chi_square_gof 的 result.sample_size 必须等于 category_count。", "chi_square_gof result.sample_size must equal category_count."))
         df_raw = result.get("degrees_of_freedom")
         if df_raw is None:
-            raise ValueError("chi_square_gof result requires degrees_of_freedom.")
+            raise ValueError(_dual_msg("chi_square_gof 结果需要 degrees_of_freedom。", "chi_square_gof result requires degrees_of_freedom."))
         df = _finite_numeric_string(df_raw, field_name="result.degrees_of_freedom")
         if df != category_count - 1 - fitted_parameter_count or df <= 0:
-            raise ValueError("chi_square_gof degrees_of_freedom must equal category_count - 1 - fitted_parameter_count and be > 0.")
+            raise ValueError(_dual_msg("chi_square_gof 的 degrees_of_freedom 必须等于 category_count - 1 - fitted_parameter_count 且大于 0。", "chi_square_gof degrees_of_freedom must equal category_count - 1 - fitted_parameter_count and be > 0."))
     _effect_rows(result.get("effect_rows"), field_name="result.effect_rows")
     _diagnostics(payload.get("diagnostics"), field_name="diagnostics")
     if "analysis_rows" in payload:
@@ -583,31 +584,31 @@ def _hypothesis_output_unit(units: Mapping[str, Any] | None, metric: str) -> str
 
 def validate_statistics_hypothesis_snapshot(snapshot: Mapping[str, Any]) -> None:
     if not isinstance(snapshot, Mapping):
-        raise TypeError("statistics hypothesis snapshot must be a mapping.")
+        raise TypeError(_dual_msg("统计假设检验快照必须是一个映射。", "statistics hypothesis snapshot must be a mapping."))
     _reject_json_floats(snapshot, path="statistics_hypothesis_snapshot")
     if snapshot.get("schema") != _STATISTICS_RESULT_SNAPSHOT_SCHEMA:
-        raise ValueError("statistics hypothesis snapshot schema is unsupported.")
+        raise ValueError(_dual_msg("统计假设检验快照的 schema 不受支持。", "statistics hypothesis snapshot schema is unsupported."))
     if snapshot.get("schema_version") != _STATISTICS_RESULT_SNAPSHOT_SCHEMA_VERSION:
-        raise ValueError("statistics hypothesis snapshot schema_version is unsupported.")
+        raise ValueError(_dual_msg("统计假设检验快照的 schema_version 不受支持。", "statistics hypothesis snapshot schema_version is unsupported."))
     if snapshot.get("family") != "statistics":
-        raise ValueError("statistics hypothesis snapshot family must be statistics.")
+        raise ValueError(_dual_msg("统计假设检验快照的 family 必须为 statistics。", "statistics hypothesis snapshot family must be statistics."))
     if snapshot.get("mode") != HYPOTHESIS_WORKFLOW_MODE:
-        raise ValueError("statistics hypothesis snapshot mode is unsupported.")
+        raise ValueError(_dual_msg("统计假设检验快照的 mode 不受支持。", "statistics hypothesis snapshot mode is unsupported."))
     payload = snapshot.get("hypothesis_test")
     if not isinstance(payload, Mapping):
-        raise TypeError("statistics hypothesis snapshot requires a hypothesis_test payload.")
+        raise TypeError(_dual_msg("统计假设检验快照需要一个 hypothesis_test 载荷。", "statistics hypothesis snapshot requires a hypothesis_test payload."))
     validate_statistics_hypothesis_payload(payload)
     source = snapshot.get("source")
     if not isinstance(source, Mapping):
-        raise TypeError("statistics hypothesis snapshot source must be a mapping.")
+        raise TypeError(_dual_msg("统计假设检验快照的 source 必须是一个映射。", "statistics hypothesis snapshot source must be a mapping."))
     if source.get("test_kind") != payload.get("test_kind"):
-        raise ValueError("statistics hypothesis snapshot source test_kind does not match payload.")
+        raise ValueError(_dual_msg("统计假设检验快照 source 的 test_kind 与载荷不匹配。", "statistics hypothesis snapshot source test_kind does not match payload."))
     if source.get("alternative") != payload.get("alternative"):
-        raise ValueError("statistics hypothesis snapshot source alternative does not match payload.")
+        raise ValueError(_dual_msg("统计假设检验快照 source 的 alternative 与载荷不匹配。", "statistics hypothesis snapshot source alternative does not match payload."))
     if source.get("alpha") != payload.get("alpha"):
-        raise ValueError("statistics hypothesis snapshot source alpha does not match payload.")
+        raise ValueError(_dual_msg("统计假设检验快照 source 的 alpha 与载荷不匹配。", "statistics hypothesis snapshot source alpha does not match payload."))
     if source.get("backend") != payload.get("backend"):
-        raise ValueError("statistics hypothesis snapshot source backend does not match payload.")
+        raise ValueError(_dual_msg("统计假设检验快照 source 的 backend 与载荷不匹配。", "statistics hypothesis snapshot source backend does not match payload."))
     _validate_statistics_hypothesis_snapshot_source(source, payload)
 
 
@@ -626,7 +627,7 @@ def _validate_statistics_hypothesis_snapshot_source(
         "statistics_hypothesis_snapshot.source.value_columns",
     )
     if source_value_columns != payload_value_columns:
-        raise ValueError("statistics hypothesis snapshot source value_columns do not match payload.")
+        raise ValueError(_dual_msg("统计假设检验快照 source 的 value_columns 与载荷不匹配。", "statistics hypothesis snapshot source value_columns do not match payload."))
 
     payload_row_ids = _source_row_ids(
         inputs.get("source_row_ids"),
@@ -637,7 +638,7 @@ def _validate_statistics_hypothesis_snapshot_source(
         field_name="statistics_hypothesis_snapshot.source.source_row_ids",
     )
     if source_row_ids != payload_row_ids:
-        raise ValueError("statistics hypothesis snapshot source_row_ids do not match payload.")
+        raise ValueError(_dual_msg("统计假设检验快照的 source_row_ids 与载荷不匹配。", "statistics hypothesis snapshot source_row_ids do not match payload."))
 
     row_count = _nonnegative_int(
         source.get("row_count"),
@@ -648,7 +649,7 @@ def _validate_statistics_hypothesis_snapshot_source(
         field_name="hypothesis_test.result.sample_size",
     )
     if row_count != sample_size:
-        raise ValueError("statistics hypothesis snapshot source row_count does not match payload.")
+        raise ValueError(_dual_msg("统计假设检验快照 source 的 row_count 与载荷不匹配。", "statistics hypothesis snapshot source row_count does not match payload."))
 
     if "source_row_ids_b" in inputs:
         payload_row_ids_b = _source_row_ids(
@@ -660,9 +661,9 @@ def _validate_statistics_hypothesis_snapshot_source(
             field_name="statistics_hypothesis_snapshot.source.source_row_ids_b",
         )
         if source_row_ids_b != payload_row_ids_b:
-            raise ValueError("statistics hypothesis snapshot source_row_ids_b do not match payload.")
+            raise ValueError(_dual_msg("统计假设检验快照的 source_row_ids_b 与载荷不匹配。", "statistics hypothesis snapshot source_row_ids_b do not match payload."))
     elif "source_row_ids_b" in source:
-        raise ValueError("statistics hypothesis snapshot source_row_ids_b must not be present.")
+        raise ValueError(_dual_msg("统计假设检验快照中不应出现 source_row_ids_b。", "statistics hypothesis snapshot source_row_ids_b must not be present."))
 
 
 def _one_sample_t_payload(
@@ -675,16 +676,16 @@ def _one_sample_t_payload(
 ) -> dict[str, Any]:
     n = len(values)
     if n < 2:
-        raise ValueError("one_sample_t requires at least two values.")
+        raise ValueError(_dual_msg("one_sample_t 至少需要两个值。", "one_sample_t requires at least two values."))
     mean = mp.fsum(values) / n
     centered = [value - mean for value in values]
     variance = mp.fsum([value * value for value in centered]) / (n - 1)
     if not (variance > 0) or not mp.isfinite(variance):
-        raise ValueError("one_sample_t requires a positive finite sample variance.")
+        raise ValueError(_dual_msg("one_sample_t 需要一个正的有限样本方差。", "one_sample_t requires a positive finite sample variance."))
     std = mp.sqrt(variance)
     standard_error = std / mp.sqrt(n)
     if not (standard_error > 0) or not mp.isfinite(standard_error):
-        raise ValueError("one_sample_t requires a positive finite standard error.")
+        raise ValueError(_dual_msg("one_sample_t 需要一个正的有限标准误。", "one_sample_t requires a positive finite standard error."))
     mean_difference = mean - options.null_parameter_value
     statistic = mean_difference / standard_error
     df = mp.mpf(n - 1)
@@ -732,7 +733,7 @@ def _sign_test_payload(
     value_column: str,
 ) -> dict[str, Any]:
     if options.sign_mode != "one_sample":
-        raise ValueError("sign_test first slice supports only one_sample mode.")
+        raise ValueError(_dual_msg("sign_test 的第一个分片仅支持 one_sample 模式。", "sign_test first slice supports only one_sample mode."))
     positive_count = 0
     negative_count = 0
     tie_count = 0
@@ -746,7 +747,7 @@ def _sign_test_payload(
             tie_count += 1
     effective_n = positive_count + negative_count
     if effective_n == 0:
-        raise ValueError("sign_test requires at least one non-tied value.")
+        raise ValueError(_dual_msg("sign_test 至少需要一个非并列值。", "sign_test requires at least one non-tied value."))
     p_value = _sign_test_p_value(positive_count, effective_n, options.alternative)
     diagnostics: list[dict[str, str]] = []
     if tie_count:
@@ -802,11 +803,11 @@ def _paired_t_payload(
     value_column_b: str,
 ) -> dict[str, Any]:
     if len(values) != len(paired_values):
-        raise ValueError("paired_t requires equal-length paired values.")
+        raise ValueError(_dual_msg("paired_t 需要等长的配对数值。", "paired_t requires equal-length paired values."))
     normalized_source_row_ids_a = _default_source_row_ids(source_row_ids_a, count=len(values))
     normalized_source_row_ids_b = _default_source_row_ids(source_row_ids_b, count=len(paired_values))
     if normalized_source_row_ids_a != normalized_source_row_ids_b:
-        raise ValueError("paired_t requires identical source_row_ids and source_row_ids_b.")
+        raise ValueError(_dual_msg("paired_t 需要 source_row_ids 与 source_row_ids_b 完全一致。", "paired_t requires identical source_row_ids and source_row_ids_b."))
     differences = [mp.mpf(a) - mp.mpf(b) for a, b in zip(values, paired_values)]
     payload = _one_sample_t_like_payload(
         values=differences,
@@ -839,17 +840,17 @@ def _welch_t_payload(
     value_column_b: str,
 ) -> dict[str, Any]:
     if len(values_a) < 2 or len(values_b) < 2:
-        raise ValueError("welch_t requires at least two values per group.")
+        raise ValueError(_dual_msg("welch_t 每组至少需要两个值。", "welch_t requires at least two values per group."))
     mean_a, variance_a = _sample_mean_variance(values_a, field_name="values", require_positive=False)
     mean_b, variance_b = _sample_mean_variance(values_b, field_name="values_b", require_positive=False)
     se2_a = variance_a / len(values_a)
     se2_b = variance_b / len(values_b)
     se2 = se2_a + se2_b
     if not (se2 > 0) or not mp.isfinite(se2):
-        raise ValueError("welch_t requires a positive finite standard error.")
+        raise ValueError(_dual_msg("welch_t 需要一个正的有限标准误。", "welch_t requires a positive finite standard error."))
     denominator = (se2_a * se2_a) / (len(values_a) - 1) + (se2_b * se2_b) / (len(values_b) - 1)
     if not (denominator > 0) or not mp.isfinite(denominator):
-        raise ValueError("welch_t degrees of freedom are undefined.")
+        raise ValueError(_dual_msg("welch_t 的自由度未定义。", "welch_t degrees of freedom are undefined."))
     df = (se2 * se2) / denominator
     effect = mean_a - mean_b - options.null_parameter_value
     statistic = effect / mp.sqrt(se2)
@@ -910,41 +911,41 @@ def _chi_square_gof_payload(
     expected_column: str,
 ) -> dict[str, Any]:
     if expected_counts is not None and expected_probabilities is not None:
-        raise ValueError("chi_square_gof accepts expected_counts or expected_probabilities, not both.")
+        raise ValueError(_dual_msg("chi_square_gof 只接受 expected_counts 或 expected_probabilities 之一，不能同时提供。", "chi_square_gof accepts expected_counts or expected_probabilities, not both."))
     if expected_counts is None and expected_probabilities is None:
-        raise ValueError("chi_square_gof requires expected_counts or expected_probabilities.")
+        raise ValueError(_dual_msg("chi_square_gof 需要 expected_counts 或 expected_probabilities。", "chi_square_gof requires expected_counts or expected_probabilities."))
     observed_values = [_validate_observed_count(value, index) for index, value in enumerate(observed)]
     if len(observed_values) < 2:
-        raise ValueError("chi_square_gof requires at least two categories.")
+        raise ValueError(_dual_msg("chi_square_gof 至少需要两个类别。", "chi_square_gof requires at least two categories."))
     total_observed = mp.fsum(observed_values)
     if not (total_observed > 0):
-        raise ValueError("chi_square_gof observed total must be > 0.")
+        raise ValueError(_dual_msg("chi_square_gof 的观测总数必须大于 0。", "chi_square_gof observed total must be > 0."))
 
     probability_normalized = False
     if expected_probabilities is not None:
         if len(expected_probabilities) != len(observed_values):
-            raise ValueError("expected_probabilities must match observed category count.")
+            raise ValueError(_dual_msg("expected_probabilities 必须与观测类别数匹配。", "expected_probabilities must match observed category count."))
         probability_sum = mp.fsum(expected_probabilities)
         if not (mp.isfinite(probability_sum) and probability_sum > 0):
-            raise ValueError("expected probabilities must sum to a positive finite value.")
+            raise ValueError(_dual_msg("期望概率之和必须为一个正的有限值。", "expected probabilities must sum to a positive finite value."))
         for index, probability in enumerate(expected_probabilities):
             if not (mp.isfinite(probability) and probability >= 0):
-                raise ValueError(f"expected_probabilities[{index}] must be finite and non-negative.")
+                raise ValueError(_dual_msg(f"expected_probabilities[{index}] 必须是有限且非负的。", f"expected_probabilities[{index}] must be finite and non-negative."))
         expected = [total_observed * mp.mpf(probability) / probability_sum for probability in expected_probabilities]
         expected_source = "probabilities"
         probability_normalized = probability_sum != 1
     else:
         assert expected_counts is not None
         if len(expected_counts) != len(observed_values):
-            raise ValueError("expected_counts must match observed category count.")
+            raise ValueError(_dual_msg("expected_counts 必须与观测类别数匹配。", "expected_counts must match observed category count."))
         expected = []
         for index, count in enumerate(expected_counts):
             if not (mp.isfinite(count) and count >= 0):
-                raise ValueError(f"expected_counts[{index}] must be finite and non-negative.")
+                raise ValueError(_dual_msg(f"expected_counts[{index}] 必须是有限且非负的。", f"expected_counts[{index}] must be finite and non-negative."))
             expected.append(mp.mpf(count))
         expected_total = mp.fsum(expected)
         if not _same_total(expected_total, total_observed, precision_digits):
-            raise ValueError("expected_counts total must match observed total.")
+            raise ValueError(_dual_msg("expected_counts 的总数必须与观测总数匹配。", "expected_counts total must match observed total."))
         expected_source = "counts"
 
     statistic_terms: list[mp.mpf] = []
@@ -959,14 +960,14 @@ def _chi_square_gof_payload(
         )
     for index, (observed_value, expected_value) in enumerate(zip(observed_values, expected)):
         if expected_value == 0 and observed_value > 0:
-            raise ValueError(f"expected count is zero for positive observed count at category {index}.")
+            raise ValueError(_dual_msg(f"类别 {index} 处观测计数为正，但期望计数为零。", f"expected count is zero for positive observed count at category {index}."))
         if expected_value == 0:
             continue
         statistic_terms.append(((observed_value - expected_value) ** 2) / expected_value)
     statistic = mp.fsum(statistic_terms)
     df = len(observed_values) - 1 - options.fitted_parameter_count
     if df <= 0:
-        raise ValueError("chi_square_gof degrees of freedom must be > 0.")
+        raise ValueError(_dual_msg("chi_square_gof 的自由度必须大于 0。", "chi_square_gof degrees of freedom must be > 0."))
     p_value, backend, backend_version = _chi_square_p_value(
         statistic,
         mp.mpf(df),
@@ -1020,12 +1021,12 @@ def _one_sample_t_like_payload(
 ) -> dict[str, Any]:
     n = len(values)
     if n < 2:
-        raise ValueError(f"{test_kind} requires at least two values.")
+        raise ValueError(_dual_msg(f"{test_kind} 至少需要两个值。", f"{test_kind} requires at least two values."))
     mean, variance = _sample_mean_variance(values, field_name=test_kind)
     std = mp.sqrt(variance)
     standard_error = std / mp.sqrt(n)
     if not (standard_error > 0) or not mp.isfinite(standard_error):
-        raise ValueError(f"{test_kind} requires a positive finite standard error.")
+        raise ValueError(_dual_msg(f"{test_kind} 需要一个正的有限标准误。", f"{test_kind} requires a positive finite standard error."))
     mean_difference = mean - options.null_parameter_value
     statistic = mean_difference / standard_error
     df = mp.mpf(n - 1)
@@ -1119,10 +1120,10 @@ def _result_value_text(value: object) -> str:
 def _normalize_options(inputs: Mapping[str, Any]) -> _HypothesisOptions:
     test_kind = _required_string_option(inputs.get("test_kind"), field_name="test_kind")
     if test_kind not in _SUPPORTED_TEST_KINDS:
-        raise ValueError(f"Unsupported hypothesis test kind: {test_kind}.")
+        raise ValueError(_dual_msg(f"不支持的假设检验类型：{test_kind}。", f"Unsupported hypothesis test kind: {test_kind}."))
     alternative = _string_option(inputs.get("alternative"), default="two_sided", field_name="alternative")
     if alternative not in _SUPPORTED_ALTERNATIVES:
-        raise ValueError("alternative must be one of: greater, less, two_sided.")
+        raise ValueError(_dual_msg("alternative 必须是以下之一：greater、less、two_sided。", "alternative must be one of: greater, less, two_sided."))
     alpha_text = _numeric_string_option(inputs.get("alpha"), default="0.05", field_name="alpha")
     alpha = _parse_probability(alpha_text, field_name="alpha")
     fitted_parameter_count = 0
@@ -1139,14 +1140,14 @@ def _normalize_options(inputs: Mapping[str, Any]) -> _HypothesisOptions:
         null_text = _numeric_string_option(inputs.get("m0"), default="0", field_name="m0")
         sign_mode = _string_option(inputs.get("sign_mode"), default="one_sample", field_name="sign_mode")
         if sign_mode not in _SUPPORTED_SIGN_MODES:
-            raise ValueError("sign_test first slice supports only sign_mode='one_sample'.")
+            raise ValueError(_dual_msg("sign_test 的第一个分片仅支持 sign_mode='one_sample'。", "sign_test first slice supports only sign_mode='one_sample'."))
     else:
         null_key = ""
         null_text = "0"
         sign_mode = None
         alternative = "greater"
         if inputs.get("alternative") not in (None, "", "greater"):
-            raise ValueError("chi_square_gof supports only the upper-tail alternative.")
+            raise ValueError(_dual_msg("chi_square_gof 仅支持上尾备择假设。", "chi_square_gof supports only the upper-tail alternative."))
         fitted_parameter_count = _optional_nonnegative_int_option(
             inputs.get("fitted_parameter_count"),
             default=0,
@@ -1230,7 +1231,7 @@ def _scipy_chi_square_p_value(
 
 def _student_t_cdf_sf(statistic: mp.mpf, df: mp.mpf) -> tuple[mp.mpf, mp.mpf]:
     if not df > 0:
-        raise ValueError("Student-t degrees of freedom must be > 0.")
+        raise ValueError(_dual_msg("Student-t 的自由度必须大于 0。", "Student-t degrees of freedom must be > 0."))
     if statistic == 0:
         return mp.mpf("0.5"), mp.mpf("0.5")
     x = df / (df + statistic * statistic)
@@ -1246,9 +1247,9 @@ def _student_t_cdf_sf(statistic: mp.mpf, df: mp.mpf) -> tuple[mp.mpf, mp.mpf]:
 
 def _chi_square_sf(statistic: mp.mpf, df: mp.mpf) -> mp.mpf:
     if statistic < 0:
-        raise ValueError("chi-square statistic must be non-negative.")
+        raise ValueError(_dual_msg("卡方统计量必须是非负的。", "chi-square statistic must be non-negative."))
     if not df > 0:
-        raise ValueError("chi-square degrees of freedom must be > 0.")
+        raise ValueError(_dual_msg("卡方自由度必须大于 0。", "chi-square degrees of freedom must be > 0."))
     return _clamp_probability(mp.gammainc(df / 2, statistic / 2, mp.inf, regularized=True))
 
 
@@ -1274,23 +1275,23 @@ def _sample_mean_variance(
     require_positive: bool = True,
 ) -> tuple[mp.mpf, mp.mpf]:
     if len(values) < 2:
-        raise ValueError(f"{field_name} requires at least two values.")
+        raise ValueError(_dual_msg(f"{field_name} 至少需要两个值。", f"{field_name} requires at least two values."))
     mean = mp.fsum(values) / len(values)
     centered = [value - mean for value in values]
     variance = mp.fsum([value * value for value in centered]) / (len(values) - 1)
     if not mp.isfinite(variance) or variance < 0:
-        raise ValueError(f"{field_name} requires a finite non-negative sample variance.")
+        raise ValueError(_dual_msg(f"{field_name} 需要一个有限的非负样本方差。", f"{field_name} requires a finite non-negative sample variance."))
     if require_positive and not variance > 0:
-        raise ValueError(f"{field_name} requires a positive finite sample variance.")
+        raise ValueError(_dual_msg(f"{field_name} 需要一个正的有限样本方差。", f"{field_name} requires a positive finite sample variance."))
     return mean, variance
 
 
 def _validate_observed_count(value: mp.mpf, index: int) -> mp.mpf:
     count = mp.mpf(value)
     if not (mp.isfinite(count) and count >= 0):
-        raise ValueError(f"observed count at category {index} must be finite and non-negative.")
+        raise ValueError(_dual_msg(f"类别 {index} 处的观测计数必须是有限且非负的。", f"observed count at category {index} must be finite and non-negative."))
     if count != mp.floor(count):
-        raise ValueError(f"observed count at category {index} must be integer-valued.")
+        raise ValueError(_dual_msg(f"类别 {index} 处的观测计数必须为整数值。", f"observed count at category {index} must be integer-valued."))
     return count
 
 
@@ -1302,7 +1303,7 @@ def _same_total(left: mp.mpf, right: mp.mpf, precision_digits: int) -> bool:
 def _parse_probability(value: str, *, field_name: str) -> mp.mpf:
     parsed = _finite_numeric_string(value, field_name=field_name)
     if not (mp.mpf("0") < parsed < mp.mpf("1")):
-        raise ValueError(f"{field_name} must be in (0, 1).")
+        raise ValueError(_dual_msg(f"{field_name} 必须在 (0, 1) 区间内。", f"{field_name} must be in (0, 1)."))
     return parsed
 
 
@@ -1320,11 +1321,11 @@ def _format_mpf(value: Any, precision_digits: int) -> str:
 
 def _reject_json_floats(value: Any, *, path: str) -> None:
     if isinstance(value, float):
-        raise TypeError(f"JSON floats are not allowed at {path}; pass numeric values as strings.")
+        raise TypeError(_dual_msg(f"{path} 处不允许出现 JSON 浮点数；请以字符串形式传递数值。", f"JSON floats are not allowed at {path}; pass numeric values as strings."))
     if isinstance(value, Mapping):
         for key, item in value.items():
             if isinstance(key, float):
-                raise TypeError(f"JSON floats are not allowed at {path}.<key>.")
+                raise TypeError(_dual_msg(f"{path}.<key> 处不允许出现 JSON 浮点数。", f"JSON floats are not allowed at {path}.<key>."))
             _reject_json_floats(item, path=f"{path}.{key}")
         return
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray, memoryview)):
@@ -1336,18 +1337,18 @@ def _reject_unknown_keys(mapping: Mapping[str, Any], allowed: set[str] | frozens
     unknown = set(mapping) - set(allowed)
     if unknown:
         names = ", ".join(sorted(str(key) for key in unknown))
-        raise ValueError(f"{path} contains unsupported fields: {names}.")
+        raise ValueError(_dual_msg(f"{path} 包含不受支持的字段：{names}。", f"{path} contains unsupported fields: {names}."))
 
 
 def _required_mapping(value: Any, field_name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
-        raise TypeError(f"{field_name} must be a mapping.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是一个映射。", f"{field_name} must be a mapping."))
     return value
 
 
 def _required_text(value: Any, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field_name} must be a non-empty string.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是一个非空字符串。", f"{field_name} must be a non-empty string."))
     return value
 
 
@@ -1355,13 +1356,13 @@ def _optional_text(value: Any, field_name: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise TypeError(f"{field_name} must be a string or None.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是字符串或 None。", f"{field_name} must be a string or None."))
     return value
 
 
 def _required_string_option(value: Any, *, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field_name} must be a non-empty string.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是一个非空字符串。", f"{field_name} must be a non-empty string."))
     return value.strip()
 
 
@@ -1369,7 +1370,7 @@ def _string_option(value: Any, *, default: str, field_name: str) -> str:
     if value is None:
         return default
     if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a string.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是一个字符串。", f"{field_name} must be a string."))
     return value.strip() or default
 
 
@@ -1377,7 +1378,7 @@ def _numeric_string_option(value: Any, *, default: str, field_name: str) -> str:
     if value is None:
         return default
     if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a numeric string.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是一个数值字符串。", f"{field_name} must be a numeric string."))
     return value
 
 
@@ -1389,10 +1390,10 @@ def _optional_nonnegative_int_option(value: Any, *, default: int, field_name: st
 
 def _parse_mpf_sequence(value: Any, *, field_name: str) -> list[mp.mpf]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray, memoryview)):
-        raise ValueError(f"{field_name} must be a list of numeric strings.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是一个数值字符串列表。", f"{field_name} must be a list of numeric strings."))
     parsed = [_finite_numeric_string(item, field_name=f"{field_name}[{index}]") for index, item in enumerate(value)]
     if not parsed:
-        raise ValueError(f"{field_name} must contain at least one value.")
+        raise ValueError(_dual_msg(f"{field_name} 至少需要包含一个值。", f"{field_name} must contain at least one value."))
     return parsed
 
 
@@ -1413,47 +1414,47 @@ def _default_source_row_ids(value: Sequence[str | int] | None, *, count: int) ->
         return tuple(str(index) for index in range(1, count + 1))
     row_ids = tuple(value)
     if len(row_ids) != count:
-        raise ValueError("source row ID count must match value count.")
+        raise ValueError(_dual_msg("源行 ID 的数量必须与数值数量匹配。", "source row ID count must match value count."))
     return row_ids
 
 
 def _finite_numeric_string(value: Any, *, field_name: str) -> mp.mpf:
     if not isinstance(value, str):
-        raise TypeError(f"{field_name} must be a numeric string.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是一个数值字符串。", f"{field_name} must be a numeric string."))
     parsed = mp.mpf(value)
     if not mp.isfinite(parsed):
-        raise ValueError(f"{field_name} must be finite.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是有限值。", f"{field_name} must be finite."))
     return parsed
 
 
 def _choice(value: Any, allowed: set[str], field_name: str) -> str:
     if not isinstance(value, str):
-        raise TypeError(f"{field_name} must be a string.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是一个字符串。", f"{field_name} must be a string."))
     if value not in allowed:
         choices = ", ".join(sorted(allowed))
-        raise ValueError(f"{field_name} must be one of: {choices}.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是以下之一：{choices}。", f"{field_name} must be one of: {choices}."))
     return value
 
 
 def _positive_int(value: Any, *, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{field_name} must be a positive integer.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是一个正整数。", f"{field_name} must be a positive integer."))
     if value <= 0:
-        raise ValueError(f"{field_name} must be positive.")
+        raise ValueError(_dual_msg(f"{field_name} 必须为正。", f"{field_name} must be positive."))
     return int(value)
 
 
 def _nonnegative_int(value: Any, *, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{field_name} must be a non-negative integer.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是一个非负整数。", f"{field_name} must be a non-negative integer."))
     if value < 0:
-        raise ValueError(f"{field_name} must be non-negative.")
+        raise ValueError(_dual_msg(f"{field_name} 必须是非负的。", f"{field_name} must be non-negative."))
     return int(value)
 
 
 def _required_text_sequence(value: Any, field_name: str) -> tuple[str, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray, memoryview)):
-        raise TypeError(f"{field_name} must be a sequence of strings.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是一个字符串序列。", f"{field_name} must be a sequence of strings."))
     output: list[str] = []
     for index, item in enumerate(value):
         output.append(_required_text(item, f"{field_name}[{index}]"))
@@ -1462,25 +1463,25 @@ def _required_text_sequence(value: Any, field_name: str) -> tuple[str, ...]:
 
 def _source_row_ids(value: Any, *, field_name: str) -> tuple[str | int, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray, memoryview)):
-        raise TypeError(f"{field_name} must be a sequence of row identifiers.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是一个行标识符序列。", f"{field_name} must be a sequence of row identifiers."))
     output: list[str | int] = []
     for index, item in enumerate(value):
         if isinstance(item, float):
-            raise TypeError(f"JSON floats are not allowed at {field_name}[{index}].")
+            raise TypeError(_dual_msg(f"{field_name}[{index}] 处不允许出现 JSON 浮点数。", f"JSON floats are not allowed at {field_name}[{index}]."))
         if isinstance(item, bool) or not isinstance(item, (str, int)):
-            raise TypeError(f"{field_name}[{index}] must be a string or integer.")
+            raise TypeError(_dual_msg(f"{field_name}[{index}] 必须是字符串或整数。", f"{field_name}[{index}] must be a string or integer."))
         if isinstance(item, str) and not item.strip():
-            raise ValueError(f"{field_name}[{index}] must not be blank.")
+            raise ValueError(_dual_msg(f"{field_name}[{index}] 不能为空白。", f"{field_name}[{index}] must not be blank."))
         output.append(item)
     return tuple(output)
 
 
 def _effect_rows(value: Any, *, field_name: str) -> None:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray, memoryview)):
-        raise TypeError(f"{field_name} must be a sequence of mappings.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是一个映射序列。", f"{field_name} must be a sequence of mappings."))
     for index, row in enumerate(value):
         if not isinstance(row, Mapping):
-            raise TypeError(f"{field_name}[{index}] must be a mapping.")
+            raise TypeError(_dual_msg(f"{field_name}[{index}] 必须是一个映射。", f"{field_name}[{index}] must be a mapping."))
         _reject_unknown_keys(row, _EFFECT_ROW_KEYS, path=f"{field_name}[{index}]")
         _required_text(row.get("key"), f"{field_name}[{index}].key")
         row_value = row.get("value")
@@ -1493,10 +1494,10 @@ def _effect_rows(value: Any, *, field_name: str) -> None:
 
 def _diagnostics(value: Any, *, field_name: str) -> None:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray, memoryview)):
-        raise TypeError(f"{field_name} must be a sequence of mappings.")
+        raise TypeError(_dual_msg(f"{field_name} 必须是一个映射序列。", f"{field_name} must be a sequence of mappings."))
     for index, row in enumerate(value):
         if not isinstance(row, Mapping):
-            raise TypeError(f"{field_name}[{index}] must be a mapping.")
+            raise TypeError(_dual_msg(f"{field_name}[{index}] 必须是一个映射。", f"{field_name}[{index}] must be a mapping."))
         _reject_unknown_keys(row, _DIAGNOSTIC_KEYS, path=f"{field_name}[{index}]")
         _required_text(row.get("code"), f"{field_name}[{index}].code")
         _choice(row.get("severity"), _DIAGNOSTIC_SEVERITIES, f"{field_name}[{index}].severity")
