@@ -37,18 +37,88 @@ changes; see ``git log`` for canonical history):
 """
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 import re
 from pathlib import Path
+from typing import Any
 
 import mpmath as mp
 
 from fitting import infer_parameter_names
+from fitting.diagnostic_formatting import (
+    build_fitting_diagnostic_csv_rows,
+    fitting_diagnostic_view,
+)
 from fitting.hp_fitter import FitResult
+from shared.unit_annotations import unit_annotation_text, unit_annotations_for_labels
 
 from . import fitting_latex_writer as _fit_latex_writer
 
 
 class WindowFittingFormattersMixin:
+    def _fit_output_unit(self, units: Mapping[str, Any] | None, target_column: str | None = None) -> str:
+        target = str(target_column or "").strip()
+        if not target:
+            target_edit = getattr(self, "fit_target_edit", None)
+            if target_edit is not None and hasattr(target_edit, "text"):
+                target = str(target_edit.text() or "").strip()
+        if target:
+            mapped = unit_annotations_for_labels(
+                units,
+                "outputs",
+                [target],
+                fallback_prefix="output",
+                default_key="result",
+            )
+            unit = mapped.get(target, "")
+            if unit:
+                return unit
+        return unit_annotation_text(units, "outputs", "result")
+
+    def _fit_parameter_units(self, units: Mapping[str, Any] | None, names: Iterable[str]) -> dict[str, str]:
+        return unit_annotations_for_labels(
+            units,
+            "parameters",
+            list(names),
+            fallback_prefix="parameter",
+        )
+
+    def _fit_input_unit_for_job(self, units: Mapping[str, Any] | None, job: object) -> str:
+        variable_map = getattr(job, "variable_map", None)
+        labels: list[str] = []
+        if isinstance(variable_map, Mapping) and variable_map:
+            first_var, first_col = next(iter(variable_map.items()))
+            labels.extend([str(first_var), str(first_col)])
+        if not labels:
+            labels.append("x")
+        mapped = unit_annotations_for_labels(
+            units,
+            "inputs",
+            labels,
+            fallback_prefix="input",
+        )
+        for label in labels:
+            unit = mapped.get(label, "")
+            if unit:
+                return unit
+        return ""
+
+    def _fit_single_parameter_axis_unit(
+        self,
+        units: Mapping[str, Any] | None,
+        names: Iterable[str],
+    ) -> str:
+        parameter_units = self._fit_parameter_units(units, names)
+        unique_units = {unit for unit in parameter_units.values() if unit}
+        return next(iter(unique_units)) if len(unique_units) == 1 else ""
+
+    def _fit_csv_headers(self, rows: list[dict[str, object]]) -> list[str]:
+        headers = ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error"]
+        if any("unit" in row for row in rows):
+            headers.append("unit")
+        headers.append("note")
+        return headers
+
     def _build_substituted_expression(self, expression: str, params: dict[str, mp.mpf], digits: int | None = None) -> str:
         if not expression:
             return ""
@@ -83,7 +153,11 @@ class WindowFittingFormattersMixin:
         )
 
     def _format_fit_result_text(
-        self, fit_result: FitResult, expression: str | None, substituted: str | None
+        self,
+        fit_result: FitResult,
+        expression: str | None,
+        substituted: str | None,
+        units: Mapping[str, Any] | None = None,
     ) -> str:
         """Render a fit result as Markdown for ``setMarkdown`` display.
 
@@ -107,6 +181,9 @@ class WindowFittingFormattersMixin:
         total_errors = fit_result.param_errors_total or fit_result.param_errors
         stat_errors = fit_result.param_errors_stat or {}
         sys_errors = fit_result.param_errors_sys or {}
+        parameter_units = self._fit_parameter_units(units, params_dict.keys())
+        has_parameter_units = any(parameter_units.values())
+        output_unit = self._fit_output_unit(units)
 
         # Show systematic-error columns only when at least one parameter
         # actually has a non-zero systematic error — keeps the table
@@ -144,16 +221,16 @@ class WindowFittingFormattersMixin:
         # ---- parameters table ------------------------------------
         if has_systematic:
             header_cells = self._tr(
-                "| 参数 | 值 ± 总误差 | 统计 σ | 系统 σ |",
-                "| Parameter | Value ± Total | Stat σ | Sys σ |",
+                "| 参数 | 单位 | 值 ± 总误差 | 统计 σ | 系统 σ |" if has_parameter_units else "| 参数 | 值 ± 总误差 | 统计 σ | 系统 σ |",
+                "| Parameter | Unit | Value ± Total | Stat σ | Sys σ |" if has_parameter_units else "| Parameter | Value ± Total | Stat σ | Sys σ |",
             )
-            sep_cells = "| --- | --- | --- | --- |"
+            sep_cells = "| --- | --- | --- | --- | --- |" if has_parameter_units else "| --- | --- | --- | --- |"
         else:
             header_cells = self._tr(
-                "| 参数 | 值 ± 误差 |",
-                "| Parameter | Value ± Error |",
+                "| 参数 | 单位 | 值 ± 误差 |" if has_parameter_units else "| 参数 | 值 ± 误差 |",
+                "| Parameter | Unit | Value ± Error |" if has_parameter_units else "| Parameter | Value ± Error |",
             )
-            sep_cells = "| --- | --- |"
+            sep_cells = "| --- | --- | --- |" if has_parameter_units else "| --- | --- |"
         lines.append(header_cells)
         lines.append(sep_cells)
         for name, value in params_dict.items():
@@ -161,19 +238,30 @@ class WindowFittingFormattersMixin:
             stat_err = stat_errors.get(name, total_err)
             sys_err = sys_errors.get(name, mp.mpf("0"))
             value_cell = self._format_uncertainty_value(value, total_err)
+            unit_cell = parameter_units.get(name, "")
             if has_systematic:
                 stat_cell = self._format_precision_value(stat_err)
                 sys_cell = self._format_precision_value(sys_err)
-                lines.append(
-                    f"| {name} | {value_cell} | {stat_cell} | {sys_cell} |"
-                )
+                if has_parameter_units:
+                    lines.append(f"| {name} | {unit_cell} | {value_cell} | {stat_cell} | {sys_cell} |")
+                else:
+                    lines.append(f"| {name} | {value_cell} | {stat_cell} | {sys_cell} |")
             else:
-                lines.append(f"| {name} | {value_cell} |")
+                if has_parameter_units:
+                    lines.append(f"| {name} | {unit_cell} | {value_cell} |")
+                else:
+                    lines.append(f"| {name} | {value_cell} |")
         lines.append("")
 
         # ---- goodness-of-fit metrics table -----------------------
-        lines.append(self._tr("| 指标 | 值 |", "| Metric | Value |"))
-        lines.append("| --- | --- |")
+        has_metric_units = bool(output_unit)
+        lines.append(
+            self._tr(
+                "| 指标 | 单位 | 值 |" if has_metric_units else "| 指标 | 值 |",
+                "| Metric | Unit | Value |" if has_metric_units else "| Metric | Value |",
+            )
+        )
+        lines.append("| --- | --- | --- |" if has_metric_units else "| --- | --- |")
         metrics: list[tuple[str, mp.mpf]] = [
             ("χ²", fit_result.chi2),
             (self._tr("Reduced χ²", "Reduced χ²"), fit_result.reduced_chi2),
@@ -182,9 +270,38 @@ class WindowFittingFormattersMixin:
             ("R²", fit_result.r2),
             ("RMSE", fit_result.rmse),
         ]
+        diagnostic_view = fitting_diagnostic_view(fit_result)
+        for metric in diagnostic_view.metrics:
+            metrics.append((metric.label, metric.value))
         for label, value in metrics:
-            lines.append(f"| {label} | {self._format_precision_value(value)} |")
+            unit_cell = output_unit if label == "RMSE" else ""
+            if has_metric_units:
+                lines.append(f"| {label} | {unit_cell} | {self._format_precision_value(value)} |")
+            else:
+                lines.append(f"| {label} | {self._format_precision_value(value)} |")
         lines.append("")
+
+        if diagnostic_view.correlations:
+            names = []
+            for cell in diagnostic_view.correlations:
+                if cell.left not in names:
+                    names.append(cell.left)
+            lines.append(self._tr("### 参数相关矩阵", "### Parameter Correlation Matrix"))
+            lines.append("|  | " + " | ".join(names) + " |")
+            lines.append("| --- | " + " | ".join("---" for _ in names) + " |")
+            by_pair = {(cell.left, cell.right): cell.value for cell in diagnostic_view.correlations}
+            for name in names:
+                cells = [self._format_precision_value(by_pair.get((name, other), mp.nan)) for other in names]
+                lines.append(f"| {name} | " + " | ".join(cells) + " |")
+            lines.append("")
+
+        if diagnostic_view.residuals:
+            lines.append(self._tr("### 标准化残差", "### Standardized Residuals"))
+            lines.append(self._tr("| 行 | 值 | 类型 |", "| Row | Value | Type |"))
+            lines.append("| --- | --- | --- |")
+            for residual in diagnostic_view.residuals:
+                lines.append(f"| {residual.index} | {self._format_precision_value(residual.value)} | {residual.label} |")
+            lines.append("")
 
         # ---- weighted-fit note + uncertainty note + warnings -----
         # Each renders as a bold metadata line (matching the sibling
@@ -218,6 +335,13 @@ class WindowFittingFormattersMixin:
             lines.append(
                 self._tr(f"**警告**: {localized}", f"**Warning**: {localized}")
             )
+        for diagnostic_warning in diagnostic_view.warnings:
+            lines.append(
+                self._tr(
+                    f"**警告**: {diagnostic_warning}",
+                    f"**Warning**: {diagnostic_warning}",
+                )
+            )
         warning = fit_result.details.get("boundary_warning")
         if warning:
             localized = self._localize_text(str(warning))
@@ -226,18 +350,27 @@ class WindowFittingFormattersMixin:
             )
         return "\n".join(lines)
 
-    def _format_fit_display(self, fit_result: FitResult, expression: str | None, substituted: str | None, batch_idx: int = 1, **_ignored) -> tuple[str, list[dict[str, object]]]:
+    def _format_fit_display(self, fit_result: FitResult, expression: str | None, substituted: str | None, batch_idx: int = 1, units: Mapping[str, Any] | None = None, **_ignored) -> tuple[str, list[dict[str, object]]]:
         """Return formatted fit summary text/CSV rows (numbers only; LaTeX unaffected)."""
-        text = self._format_fit_result_text(fit_result, expression, substituted)
-        csv_rows = self._build_fit_csv_rows(fit_result, expression or "", batch_idx=batch_idx)
+        text = self._format_fit_result_text(fit_result, expression, substituted, units=units)
+        csv_rows = self._build_fit_csv_rows(fit_result, expression or "", batch_idx=batch_idx, units=units)
         return text, csv_rows
 
-    def _build_fit_csv_rows(self, fit_result: FitResult, expression: str | None, batch_idx: int | None = None) -> list[dict[str, object]]:
+    def _build_fit_csv_rows(
+        self,
+        fit_result: FitResult,
+        expression: str | None,
+        batch_idx: int | None = None,
+        units: Mapping[str, Any] | None = None,
+    ) -> list[dict[str, object]]:
         def _fmt(val) -> str:
             return self._format_display_value(val)
 
         batch_value = batch_idx if batch_idx is not None else 1
         rows: list[dict[str, object]] = []
+        parameter_units = self._fit_parameter_units(units, fit_result.params.keys())
+        output_unit = self._fit_output_unit(units)
+        include_unit = bool(parameter_units or output_unit)
         if expression:
             rows.append(
                 {
@@ -248,6 +381,7 @@ class WindowFittingFormattersMixin:
                     "uncertainty": "",
                     "stat_error": "",
                     "sys_error": "",
+                    **({"unit": ""} if include_unit else {}),
                     "note": "",
                 }
             )
@@ -264,6 +398,7 @@ class WindowFittingFormattersMixin:
                     "uncertainty": _fmt(total_err),
                     "stat_error": _fmt(stat_err) if stat_err is not None else "",
                     "sys_error": _fmt(sys_err) if sys_err is not None else "",
+                    **({"unit": parameter_units.get(name, "")} if include_unit else {}),
                     "note": "",
                 }
             )
@@ -276,6 +411,7 @@ class WindowFittingFormattersMixin:
             ("rmse", fit_result.rmse),
         ]
         for name, value in metrics:
+            row_unit = output_unit if name == "rmse" else ""
             rows.append(
                 {
                     "batch": batch_value,
@@ -285,9 +421,17 @@ class WindowFittingFormattersMixin:
                     "uncertainty": "",
                     "stat_error": "",
                     "sys_error": "",
+                    **({"unit": row_unit} if include_unit else {}),
                     "note": "",
                 }
             )
+        rows.extend(
+            build_fitting_diagnostic_csv_rows(
+                fit_result,
+                batch=batch_value,
+                format_value=_fmt,
+            )
+        )
         cov = getattr(fit_result, "covariance", None)
         if cov:
             for i, cov_row in enumerate(cov):
@@ -350,6 +494,9 @@ class WindowFittingFormattersMixin:
                     "note": "",
                 }
             )
+        if include_unit:
+            for row in rows:
+                row.setdefault("unit", "")
         return rows
 
     def _latex_escape(self, text: str) -> str:
@@ -376,6 +523,7 @@ class WindowFittingFormattersMixin:
         *,
         latex_group_size: int = 3,
         batch_index: int | None = None,
+        units: Mapping[str, Any] | None = None,
     ) -> list[str]:
         default_unc_digits = self._uncertainty_digits_value()
         target_column = self.fit_target_edit.text().strip()
@@ -409,4 +557,5 @@ class WindowFittingFormattersMixin:
             caption_text=caption_base,
             default_uncertainty_digits=default_unc_digits,
             cleaned_substituted=cleaned_sub,
+            units=units,
         )

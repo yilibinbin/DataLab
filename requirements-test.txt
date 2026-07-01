@@ -1,2 +1,6 @@
-pytest-qt>=4.4.0
-pytest-cov>=5.0.0
+# Test install. The single source of truth is pyproject.toml — this file is a
+# thin pointer to the matching extras so the two can't drift (P2-2).
+# `.[desktop,web,test]` = both frontends (the suite exercises Qt and Flask) plus
+# the test runners (pytest / pytest-qt / pytest-cov). Add `,units,mcmc` for the
+# optional-path tests, or install `.[dev]` for everything.
+-e .[desktop,web,test]

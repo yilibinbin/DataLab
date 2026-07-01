@@ -3,7 +3,9 @@ from __future__ import annotations
 import pytest
 from mpmath import mp
 
-import datalab_latex.expression_engine as expression_engine
+# datalab_latex.expression_engine is a shim over the shared implementation
+# (P0-3); patch the module that safe_eval actually executes in.
+import shared.expression_engine as expression_engine
 from data_extrapolation_latex_latest import safe_eval
 
 

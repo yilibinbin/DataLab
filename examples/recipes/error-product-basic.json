@@ -1,0 +1,54 @@
+{
+  "configuration": {
+    "error": {
+      "formula": "v1 * v2",
+      "mc_seed": 12345,
+      "method": "taylor",
+      "order": 1
+    }
+  },
+  "description": {
+    "en": "Configure uncertainty propagation for a product expression using two measured input columns.",
+    "zh": "使用两个测量输入列配置乘积表达式的不确定度传播。"
+  },
+  "examples": [
+    {
+      "workspace": "error-propagation.datalab"
+    }
+  ],
+  "exports": {
+    "latex": true,
+    "plots": true,
+    "report_bundle": false
+  },
+  "family": "error",
+  "id": "error-product-basic",
+  "inputs": {
+    "constants": [],
+    "data": {
+      "required_columns": [
+        {
+          "description": "First measured factor with optional uncertainty notation.",
+          "id": "v1",
+          "role": "value",
+          "suggested_name": "V1",
+          "type": "number_with_uncertainty"
+        },
+        {
+          "description": "Second measured factor with optional uncertainty notation.",
+          "id": "v2",
+          "role": "value",
+          "suggested_name": "V2",
+          "type": "number_with_uncertainty"
+        }
+      ]
+    }
+  },
+  "schema": "datalab.recipe.v1",
+  "schema_version": 1,
+  "title": {
+    "en": "Error propagation: product",
+    "zh": "误差传递：乘积"
+  },
+  "workflow_mode": "error.standard"
+}

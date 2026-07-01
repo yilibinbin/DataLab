@@ -7,7 +7,7 @@ The root-solving module solves equations in the form `F(...)=0`. Enter one equat
 - Equations: residual expressions such as `x^2 - A`; DataLab solves them as zero equations.
 - Unknowns: names, initial values, and optional lower/upper bounds. Bounds are recommended for scan-multiple mode.
 - Input data: when data rows are present, roots are solved row by row; without data rows, DataLab solves a single problem.
-- Constants: disabled by default. Enabled constants enter the expression scope but are not treated as unknowns.
+- Constants: enter fixed quantities in the left input area. Non-empty constants enter the expression scope automatically and are excluded from unknown detection; blank constants are ignored. Text input and data files may also use `[data]` and `[constants]` sections.
 
 ## Modes
 

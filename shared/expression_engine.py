@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from functools import lru_cache
 import re
 from typing import Any, Callable, cast
 
@@ -147,13 +148,15 @@ def _resolve_name(name: str, variables: dict[str, object]) -> object | None:
     return None
 
 
-def safe_eval(expression: str, var_dict: dict[str, object]) -> Any:
-    """
-    Safely evaluate a mathematical expression with given variables.
+@lru_cache(maxsize=512)
+def _parse_validated_expression(expression: str) -> tuple[ast.AST, str]:
+    """Normalize, parse, and safety-check an expression, returning its AST body
+    and the normalized source. Cached on the raw expression string: the parse
+    and validation are pure functions of the text, so a fit loop that evaluates
+    the same model thousands of times parses it exactly once (P1-1).
 
-    Notes:
-    - Uses an AST allowlist (no attribute access, no kwargs, no comprehensions).
-    - Enforces a maximum AST depth/node count to prevent recursion/CPU abuse.
+    Raising calls are not cached by lru_cache, so an invalid expression still
+    re-validates (and re-raises) on every call — only successful parses persist.
     """
     bad_calls = _detect_lowercase_allowed_function_calls(expression)
     if bad_calls:
@@ -190,8 +193,40 @@ def safe_eval(expression: str, var_dict: dict[str, object]) -> Any:
             )
         )
 
+    return tree.body, expr
+
+
+def safe_eval(expression: str, var_dict: dict[str, object]) -> Any:
+    """
+    Safely evaluate a mathematical expression with given variables.
+
+    Notes:
+    - Uses an AST allowlist (no attribute access, no kwargs, no comprehensions).
+    - Enforces a maximum AST depth/node count to prevent recursion/CPU abuse.
+    - The parse + validation is cached per expression string (see
+      ``_parse_validated_expression``); only variable binding varies per call.
+    """
+    body, expr = _parse_validated_expression(expression)
     variables = {name: _mp(value) for name, value in (var_dict or {}).items()}
-    return _evaluate_ast(tree.body, variables, expr)
+    return _evaluate_ast(body, variables, expr)
+
+
+def compile_expression(expression: str) -> Callable[[dict[str, object]], Any]:
+    """Parse/validate ``expression`` once and return a fast evaluator.
+
+    The returned callable takes a variable dict and evaluates the pre-parsed AST
+    without re-parsing — the hot-path API for tight loops (fitting residuals /
+    gradients, Monte-Carlo sampling). Equivalent to ``safe_eval(expression, d)``
+    but with the parse hoisted out of the loop. Validation errors surface here,
+    at compile time, exactly as ``safe_eval`` would raise them.
+    """
+    body, expr = _parse_validated_expression(expression)
+
+    def _evaluate(var_dict: dict[str, object]) -> Any:
+        variables = {name: _mp(value) for name, value in (var_dict or {}).items()}
+        return _evaluate_ast(body, variables, expr)
+
+    return _evaluate
 
 
 def _evaluate_ast(node: ast.AST, variables: dict[str, object], source: str) -> Any:

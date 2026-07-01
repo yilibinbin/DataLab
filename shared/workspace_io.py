@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import json
 import os
-import posixpath
 import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .archive_validation import (
+    ArchiveMemberRule,
+    ArchiveValidationError,
+    ArchiveValidationPolicy,
+    normalize_archive_member_name,
+    validate_archive_members,
+    validate_archive_payloads,
+)
 from .workspace_schema import (
     MAX_MANIFEST_BYTES,
     MAX_PLOT_ATTACHMENTS,
@@ -24,6 +31,33 @@ from .workspace_schema import (
 
 _ZIP_TIMESTAMP = (2026, 1, 1, 0, 0, 0)
 _ZIP_FILE_MODE = 0o100644 << 16
+_WORKSPACE_ARCHIVE_POLICY = ArchiveValidationPolicy(
+    rules=(
+        ArchiveMemberRule(
+            exact_path="manifest.json",
+            max_file_bytes=MAX_MANIFEST_BYTES,
+            file_size_error="manifest exceeds size limit",
+        ),
+        ArchiveMemberRule(
+            prefix="attachments/plots/",
+            required_suffix=".png",
+            max_count=MAX_PLOT_ATTACHMENTS,
+            max_file_bytes=MAX_PLOT_BYTES,
+            count_error="too many plot attachments",
+            file_size_error="plot attachment exceeds size limit: {name}",
+            suffix_error="plot attachment must be png: {name}",
+        ),
+        ArchiveMemberRule(
+            prefix="attachments/sources/",
+            max_count=MAX_SOURCE_ATTACHMENTS,
+            max_file_bytes=MAX_SOURCE_BYTES,
+            count_error="too many source attachments",
+            file_size_error="source attachment exceeds size limit: {name}",
+        ),
+    ),
+    total_uncompressed_bytes=MAX_TOTAL_UNCOMPRESSED_BYTES,
+    total_size_error="workspace exceeds total uncompressed size limit",
+)
 
 
 @dataclass(frozen=True)
@@ -33,67 +67,19 @@ class WorkspaceReadResult:
 
 
 def _normalize_archive_name(name: str) -> str:
-    raw = name.replace("\\", "/")
-    if not raw or raw.startswith("/") or raw.startswith("\\"):
-        raise WorkspaceValidationError(f"unsafe archive path: {name!r}")
-    if len(raw) >= 2 and raw[1] == ":":
-        raise WorkspaceValidationError(f"unsafe archive path: {name!r}")
-    raw_parts = raw.split("/")
-    if any(part in {"", ".", ".."} for part in raw_parts):
-        raise WorkspaceValidationError(f"unsafe archive path: {name!r}")
-    normalized = posixpath.normpath(raw)
-    parts = normalized.split("/")
-    if normalized in {"", "."} or any(part in {"", ".", ".."} for part in parts):
-        raise WorkspaceValidationError(f"unsafe archive path: {name!r}")
-    if normalized == "manifest.json":
-        return normalized
-    if normalized.startswith("attachments/sources/") or normalized.startswith("attachments/plots/"):
-        return normalized
-    raise WorkspaceValidationError(f"unsupported archive path: {name!r}")
-
-
-def _is_symlink(info: zipfile.ZipInfo) -> bool:
-    return ((info.external_attr >> 16) & 0o170000) == 0o120000
+    try:
+        return normalize_archive_member_name(name, _WORKSPACE_ARCHIVE_POLICY)
+    except ArchiveValidationError as exc:
+        raise WorkspaceValidationError(str(exc)) from exc
 
 
 def _validate_zip_members(zf: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
-    normalized: dict[str, zipfile.ZipInfo] = {}
-    manifest_count = 0
-    plot_count = 0
-    source_count = 0
-    total_size = 0
-    for info in zf.infolist():
-        name = _normalize_archive_name(info.filename)
-        if name in normalized:
-            raise WorkspaceValidationError(f"duplicate archive entry: {name}")
-        if _is_symlink(info):
-            raise WorkspaceValidationError(f"symlink entries are not allowed: {name}")
-        if info.is_dir():
-            raise WorkspaceValidationError(f"directory entries are not allowed: {name}")
-        total_size += info.file_size
-        if total_size > MAX_TOTAL_UNCOMPRESSED_BYTES:
-            raise WorkspaceValidationError("workspace exceeds total uncompressed size limit")
-        if name == "manifest.json":
-            manifest_count += 1
-            if info.file_size > MAX_MANIFEST_BYTES:
-                raise WorkspaceValidationError("manifest exceeds size limit")
-        elif name.startswith("attachments/plots/"):
-            plot_count += 1
-            if not name.endswith(".png"):
-                raise WorkspaceValidationError(f"plot attachment must be png: {name}")
-            if info.file_size > MAX_PLOT_BYTES:
-                raise WorkspaceValidationError(f"plot attachment exceeds size limit: {name}")
-        elif name.startswith("attachments/sources/"):
-            source_count += 1
-            if info.file_size > MAX_SOURCE_BYTES:
-                raise WorkspaceValidationError(f"source attachment exceeds size limit: {name}")
-        normalized[name] = info
-    if manifest_count != 1:
+    try:
+        normalized = validate_archive_members(zf, _WORKSPACE_ARCHIVE_POLICY)
+    except ArchiveValidationError as exc:
+        raise WorkspaceValidationError(str(exc)) from exc
+    if "manifest.json" not in normalized:
         raise WorkspaceValidationError("workspace must contain exactly one manifest.json")
-    if plot_count > MAX_PLOT_ATTACHMENTS:
-        raise WorkspaceValidationError("too many plot attachments")
-    if source_count > MAX_SOURCE_ATTACHMENTS:
-        raise WorkspaceValidationError("too many source attachments")
     return normalized
 
 
@@ -101,7 +87,7 @@ def _load_and_validate(path: Path) -> WorkspaceReadResult:
     try:
         with zipfile.ZipFile(path, "r") as zf:
             members = _validate_zip_members(zf)
-            manifest_bytes = zf.read(members["manifest.json"])
+            manifest_bytes = _read_zip_member(zf, members["manifest.json"])
             try:
                 manifest = json.loads(manifest_bytes.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -112,11 +98,24 @@ def _load_and_validate(path: Path) -> WorkspaceReadResult:
                 normalized = _normalize_archive_name(archive_name)
                 if normalized not in members:
                     raise WorkspaceValidationError(f"missing attachment: {normalized}")
-                attachments[normalized] = zf.read(members[normalized])
-            hash_validator(manifest, attachments)
+                attachments[normalized] = _read_zip_member(zf, members[normalized])
+            try:
+                validate_archive_payloads(
+                    attachments,
+                    hash_hook=lambda payloads: hash_validator(manifest, dict(payloads)),
+                )
+            except ArchiveValidationError as exc:
+                raise WorkspaceValidationError(str(exc)) from exc
             return WorkspaceReadResult(manifest=manifest, attachments=attachments)
     except zipfile.BadZipFile as exc:
         raise WorkspaceValidationError("workspace is not a valid ZIP file") from exc
+
+
+def _read_zip_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
+    try:
+        return zf.read(info)
+    except (RuntimeError, NotImplementedError, zipfile.BadZipFile, OSError, EOFError) as exc:
+        raise WorkspaceValidationError(f"unreadable archive entry: {info.filename}") from exc
 
 
 def _validated_manifest_dispatch(

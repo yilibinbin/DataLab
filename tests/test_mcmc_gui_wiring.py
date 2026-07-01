@@ -110,6 +110,84 @@ def test_prepare_explicit_fit_job_keeps_mcmc_checkbox_independent(_window):
 
     assert isinstance(job, FitJob)
     assert job.model_type == "polynomial"
+    # The checkbox must actually propagate to the job — otherwise it is a shell
+    # control that does nothing when ticked.
+    assert job.refine_with_mcmc is True
+
+    _window.fit_mcmc_refine.setChecked(False)
+    job_off = _window._prepare_fit_job(
+        dataset, generate_latex=False, output_path="", verbose=False, render_plots=False
+    )
+    assert job_off.refine_with_mcmc is False
+
+
+def test_refine_with_mcmc_flag_triggers_refinement_in_worker(monkeypatch):
+    """When job.refine_with_mcmc is True, the fit worker must invoke MCMC refinement
+    on the fit result. When False, it must not. Guards against the flag being read
+    but never acted on."""
+    import app_desktop.workers_core as workers_core
+
+    calls: list[bool] = []
+
+    def _fake_attach(fit_result, job):
+        calls.append(True)
+
+    monkeypatch.setattr(workers_core, "_attach_mcmc_refinement_to_fit", _fake_attach)
+
+    class _FakeOutput:
+        def __init__(self):
+            from fitting.hp_fitter import FitResult
+            from mpmath import mp
+
+            self.fit_result = FitResult(
+                params={"a": mp.mpf("1")},
+                param_errors={"a": mp.mpf("0.1")},
+                chi2=mp.mpf("0"),
+                reduced_chi2=mp.mpf("0"),
+                aic=mp.mpf("0"),
+                bic=mp.mpf("0"),
+                r2=mp.mpf("1"),
+                rmse=mp.mpf("0"),
+                residuals=[mp.mpf("0")],
+                fitted_curve=[mp.mpf("1")],
+                covariance=[[mp.mpf("1")]],
+                details={},
+            )
+            self.expression = "a"
+            self.logs = []
+            self.warnings = []
+
+    monkeypatch.setattr(workers_core, "execute_direct_fit", lambda *a, **k: _FakeOutput())
+
+    from app_desktop.workers_core import FitJob
+
+    def _job(refine: bool) -> FitJob:
+        return FitJob(
+            model_type="polynomial",
+            headers=["x", "y"],
+            data_rows=[],
+            sigma_rows=[],
+            x_series=[],
+            y_series=[],
+            sigma_series=[],
+            weights=None,
+            variable_map={"x": "x"},
+            variable_data={},
+            target_series=[],
+            target_column="y",
+            model_expr="a",
+            parameter_config={},
+            parameter_names=["a"],
+            refine_with_mcmc=refine,
+        )
+
+    calls.clear()
+    workers_core._execute_fit_job_payload(_job(refine=True))
+    assert calls == [True], "refine_with_mcmc=True must trigger MCMC refinement"
+
+    calls.clear()
+    workers_core._execute_fit_job_payload(_job(refine=False))
+    assert calls == [], "refine_with_mcmc=False must NOT trigger MCMC refinement"
 
 
 def test_render_corner_plot_accepts_mcmc_result():
@@ -146,17 +224,23 @@ def test_render_corner_plot_accepts_mcmc_result():
 
 
 def test_gui_requirements_declares_emcee():
-    """gui_requirements.txt must list emcee + numpy + corner so the
-    desktop install gives users MCMC out of the box."""
+    """The desktop install must give users MCMC (emcee + numpy + corner) out of
+    the box. Since P2-2 gui_requirements.txt is a thin pointer to pyproject
+    extras, so this is delivered via the [mcmc] extra — whose contents are pinned
+    by test_pyproject_mcmc_extra_still_lists_deps below."""
     from pathlib import Path
 
     reqs = (
         Path(__file__).resolve().parent.parent / "gui_requirements.txt"
     ).read_text(encoding="utf-8")
-    for needle in ("emcee", "numpy", "corner"):
-        assert needle in reqs, (
-            f"gui_requirements.txt must include {needle} for MCMC support"
-        )
+    non_comment = [
+        line.strip()
+        for line in reqs.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert any("mcmc" in line for line in non_comment), (
+        "gui_requirements.txt must include the [mcmc] extra for MCMC support"
+    )
 
 
 def test_pyproject_mcmc_extra_still_lists_deps():

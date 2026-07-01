@@ -16,14 +16,51 @@
 - 倒数幂级数
 - Padé 与幂律极限模型
 - 自定义非线性模型与自洽隐式模型
+- 显式选择的拟合比较
 
 模型相关参数会随选择动态显示在左侧区域。
 
+## 显式选择的拟合比较
+
+桌面端的显式选择的拟合比较只运行你在候选项 JSON 编辑框中填写的拟合项。
+每个条目需要给出自己的标识、标签和模型设置。支持的候选项类型为
+`polynomial`、`inverse_power` 和 `custom`。
+
+候选项 JSON 示例：
+
+```json
+[
+  {
+    "candidate_id": "linear",
+    "label": "Linear",
+    "model_type": "polynomial",
+    "poly_degree": 1
+  },
+  {
+    "candidate_id": "inverse_1_2",
+    "label": "Inverse powers 1-2",
+    "model_type": "inverse_power",
+    "inverse_min": 1,
+    "inverse_max": 2
+  },
+  {
+    "candidate_id": "custom_a",
+    "label": "Custom a*x+b",
+    "model_type": "custom",
+    "model_expr": "a*x+b"
+  }
+]
+```
+
+结果区会显示这些拟合项的比较表格。CSV 导出使用同一套比较行顺序；启用
+LaTeX 生成时，会写出对应的比较表格。工作区会把候选项 JSON 保存到
+`config.fitting.comparison_candidates`，再次打开项目时恢复同一份显式列表。
+
 ## 自定义与自洽隐式模型
 
-自定义模型和自洽隐式模型共用工作台中的公式卡片、参数表和常数表。公式卡片的预览语法可用于检查
-DataLab 兼容、Python 风格或 Mathematica 风格的显示效果，但该选择仅影响预览，不会改变计算。参数
-表仍由当前公式自动识别，也可以手动增删；常数表关闭时不会参与拟合。
+自定义模型和自洽隐式模型共用工作台中的公式卡片、参数表和常数表。公式输入使用
+DataLab/Mathematica 兼容语法，预览按钮会把当前表达式渲染为 LaTeX 风格数学公式；预览仅用于显示，
+不会改变计算。参数表仍由当前公式自动识别，也可以手动增删；常数表关闭时不会参与拟合。
 
 自洽隐式模型用于类似 `u = g(x, u, 参数)`、`y = f(x, u, 参数)` 的问题。每个数据点先求自洽变量，
 再把输出表达式代入拟合目标。建议先用较简单的初值和边界确认模型能稳定求解，再增加参数数量或提高

@@ -13,7 +13,7 @@ Input scope (kept in sync with build_mac_data_gui.sh / build_windows_
 data_gui.ps1):
 - entry script: ``data_extrapolation_gui.py`` at the project root
 - data assets: ``docs/desktop/`` (manuals), ``examples/workspaces/``,
-  and ``shared/help_specs.json``
+  ``examples/recipes/``, and ``shared/help_specs.json``
 - icon: ``build/macos_gui_build/app_icon.icns`` (created by the
   build script before PyInstaller runs; absent on first invocation —
   guarded with ``Path.is_file()``)
@@ -53,6 +53,7 @@ datas = [
     (_rel("DataLab.png"), "."),
     (_rel("docs", "desktop"), "docs/desktop"),
     (_rel("examples", "workspaces"), "examples/workspaces"),
+    (_rel("examples", "recipes"), "examples/recipes"),
     (_rel("shared", "help_specs.json"), "shared"),
 ]
 binaries = []

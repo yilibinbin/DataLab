@@ -17,13 +17,23 @@ def test_render_root_with_uncertainty_to_markdown_and_csv() -> None:
 
     markdown, csv_rows, csv_headers = render_root_result(result, display_digits=6, uncertainty_digits=2)
 
-    assert csv_headers == ["name", "value", "uncertainty", "display_value", "backend", "mode", "residual_norm"]
+    assert csv_headers == [
+        "name",
+        "value",
+        "uncertainty",
+        "display_value",
+        "classification_tags",
+        "backend",
+        "mode",
+        "residual_norm",
+    ]
     assert csv_rows == [
         {
             "name": "x",
             "value": "2.34568",
             "uncertainty": "0.00123457",
             "display_value": "2.3457(12)",
+            "classification_tags": "",
             "backend": "mpmath",
             "mode": "scalar",
             "residual_norm": "1.0e-20",
@@ -31,9 +41,9 @@ def test_render_root_with_uncertainty_to_markdown_and_csv() -> None:
     ]
     assert markdown == "\n".join(
         [
-            "| name | value | backend | mode | residual_norm |",
-            "| --- | --- | --- | --- | --- |",
-            "| x | 2.3457(12) | mpmath | scalar | 1.0e-20 |",
+            "| name | value | classification_tags | backend | mode | residual_norm |",
+            "| --- | --- | --- | --- | --- | --- |",
+            "| x | 2.3457(12) |  | mpmath | scalar | 1.0e-20 |",
         ]
     )
 
@@ -51,7 +61,7 @@ def test_render_root_without_uncertainty_leaves_empty_uncertainty_fields() -> No
     assert csv_rows[0]["value"] == "1.2346e+8"
     assert csv_rows[0]["uncertainty"] == ""
     assert csv_rows[0]["display_value"] == "1.2346e+8"
-    assert "| x | 1.2346e+8 | scipy | scalar | 0.0 |" in markdown
+    assert "| x | 1.2346e+8 |  | scipy | scalar | 0.0 |" in markdown
 
 
 def test_render_root_with_missing_value_falls_back_to_empty_display() -> None:
@@ -65,7 +75,7 @@ def test_render_root_with_missing_value_falls_back_to_empty_display() -> None:
 
     assert csv_rows[0]["value"] == ""
     assert csv_rows[0]["display_value"] == ""
-    assert "| x |  | mpmath | scalar |  |" in markdown
+    assert "| x |  |  | mpmath | scalar |  |" in markdown
 
 
 def test_render_uncertainty_scientific_display_uses_plain_exponent() -> None:
@@ -106,6 +116,7 @@ def test_render_complex_polynomial_roots_as_a_plus_b_i_without_uncertainty() -> 
         backend="mpmath",
         mode="polynomial",
         residual_norm=mp.mpf("2.5e-30"),
+        details={"root_classification_tags": {"0": ["complex"], "1": ["complex"]}},
     )
 
     markdown, csv_rows, _ = render_root_result(result, display_digits=4)
@@ -116,6 +127,7 @@ def test_render_complex_polynomial_roots_as_a_plus_b_i_without_uncertainty() -> 
             "value": "0.0 + 1.0 i",
             "uncertainty": "",
             "display_value": "0.0 + 1.0 i",
+            "classification_tags": "complex",
             "backend": "mpmath",
             "mode": "polynomial",
             "residual_norm": "2.5e-30",
@@ -125,13 +137,14 @@ def test_render_complex_polynomial_roots_as_a_plus_b_i_without_uncertainty() -> 
             "value": "0.0 - 1.0 i",
             "uncertainty": "",
             "display_value": "0.0 - 1.0 i",
+            "classification_tags": "complex",
             "backend": "mpmath",
             "mode": "polynomial",
             "residual_norm": "2.5e-30",
         },
     ]
-    assert "| x1 | 0.0 + 1.0 i | mpmath | polynomial | 2.5e-30 |" in markdown
-    assert "| x2 | 0.0 - 1.0 i | mpmath | polynomial | 2.5e-30 |" in markdown
+    assert "| x1 | 0.0 + 1.0 i | complex | mpmath | polynomial | 2.5e-30 |" in markdown
+    assert "| x2 | 0.0 - 1.0 i | complex | mpmath | polynomial | 2.5e-30 |" in markdown
 
 
 def test_render_warnings_below_result_table() -> None:
@@ -146,7 +159,7 @@ def test_render_warnings_below_result_table() -> None:
     markdown, _, _ = render_root_result(result, display_digits=3)
 
     table, warnings = markdown.split("\n\n", maxsplit=1)
-    assert table.endswith("| x | 2.0 | mpmath | scalar | 1.0e-12 |")
+    assert table.endswith("| x | 2.0 |  | mpmath | scalar | 1.0e-12 |")
     assert warnings == "\n".join(
         [
             "Warnings:",
@@ -171,7 +184,16 @@ def test_render_root_result_includes_uncertainty_method_details_without_csv_colu
 
     markdown, csv_rows, csv_headers = render_root_result(result, display_digits=6)
 
-    assert csv_headers == ["name", "value", "uncertainty", "display_value", "backend", "mode", "residual_norm"]
+    assert csv_headers == [
+        "name",
+        "value",
+        "uncertainty",
+        "display_value",
+        "classification_tags",
+        "backend",
+        "mode",
+        "residual_norm",
+    ]
     assert "uncertainty_method" not in csv_rows[0]
     assert "Details:" in markdown
     assert "- uncertainty method: monte_carlo" in markdown
@@ -189,6 +211,12 @@ def test_render_scan_multiple_flattens_roots_to_csv_rows() -> None:
                     roots=(RootValue("x", mp.mpf("-2")), RootValue("x", mp.mpf("2"))),
                     backend="scipy",
                     mode="scan_multiple",
+                    details={
+                        "root_classification_tags": {
+                            "0": ["bracketed_sign_change"],
+                            "1": ["boundary", "bracketed_sign_change"],
+                        }
+                    },
                 ),
             ),
         ),
@@ -205,9 +233,12 @@ def test_render_scan_multiple_flattens_roots_to_csv_rows() -> None:
     assert csv_rows[0]["root_index"] == "0"
     assert csv_rows[0]["A"] == "4"
     assert csv_rows[0]["value"] == "-2.0"
+    assert csv_rows[0]["classification_tags"] == "bracketed_sign_change"
     assert csv_rows[1]["root_index"] == "1"
     assert csv_rows[1]["value"] == "2.0"
+    assert csv_rows[1]["classification_tags"] == "bracketed_sign_change; boundary"
     assert "| input_row_index |" in markdown
+    assert "| 0 | 0 | 4 | x | -2.0 | bracketed_sign_change | scipy | scan_multiple |" in markdown
 
 
 def test_render_batch_result_includes_uncertainty_method_details_without_csv_columns() -> None:
@@ -315,13 +346,14 @@ def test_render_row_failure_as_one_csv_row() -> None:
             "value": "",
             "uncertainty": "",
             "display_value": "",
+            "classification_tags": "",
             "backend": "",
             "mode": "",
             "residual_norm": "",
             "failure": "failed",
         }
     ]
-    assert "| 2 |  | bad |  |  |  |  |  | failed |" in markdown
+    assert "| 2 |  | bad |  |  |  |  |  |  | failed |" in markdown
 
 
 def test_render_batch_disambiguates_source_headers_that_match_result_columns() -> None:

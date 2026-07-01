@@ -8,16 +8,22 @@ from typing import Any, Mapping
 
 import mpmath as mp
 
-from fitting.model_parser import is_reserved_expression_name
 from shared.bilingual import _dual_msg
-from shared.fitting_uncertainty import FitUncertaintyState, fit_uncertainty_policy
-from shared.uncertainty import parse_numeric_value, parse_uncertainty_format
+from shared.fitting_uncertainty import (
+    FitUncertaintyState as FitUncertaintyState,
+    fit_uncertainty_policy as fit_uncertainty_policy,
+)
+from shared.input_normalization import (
+    ConstantsState as ConstantsState,
+    constants_rows_to_text as constants_rows_to_text,
+    normalize_constants_state as normalize_constants_state,
+    parse_constants_text as parse_constants_text,
+)
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PARAMETER_FIELDS = ("name", "initial", "fixed", "min", "max")
 PARAMETER_PERSISTED_FIELDS = (*PARAMETER_FIELDS, "source")
-CONSTANT_FIELDS = ("name", "value")
 
 
 def coerce_string_rows(
@@ -52,35 +58,7 @@ def _string_value(value: Any) -> str:
     return str(value)
 
 
-def parse_constants_text(text: str) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
-    for line in (text or "").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if "=" in stripped:
-            name, value = stripped.split("=", 1)
-            name = name.strip()
-            value = value.strip()
-        else:
-            parts = stripped.split(None, 1)
-            if len(parts) == 1:
-                name, value = parts[0].strip(), ""
-            else:
-                name, value = parts[0].strip(), parts[1].strip()
-        if name or value:
-            rows.append({"name": name, "value": value})
-    return rows
-
-
-def constants_rows_to_text(rows: Iterable[dict[str, str]]) -> str:
-    lines: list[str] = []
-    for row in rows:
-        name = str(row.get("name") or "").strip()
-        value = str(row.get("value") or "").strip()
-        if name or value:
-            lines.append(f"{name} {value}".strip())
-    return "\n".join(lines)
+# parse_constants_text and constants_rows_to_text are imported from shared.input_normalization
 
 
 @dataclass(frozen=True)
@@ -206,78 +184,7 @@ def normalize_parameter_rows(
     )
 
 
-@dataclass(frozen=True)
-class ConstantsState:
-    enabled: bool
-    view: str
-    rows: tuple[Mapping[str, str], ...]
-    text: str = ""
-    numeric_mode: str = "uncertainty"
-
-    def persisted_rows(self) -> list[dict[str, str]]:
-        return [dict(row) for row in self.rows]
-
-    def compute_dict(self, *, validate: bool = True) -> dict[str, str]:
-        if not self.enabled:
-            return {}
-        constants: dict[str, str] = {}
-        for row in self.rows:
-            name = row["name"].strip()
-            value = row["value"].strip()
-            if not name and not value:
-                continue
-            if not validate and (not name or not value):
-                continue
-            if not name:
-                raise ValueError(_dual_msg("常数名不能为空。", "Constant name cannot be empty."))
-            if not _IDENTIFIER_RE.fullmatch(name):
-                raise ValueError(_dual_msg(f"常数名无效：{name}", f"Invalid constant name: {name}"))
-            if is_reserved_expression_name(name):
-                raise ValueError(_dual_msg(f"常数名是保留字：{name}", f"Constant name is reserved: {name}"))
-            if not value:
-                raise ValueError(_dual_msg(f"常数 {name} 需要数值。", f"Constant {name} needs a value."))
-            if name in constants:
-                raise ValueError(_dual_msg(f"常数名重复：{name}", f"Duplicate constant name: {name}"))
-            if validate:
-                try:
-                    if self.numeric_mode == "mpmath":
-                        parse_numeric_value(value)
-                    else:
-                        parse_uncertainty_format(value)
-                except Exception as exc:  # noqa: BLE001
-                    raise ValueError(
-                        _dual_msg(
-                            f"常数 {name} 的数值无效。",
-                            f"Invalid value for constant {name}.",
-                        )
-                    ) from exc
-            constants[name] = value
-        return constants
-
-
-def normalize_constants_state(
-    *,
-    enabled: bool,
-    view: str = "table",
-    rows: Iterable[dict[str, Any]] | dict[str, Any] | None = None,
-    text: str = "",
-    numeric_mode: str = "uncertainty",
-) -> ConstantsState:
-    if isinstance(rows, dict):
-        clean_rows = [{"name": str(name), "value": _string_value(value)} for name, value in rows.items()]
-    elif rows is None:
-        clean_rows = parse_constants_text(text) if view == "text" else []
-    else:
-        clean_rows = coerce_string_rows(rows, CONSTANT_FIELDS, source="Constant rows")
-    if view == "text" and text and not clean_rows:
-        clean_rows = parse_constants_text(text)
-    return ConstantsState(
-        enabled=bool(enabled),
-        view="text" if view == "text" else "table",
-        rows=_freeze_rows(clean_rows),
-        text=str(text or ""),
-        numeric_mode=numeric_mode,
-    )
+# ConstantsState and normalize_constants_state are imported from shared.input_normalization
 
 
 @dataclass(frozen=True)
@@ -514,6 +421,7 @@ def normalize_data_uncertainty(
     sigma_rows: Sequence[Sequence[object | None]],
     target_column: str,
     sigma_column: str | None = None,
+    absolute: bool = True,
 ) -> list[mp.mpf | None]:
     requested_column = (sigma_column or "").strip()
     if requested_column:
@@ -529,7 +437,8 @@ def normalize_data_uncertainty(
                         f"Row {row_index} is missing column {requested_column}.",
                     )
                 )
-            explicit_sigmas.append(mp.fabs(mp.mpf(row[column_index])))
+            sigma = mp.mpf(row[column_index])
+            explicit_sigmas.append(mp.fabs(sigma) if absolute else sigma)
         return explicit_sigmas
     if target_column not in headers:
         raise ValueError(_dual_msg(f"未找到列 {target_column}。", f"Column not found: {target_column}."))
@@ -546,7 +455,12 @@ def normalize_data_uncertainty(
                 sigma = mp.mpf(entry_val)
             except Exception:
                 sigma = None
-            resolved.append(sigma if sigma and sigma > 0 else None)
+            if sigma is None:
+                resolved.append(None)
+            elif absolute:
+                resolved.append(sigma if sigma and sigma > 0 else None)
+            else:
+                resolved.append(sigma)
         else:
             resolved.append(None)
     if any(sigma is not None for sigma in resolved):
@@ -575,5 +489,6 @@ def normalize_data_uncertainty(
         if candidate_idx >= len(row):
             detected_sigmas.append(None)
             continue
-        detected_sigmas.append(mp.fabs(mp.mpf(row[candidate_idx])))
+        sigma = mp.mpf(row[candidate_idx])
+        detected_sigmas.append(mp.fabs(sigma) if absolute else sigma)
     return detected_sigmas

@@ -23,6 +23,7 @@ from datalab_core.service_factory import create_core_session_service
 from data_extrapolation_latex_latest import ExtrapolationOptions, _precision_guard, generate_latex_table
 from extrapolation_methods import PowerLawConfig
 from shared.extrapolation_engine import parse_extrapolation_string
+from shared.formula_export import inline_formula_summary_or_none
 
 from .common import (
     _core_failure_message,
@@ -34,6 +35,23 @@ from .common import (
     _parse_int,
 )
 from .plots import _render_extrapolation_plot
+
+
+def _formula_summary_line(formula_summary: object | None) -> str | None:
+    inline_formula = inline_formula_summary_or_none(formula_summary)
+    if inline_formula is None:
+        return None
+    return f"Formula: {inline_formula}"
+
+
+def _insert_formula_summary(tex: str, formula_line: str) -> str:
+    document_anchor = "\\begin{document}"
+    if document_anchor in tex:
+        return tex.replace(document_anchor, f"{document_anchor}\n{formula_line}\n", 1)
+    table_anchor = "\\begin{table}"
+    if table_anchor in tex:
+        return tex.replace(table_anchor, f"{formula_line}\n\n{table_anchor}", 1)
+    raise ValueError("Extrapolation LaTeX output has no document/table anchor for formula summary.")
 
 
 @dataclass
@@ -62,6 +80,7 @@ def _render_latex(
     latex_group_size: int,
     use_dcolumn: bool,
     result_digits: int | None,
+    formula_summary: object | None = None,
 ) -> str:
     with tempfile.TemporaryDirectory() as tmpdir:
         tex_path = Path(tmpdir) / "extrapolation.tex"
@@ -78,7 +97,11 @@ def _render_latex(
             result_uncertainty_digits=result_digits,
             latex_group_size=latex_group_size,
         )
-        return tex_path.read_text(encoding="utf-8")
+        tex = tex_path.read_text(encoding="utf-8")
+    formula_line = _formula_summary_line(formula_summary)
+    if formula_line is None:
+        return tex
+    return _insert_formula_summary(tex, formula_line)
 
 
 def _build_power_config(form, mp_precision: int | None) -> PowerLawConfig:
@@ -236,6 +259,7 @@ def _run_extrapolation(data_text: str, form, lang: str = "zh") -> ExtrapolationR
         latex_group_size=latex_group_size,
         use_dcolumn=use_dcolumn,
         result_digits=result_digits,
+        formula_summary=custom_formula if method == "custom" else None,
     )
     formatted_rows = _format_rows(headers, data_rows, raw_results, digits=12, uncertainty_digits=result_digits, mp_precision=mp_precision)
 

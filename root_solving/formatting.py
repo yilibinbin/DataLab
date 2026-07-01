@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 
 from mpmath import mp
 
@@ -11,7 +11,16 @@ from datalab_latex.latex_formatting import format_result_with_uncertainty_latex
 from root_solving.messages import localize_root_message
 from root_solving.models import RootBatchResult, RootBatchRowResult, RootResult
 
-CSV_HEADERS = ["name", "value", "uncertainty", "display_value", "backend", "mode", "residual_norm"]
+CSV_HEADERS = [
+    "name",
+    "value",
+    "uncertainty",
+    "display_value",
+    "classification_tags",
+    "backend",
+    "mode",
+    "residual_norm",
+]
 BATCH_CSV_HEADERS = [
     "input_row_index",
     "root_index",
@@ -19,12 +28,20 @@ BATCH_CSV_HEADERS = [
     "value",
     "uncertainty",
     "display_value",
+    "classification_tags",
     "backend",
     "mode",
     "residual_norm",
     "failure",
 ]
 _BATCH_RESULT_COLUMNS = frozenset(BATCH_CSV_HEADERS)
+_ROOT_CLASSIFICATION_TAGS = (
+    "complex",
+    "bracketed_sign_change",
+    "suspected_tangent_or_repeated",
+    "boundary",
+    "unclassified",
+)
 
 
 def render_root_result(
@@ -33,23 +50,33 @@ def render_root_result(
     display_digits: int = 10,
     uncertainty_digits: int = 1,
     language: str = "en",
+    root_units_by_name: Mapping[str, str] | None = None,
 ) -> tuple[str, list[dict[str, str]], list[str]]:
     """Render a root-solving result for desktop markdown and CSV plumbing."""
     digits = max(1, int(display_digits))
     residual_norm = _format_optional_real(result.residual_norm, digits)
+    classification_tags = _root_classification_tags(result.details)
+    include_unit_column = bool(root_units_by_name)
     csv_rows = [
         {
             "name": root.name,
+            **_root_unit_cell(root.name, root_units_by_name),
             "value": "" if root.value is None else _format_root_value(root.value, digits),
             "uncertainty": _format_optional_real(root.uncertainty, digits),
             "display_value": _format_root_display_value(root, digits, uncertainty_digits),
+            "classification_tags": _format_classification_tags(classification_tags.get(root_index, ())),
             "backend": result.backend,
             "mode": result.mode,
             "residual_norm": residual_norm,
         }
-        for root in result.roots
+        for root_index, root in enumerate(result.roots)
     ]
-    return _render_markdown(csv_rows, result.warnings, details=result.details, language=language), csv_rows, list(CSV_HEADERS)
+    headers = _headers_with_optional_unit(CSV_HEADERS, include_unit_column=include_unit_column)
+    return (
+        _render_markdown_with_headers(csv_rows, headers, result.warnings, details=result.details, language=language),
+        csv_rows,
+        headers,
+    )
 
 
 def render_root_batch_result(
@@ -58,19 +85,23 @@ def render_root_batch_result(
     display_digits: int = 10,
     uncertainty_digits: int = 1,
     language: str = "en",
+    root_units_by_name: Mapping[str, str] | None = None,
 ) -> tuple[str, list[dict[str, str]], list[str]]:
     """Render a root batch result as a flat table for desktop result plumbing."""
     digits = max(1, int(display_digits))
     source_headers = list(batch.headers)
     source_output_headers = _source_output_headers(source_headers)
+    include_unit_column = bool(root_units_by_name)
     headers = [
         "input_row_index",
         "root_index",
         *source_output_headers,
         "name",
+        *(("root_unit",) if include_unit_column else ()),
         "value",
         "uncertainty",
         "display_value",
+        "classification_tags",
         "backend",
         "mode",
         "residual_norm",
@@ -82,16 +113,41 @@ def render_root_batch_result(
     for batch_row in batch.rows:
         warnings.extend(warning for warning in batch_row.warnings if warning)
         if batch_row.failure:
-            rows.append(_batch_failure_row(batch_row, source_headers, source_output_headers, failure=batch_row.failure))
+            rows.append(
+                _batch_failure_row(
+                    batch_row,
+                    source_headers,
+                    source_output_headers,
+                    failure=batch_row.failure,
+                    include_unit_column=include_unit_column,
+                )
+            )
             continue
         if batch_row.result is None:
-            rows.append(_batch_failure_row(batch_row, source_headers, source_output_headers, failure="missing result"))
+            rows.append(
+                _batch_failure_row(
+                    batch_row,
+                    source_headers,
+                    source_output_headers,
+                    failure="missing result",
+                    include_unit_column=include_unit_column,
+                )
+            )
             continue
         warnings.extend(warning for warning in batch_row.result.warnings if warning)
         _merge_root_details(detail_values, batch_row.result.details)
         residual_norm = _format_optional_real(batch_row.result.residual_norm, digits)
+        classification_tags = _root_classification_tags(batch_row.result.details)
         if not batch_row.result.roots:
-            rows.append(_batch_failure_row(batch_row, source_headers, source_output_headers, failure="no roots"))
+            rows.append(
+                _batch_failure_row(
+                    batch_row,
+                    source_headers,
+                    source_output_headers,
+                    failure="no roots",
+                    include_unit_column=include_unit_column,
+                )
+            )
             continue
         for root_index, root in enumerate(batch_row.result.roots):
             rows.append(
@@ -100,9 +156,11 @@ def render_root_batch_result(
                     "root_index": str(root_index),
                     **_source_values_for_output(batch_row, source_headers, source_output_headers),
                     "name": root.name,
-                    "value": _format_root_value(root.value, digits),
+                    **_root_unit_cell(root.name, root_units_by_name),
+                    "value": "" if root.value is None else _format_root_value(root.value, digits),
                     "uncertainty": _format_optional_real(root.uncertainty, digits),
                     "display_value": _format_root_display_value(root, digits, uncertainty_digits),
+                    "classification_tags": _format_classification_tags(classification_tags.get(root_index, ())),
                     "backend": batch_row.result.backend,
                     "mode": batch_row.result.mode,
                     "residual_norm": residual_norm,
@@ -118,20 +176,40 @@ def _batch_failure_row(
     source_output_headers: list[str],
     *,
     failure: str,
+    include_unit_column: bool = False,
 ) -> dict[str, str]:
     return {
         "input_row_index": _format_row_index(row),
         "root_index": "",
         **_source_values_for_output(row, source_headers, source_output_headers),
         "name": "",
+        **({"root_unit": ""} if include_unit_column else {}),
         "value": "",
         "uncertainty": "",
         "display_value": "",
+        "classification_tags": "",
         "backend": "",
         "mode": "",
         "residual_norm": "",
         "failure": failure,
     }
+
+
+def _headers_with_optional_unit(headers: Sequence[str], *, include_unit_column: bool) -> list[str]:
+    if not include_unit_column or "root_unit" in headers:
+        return list(headers)
+    output: list[str] = []
+    for header in headers:
+        output.append(header)
+        if header == "name":
+            output.append("root_unit")
+    return output
+
+
+def _root_unit_cell(name: str, root_units_by_name: Mapping[str, str] | None) -> dict[str, str]:
+    if not root_units_by_name:
+        return {}
+    return {"root_unit": str(root_units_by_name.get(str(name), "") or "")}
 
 
 def _source_output_headers(source_headers: list[str]) -> list[str]:
@@ -209,8 +287,10 @@ _ZH_HEADERS = {
     "input_row_index": "输入行",
     "root_index": "根序号",
     "name": "名称",
+    "root_unit": "单位",
     "value": "值",
     "display_value": "值",
+    "classification_tags": "分类标签",
     "uncertainty": "不确定度",
     "backend": "后端",
     "mode": "模式",
@@ -228,6 +308,8 @@ def _markdown_headers(headers: list[str]) -> list[str]:
 def _display_header(header: str, *, language: str) -> str:
     if header == "display_value" and language != "zh":
         return "value"
+    if header == "root_unit" and language != "zh":
+        return "unit"
     if language != "zh":
         return header
     if header.startswith("input_") and header not in _ZH_HEADERS:
@@ -299,6 +381,39 @@ def _detail_value(key: str, value: object, *, language: str) -> str:
         "mixed": "混合",
     }
     return values.get(text, text)
+
+
+def _root_classification_tags(details: Mapping[str, object]) -> dict[int, tuple[str, ...]]:
+    raw = details.get("root_classification_tags")
+    if isinstance(raw, Mapping):
+        tags_by_index: dict[int, tuple[str, ...]] = {}
+        for key, value in raw.items():
+            try:
+                index = int(key)
+            except (TypeError, ValueError):
+                continue
+            tags_by_index[index] = _ordered_classification_tags(value)
+        return tags_by_index
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+        return {index: _ordered_classification_tags(value) for index, value in enumerate(raw)}
+    return {}
+
+
+def _ordered_classification_tags(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        raw_tags = {value}
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        raw_tags = {str(tag) for tag in value}
+    else:
+        return ()
+    tags = {tag for tag in raw_tags if tag in _ROOT_CLASSIFICATION_TAGS and tag != "unclassified"}
+    if not tags and "unclassified" in raw_tags:
+        return ("unclassified",)
+    return tuple(tag for tag in _ROOT_CLASSIFICATION_TAGS if tag in tags)
+
+
+def _format_classification_tags(tags: Sequence[str]) -> str:
+    return "; ".join(tags)
 
 
 def _merge_root_details(target: dict[str, object], source: Mapping[str, object]) -> None:

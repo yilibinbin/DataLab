@@ -160,7 +160,7 @@ def test_formula_preview_with_empty_text_clears_click_source(qtbot) -> None:
     assert label._preview_lhs == "z"
 
 
-def test_formula_preview_with_empty_text_dispatches_selected_language(qtbot, monkeypatch) -> None:
+def test_formula_preview_with_empty_text_language_keyword_is_inert_compatibility_shim(qtbot, monkeypatch) -> None:
     from datalab_latex.formula_render_service import InputLanguage, RenderResult
 
     import app_desktop.formula_preview as formula_preview
@@ -179,7 +179,7 @@ def test_formula_preview_with_empty_text_dispatches_selected_language(qtbot, mon
             fallback_text=request.source,
         )
 
-    monkeypatch.setattr(formula_preview, "render_formula", fake_render_formula)
+    monkeypatch.setattr(formula_preview, "render_desktop_preview", fake_render_formula)
     label = formula_preview.FormulaPreviewLabel()
     qtbot.addWidget(label)
 
@@ -193,14 +193,20 @@ def test_formula_preview_with_empty_text_dispatches_selected_language(qtbot, mon
 
     assert captured
     assert captured[0].source == r"\frac{1}{2}"
-    assert captured[0].language is InputLanguage.LATEX
+    assert captured[0].language is InputLanguage.DATALAB
     assert captured[0].lhs == "y"
     assert result is not None
-    assert result.language is InputLanguage.LATEX
+    assert result.language is InputLanguage.DATALAB
     assert _pixmap_is_cleared(label)
     assert label.text() == r"  \frac{1}{2}  "
     assert label._preview_expression == r"  \frac{1}{2}  "
     assert label._preview_lhs == "y"
+
+
+def test_formula_preview_no_longer_exposes_render_formula() -> None:
+    import app_desktop.formula_preview as formula_preview
+
+    assert "render_formula" not in vars(formula_preview)
 
 
 def test_implicit_equation_preview_adds_left_hand_side(qtbot) -> None:

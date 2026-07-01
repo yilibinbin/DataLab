@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, cast
+from typing import Any
 
 from mpmath import mp
 
@@ -17,7 +17,8 @@ from root_solving.models import (
 )
 from shared.input_normalization import normalize_constants_state
 from shared.integer_validation import strict_int
-from shared.parallel_config import NestedParallelPolicy, ParallelConfig, ParallelMode
+from shared.parallel_config import ParallelConfig
+from shared.parallel_options import parallel_config_from_mapping
 from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS, precision_guard
 from shared.uncertainty import parse_uncertainty_format
 
@@ -153,7 +154,7 @@ def _deserialize_root_value(payload: Any) -> RootValue:
         value=_number_from_payload(payload["value"]),
         uncertainty=_optional_number_from_payload(payload.get("uncertainty")),
         contributions={
-            str(key): mp.mpf(value)
+            str(key): _real_number_from_payload(value)
             for key, value in dict(payload.get("contributions") or {}).items()
         },
     )
@@ -184,17 +185,35 @@ def _optional_number_payload(value: Any | None, *, digits: int) -> dict[str, str
 
 def _number_from_payload(payload: Any) -> mp.mpf | mp.mpc:
     if not isinstance(payload, Mapping):
+        if isinstance(payload, float):
+            raise TypeError("JSON floats are not allowed in root-solving numeric payloads; pass numeric values as strings.")
         return mp.mpf(payload)
     kind = str(payload.get("kind") or "real")
     if kind == "complex":
-        return mp.mpc(mp.mpf(payload.get("real", "0")), mp.mpf(payload.get("imag", "0")))
-    return mp.mpf(payload.get("value", "0"))
+        real = payload.get("real", "0")
+        imag = payload.get("imag", "0")
+        if isinstance(real, float) or isinstance(imag, float):
+            raise TypeError("JSON floats are not allowed in root-solving numeric payloads; pass numeric values as strings.")
+        return mp.mpc(mp.mpf(real), mp.mpf(imag))
+    value = payload.get("value", "0")
+    if isinstance(value, float):
+        raise TypeError("JSON floats are not allowed in root-solving numeric payloads; pass numeric values as strings.")
+    return mp.mpf(value)
 
 
 def _optional_number_from_payload(payload: Any | None) -> mp.mpf | mp.mpc | None:
     if payload is None:
         return None
     return _number_from_payload(payload)
+
+
+def _real_number_from_payload(payload: Any) -> mp.mpf:
+    value = _number_from_payload(payload)
+    if isinstance(value, mp.mpc):
+        if value.imag:
+            raise ValueError("root-solving contribution payloads must be real numbers.")
+        return mp.mpf(value.real)
+    return mp.mpf(value)
 
 
 def _json_safe_tree(value: Any, digits: int) -> Any:
@@ -219,7 +238,11 @@ def _required_sequence(payload: Mapping[str, Any], key: str) -> Sequence[Any]:
     value = payload[key]
     if isinstance(value, (str, bytes, bytearray, memoryview)) or not isinstance(value, Sequence):
         raise TypeError(f"{key} must be a sequence.")
-    return cast(Sequence[Any], value)
+    # Annotate explicitly rather than cast(): older mypy sees the narrowed value
+    # as Any (needs the annotation), newer mypy sees it as Sequence (flags a cast
+    # as redundant). The typed assignment satisfies both.
+    result: Sequence[Any] = value
+    return result
 
 
 def _root_backend(value: object) -> RootBackend:
@@ -249,32 +272,4 @@ def _optional_int(value: Any, *, field_name: str) -> int | None:
 
 
 def _parallel_config_from_mapping(value: Mapping[str, object]) -> ParallelConfig:
-    return ParallelConfig(
-        mode=_parallel_mode(value.get("mode", ParallelMode.AUTO)),
-        max_workers=_optional_int(value.get("max_workers"), field_name="parallel.max_workers"),
-        reserve_cores=strict_int(value.get("reserve_cores", 1), field_name="parallel.reserve_cores"),
-        default_worker_cap=strict_int(
-            value.get("default_worker_cap", 16),
-            field_name="parallel.default_worker_cap",
-        ),
-        min_process_tasks=strict_int(
-            value.get("min_process_tasks", 4),
-            field_name="parallel.min_process_tasks",
-        ),
-        nested_policy=_nested_policy(value.get("nested_policy", NestedParallelPolicy.SERIAL_WHEN_NESTED)),
-        process_start_method=str(value.get("process_start_method") or "spawn"),
-    )
-
-
-def _parallel_mode(value: object) -> ParallelMode:
-    try:
-        return ParallelMode(str(value))
-    except ValueError:
-        return ParallelMode.AUTO
-
-
-def _nested_policy(value: object) -> NestedParallelPolicy:
-    try:
-        return NestedParallelPolicy(str(value))
-    except ValueError:
-        return NestedParallelPolicy.SERIAL_WHEN_NESTED
+    return parallel_config_from_mapping(value)

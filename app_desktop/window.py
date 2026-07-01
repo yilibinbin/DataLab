@@ -32,6 +32,14 @@ from examples.catalog import example_index_payload
 from app_desktop.fitting_input_normalization import normalize_fitting_input_from_widgets
 from app_desktop.update_controller import UpdateController
 from datalab_core.root_solving import build_root_solving_request
+from datalab_core.fitting_comparison import (
+    build_fitting_comparison_result_snapshot,
+    render_fitting_comparison_snapshot_outputs,
+)
+from datalab_core.statistics import (
+    build_statistics_result_snapshot,
+    render_statistics_snapshot_outputs,
+)
 from shared.computation_inputs import extract_expression_symbols
 from shared.update_checker import REPOSITORY_URL
 
@@ -164,6 +172,7 @@ from .docs_dialog import DocsDialog
 from .resources import (
     _apply_system_theme,
     _compute_default_pdf_dpi,
+    _detect_system_light_mode,
     _detect_windows_light_mode,
     _ensure_default_path_augmented,
     _locate_icon_file,
@@ -256,6 +265,28 @@ def _qt_object_alive(obj) -> bool:
             return True
         except Exception:
             return False
+
+
+def _error_output_unit_from_payload(payload: object) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    units = payload.get("units")
+    if not isinstance(units, dict):
+        return ""
+    outputs = units.get("outputs")
+    if not isinstance(outputs, dict):
+        return ""
+    result_unit = outputs.get("result")
+    if isinstance(result_unit, dict):
+        result_unit = result_unit.get("unit")
+    return str(result_unit or "").strip()
+
+
+def _error_csv_headers_from_payload(payload: object) -> list[str]:
+    headers = ["index", "value", "uncertainty", "latex"]
+    if _error_output_unit_from_payload(payload):
+        headers.append("output_unit")
+    return headers
 
 
 def _example_workspace_candidates(name: str) -> list[Path]:
@@ -448,13 +479,26 @@ class ExtrapolationWindow(
         self.resize(1280, 760)
         self._window_icon = None
         self._apply_window_icon()
-        self._windows_light_pref = _detect_windows_light_mode()
+        # OS light/dark preference, detected cross-platform (Qt colorScheme on
+        # macOS/Linux/Windows, registry fallback). Kept under the historical
+        # _windows_light_pref name to avoid churning every reader.
+        self._windows_light_pref = _detect_system_light_mode()
         self._theme_timer: QTimer | None = None
-        if os.name == "nt":
+        # Prefer the event-driven colorSchemeChanged signal (Qt 6.5+, all
+        # platforms). Only fall back to Windows registry polling when the signal
+        # is unavailable, so macOS/Linux dark-mode switches are picked up live.
+        app = QApplication.instance()
+        hints = app.styleHints() if app is not None else None
+        signal = getattr(hints, "colorSchemeChanged", None) if hints is not None else None
+        if signal is not None:
+            signal.connect(self._maybe_refresh_system_theme)
+        elif os.name == "nt":
             self._theme_timer = QTimer(self)
             self._theme_timer.setInterval(5000)
             self._theme_timer.timeout.connect(self._maybe_refresh_system_theme)
             self._theme_timer.start()
+        # Theme mode: "auto" follows the OS (default), "light"/"dark" pin it.
+        self._theme_mode = "auto"
 
         self.current_latex_path: Path | None = None
         self.last_pdf_path: Path | None = None
@@ -491,6 +535,8 @@ class ExtrapolationWindow(
         self._workspace_snapshot_only = False
         self._workspace_snapshot_stale = False
         self._workspace_restoring = False
+        self._workspace_provenance: dict[str, object] = {}
+        self._suppress_recipe_provenance_modified = False
         self._workspace_migration_warnings: list[str] = []
 
         self.current_fit_figures: list[Path] = []
@@ -570,6 +616,11 @@ class ExtrapolationWindow(
 
         _panels.refresh_workbench_config_cards(self)
 
+    def refresh_workbench_section_cards(self) -> None:
+        from . import panels as _panels
+
+        _panels.refresh_workbench_section_cards(self)
+
     def refresh_workbench_data_card(self) -> None:
         from . import panels as _panels
 
@@ -597,6 +648,22 @@ class ExtrapolationWindow(
 
     def _apply_language(self, lang: str):
         WindowI18nMixin._apply_language(self, lang)
+        # Retranslation replays the registered setText on the run button, which
+        # both (a) clears its explicit shortcut in PySide6 and (b) relabels it to
+        # the default "Run" text even mid-run. Re-run the state-specific setter so
+        # a running (Stop) button keeps its Stop label and state in the new
+        # language, and the shortcut is restored either way.
+        run_state = self.run_button.property("datalab_run_state") if hasattr(self, "run_button") else None
+        if run_state == "stop" and hasattr(self, "_set_button_to_stop_mode"):
+            self._set_button_to_stop_mode()
+        elif run_state == "run" and hasattr(self, "_set_button_to_run_mode"):
+            self._set_button_to_run_mode()
+        elif hasattr(self, "_reapply_run_button_shortcut"):
+            self._reapply_run_button_shortcut()
+        if hasattr(self, "_update_constants_visibility"):
+            self._update_constants_visibility()
+        if hasattr(self, "refresh_workbench_result_rail"):
+            self.refresh_workbench_result_rail()
         try:
             self._refresh_workbench_status()
         except Exception:
@@ -638,6 +705,12 @@ class ExtrapolationWindow(
     def _mark_workspace_dirty(self, *_args) -> None:
         if getattr(self, "_workspace_restoring", False):
             return
+        if not getattr(self, "_suppress_recipe_provenance_modified", False):
+            provenance = getattr(self, "_workspace_provenance", None)
+            if provenance:
+                from datalab_core.recipe_provenance import mark_recipe_provenance_modified
+
+                self._workspace_provenance = mark_recipe_provenance_modified(provenance)
         self._workspace_dirty = True
         if self._workspace_snapshot_only and not self._workspace_snapshot_stale:
             self._workspace_snapshot_stale = True
@@ -664,6 +737,7 @@ class ExtrapolationWindow(
             getattr(self, "custom_formula_edit", None),
             getattr(self, "formula_edit", None),
             getattr(self, "fit_expr_edit", None),
+            getattr(self, "fit_comparison_candidates_edit", None),
             getattr(self, "fit_target_edit", None),
             getattr(self, "root_equations_edit", None),
             getattr(self, "root_monte_carlo_seed_edit", None),
@@ -674,6 +748,14 @@ class ExtrapolationWindow(
             getattr(self, "implicit_tolerance_edit", None),
             getattr(self, "stats_value_column_edit", None),
             getattr(self, "stats_sigma_column_edit", None),
+            getattr(self, "stats_trim_fraction_edit", None),
+            getattr(self, "stats_bootstrap_seed_edit", None),
+            getattr(self, "stats_hypothesis_b_column_edit", None),
+            getattr(self, "stats_hypothesis_null_edit", None),
+            getattr(self, "stats_hypothesis_alpha_edit", None),
+            getattr(self, "stats_time_series_time_column_edit", None),
+            getattr(self, "stats_time_series_ewma_value_edit", None),
+            getattr(self, "error_units_output_edit", None),
             getattr(self, "output_file_edit", None),
             getattr(self, "caption_edit", None),
             getattr(self, "latex_edit", None),
@@ -693,18 +775,41 @@ class ExtrapolationWindow(
             signal = getattr(table, "changed", None)
             if signal is not None:
                 signal.connect(self._mark_workspace_dirty)
-        for editor_name in ("error_constants_editor", "custom_constants_editor", "implicit_constants_editor", "root_constants_editor"):
+        connected_constant_editors: set[int] = set()
+        for editor_name in (
+            "input_constants_editor",
+            "error_constants_editor",
+            "custom_constants_editor",
+            "implicit_constants_editor",
+            "root_constants_editor",
+            "error_units_inputs_editor",
+            "error_units_constants_editor",
+        ):
             editor = getattr(self, editor_name, None)
+            if editor is None or id(editor) in connected_constant_editors:
+                continue
             signal = getattr(editor, "changed", None)
             if signal is not None:
                 signal.connect(self._mark_workspace_dirty)
+                connected_constant_editors.add(id(editor))
         for combo_name in (
             "mode_combo",
             "method_combo",
             "levin_variant_combo",
             "levin_weight_combo",
             "error_method_combo",
+            "error_units_mode_combo",
+            "stats_workflow_combo",
             "stats_mode_combo",
+            "stats_bootstrap_target_combo",
+            "stats_hypothesis_test_combo",
+            "stats_hypothesis_alternative_combo",
+            "stats_hypothesis_expected_source_combo",
+            "stats_time_series_method_combo",
+            "stats_time_series_alignment_combo",
+            "stats_time_series_denominator_combo",
+            "stats_time_series_ewma_parameter_combo",
+            "stats_matrix_missing_policy_combo",
             "fit_model_combo",
             "implicit_method_combo",
             "root_mode_combo",
@@ -720,6 +825,7 @@ class ExtrapolationWindow(
             "generate_latex_checkbox",
             "generate_plots_checkbox",
             "verbose_checkbox",
+            "error_units_enabled_checkbox",
             "scientific_checkbox",
             "dcolumn_checkbox",
             "caption_checkbox",
@@ -729,6 +835,7 @@ class ExtrapolationWindow(
             "implicit_constraints_checkbox",
             "stats_sample_checkbox",
             "stats_weight_variance_checkbox",
+            "stats_time_series_ewma_adjust_checkbox",
             "log_x_checkbox",
             "log_y_checkbox",
         ):
@@ -755,6 +862,10 @@ class ExtrapolationWindow(
             "implicit_timeout_spin",
             "root_uncertainty_order_spin",
             "root_monte_carlo_samples_spin",
+            "stats_bootstrap_resamples_spin",
+            "stats_hypothesis_fitted_parameters_spin",
+            "stats_time_series_window_size_spin",
+            "stats_time_series_min_periods_spin",
         ):
             spin = getattr(self, spin_name, None)
             if spin is not None:
@@ -1182,8 +1293,6 @@ class ExtrapolationWindow(
     def _on_constants_source_toggle(self, checked: bool):
         if hasattr(self, "constants_file_row"):
             self.constants_file_row.setVisible(checked)
-        if hasattr(self, "error_constants_editor"):
-            self.error_constants_editor.set_inputs_visible(not checked)
         if hasattr(self, "constants_hint_btn"):
             hint_text = self._tr(
                 "常数文件示例：ALPHA 7.2973525693(11)[-3]",
@@ -1191,6 +1300,8 @@ class ExtrapolationWindow(
             ) if checked else "ALPHA 7.2973525693(11)[-3]"
             self.constants_hint_btn.setToolTip(hint_text)
             self.constants_hint_btn.setVisible(checked)
+        if hasattr(self, "_update_constants_visibility"):
+            self._update_constants_visibility()
 
     def _update_error_propagation_controls(self):
         if not hasattr(self, "error_method_combo"):
@@ -1219,12 +1330,154 @@ class ExtrapolationWindow(
             self.use_file_hint_btn.setVisible(checked)
 
     def _on_stats_mode_change(self):
+        workflow = (
+            self.stats_workflow_combo.currentData()
+            if hasattr(self, "stats_workflow_combo")
+            else "standard"
+        )
+        is_bootstrap = workflow == "bootstrap_confidence_intervals"
+        is_hypothesis = workflow == "hypothesis_tests"
+        is_time_series = workflow == "time_series_rolling"
+        is_matrix = workflow == "covariance_correlation"
+        is_grouped = workflow == "grouped_statistics"
         mode = self.stats_mode_combo.currentData() if hasattr(self, "stats_mode_combo") else None
+        for name in ("stats_mode_combo", "stats_mode_label"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(not is_bootstrap and not is_hypothesis and not is_time_series and not is_matrix)
+        for name in ("stats_group_column_edit", "stats_group_column_label"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_grouped)
+        bootstrap_target = (
+            self.stats_bootstrap_target_combo.currentData()
+            if hasattr(self, "stats_bootstrap_target_combo")
+            else None
+        )
+        for name in (
+            "stats_bootstrap_target_combo",
+            "stats_bootstrap_target_label",
+            "stats_bootstrap_confidence_edit",
+            "stats_bootstrap_confidence_label",
+            "stats_bootstrap_resamples_spin",
+            "stats_bootstrap_resamples_label",
+            "stats_bootstrap_seed_edit",
+            "stats_bootstrap_seed_label",
+        ):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_bootstrap)
+        for name in ("stats_sigma_column_edit", "stats_sigma_column_label"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                method = (
+                    self.stats_time_series_method_combo.currentData()
+                    if hasattr(self, "stats_time_series_method_combo")
+                    else None
+                )
+                widget.setVisible(
+                    (not is_bootstrap and not is_hypothesis and not is_time_series and not is_matrix)
+                    or (is_time_series and method == "rolling_mean")
+                )
         if hasattr(self, "stats_weight_variance_checkbox"):
-            visible = mode == "weighted_sigma"
+            visible = (not is_bootstrap and not is_hypothesis and not is_time_series and not is_matrix) and mode == "weighted_sigma"
             self.stats_weight_variance_checkbox.setVisible(visible)
             if hasattr(self, "stats_weight_variance_label"):
                 self.stats_weight_variance_label.setVisible(visible)
+        for name in ("stats_sample_checkbox", "stats_sample_label"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(not is_hypothesis and not is_time_series)
+        trim_visible = (not is_bootstrap and mode == "descriptive") or (
+            is_bootstrap and bootstrap_target == "trimmed_mean"
+        )
+        trim_visible = trim_visible and not is_hypothesis and not is_time_series
+        trim_visible = trim_visible and not is_matrix
+        if hasattr(self, "stats_trim_fraction_edit"):
+            self.stats_trim_fraction_edit.setVisible(trim_visible)
+        if hasattr(self, "stats_trim_fraction_label"):
+            self.stats_trim_fraction_label.setVisible(trim_visible)
+        hypothesis_kind = (
+            self.stats_hypothesis_test_combo.currentData()
+            if hasattr(self, "stats_hypothesis_test_combo")
+            else None
+        )
+        needs_second_column = hypothesis_kind in {"paired_t", "welch_t", "chi_square_gof"}
+        is_chi_square = hypothesis_kind == "chi_square_gof"
+        for name in ("stats_hypothesis_test_combo", "stats_hypothesis_test_label"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_hypothesis)
+        for name in ("stats_hypothesis_b_column_edit", "stats_hypothesis_b_column_label"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_hypothesis and needs_second_column)
+        for name in ("stats_hypothesis_null_edit", "stats_hypothesis_null_label"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_hypothesis and not is_chi_square)
+        for name in ("stats_hypothesis_alternative_combo", "stats_hypothesis_alternative_label"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_hypothesis and not is_chi_square)
+        for name in ("stats_hypothesis_alpha_edit", "stats_hypothesis_alpha_label"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_hypothesis)
+        for name in (
+            "stats_hypothesis_expected_source_combo",
+            "stats_hypothesis_expected_source_label",
+            "stats_hypothesis_fitted_parameters_spin",
+            "stats_hypothesis_fitted_parameters_label",
+        ):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_hypothesis and is_chi_square)
+        time_series_method = (
+            self.stats_time_series_method_combo.currentData()
+            if hasattr(self, "stats_time_series_method_combo")
+            else None
+        )
+        is_ewma = time_series_method == "ewma"
+        is_rolling_std = time_series_method == "rolling_std"
+        for name in ("stats_time_series_method_combo", "stats_time_series_method_label"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_time_series)
+        for name in ("stats_time_series_time_column_edit", "stats_time_series_time_column_label"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_time_series)
+        for name in (
+            "stats_time_series_window_size_spin",
+            "stats_time_series_window_size_label",
+            "stats_time_series_min_periods_spin",
+            "stats_time_series_min_periods_label",
+            "stats_time_series_alignment_combo",
+            "stats_time_series_alignment_label",
+        ):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_time_series and not is_ewma)
+        for name in ("stats_time_series_denominator_combo", "stats_time_series_denominator_label"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_time_series and is_rolling_std)
+        for name in (
+            "stats_time_series_ewma_parameter_combo",
+            "stats_time_series_ewma_parameter_label",
+            "stats_time_series_ewma_value_edit",
+            "stats_time_series_ewma_value_label",
+            "stats_time_series_ewma_adjust_checkbox",
+            "stats_time_series_ewma_adjust_label",
+        ):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_time_series and is_ewma)
+        for name in ("stats_matrix_missing_policy_combo", "stats_matrix_missing_policy_label"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setVisible"):
+                widget.setVisible(is_matrix)
 
     def _update_model_controls(self):
         if not hasattr(self, "fit_model_combo"):
@@ -1239,18 +1492,22 @@ class ExtrapolationWindow(
         if hasattr(self, "implicit_model_widget"):
             self.implicit_model_widget.setVisible(mode == "self_consistent")
         show_implicit = mode == "self_consistent"
+        show_comparison = mode == "comparison"
         for name in (
             "implicit_equation_edit",
             "implicit_output_edit",
             "implicit_param_header_widget",
             "implicit_params_table",
             "implicit_constraints_checkbox",
-            "implicit_constants_editor",
         ):
             widget = getattr(self, name, None)
             if widget is not None:
                 widget.setVisible(show_implicit)
-        show_expr = mode != "self_consistent"
+        for name in ("fit_comparison_candidates_title_widget", "fit_comparison_candidates_edit"):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setVisible(show_comparison)
+        show_expr = mode not in {"self_consistent", "comparison"}
         if hasattr(self, "fit_expr_title_widget"):
             self.fit_expr_title_widget.setVisible(show_expr)
         self.fit_expr_edit.setVisible(show_expr)
@@ -1261,17 +1518,16 @@ class ExtrapolationWindow(
                 self.fit_expr_edit.setPlainText(self._mode_expression_preview(mode))
         if hasattr(self, "fit_func_help_btn"):
             self.fit_func_help_btn.setVisible(mode == "custom")
-        if hasattr(self, "custom_constants_editor"):
-            self.custom_constants_editor.setVisible(mode == "custom")
+        self._update_constants_visibility()
         for name in ("custom_param_header_widget", "custom_params_table", "custom_constraints_checkbox"):
             widget = getattr(self, name, None)
             if widget is not None:
                 widget.setVisible(mode == "custom")
         if hasattr(self, "add_variable_btn"):
-            self.add_variable_btn.setVisible(mode in {"custom", "self_consistent"})
+            self.add_variable_btn.setVisible(mode in {"custom", "self_consistent", "comparison"})
         if hasattr(self, "remove_variable_btn"):
-            self.remove_variable_btn.setVisible(mode in {"custom", "self_consistent"})
-            if mode not in {"custom", "self_consistent"}:
+            self.remove_variable_btn.setVisible(mode in {"custom", "self_consistent", "comparison"})
+            if mode not in {"custom", "self_consistent", "comparison"}:
                 self._reset_variable_rows(default_var="x", default_column="A")
 
         if hasattr(self, "refresh_workbench_formula_panel"):
@@ -1312,6 +1568,11 @@ class ExtrapolationWindow(
             hint = self._tr(
                 "通用自洽模型中的符号默认都是变量或参数；常量请在表达式中显式处理。",
                 "Symbols in generic self-consistent models are variables or parameters by default; handle constants explicitly in the expression.",
+            )
+        elif mode == "comparison":
+            hint = self._tr(
+                "选定拟合比较只运行 JSON 中显式列出的候选，不会自动生成或推荐模型。",
+                "Selected-fit comparison runs only the candidates explicitly listed in JSON; it does not generate or recommend models.",
             )
         self.fit_model_hint.setVisible(bool(hint))
         if hint:
@@ -1408,7 +1669,7 @@ class ExtrapolationWindow(
                     if var_edit.text().strip()
                 ] or ["x"],
                 parameter_table=table,
-                constants_editor=getattr(self, "custom_constants_editor", None),
+                constants_editor=self._active_constants_source(),
                 validate=True,
             )
         except ValueError as exc:
@@ -1454,9 +1715,7 @@ class ExtrapolationWindow(
                 x_variables + [implicit_variable],
                 [],
                 constants=list(
-                    self._raw_constant_names_from_editor(
-                        getattr(self, "implicit_constants_editor", None)
-                    )
+                    self._raw_constant_names_from_editor(self._active_constants_source())
                 ),
             )
         )
@@ -1475,9 +1734,7 @@ class ExtrapolationWindow(
             for var_edit, _col_edit, *_ in getattr(self, "variable_rows", [])
             if var_edit.text().strip()
         ] or ["x"]
-        constants = self._raw_constant_names_from_editor(
-            getattr(self, "custom_constants_editor", None)
-        )
+        constants = self._raw_constant_names_from_editor(self._active_constants_source())
         parameter_names = self._infer_parameter_names(
             model_expr,
             variable_names,
@@ -1492,6 +1749,11 @@ class ExtrapolationWindow(
                 self._mark_workspace_dirty()
 
     def _raw_constant_names_from_editor(self, editor: object | None) -> tuple[str, ...]:
+        # Collect declared constant *names* so parameter detection can exclude
+        # them — independent of value. A constant with a blank/invalid value is
+        # still a declared constant (the "bypasses invalid constant values"
+        # contract), so we must not route through constants_dict(), which drops
+        # empty-valued rows.
         if editor is None or not getattr(editor, "isChecked", lambda: False)():
             return ()
         names: list[str] = []
@@ -1525,7 +1787,7 @@ class ExtrapolationWindow(
             for line in self.root_equations_edit.toPlainText().splitlines()
             if line.strip()
         )
-        constants = set(self._raw_constant_names_from_editor(getattr(self, "root_constants_editor", None)))
+        constants = set(self._raw_constant_names_from_editor(self._active_constants_source()))
         data_headers = set(self._active_root_data_headers())
         symbols = extract_expression_symbols(expressions)
         unknown_names = tuple(
@@ -1601,14 +1863,18 @@ class ExtrapolationWindow(
             for line in self.root_equations_edit.toPlainText().splitlines()
             if line.strip()
         )
-        constants_editor = getattr(self, "root_constants_editor", None)
-        constants_enabled = bool(constants_editor and constants_editor.isChecked())
-        constants_view = "text" if constants_editor and constants_editor.using_text_view() else "table"
-        constants_rows = tuple(dict(row) for row in (constants_editor.rows() if constants_editor else []))
-        constants_text = constants_editor.raw_text() if constants_editor else ""
-        data_headers, data_rows = self._parse_root_data_source_for_job(
+        input_bundle = self._active_input_bundle(
             data_path=data_path,
             manual_content=manual_content,
+            source_kind="file" if data_path else "manual_text",
+        )
+        constants_enabled = bool(input_bundle.constants_rows or input_bundle.constants_text.strip())
+        constants_view = input_bundle.constants_view
+        constants_rows = input_bundle.constants_rows
+        constants_text = input_bundle.constants_text
+        data_headers, data_rows = self._parse_root_data_source_for_job(
+            data_path=input_bundle.data_path,
+            manual_content=input_bundle.data_text,
         )
         precision = int(self._read_precision())
         uncertainty_digits = int(self._uncertainty_digits_value())
@@ -1633,6 +1899,7 @@ class ExtrapolationWindow(
         parallel_config = self._current_parallel_config()
         mode = str(self.root_mode_combo.currentData() or "scalar")
         display_digits = int(self._display_digits_limit())
+        units_config = self._collect_root_units_config()
         core_request = build_root_solving_request(
             equations=equations,
             unknown_rows=tuple(dict(row) for row in self.root_unknowns_table.rows()),
@@ -1648,6 +1915,7 @@ class ExtrapolationWindow(
             precision_digits=precision,
             display_digits=display_digits,
             uncertainty_digits=uncertainty_digits,
+            units=units_config,
             parallel={
                 "mode": parallel_config.mode,
                 "max_workers": parallel_config.max_workers,
@@ -1703,9 +1971,7 @@ class ExtrapolationWindow(
         editor.setChecked(True)
 
     def _collect_implicit_constants(self) -> dict[str, str]:
-        editor = getattr(self, "implicit_constants_editor", None)
-        if editor is None or not editor.isChecked():
-            return {}
+        editor = self._active_constants_source()
         normalized = normalize_fitting_input_from_widgets(
             model_type="self_consistent",
             expression=self.implicit_output_edit.toPlainText().strip(),
@@ -1740,7 +2006,7 @@ class ExtrapolationWindow(
         max_iterations = self.implicit_max_iterations_spin.value()
         timeout_seconds = self.implicit_timeout_spin.value()
         expressions = f"{equation}\n{output_expression}"
-        editor = getattr(self, "implicit_constants_editor", None)
+        editor = self._active_constants_source()
         constants_probe = normalize_fitting_input_from_widgets(
             model_type="self_consistent",
             expression=expressions,
@@ -1896,6 +2162,8 @@ class ExtrapolationWindow(
             self.workbench_bar.setStyleSheet(toolbar_qss)
         if hasattr(self, "refresh_workbench_config_cards"):
             self.refresh_workbench_config_cards()
+        if hasattr(self, "refresh_workbench_section_cards"):
+            self.refresh_workbench_section_cards()
         if hasattr(self, "refresh_workbench_data_card"):
             self.refresh_workbench_data_card()
         if hasattr(self, "refresh_workbench_result_overview_card"):
@@ -1933,6 +2201,99 @@ class ExtrapolationWindow(
             self.refresh_workbench_variable_panel()
         if hasattr(self, "_refresh_main_splitter_left_min_width"):
             self._refresh_main_splitter_left_min_width()
+        self._update_constants_visibility()
+
+    def _update_constants_visibility(self):
+        if not hasattr(self, "input_constants_editor") or self.input_constants_editor is None:
+            return
+
+        visible, numeric_mode = self._constants_visibility_state()
+        inputs_visible = True
+        mode = self.mode_combo.currentData() if hasattr(self, "mode_combo") else None
+        if mode == "error" and hasattr(self, "use_constants_file_checkbox"):
+            inputs_visible = not self.use_constants_file_checkbox.isChecked()
+        if hasattr(self, "constants_widget"):
+            self.constants_widget.setVisible(
+                mode == "error"
+                and hasattr(self, "use_constants_file_checkbox")
+                and self.use_constants_file_checkbox.isChecked()
+            )
+
+        self.input_constants_editor.setVisible(visible)
+        self.input_constants_editor.set_inputs_visible(inputs_visible)
+        self.input_constants_editor.set_control_labels(
+            add_row=self._tr("+ 行", "+ Row"),
+            remove_row=self._tr("- 行", "- Row"),
+            clear=self._tr("清除", "Clear"),
+            table_view=self._tr("表格视图", "Table View"),
+            text_view=self._tr("文本视图", "Text View"),
+        )
+        if visible:
+            self.input_constants_editor.set_numeric_mode(numeric_mode)
+            self.input_constants_editor.setToolTip(self._constants_tooltip_text())
+            schema_key = self._constants_schema_key()
+            if schema_key:
+                self.input_constants_editor.setProperty("datalab_schema_key", schema_key)
+                self.input_constants_editor.setProperty("datalab_schema_required", False)
+                if hasattr(self.input_constants_editor, "help_button"):
+                    self.input_constants_editor.help_button.setProperty("datalab_schema_key", schema_key)
+            from app_desktop.views import helpers as view_helpers
+            view_helpers.register_constant_headers(self, self.input_constants_editor.set_table_headers)
+            view_helpers.apply_equal_column_stretch(self.input_constants_editor.table_view)
+            self.input_constants_editor.table_view.setStyleSheet(view_helpers.get_table_style())
+
+    def _constants_schema_key(self) -> str:
+        mode = self.mode_combo.currentData() if hasattr(self, "mode_combo") else None
+        if mode == "error":
+            return "error.constants"
+        if mode == "root_solving":
+            return "root.constants"
+        if mode == "fitting" and hasattr(self, "fit_model_combo"):
+            fit_mode = self.fit_model_combo.currentData()
+            if fit_mode == "custom":
+                return "fitting.custom.constants"
+            if fit_mode == "self_consistent":
+                return "fitting.implicit.constants"
+        return ""
+
+    def _constants_visibility_state(self) -> tuple[bool, str]:
+        mode = self.mode_combo.currentData() if hasattr(self, "mode_combo") else None
+        if mode in {"error", "root_solving"}:
+            return True, "uncertainty"
+        if mode == "fitting" and hasattr(self, "fit_model_combo"):
+            fit_mode = self.fit_model_combo.currentData()
+            if fit_mode in {"custom", "self_consistent"}:
+                return True, "mpmath"
+        return False, "uncertainty"
+
+    def _constants_tooltip_text(self) -> str:
+        mode = self.mode_combo.currentData() if hasattr(self, "mode_combo") else None
+        if mode == "error":
+            return self._tr(
+                "常数设置：在左侧输入区填写误差传递公式中的固定量；非空常数会自动代入。",
+                "Constants: enter fixed quantities for the uncertainty formula in the left input area; non-empty constants are substituted automatically.",
+            )
+        if mode == "root_solving":
+            return self._tr(
+                "常数设置：填写方程中的固定量，支持 1.23(4) 和 1.23(4)[-5] 这类不确定度写法；非空常数会自动代入。",
+                "Constants: fixed quantities used by equations; accepts uncertainty notation such as 1.23(4) and 1.23(4)[-5]; non-empty constants are substituted automatically.",
+            )
+        if mode == "fitting" and hasattr(self, "fit_model_combo"):
+            fit_mode = self.fit_model_combo.currentData()
+            if fit_mode == "self_consistent":
+                return self._tr(
+                    "常数设置：在左侧输入区填写自洽隐式模型中的固定常数；非空常数会自动代入并从参数识别中排除。",
+                    "Constants: enter fixed constants for the implicit model in the left input area; non-empty constants are substituted and excluded from parameter detection.",
+                )
+            if fit_mode == "custom":
+                return self._tr(
+                    "常数设置：在左侧输入区填写自定义拟合表达式中的固定常数；非空常数会自动代入并从参数识别中排除。",
+                    "Constants: enter fixed constants for the custom fit expression in the left input area; non-empty constants are substituted and excluded from parameter detection.",
+                )
+        return self._tr(
+            "常数设置：非空常数会在支持常数的计算模式中自动使用。",
+            "Constants: non-empty constants are used automatically in modes that support constants.",
+        )
 
     def _sync_manual_table_columns_for_mode(self, mode: str | None) -> None:
         table = getattr(self, "manual_table", None)
@@ -1946,6 +2307,8 @@ class ExtrapolationWindow(
         from app_desktop.panels import _apply_equal_column_stretch
 
         _apply_equal_column_stretch(table)
+        if hasattr(self, "refresh_workbench_data_summary"):
+            self.refresh_workbench_data_summary()
 
     def _manual_table_has_content(self) -> bool:
         table = getattr(self, "manual_table", None)
@@ -2047,19 +2410,22 @@ class ExtrapolationWindow(
         system_lang = getattr(self, "_system_lang", _LANG_EN)
         is_en = self._lang_mode == _LANG_EN or (self._lang_mode == _LANG_AUTO and system_lang == _LANG_EN)
         base = (
-            "Paste data here (first row as headers).\n\n"
+            "Paste table data here with headers in the first row, or use [data] and [constants] sections in text/file input.\n"
+            "Non-empty constants are used automatically; empty constants are ignored. Uncertainty notation such as 1.23(4)[-5] is accepted where the active mode supports it.\n\n"
             if is_en
-            else "在此粘贴与数据文件完全一致的内容（首行为表头）。\n\n"
+            else "在此粘贴表格数据（首行为表头），也可在文本/文件中使用 [data] 与 [constants] 分段。\n"
+            "非空常数会自动参与支持常数的计算；空常数会被忽略。当前模式支持时可使用 1.23(4)[-5] 这类不确定度写法。\n\n"
         )
         zh_example, en_example = _MANUAL_EXAMPLES.get(
             mode or "extrapolation", _MANUAL_EXAMPLES["extrapolation"]
         )
         example = en_example if is_en else zh_example
         self._current_example_text = example
+        self._current_data_help_text = base.strip()
         placeholder = base + example
         self.manual_data_edit.setPlaceholderText(placeholder)
         if hasattr(self, "use_file_hint_btn"):
-            self.use_file_hint_btn.setToolTip(example)
+            self.use_file_hint_btn.setToolTip(base + example)
         # 根据行数动态调整高度，保证示例完整可见
         line_count = placeholder.count("\n") + 1
         target_height = max(120, int(line_count * 18 + 40))
@@ -2083,7 +2449,9 @@ class ExtrapolationWindow(
         example = (example or "").strip()
         if not example:
             return
-        QMessageBox.information(self, self._tr("示例", "Example"), example)
+        help_text = getattr(self, "_current_data_help_text", "")
+        body = f"{help_text}\n\n{example}" if help_text else example
+        QMessageBox.information(self, self._tr("输入数据帮助", "Data input help"), body)
 
     def _show_constants_file_hint(self):
         """Show the constants file example (same content as the '?' tooltip)."""
@@ -2424,6 +2792,8 @@ class ExtrapolationWindow(
             self._last_result_rendered_text = ""
             self._last_result_kind = None
             self._last_result_payloads = {}
+            self._last_result_semantic_snapshot = None
+            self._last_result_semantic_snapshot_kind = None
             self.result_plot_bytes = None
             self._result_plot_base_pixmap = None
             self._image_mode = None
@@ -2480,6 +2850,9 @@ class ExtrapolationWindow(
 
         if hasattr(self, "workbench_result_overview"):
             refresh_result_overview(self)
+        history_panel = getattr(self, "workbench_history_panel", None)
+        if history_panel is not None:
+            history_panel.refresh()
 
     def _export_csv_data(self):
         if not getattr(self, "_csv_rows", None):
@@ -2523,6 +2896,8 @@ class ExtrapolationWindow(
     def _remember_last_result(self, kind: str, payload: dict[str, object]):
         """Cache the most recent result payload so we can reformat without recomputation."""
         self._last_result_kind = kind
+        self._last_result_semantic_snapshot = None
+        self._last_result_semantic_snapshot_kind = None
         if not hasattr(self, "_last_result_payloads"):
             self._last_result_payloads = {}
         self._last_result_payloads[kind] = payload
@@ -2548,10 +2923,16 @@ class ExtrapolationWindow(
                 else:
                     self._reset_csv_data()
             elif kind == "error":
-                text, csv_rows = self._format_error_display(**payload)
+                text, csv_rows = self._format_error_display(
+                    headers=payload.get("headers"),
+                    data_rows=payload.get("data_rows"),
+                    results=payload.get("results"),
+                    formula=str(payload.get("formula") or ""),
+                    units=payload.get("units"),
+                )
                 self._set_result_text(text)
                 if csv_rows:
-                    self._set_csv_data(csv_rows, ["index", "value", "uncertainty", "latex"], suggestion="error_propagation_results.csv")
+                    self._set_csv_data(csv_rows, _error_csv_headers_from_payload(payload), suggestion="error_propagation_results.csv")
                 else:
                     self._reset_csv_data()
             elif kind == "statistics_single":
@@ -2568,6 +2949,24 @@ class ExtrapolationWindow(
                     self._set_csv_data(csv_rows, ["batch", "metric", "value", "uncertainty"], suggestion="statistics_results.csv")
                 else:
                     self._reset_csv_data()
+            elif kind in {
+                "statistics_matrix",
+                "statistics_bootstrap",
+                "statistics_hypothesis_test",
+                "statistics_time_series",
+                "statistics_grouped",
+            }:
+                snapshot = build_statistics_result_snapshot(kind, payload)
+                if snapshot is None:
+                    self._reset_csv_data()
+                    return
+                semantic_outputs = render_statistics_snapshot_outputs(snapshot)
+                if semantic_outputs is None:
+                    self._reset_csv_data()
+                    return
+                text, csv_rows, headers = semantic_outputs
+                self._set_result_text(text)
+                self._set_csv_data(csv_rows, headers, suggestion=f"{kind}_results.csv")
             elif kind == "fit_single":
                 text, csv_rows = self._format_fit_display(**payload)
                 self._set_result_text(text)
@@ -2579,6 +2978,18 @@ class ExtrapolationWindow(
                     )
                 else:
                     self._reset_csv_data()
+            elif kind == "fitting_comparison":
+                snapshot = build_fitting_comparison_result_snapshot(kind, payload)
+                if snapshot is None:
+                    self._reset_csv_data()
+                    return
+                semantic_outputs = render_fitting_comparison_snapshot_outputs(snapshot)
+                if semantic_outputs is None:
+                    self._reset_csv_data()
+                    return
+                text, csv_rows, headers = semantic_outputs
+                self._set_result_text(text)
+                self._set_csv_data(csv_rows, headers, suggestion="fitting_comparison_results.csv")
             elif kind == "fit_auto":
                 self._set_result_text(
                     self._tr(
@@ -2679,7 +3090,7 @@ class ExtrapolationWindow(
                 err = error if isinstance(error, mp.mpf) else mp.mpf(error)
             except Exception:
                 err = mp.mpf("0")
-            if mp.almosteq(err, mp.mpf("0")):
+            if mp.isnan(err) or mp.isinf(err) or mp.almosteq(err, mp.mpf("0")):
                 return self._format_precision_value(value)
             latex_value = format_result_with_uncertainty_latex(value, err, self._uncertainty_digits_value())
         if latex:
@@ -2694,7 +3105,7 @@ class ExtrapolationWindow(
                     sigma_val = sigma if isinstance(sigma, mp.mpf) else mp.mpf(sigma)
                 except Exception:
                     sigma_val = mp.mpf("0")
-                if not mp.almosteq(sigma_val, mp.mpf("0")):
+                if not (mp.isnan(sigma_val) or mp.isinf(sigma_val) or mp.almosteq(sigma_val, mp.mpf("0"))):
                     return format_result_with_uncertainty_latex(value, sigma_val, self._uncertainty_digits_value())
             mp_val = value if isinstance(value, mp.mpf) else mp.mpf(value)
             return self._latex_escape(mp.nstr(mp_val, digits))

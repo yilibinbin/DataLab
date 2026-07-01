@@ -41,3 +41,22 @@ def test_weighted_variance_toggle_changes_std_for_unequal_sigmas():
         assert mp.almosteq(weighted["mean"], unweighted_var["mean"])
         assert weighted["std"] != unweighted_var["std"]
 
+
+
+def test_statistics_latex_batches_use_sequential_fallback_index(tmp_path):
+    # When a batch omits "index", the caption must fall back to a sequential batch
+    # number, not the running line count of the accumulating LaTeX document.
+    import re
+
+    from statistics_utils import generate_statistics_latex_batches
+
+    batches = [
+        {"value_col": "A", "values": ["1", "2"], "result": {}},
+        {"value_col": "A", "values": ["3", "4"], "result": {}},
+    ]
+    out = tmp_path / "batches.tex"
+    generate_statistics_latex_batches("A", batches, 6, str(out), False)
+    text = out.read_text(encoding="utf-8")
+
+    batch_numbers = sorted({int(m) for m in re.findall(r"Batch (\d+)", text)})
+    assert batch_numbers == [1, 2]

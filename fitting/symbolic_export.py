@@ -33,6 +33,7 @@ from datalab_latex.expression_engine import (
 )
 
 __all__ = [
+    "allowed_export_names",
     "MATHEMATICA_FUNCTION_MAP",
     "SYMPY_FUNCTION_MAP",
     "to_mathematica",
@@ -91,6 +92,11 @@ _MATHEMATICA_CONSTANT_MAP = {
     "Pi": "Pi",
     "E": "E",
 }
+
+
+def allowed_export_names() -> tuple[str, ...]:
+    """Return DataLab expression names supported by symbolic export."""
+    return (*SYMPY_FUNCTION_MAP, *_SYMPY_CONSTANT_MAP)
 
 
 def _normalize_for_parse(expr: str) -> str:

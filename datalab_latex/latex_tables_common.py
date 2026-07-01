@@ -1,6 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 import re
+from typing import Any
+
+from mpmath import mp
+
+from datalab_core.statistics import (
+    statistics_output_uncertainty_unit,
+    statistics_output_value_unit,
+    statistics_row_flag_detail,
+    statistics_units_have_output_annotations,
+    statistics_warning_display_text,
+)
 
 from .sisetup_block import build_sisetup_block
 
@@ -190,3 +202,291 @@ def _apply_aliases(formula: str, alias_map: dict[str, str]) -> str:
         pattern = r"\b" + re.escape(alias) + r"\b"
         result = re.sub(pattern, target, result)
     return result
+
+
+StatisticsLatexValueFormatter = Callable[[Any, Any | None, bool], str]
+StatisticsLatexTextFormatter = Callable[[str], str]
+
+
+def format_statistics_latex_value(
+    value: Any,
+    sigma: Any | None,
+    *,
+    digits: int,
+    use_dcolumn: bool,
+    uncertainty_digits: int | None = None,
+    is_input: bool = True,
+    latex_group_size: int = 3,
+) -> str:
+    """Format a statistics numeric cell through the canonical LaTeX formatter."""
+
+    from datalab_latex.latex_formatting import format_value_for_latex_file
+
+    sigma_digits = uncertainty_digits
+    if sigma is not None and hasattr(sigma, "uncertainty_digits"):
+        sigma_digits = getattr(sigma, "uncertainty_digits", None) or sigma_digits
+    if sigma is not None and hasattr(sigma, "uncertainty"):
+        try:
+            sigma = sigma.uncertainty
+        except Exception:
+            pass
+    if sigma is not None:
+        try:
+            sigma = mp.mpf(sigma)
+        except Exception:
+            sigma = None
+    return str(
+        format_value_for_latex_file(
+            value,
+            sigma,
+            use_dcolumn=use_dcolumn,
+            latex_input_decimals=digits,
+            is_input=is_input,
+            latex_group_size=max(0, int(latex_group_size)),
+            uncertainty_digits=sigma_digits,
+        )
+    )
+
+
+def latex_numeric_values_from_rows(rows: Sequence[tuple[str, str]]) -> list[str]:
+    """Return cells usable for dcolumn/siunitx table-format estimation."""
+
+    values = [value for _label, value in rows if not value.lstrip().startswith("\\multicolumn")]
+    return values or [value for _label, value in rows]
+
+
+STATISTICS_LATEX_SUMMARY_LABEL_KEYS = {
+    "Mean": "mean",
+    "Trimmed mean": "trimmed_mean",
+    "Std. error": "std_mean",
+    "Mean CI lower": "mean_ci_lower",
+    "Mean CI upper": "mean_ci_upper",
+    "Mean CI margin": "mean_ci_margin",
+    "CI level": "mean_ci_confidence_level",
+    "Sample SE for CI": "mean_sample_se_for_ci",
+    "Known-sigma weighted SE": "weighted_se_known_sigma",
+    "CI dof": "mean_ci_dof",
+    "CI critical value": "mean_ci_critical_value",
+    "Min": "min",
+    "Max": "max",
+    "Std. dev.": "std",
+    "Count": "count",
+    "Variance": "variance",
+    "Median": "median",
+    "Q1": "q1",
+    "Q3": "q3",
+    "IQR": "iqr",
+    "MAD": "mad",
+    "Skewness": "skewness",
+    "Excess kurtosis": "excess_kurtosis",
+    "Weighted chi-square": "weighted_chi_square",
+    "Weighted consistency dof": "weighted_consistency_dof",
+    "Weighted reduced chi-square": "weighted_reduced_chi_square",
+    "Birge ratio": "birge_ratio",
+}
+
+
+def statistics_latex_output_unit_for_keys(units: Mapping[str, Any] | None, *keys: object) -> str:
+    for key in keys:
+        text = str(key or "").strip()
+        if not text:
+            continue
+        unit = statistics_output_value_unit(units, text)
+        if unit:
+            return unit
+    return ""
+
+
+def statistics_latex_summary_unit_for_label(units: Mapping[str, Any] | None, label: str) -> str:
+    key = STATISTICS_LATEX_SUMMARY_LABEL_KEYS.get(label)
+    if not key:
+        return ""
+    value_unit = statistics_output_value_unit(units, key)
+    uncertainty_unit = statistics_output_uncertainty_unit(units, key)
+    if value_unit and uncertainty_unit and value_unit != uncertainty_unit:
+        return f"{value_unit}; uncertainty {uncertainty_unit}"
+    return value_unit or uncertainty_unit
+
+
+def statistics_latex_summary_units_for_rows(
+    units: Mapping[str, Any] | None,
+    summary_rows: Sequence[tuple[str, str]],
+) -> dict[str, str]:
+    if not statistics_units_have_output_annotations(units):
+        return {}
+    result: dict[str, str] = {}
+    for label, _value in summary_rows:
+        unit = statistics_latex_summary_unit_for_label(units, label)
+        if unit:
+            result[label] = unit
+    return result
+
+
+def build_statistics_latex_summary_rows(
+    result: Mapping[str, Any],
+    *,
+    format_value: StatisticsLatexValueFormatter,
+    format_text: StatisticsLatexTextFormatter | None = None,
+) -> list[tuple[str, str]]:
+    """Build the shared non-UI statistics summary rows for LaTeX tables."""
+
+    rows: list[tuple[str, str]] = []
+    if _statistics_latex_has_finite_value(result, "mean"):
+        rows.append(
+            (
+                "Mean",
+                format_value(result["mean"], _statistics_latex_finite_or_none(result.get("std_mean")), False),
+            )
+        )
+    if _statistics_latex_has_finite_value(result, "trimmed_mean"):
+        rows.append(("Trimmed mean", format_value(result["trimmed_mean"], None, True)))
+    if _statistics_latex_has_finite_value(result, "std_mean"):
+        rows.append(
+            (
+                "Std. error",
+                format_value(result["std_mean"], None, True),
+            )
+        )
+    for label, key in (
+        ("Mean CI lower", "mean_ci_lower"),
+        ("Mean CI upper", "mean_ci_upper"),
+        ("Mean CI margin", "mean_ci_margin"),
+        ("CI level", "mean_ci_confidence_level"),
+        ("Sample SE for CI", "mean_sample_se_for_ci"),
+        ("Known-sigma weighted SE", "weighted_se_known_sigma"),
+        ("CI dof", "mean_ci_dof"),
+        ("CI critical value", "mean_ci_critical_value"),
+    ):
+        if _statistics_latex_has_finite_value(result, key):
+            rows.append((label, format_value(result[key], None, True)))
+    ci_method = str(result.get("mean_ci_method_label") or "").strip()
+    if ci_method:
+        text_formatter = format_text or (lambda text: text)
+        rows.append(("CI method", _statistics_latex_text_cell(ci_method, format_text=text_formatter)))
+    min_key = "v_min" if "v_min" in result else "min"
+    max_key = "v_max" if "v_max" in result else "max"
+    if _statistics_latex_has_finite_value(result, min_key):
+        rows.append(("Min", format_value(result[min_key], None, True)))
+    if _statistics_latex_has_finite_value(result, max_key):
+        rows.append(("Max", format_value(result[max_key], None, True)))
+    if _statistics_latex_has_std(result):
+        rows.append(
+            (
+                "Std. dev.",
+                format_value(result["std"], None, True),
+            )
+        )
+    for label, key in (
+        ("Count", "count"),
+        ("Variance", "variance"),
+        ("Median", "median"),
+        ("Q1", "q1"),
+        ("Q3", "q3"),
+        ("IQR", "iqr"),
+        ("MAD", "mad"),
+        ("Skewness", "skewness"),
+        ("Excess kurtosis", "excess_kurtosis"),
+        ("Weighted chi-square", "weighted_chi_square"),
+        ("Weighted consistency dof", "weighted_consistency_dof"),
+        ("Weighted reduced chi-square", "weighted_reduced_chi_square"),
+        ("Birge ratio", "birge_ratio"),
+    ):
+        if _statistics_latex_has_finite_value(result, key):
+            rows.append((label, format_value(result[key], None, True)))
+    rows.extend(
+        build_statistics_latex_diagnostic_rows(
+            result,
+            format_text=format_text,
+        )
+    )
+    return rows
+
+
+def build_statistics_latex_diagnostic_rows(
+    result: Mapping[str, Any],
+    *,
+    format_text: StatisticsLatexTextFormatter | None = None,
+) -> list[tuple[str, str]]:
+    """Build current statistics warning/diagnostic rows for LaTeX summaries."""
+
+    text_formatter = format_text or (lambda text: text)
+    rows: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    analysis_rows = result.get("analysis_rows")
+    if isinstance(analysis_rows, Sequence) and not isinstance(analysis_rows, (str, bytes, bytearray)):
+        for row in analysis_rows:
+            if not isinstance(row, Mapping):
+                continue
+            if row.get("render_group") == "plot_annotation":
+                continue
+            severity = str(row.get("severity") or "")
+            key = str(row.get("key") or "")
+            if row.get("render_group") == "row_flag" and key.startswith("outlier."):
+                message = f"value {row.get('value')}; {statistics_row_flag_detail(row)}"
+                if message in seen:
+                    continue
+                seen.add(message)
+                rows.append(("Outlier flag", _statistics_latex_text_cell(message, format_text=text_formatter)))
+                continue
+            if severity != "warning" and not key.startswith("warning."):
+                continue
+            message = statistics_warning_display_text(row.get("value"), fallback=row.get("message_key") or key)
+            if not message or message in seen:
+                continue
+            seen.add(message)
+            rows.append(("Warning", _statistics_latex_text_cell(message, format_text=text_formatter)))
+        if rows:
+            return rows
+
+    warning_codes = result.get("warning_codes")
+    if isinstance(warning_codes, Sequence) and not isinstance(warning_codes, (str, bytes, bytearray)):
+        for code in warning_codes:
+            message = statistics_warning_display_text(code)
+            if message in seen:
+                continue
+            seen.add(message)
+            rows.append(("Warning", _statistics_latex_text_cell(message, format_text=text_formatter)))
+    if rows:
+        return rows
+
+    warnings = result.get("warnings")
+    if isinstance(warnings, Sequence) and not isinstance(warnings, (str, bytes, bytearray)):
+        for warning in warnings:
+            message = statistics_warning_display_text(warning)
+            if not message or message in seen:
+                continue
+            seen.add(message)
+            rows.append(("Warning", _statistics_latex_text_cell(message, format_text=text_formatter)))
+    return rows
+
+
+def _statistics_latex_text_cell(
+    text: str,
+    *,
+    format_text: StatisticsLatexTextFormatter,
+) -> str:
+    return f"\\multicolumn{{1}}{{l}}{{{format_text(text)}}}"
+
+
+def _statistics_latex_has_std(result: Mapping[str, Any]) -> bool:
+    return _statistics_latex_has_finite_value(result, "std")
+
+
+def _statistics_latex_has_finite_value(result: Mapping[str, Any], key: str) -> bool:
+    if result.get(key) is None:
+        return False
+    try:
+        value = mp.mpf(result.get(key, mp.nan))
+        return not (mp.isnan(value) or mp.isinf(value))
+    except Exception:
+        return True
+
+
+def _statistics_latex_finite_or_none(value: Any) -> Any | None:
+    try:
+        numeric = mp.mpf(value)
+    except Exception:
+        return value
+    if mp.isnan(numeric) or mp.isinf(numeric):
+        return None
+    return value

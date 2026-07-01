@@ -81,3 +81,52 @@ def test_generate_error_propagation_table_contains_formula_and_filtered_columns(
     assert "\\multicolumn{1}{c}{B}" in content
     assert "\\multicolumn{1}{c}{A}" not in content
     assert "\\multicolumn{1}{c}{C}" not in content
+
+
+def test_generate_error_propagation_table_labels_units_without_breaking_dcolumn(tmp_path: Path):
+    headers = ["A", "B"]
+    parsed_data = [
+        [parse_uncertainty_format("1.0(1)"), parse_uncertainty_format("2.0(2)")],
+    ]
+    results = [parse_uncertainty_format("3.0(3)")]
+
+    out = tmp_path / "unit_error_dcolumn.tex"
+    generate_error_propagation_table(
+        headers,
+        parsed_data,
+        results,
+        constants={},
+        formula_str="A + B",
+        output_filename=out,
+        use_dcolumn=True,
+        input_units={"A": "m/s^2", "B": "kg"},
+        result_unit="N_m",
+    )
+
+    content = out.read_text(encoding="utf-8")
+    tabular = _find_tabular_line(content)
+    assert "d{" in tabular
+    assert "\\multicolumn{1}{c}{A~[\\texttt{m/s\\textasciicircum{}2}]}" in content
+    assert "\\multicolumn{1}{c}{B~[\\texttt{kg}]}" in content
+    assert "\\multicolumn{1}{c}{Result~[\\texttt{N\\_m}]}" in content
+
+
+def test_generate_error_propagation_table_preserves_math_header_with_unit(tmp_path: Path):
+    headers = ["$V_{in}$"]
+    parsed_data = [[parse_uncertainty_format("1.0(1)")]]
+    results = [parse_uncertainty_format("1.0(1)")]
+
+    out = tmp_path / "math_header_unit_error.tex"
+    generate_error_propagation_table(
+        headers,
+        parsed_data,
+        results,
+        constants={},
+        formula_str="x1",
+        output_filename=out,
+        input_units={"$V_{in}$": "V"},
+        result_unit="V",
+    )
+
+    content = out.read_text(encoding="utf-8")
+    assert "\\multicolumn{1}{c}{$V_{in}$~[\\texttt{V}]}" in content

@@ -266,6 +266,14 @@ else
   echo "[warn] Example workspaces directory not found: $EXAMPLE_WORKSPACES_DIR"
 fi
 
+EXAMPLE_RECIPES_DIR="$PROJECT_ROOT/examples/recipes"
+if [[ -d "$EXAMPLE_RECIPES_DIR" ]]; then
+  echo "[info] Including example recipes: $EXAMPLE_RECIPES_DIR"
+  DOCS_DATA_FLAGS+=(--add-data "$EXAMPLE_RECIPES_DIR:examples/recipes")
+else
+  echo "[warn] Example recipes directory not found: $EXAMPLE_RECIPES_DIR"
+fi
+
 HELP_SPECS_FILE="$PROJECT_ROOT/shared/help_specs.json"
 if [[ -f "$HELP_SPECS_FILE" ]]; then
   echo "[info] Including help specs: $HELP_SPECS_FILE"

@@ -55,6 +55,7 @@
       {% set mode = request.form.get('stats_mode', 'mean_sample') %}
       <select id="stats_mode" name="stats_mode">
         <option value="mean" {% if mode == 'mean' %}selected{% endif %} data-i18n="stats.modeMean">算术均值</option>
+        <option value="descriptive" {% if mode == 'descriptive' %}selected{% endif %} data-i18n="stats.modeDescriptive">描述统计</option>
         <option value="weighted" {% if mode == 'weighted' %}selected{% endif %} data-i18n="stats.modeWeighted">σ 加权均值</option>
       </select>
 
@@ -63,6 +64,20 @@
         <span data-i18n="stats.useSample">使用样本统计 (n-1 校正)</span>
       </label>
       <div class="hint" data-i18n="stats.sampleHint">不勾选则使用总体统计 (n 除数)。样本统计用于估计总体参数，总体统计用于描述已知数据集。</div>
+
+      <div id="stats_descriptive_options" style="{% if mode == 'descriptive' %}display:block{% else %}display:none{% endif %}">
+        <label class="field-label" for="stats_trim_fraction" data-i18n="stats.trimFractionLabel">修剪比例（可选）</label>
+        <input
+          id="stats_trim_fraction"
+          name="stats_trim_fraction"
+          type="text"
+          inputmode="decimal"
+          data-i18n-placeholder="stats.trimFractionPlaceholder"
+          placeholder="留空或 0 表示关闭"
+          value="{{ request.form.get('stats_trim_fraction', '') }}"
+        >
+        <div class="hint" data-i18n="stats.trimFractionHint">仅用于描述统计；每端按 floor(n × 修剪比例) 删除数据后计算均值。</div>
+      </div>
 
       <div id="stats_weighted_options" style="{% if mode == 'weighted' %}display:block{% else %}display:none{% endif %}">
         <label class="checkbox">
@@ -195,11 +210,77 @@
             <tr><td data-i18n="stats.metricMode">模式</td><td>{{ result.result.method_label }}</td><td></td><td></td></tr>
             <tr><td data-i18n="stats.metricCount">数据点数</td><td class="fmt-number" data-raw="{{ result.rows|length }}">{{ result.rows|length }}</td><td></td><td></td></tr>
             <tr><td data-i18n="stats.metricMean">均值</td><td class="fmt-number" data-raw="{{ result.result.mean }}">{{ result.result.mean }}</td><td class="fmt-number" data-raw="{{ result.result.std_mean }}">{{ result.result.std_mean }}</td><td class="strong">{{ result.result.mean_latex }}</td></tr>
+            {% if result.result.trimmed_mean is defined and result.result.trimmed_mean|string|lower != 'nan' %}
+              <tr><td data-i18n="stats.metricTrimmedMean">修剪均值</td><td class="fmt-number" data-raw="{{ result.result.trimmed_mean }}">{{ result.result.trimmed_mean }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.mean_ci_lower is defined %}
+              <tr><td data-i18n="stats.metricMeanCiLower">均值 95% CI 下限</td><td class="fmt-number" data-raw="{{ result.result.mean_ci_lower }}">{{ result.result.mean_ci_lower }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.mean_ci_upper is defined %}
+              <tr><td data-i18n="stats.metricMeanCiUpper">均值 95% CI 上限</td><td class="fmt-number" data-raw="{{ result.result.mean_ci_upper }}">{{ result.result.mean_ci_upper }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.mean_ci_margin is defined %}
+              <tr><td data-i18n="stats.metricMeanCiMargin">均值 95% CI 半宽</td><td class="fmt-number" data-raw="{{ result.result.mean_ci_margin }}">{{ result.result.mean_ci_margin }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.mean_sample_se_for_ci is defined %}
+              <tr><td data-i18n="stats.metricMeanSampleSeForCi">CI 样本标准误差</td><td class="fmt-number" data-raw="{{ result.result.mean_sample_se_for_ci }}">{{ result.result.mean_sample_se_for_ci }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.weighted_se_known_sigma is defined %}
+              <tr><td data-i18n="stats.metricWeightedSeKnownSigma">已知 σ 加权 CI 标准误差</td><td class="fmt-number" data-raw="{{ result.result.weighted_se_known_sigma }}">{{ result.result.weighted_se_known_sigma }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.mean_ci_dof is defined %}
+              <tr><td data-i18n="stats.metricMeanCiDof">CI 自由度</td><td class="fmt-number" data-raw="{{ result.result.mean_ci_dof }}">{{ result.result.mean_ci_dof }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.mean_ci_critical_value is defined %}
+              <tr><td data-i18n="stats.metricMeanCiCritical">CI 临界值</td><td class="fmt-number" data-raw="{{ result.result.mean_ci_critical_value }}">{{ result.result.mean_ci_critical_value }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.mean_ci_method_label %}
+              <tr><td data-i18n="stats.metricMeanCiMethod">CI 方法</td><td>{{ result.result.mean_ci_method_label }}</td><td></td><td></td></tr>
+            {% endif %}
             <tr><td data-i18n="stats.metricStd">标准差</td><td class="fmt-number" data-raw="{{ result.result.std }}">{{ result.result.std }}</td><td></td><td></td></tr>
+            {% if result.result.variance is defined and result.result.variance|string|lower != 'nan' %}
+              <tr><td data-i18n="stats.metricVariance">方差</td><td class="fmt-number" data-raw="{{ result.result.variance }}">{{ result.result.variance }}</td><td></td><td></td></tr>
+            {% endif %}
             <tr><td data-i18n="stats.metricMin">最小值</td><td class="fmt-number" data-raw="{{ result.result.v_min }}">{{ result.result.v_min }}</td><td></td><td></td></tr>
             <tr><td data-i18n="stats.metricMax">最大值</td><td class="fmt-number" data-raw="{{ result.result.v_max }}">{{ result.result.v_max }}</td><td></td><td></td></tr>
+            {% if result.result.median is defined and result.result.median|string|lower != 'nan' %}
+              <tr><td data-i18n="stats.metricMedian">中位数</td><td class="fmt-number" data-raw="{{ result.result.median }}">{{ result.result.median }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.q1 is defined and result.result.q1|string|lower != 'nan' %}
+              <tr><td data-i18n="stats.metricQ1">第一四分位数 Q1</td><td class="fmt-number" data-raw="{{ result.result.q1 }}">{{ result.result.q1 }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.q3 is defined and result.result.q3|string|lower != 'nan' %}
+              <tr><td data-i18n="stats.metricQ3">第三四分位数 Q3</td><td class="fmt-number" data-raw="{{ result.result.q3 }}">{{ result.result.q3 }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.iqr is defined and result.result.iqr|string|lower != 'nan' %}
+              <tr><td data-i18n="stats.metricIqr">四分位距 IQR</td><td class="fmt-number" data-raw="{{ result.result.iqr }}">{{ result.result.iqr }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.mad is defined and result.result.mad|string|lower != 'nan' %}
+              <tr><td data-i18n="stats.metricMad">中位数绝对偏差 MAD</td><td class="fmt-number" data-raw="{{ result.result.mad }}">{{ result.result.mad }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.skewness is defined and result.result.skewness|string|lower != 'nan' %}
+              <tr><td data-i18n="stats.metricSkewness">偏度</td><td class="fmt-number" data-raw="{{ result.result.skewness }}">{{ result.result.skewness }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.excess_kurtosis is defined and result.result.excess_kurtosis|string|lower != 'nan' %}
+              <tr><td data-i18n="stats.metricExcessKurtosis">超额峰度</td><td class="fmt-number" data-raw="{{ result.result.excess_kurtosis }}">{{ result.result.excess_kurtosis }}</td><td></td><td></td></tr>
+            {% endif %}
             {% if result.result.effective_n %}
               <tr><td data-i18n="stats.metricEffectiveN">有效点数 n_eff</td><td class="fmt-number" data-raw="{{ result.result.effective_n }}">{{ result.result.effective_n }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.weighted_chi_square is defined %}
+              <tr><td data-i18n="stats.metricWeightedChiSquare">加权均值 χ²</td><td class="fmt-number" data-raw="{{ result.result.weighted_chi_square }}">{{ result.result.weighted_chi_square }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.weighted_consistency_dof is defined %}
+              <tr><td data-i18n="stats.metricWeightedConsistencyDof">加权一致性自由度</td><td class="fmt-number" data-raw="{{ result.result.weighted_consistency_dof }}">{{ result.result.weighted_consistency_dof }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.weighted_reduced_chi_square is defined %}
+              <tr><td data-i18n="stats.metricWeightedReducedChiSquare">加权约化 χ²</td><td class="fmt-number" data-raw="{{ result.result.weighted_reduced_chi_square }}">{{ result.result.weighted_reduced_chi_square }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.birge_ratio is defined %}
+              <tr><td data-i18n="stats.metricBirgeRatio">Birge 比率</td><td class="fmt-number" data-raw="{{ result.result.birge_ratio }}">{{ result.result.birge_ratio }}</td><td></td><td></td></tr>
+            {% endif %}
+            {% if result.result.zero_sigma_anchor %}
+              <tr><td data-i18n="stats.metricZeroSigmaAnchor">零 σ 锚定</td><td>{{ result.result.zero_sigma_anchor }}</td><td></td><td></td></tr>
             {% endif %}
             {% if result.result.dropped %}
               <tr><td data-i18n="stats.metricDropped">忽略的数据点</td><td class="fmt-number" data-raw="{{ result.result.dropped }}">{{ result.result.dropped }}</td><td></td><td></td></tr>
@@ -218,7 +299,16 @@
     </div>
   </div>
 
-  {% if result.plot_b64 %}
+  {% if result.plot_b64_list %}
+  <div class="grid">
+    {% for plot_b64 in result.plot_b64_list %}
+    <div class="card">
+      <div class="card-header"><div class="label" data-i18n="stats.plotLabel">统计图表</div></div>
+      <img src="data:image/png;base64,{{ plot_b64 }}" data-i18n-alt="stats.plotAlt" alt="统计图表" style="width: 100%; max-width: 600px; height: auto;">
+    </div>
+    {% endfor %}
+  </div>
+  {% elif result.plot_b64 %}
   <div class="card">
     <div class="card-header"><div class="label" data-i18n="stats.plotLabel">统计图表</div></div>
     <img src="data:image/png;base64,{{ result.plot_b64 }}" data-i18n-alt="stats.plotAlt" alt="统计图表" style="width: 100%; max-width: 600px; height: auto;">
@@ -274,14 +364,19 @@
     // Toggle weighted variance options based on stats mode
     const statsModeSelect = document.getElementById('stats_mode');
     const weightedOptions = document.getElementById('stats_weighted_options');
-    if (statsModeSelect && weightedOptions) {
-      statsModeSelect.addEventListener('change', (e) => {
-        weightedOptions.style.display = (e.target.value === 'weighted') ? 'block' : 'none';
-      });
+    const descriptiveOptions = document.getElementById('stats_descriptive_options');
+    if (statsModeSelect) {
+      const syncStatsModeOptions = () => {
+        if (weightedOptions) weightedOptions.style.display = (statsModeSelect.value === 'weighted') ? 'block' : 'none';
+        if (descriptiveOptions) descriptiveOptions.style.display = (statsModeSelect.value === 'descriptive') ? 'block' : 'none';
+      };
+      statsModeSelect.addEventListener('change', syncStatsModeOptions);
+      syncStatsModeOptions();
     }
 
     // CSV download - statistics results
     const statsCsvBtn = document.getElementById('stats-result-csv-btn');
+    const serverStatsCsvData = {% if result and result.csv_data %}{{ result.csv_data | tojson }}{% else %}null{% endif %};
     function tableToCsv(table, sci, digits) {
       const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim());
       const lines = [headers.join(',')];
@@ -302,10 +397,12 @@
       statsCsvBtn.addEventListener('click', (e) => {
         e.preventDefault();
         const table = document.querySelector('.table-wrap table');
-        if (!table) return;
+        if (!table && !serverStatsCsvData) return;
         const sci = fmtSci && fmtSci.checked;
         const digits = fmtDigits ? parseInt(fmtDigits.value || '10', 10) : 10;
-        const csvData = tableToCsv(table, sci, digits);
+        // Rebuild from the visible table so the sci/decimals toggles are honored;
+        // fall back to the server CSV only when no table is rendered.
+        const csvData = table ? tableToCsv(table, sci, digits) : serverStatsCsvData;
         const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');

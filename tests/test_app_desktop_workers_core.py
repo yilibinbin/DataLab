@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import pickle
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, cast
+import warnings
 
 import mpmath as mp
 import pytest
@@ -34,6 +36,264 @@ from fitting.implicit_model import ImplicitModelDefinition, ImplicitSolveOptions
 from shared.parallel_config import ParallelConfig
 from shared.parallel_backend import KillableProcessTaskRunner, current_parallel_depth
 from shared.uncertainty import UncertainValue
+
+
+def _valid_distribution_summary() -> dict[str, object]:
+    return {
+        "schema": "datalab.monte_carlo_distribution_summary",
+        "schema_version": 1,
+        "requested_sample_count": 100,
+        "evaluated_sample_count": 100,
+        "accepted_sample_count": 100,
+        "rejected_sample_count": 0,
+        "finite_sample_count": 100,
+        "mean": "1.0",
+        "std": "0.2",
+        "histogram": {"bin_edges": ["0.0", "1.0", "2.0"], "counts": [50, 50]},
+        "percentiles": {"2.5": "0.1", "50": "1.0", "97.5": "1.9"},
+    }
+
+
+def test_error_contribution_plot_uses_cjk_safe_shared_plotting() -> None:
+    pytest.importorskip("matplotlib")
+    from shared.plotting import cjk_font_properties, rcParams
+
+    if cjk_font_properties() is None:
+        pytest.skip("No CJK-capable Matplotlib font available in this environment.")
+
+    summary = [
+        {"name": "V2", "variance": mp.mpf("2"), "sigma": mp.sqrt(2), "percent": 50.51},
+        {"name": "V1", "variance": mp.mpf("1.96"), "sigma": mp.sqrt(mp.mpf("1.96")), "percent": 49.49},
+    ]
+
+    previous_family = rcParams["font.family"]
+    previous_sans = rcParams["font.sans-serif"]
+    try:
+        rcParams["font.family"] = ["DejaVu Sans"]
+        rcParams["font.sans-serif"] = ["DejaVu Sans"]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            png = workers_core._render_contribution_plot(summary, "zh", title_suffix="row 1")
+    finally:
+        rcParams["font.family"] = previous_family
+        rcParams["font.sans-serif"] = previous_sans
+
+    missing_glyph_warnings = [
+        str(item.message)
+        for item in caught
+        if "glyph" in str(item.message).lower() and "missing" in str(item.message).lower()
+    ]
+    assert png is not None
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+    assert missing_glyph_warnings == []
+
+
+def test_core_contribution_plot_routes_shared_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+    from shared import plotting
+
+    captured: dict[str, Any] = {}
+
+    def fake_render(spec: Any) -> bytes:
+        captured["spec"] = spec
+        return b"\x89PNG\r\n\x1a\ncore-contribution"
+
+    monkeypatch.setattr(plotting, "render_error_contribution_plot_from_spec", fake_render)
+
+    png = workers_core._render_contribution_plot(
+        [
+            {"name": "B", "variance": mp.mpf("2"), "sigma": mp.sqrt(2), "percent": 66.6667},
+            {"name": "A", "variance": mp.mpf("1"), "sigma": mp.mpf("1"), "percent": 33.3333},
+        ],
+        "en",
+        title_suffix="batch 2",
+    )
+
+    assert png == b"\x89PNG\r\n\x1a\ncore-contribution"
+    spec = captured["spec"]
+    assert spec.labels == ("B", "A")
+    assert spec.percents == pytest.approx((66.6667, 33.3333))
+    assert spec.cumulative_percents == pytest.approx((66.6667, 100.0))
+    assert spec.plot_labels.x_axis == "Uncertainty contribution (%)"
+    assert spec.plot_labels.title == "Uncertainty breakdown"
+    assert spec.plot_labels.cumulative_label == "Cumulative contribution"
+    assert spec.title_suffix == "batch 2"
+
+
+def test_qt_contribution_plot_routes_shared_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app_desktop.workers_qt import CalcWorker
+    from shared import plotting
+
+    captured: dict[str, Any] = {}
+
+    def fake_render(spec: Any) -> bytes:
+        captured["spec"] = spec
+        return b"\x89PNG\r\n\x1a\nqt-contribution"
+
+    monkeypatch.setattr(plotting, "render_error_contribution_plot_from_spec", fake_render)
+    worker = CalcWorker(cast(Any, SimpleNamespace(lang="zh")))
+
+    png = worker._render_contribution_plot(
+        [{"name": "输入A", "variance": mp.mpf("1"), "sigma": mp.mpf("1"), "percent": 100.0}],
+        "zh",
+    )
+
+    assert png == b"\x89PNG\r\n\x1a\nqt-contribution"
+    spec = captured["spec"]
+    assert spec.labels == ("输入A",)
+    assert spec.percents == (100.0,)
+    assert spec.cumulative_percents == (100.0,)
+    assert spec.plot_labels.x_axis == "不确定度贡献 (%)"
+    assert spec.plot_labels.title == "不确定度贡献分解"
+    assert spec.plot_labels.cumulative_label == "累计贡献"
+
+
+def test_core_monte_carlo_distribution_plot_routes_shared_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+    from shared import plotting
+
+    captured: dict[str, Any] = {}
+
+    def fake_render(spec: Any) -> bytes:
+        captured["spec"] = spec
+        return b"\x89PNG\r\n\x1a\ncore-distribution"
+
+    monkeypatch.setattr(plotting, "render_monte_carlo_distribution_plot_from_spec", fake_render)
+
+    png = workers_core._render_monte_carlo_distribution_plot(
+        _valid_distribution_summary(),
+        "en",
+        row_index=3,
+        value_unit="m",
+    )
+
+    assert png == b"\x89PNG\r\n\x1a\ncore-distribution"
+    spec = captured["spec"]
+    assert spec.labels.title == "Monte Carlo distribution"
+    assert spec.labels.x_axis == "Result value [m]"
+    assert spec.labels.y_axis == "Sample count"
+    assert spec.title_suffix == "row 3"
+
+
+def test_desktop_monte_carlo_distribution_collection_gating() -> None:
+    assert workers_core._should_collect_monte_carlo_distribution(
+        propagation_method="mc",
+        propagation_order=1,
+        mc_samples=100,
+        mc_seed=7,
+        render_plots=True,
+    )
+    assert not workers_core._should_collect_monte_carlo_distribution(
+        propagation_method="monte_carlo",
+        propagation_order=1,
+        mc_samples=100,
+        mc_seed=7,
+        render_plots=False,
+    )
+    assert not workers_core._should_collect_monte_carlo_distribution(
+        propagation_method="taylor",
+        propagation_order=1,
+        mc_samples=100,
+        mc_seed=7,
+        render_plots=True,
+    )
+
+
+def test_statistics_worker_plot_routes_shared_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app_desktop.workers_qt import CalcWorker
+    from shared import plotting
+
+    captured: dict[str, Any] = {}
+
+    def fake_render(spec: Any) -> bytes:
+        captured["spec"] = spec
+        return b"\x89PNG\r\n\x1a\nworker"
+
+    monkeypatch.setattr(plotting, "render_statistics_plot_from_spec", fake_render)
+    worker = CalcWorker(cast(Any, SimpleNamespace(lang="en")))
+
+    png = worker._render_statistics_plot(
+        [mp.mpf("1.0"), mp.mpf("2.0")],
+        [mp.mpf("0.1"), None],
+        {"mean": mp.mpf("1.5"), "std_mean": mp.mpf("0.25")},
+        batch_idx=3,
+    )
+
+    assert png == b"\x89PNG\r\n\x1a\nworker"
+    spec = captured["spec"]
+    assert spec.values == (mp.mpf("1.0"), mp.mpf("2.0"))
+    assert spec.labels.title == "Statistical mean"
+    assert spec.labels.mean_band == "Mean ± standard error"
+    assert spec.batch_suffix == " - 3"
+
+
+def test_statistics_worker_plot_gallery_routes_shared_specs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app_desktop.workers_qt import CalcWorker
+    from shared import plotting
+
+    captured: dict[str, Any] = {}
+
+    def fake_render(specs: Any) -> list[bytes]:
+        captured["specs"] = specs
+        return [b"\x89PNG\r\n\x1a\nseries", b"\x89PNG\r\n\x1a\nhist"]
+
+    monkeypatch.setattr(plotting, "render_statistics_plots_from_specs", fake_render)
+    worker = CalcWorker(cast(Any, SimpleNamespace(lang="en")))
+
+    pngs = worker._render_statistics_plots(
+        [mp.mpf("1.0"), mp.mpf("2.0"), mp.mpf("4.0")],
+        [mp.mpf("0.1"), mp.mpf("0.2"), mp.mpf("0.3")],
+        {
+            "mode": "weighted_sigma",
+            "mean": mp.mpf("2.0"),
+            "std": mp.mpf("1.5"),
+            "std_mean": mp.mpf("0.5"),
+            "median": mp.mpf("2.0"),
+            "weighted_consistency_dof": 2,
+        },
+        batch_idx=3,
+    )
+
+    assert pngs == [b"\x89PNG\r\n\x1a\nseries", b"\x89PNG\r\n\x1a\nhist"]
+    specs = captured["specs"]
+    assert [spec.plot_key for spec in specs] == [
+        "statistics.series_with_mean",
+        "statistics.histogram",
+        "statistics.box",
+        "statistics.qq",
+        "statistics.weighted_residual",
+    ]
+    assert specs[0].labels.title == "Statistical mean"
+    assert specs[1].labels.histogram_title == "Histogram"
+    assert specs[0].batch_suffix == " - 3"
+
+
+def test_statistics_worker_plot_gallery_omits_weighted_residual_for_unweighted_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app_desktop.workers_qt import CalcWorker
+    from shared import plotting
+
+    captured: dict[str, Any] = {}
+
+    def fake_render(specs: Any) -> list[bytes]:
+        captured["specs"] = specs
+        return []
+
+    monkeypatch.setattr(plotting, "render_statistics_plots_from_specs", fake_render)
+    worker = CalcWorker(cast(Any, SimpleNamespace(lang="en")))
+
+    worker._render_statistics_plots(
+        [mp.mpf("1.0"), mp.mpf("2.0"), mp.mpf("4.0")],
+        [mp.mpf("0.1"), mp.mpf("0.2"), mp.mpf("0.3")],
+        {
+            "mode": "mean_sample",
+            "mean": mp.mpf("2.3333333333333333"),
+            "std": mp.mpf("1.5"),
+            "std_mean": mp.mpf("0.5"),
+        },
+        batch_idx=3,
+    )
+
+    assert "statistics.weighted_residual" not in [spec.plot_key for spec in captured["specs"]]
 
 
 def _assert_primitive_payload(value: object) -> None:
@@ -103,14 +363,14 @@ def _small_self_consistent_fit_job(
 def test_statistics_calc_job_uses_core_statistics_request_builder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from datalab_core.statistics import build_statistics_requests as real_build_statistics_requests
+    from datalab_core.statistics import build_multi_column_statistics_requests as real_build_multi_column_statistics_requests
     from datalab_core.statistics import run_statistics as real_run_statistics
 
     calls: dict[str, object] = {}
 
-    def fake_build_statistics_requests(**kwargs: object) -> object:
+    def fake_build_multi_column_statistics_requests(**kwargs: object) -> object:
         calls["builder_kwargs"] = kwargs
-        return real_build_statistics_requests(**kwargs)
+        return real_build_multi_column_statistics_requests(**kwargs)
 
     def fake_run_statistics(request: object) -> object:
         calls.setdefault("request_ids", []).append(getattr(request, "request_id", ""))
@@ -126,13 +386,13 @@ def test_statistics_calc_job_uses_core_statistics_request_builder(
         calls["cancellation_checker"] = cancellation_checker
         return FakeService()
 
-    monkeypatch.setattr(workers_core, "build_statistics_requests", fake_build_statistics_requests, raising=False)
+    monkeypatch.setattr(workers_core, "build_multi_column_statistics_requests", fake_build_multi_column_statistics_requests, raising=False)
     monkeypatch.setattr(workers_core, "run_statistics", fake_run_statistics, raising=False)
     monkeypatch.setattr(workers_core, "create_core_session_service", fake_create_core_session_service, raising=False)
 
     with mp.workdps(80):
         rows = [
-            (mp.mpf("1.0000000000000000001"), mp.mpf("-0.1")),
+            (mp.mpf("1.0000000000000000001"), mp.mpf("0.1")),
             (mp.mpf("2.0000000000000000002"), mp.mpf("0.2")),
         ]
 
@@ -169,12 +429,12 @@ def test_statistics_calc_job_uses_core_statistics_request_builder(
 
     assert calls["factory_calls"] == 1
     assert callable(calls["cancellation_checker"])
-    assert calls["submit_request_ids"] == ["statistics-1"]
-    assert calls["request_ids"] == ["statistics-1"]
+    assert calls["submit_request_ids"] == ["statistics-c1-1"]
+    assert calls["request_ids"] == ["statistics-c1-1"]
     builder_kwargs = calls["builder_kwargs"]
     assert isinstance(builder_kwargs, dict)
     assert builder_kwargs["headers"] == ["A", "sigma"]
-    assert builder_kwargs["value_col"] == "A"
+    assert builder_kwargs["value_columns"] == "A"
     assert builder_kwargs["sigma_col"] == "sigma"
     assert builder_kwargs["precision_digits"] == 80
     assert builder_kwargs["segments"] == [(0, 2)]
@@ -182,6 +442,8 @@ def test_statistics_calc_job_uses_core_statistics_request_builder(
     batch = result.payload["batches"][0]  # type: ignore[index]
     assert batch["value_col"] == "A"
     assert batch["row_count"] == 2
+    assert batch["source_row_ids"] == ("1", "2")
+    assert batch["result"]["source_row_ids"] == ("1", "2")
     assert [mp.nstr(value, 30) for value in batch["values"]] == [
         "1.0000000000000000001",
         "2.0000000000000000002",
@@ -190,13 +452,226 @@ def test_statistics_calc_job_uses_core_statistics_request_builder(
     assert mp.nstr(batch["result"]["mean"], 30) == "1.20000000000000000012"
 
 
+def test_statistics_calc_job_runs_multiple_value_columns_in_selected_order() -> None:
+    job = CalcJob(
+        mode="statistics",
+        data_path=None,
+        manual_content="",
+        manual_constants="",
+        constants_file_path=None,
+        options=SimpleNamespace(mp_precision=60, warnings=[]),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        stats_value_col="B, A",
+        stats_mode="mean",
+        stats_sample=True,
+        stats_weighted_variance=True,
+        dataset=(
+            ["A", "B"],
+            [(mp.mpf("1"), mp.mpf("10")), (mp.mpf("2"), mp.mpf("20"))],
+            [(None, None), (None, None)],
+        ),
+        latex_digits=16,
+        segments=[(0, 2)],
+        uncertainty_digits=2,
+    )
+
+    result = _execute_calc_job(job)
+
+    assert result.payload["value_col"] == "B, A"
+    assert result.payload["value_columns"] == ["B", "A"]
+    batches = result.payload["batches"]
+    assert [batch["value_col"] for batch in batches] == ["B", "A"]  # type: ignore[index]
+    assert [batch["column_index"] for batch in batches] == [1, 2]  # type: ignore[index]
+    assert [batch["batch_index"] for batch in batches] == [1, 1]  # type: ignore[index]
+    assert [mp.nstr(batch["result"]["mean"], 20) for batch in batches] == ["15.0", "1.5"]  # type: ignore[index]
+
+
+def test_statistics_calc_job_rejects_negative_explicit_sigma_column() -> None:
+    job = CalcJob(
+        mode="statistics",
+        data_path=None,
+        manual_content="",
+        manual_constants="",
+        constants_file_path=None,
+        options=SimpleNamespace(mp_precision=60, warnings=[]),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        stats_value_col="A",
+        stats_sigma_col="sigma",
+        stats_mode="weighted_sigma",
+        stats_sample=True,
+        stats_weighted_variance=True,
+        dataset=(
+            ["A", "sigma"],
+            [
+                (mp.mpf("1.0"), mp.mpf("-0.1")),
+                (mp.mpf("2.0"), mp.mpf("0.2")),
+            ],
+            [(None, None), (None, None)],
+        ),
+        latex_digits=16,
+        segments=[(0, 2)],
+        uncertainty_digits=2,
+    )
+
+    with pytest.raises(ValueError, match="Negative uncertainty"):
+        _execute_calc_job(job)
+
+
+def test_statistics_calc_job_preserves_result_envelope_warnings_in_batch_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datalab_core.results import ResultEnvelope, ResultKind, ResultStatus
+
+    class WarningService:
+        def submit(self, _request: object) -> object:
+            return ResultEnvelope(
+                kind=ResultKind.TABLE,
+                status=ResultStatus.SUCCEEDED,
+                payload={
+                    "mode": "weighted_sigma",
+                    "row_count": 2,
+                    "precision_used": 60,
+                    "mean": "1.25",
+                    "std_mean": "0.0",
+                    "std": "0.0",
+                    "min": "1.25",
+                    "max": "2.5",
+                    "method_label": "Weighted mean (σ=0 anchor)",
+                    "dropped": 1,
+                    "effective_n": "1.0",
+                    "zero_sigma_anchor": True,
+                },
+                warnings=("Detected σ=0; treated as infinite weight.",),
+            )
+
+    monkeypatch.setattr(
+        workers_core,
+        "create_core_session_service",
+        lambda *, cancellation_checker=None: WarningService(),
+        raising=False,
+    )
+
+    job = CalcJob(
+        mode="statistics",
+        data_path=None,
+        manual_content="",
+        manual_constants="",
+        constants_file_path=None,
+        options=SimpleNamespace(mp_precision=60, warnings=[]),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        stats_value_col="A",
+        stats_mode="weighted_sigma",
+        dataset=(
+            ["A"],
+            [(mp.mpf("1.25"),), (mp.mpf("2.5"),)],
+            [(mp.mpf("0"),), (mp.mpf("0.1"),)],
+        ),
+        latex_digits=16,
+        segments=[(0, 2)],
+        uncertainty_digits=2,
+    )
+
+    result = _execute_calc_job(job)
+
+    batch_result = result.payload["batches"][0]["result"]  # type: ignore[index]
+    assert batch_result["warnings"] == ["Detected σ=0; treated as infinite weight."]
+    assert result.warnings == ["Detected σ=0; treated as infinite weight."]
+    assert batch_result["v_min"] == mp.mpf("1.25")
+    assert batch_result["v_max"] == mp.mpf("2.5")
+    assert batch_result["zero_sigma_anchor"] is True
+
+
+def test_statistics_calc_job_descriptive_singleton_surfaces_core_warnings() -> None:
+    job = CalcJob(
+        mode="statistics",
+        data_path=None,
+        manual_content="",
+        manual_constants="",
+        constants_file_path=None,
+        options=SimpleNamespace(mp_precision=60, warnings=[]),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        stats_value_col="A",
+        stats_mode="descriptive",
+        stats_sample=True,
+        stats_weighted_variance=True,
+        dataset=(["A"], [(mp.mpf("7"),)], [(None,)]),
+        latex_digits=16,
+        segments=[(0, 1)],
+        uncertainty_digits=2,
+    )
+
+    result = _execute_calc_job(job)
+
+    assert result.warnings
+    assert any("Sample descriptive statistics require n>=2" in warning for warning in result.warnings)
+    assert any("Zero variance" in warning for warning in result.warnings)
+    batch_result = result.payload["batches"][0]["result"]  # type: ignore[index]
+    assert batch_result["warnings"] == result.warnings
+
+
+def test_statistics_calc_job_descriptive_trimmed_mean_routes_core_option() -> None:
+    job = CalcJob(
+        mode="statistics",
+        data_path=None,
+        manual_content="",
+        manual_constants="",
+        constants_file_path=None,
+        options=SimpleNamespace(mp_precision=60, warnings=[]),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        lang="en",
+        stats_value_col="A",
+        stats_mode="descriptive",
+        stats_sample=True,
+        stats_weighted_variance=True,
+        stats_trim_fraction="0.2",
+        dataset=(["A"], [(mp.mpf("1"),), (mp.mpf("2"),), (mp.mpf("3"),), (mp.mpf("4"),), (mp.mpf("100"),)], [(None,)] * 5),
+        latex_digits=16,
+        segments=[(0, 5)],
+        uncertainty_digits=2,
+    )
+
+    result = _execute_calc_job(job)
+
+    batch_result = result.payload["batches"][0]["result"]  # type: ignore[index]
+    assert batch_result["trimmed_mean"] == mp.mpf("3")
+
+
 def test_statistics_calc_job_rejects_malformed_segments_before_core_builder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fail_if_called(**_kwargs: object) -> object:
         raise AssertionError("core builder should not receive malformed worker segments")
 
-    monkeypatch.setattr(workers_core, "build_statistics_requests", fail_if_called, raising=False)
+    monkeypatch.setattr(workers_core, "build_multi_column_statistics_requests", fail_if_called, raising=False)
 
     job = CalcJob(
         mode="statistics",
@@ -304,11 +779,18 @@ def test_statistics_calc_job_maps_explicit_sigma_column_to_latex_sigma_rows(
 ) -> None:
     captured: dict[str, object] = {}
 
-    def fake_generate_statistics_latex_batches(value_col: str, batches: list[dict], *args: object, **kwargs: object) -> None:
+    def fake_generate_statistics_latex(
+        value_col: str,
+        rows: list[tuple[mp.mpf, ...]],
+        sigma_rows: list[tuple[mp.mpf | None, ...]],
+        *args: object,
+        **kwargs: object,
+    ) -> None:
         captured["value_col"] = value_col
-        captured["batches"] = batches
+        captured["rows"] = rows
+        captured["sigma_rows"] = sigma_rows
 
-    monkeypatch.setattr(workers_core, "generate_statistics_latex_batches", fake_generate_statistics_latex_batches)
+    monkeypatch.setattr(workers_core, "generate_statistics_latex", fake_generate_statistics_latex)
 
     job = CalcJob(
         mode="statistics",
@@ -329,7 +811,7 @@ def test_statistics_calc_job_maps_explicit_sigma_column_to_latex_sigma_rows(
         stats_mode="weighted_sigma",
         dataset=(
             ["A", "sigma"],
-            [(mp.mpf("1.0"), mp.mpf("-0.1")), (mp.mpf("2.0"), mp.mpf("0.2"))],
+            [(mp.mpf("1.0"), mp.mpf("0.1")), (mp.mpf("2.0"), mp.mpf("0.2"))],
             [(None, None), (None, None)],
         ),
         latex_digits=16,
@@ -341,10 +823,9 @@ def test_statistics_calc_job_maps_explicit_sigma_column_to_latex_sigma_rows(
 
     assert result.latex_path == str(tmp_path / "stats.tex")
     assert captured["value_col"] == "A"
-    batch = captured["batches"][0]  # type: ignore[index]
     assert [
         tuple(mp.nstr(value, 30) if value is not None else None for value in row)
-        for row in batch["sigma_rows"]
+        for row in captured["sigma_rows"]  # type: ignore[index]
     ] == [("0.1", None), ("0.2", None)]
 
 
@@ -380,6 +861,7 @@ def test_statistics_calc_job_preserves_multi_segment_batch_alignment() -> None:
     batches = result.payload["batches"]
     assert [batch["index"] for batch in batches] == [1, 2]  # type: ignore[index]
     assert [batch["row_count"] for batch in batches] == [1, 2]  # type: ignore[index]
+    assert [batch["source_row_ids"] for batch in batches] == [("1",), ("2", "3")]  # type: ignore[index]
     assert [[mp.nstr(value, 10) for value in batch["values"]] for batch in batches] == [["1.0"], ["2.0", "3.0"]]  # type: ignore[index]
 
 
@@ -726,7 +1208,7 @@ def test_execute_root_solving_job_payload_forwards_uncertainty_options(
 
     def fake_solve_root_batch(**kwargs: object) -> object:
         captured.update(kwargs)
-        return SimpleNamespace(rows=(), warnings=(), headers=())
+        return SimpleNamespace(rows=(), warnings=(), headers=(), details={})
 
     def fake_render_root_batch_result(
         _batch: object,
@@ -734,6 +1216,7 @@ def test_execute_root_solving_job_payload_forwards_uncertainty_options(
         display_digits: int,
         uncertainty_digits: int,
         language: str,
+        root_units_by_name: object = None,
     ) -> tuple[str, list[dict[str, str]], list[str]]:
         captured["display_digits"] = display_digits
         captured["uncertainty_digits"] = uncertainty_digits
@@ -799,6 +1282,11 @@ def test_execute_root_solving_job_payload_uses_core_service_when_request_availab
         equations=("x^2 - 4",),
         unknown_rows=({"name": "x", "initial": "2", "lower": "0", "upper": "10"},),
         mode="scalar",
+        units={
+            "enabled": True,
+            "mode": "display_only",
+            "outputs": {"x": {"unit": "m"}},
+        },
         precision_digits=50,
         display_digits=12,
         request_id="desktop-root-test",
@@ -816,6 +1304,7 @@ def test_execute_root_solving_job_payload_uses_core_service_when_request_availab
                     "row_count": 1,
                     "roots_count": 1,
                     "precision_used": 50,
+                    "units": request.inputs["units"],
                 },
             )
 
@@ -851,8 +1340,77 @@ def test_execute_root_solving_job_payload_uses_core_service_when_request_availab
     assert calls["request"].mode is JobMode.ROOT_SOLVING
     assert callable(calls["cancellation_checker"])
     assert calls["cancellation_checker"]() is True
+    assert payload["batch"] == _root_batch_payload_with_scalar_root("7")
+    assert payload["compute_digits"] == 50
+    assert payload["display_digits"] == 12
+    assert payload["uncertainty_digits"] == 1
+    assert payload["language"] == "en"
+    assert payload["units"]["outputs"] == {"x": {"unit": "m"}}
+    assert "root_unit" in payload["csv_headers"]
+    assert cast(list[dict[str, str]], payload["csv_rows"])[0]["root_unit"] == "m"
     raw_rows = cast(list[dict[str, str]], payload["raw_rows"])
     assert raw_rows[0]["value"] == "7.0"
+
+
+def test_execute_root_solving_job_payload_core_service_deserializes_under_precision_used(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datalab_core.jobs import ComputeJobRequest
+    from datalab_core.results import ResultEnvelope, ResultKind, ResultStatus
+    from datalab_core.root_solving import build_root_solving_request
+
+    value_text = "1.234567890123456789012345678901234567890123456789"
+    core_request = build_root_solving_request(
+        equations=("x - 1",),
+        unknown_rows=({"name": "x", "initial": "1"},),
+        mode="scalar",
+        precision_digits=90,
+        display_digits=45,
+        request_id="desktop-root-high-precision-service",
+    )
+
+    class FakeService:
+        def submit(self, _request: ComputeJobRequest) -> ResultEnvelope:
+            return ResultEnvelope(
+                kind=ResultKind.TABLE,
+                status=ResultStatus.SUCCEEDED,
+                payload={
+                    "batch": _root_batch_payload_with_scalar_root(value_text),
+                    "row_count": 1,
+                    "roots_count": 1,
+                    "precision_used": 90,
+                },
+            )
+
+    monkeypatch.setattr(workers_core, "create_core_session_service", lambda **_kwargs: FakeService())
+    job = RootSolvingJob(
+        equations=("x - 1",),
+        unknown_rows=({"name": "x", "initial": "1"},),
+        data_headers=(),
+        data_rows=(),
+        constants_enabled=False,
+        constants_rows=(),
+        constants_view="table",
+        constants_text="",
+        mode="scalar",
+        scan_config={},
+        precision=16,
+        display_digits=45,
+        core_request=core_request,
+    )
+
+    previous_dps = mp.mp.dps
+    try:
+        mp.mp.dps = 15
+        payload = _execute_root_solving_job_payload(job)
+    finally:
+        mp.mp.dps = previous_dps
+
+    assert payload["compute_digits"] == 90
+    csv_rows = cast(list[dict[str, str]], payload["csv_rows"])
+    raw_rows = cast(list[dict[str, str]], payload["raw_rows"])
+    assert csv_rows[0]["value"].startswith("1.23456789012345678901234567890123456789012")
+    assert raw_rows[0]["value"].startswith("1.234567890123456789012345678901234567890123456789")
 
 
 def test_execute_root_solving_job_payload_formats_under_job_precision(
@@ -880,13 +1438,16 @@ def test_execute_root_solving_job_payload_formats_under_job_precision(
             name="x",
             value=mp.mpf("1.23456789012345678901234567890123456789"),
             uncertainty=mp.mpf("1e-40"),
+            contributions={},
         )
         fake_result = SimpleNamespace(
             roots=(fake_root,),
             backend="mpmath",
             mode="scalar",
             residual_norm=mp.mpf("0"),
+            jacobian_condition=None,
             warnings=(),
+            details={},
         )
     fake_batch = SimpleNamespace(
         rows=(
@@ -900,6 +1461,7 @@ def test_execute_root_solving_job_payload_formats_under_job_precision(
         ),
         warnings=(),
         headers=(),
+        details={},
     )
 
     def fake_solve_root_batch(**_kwargs: object) -> object:
@@ -919,6 +1481,12 @@ def test_execute_root_solving_job_payload_formats_under_job_precision(
         mp.mp.dps = previous
 
     assert captured["render_dps"] == 80
+    batch_payload = cast(dict[str, Any], payload["batch"])
+    first_row = cast(dict[str, Any], cast(list[Any], batch_payload["rows"])[0])
+    result_payload = cast(dict[str, Any], first_row["result"])
+    first_root = cast(dict[str, Any], cast(list[Any], result_payload["roots"])[0])
+    value_payload = cast(dict[str, str], first_root["value"])
+    assert value_payload["value"].startswith("1.23456789012345678901234567890123456789")
     raw_rows = cast(list[dict[str, str]], payload["raw_rows"])
     assert raw_rows[0]["value"].startswith("1.23456789012345678901234567890123456789")
 
@@ -965,7 +1533,7 @@ def test_execute_root_solving_job_payload_returns_markdown_csv_and_log() -> None
     assert payload["kind"] == "root_solving"
     markdown = payload["markdown"]
     assert isinstance(markdown, str)
-    assert "| input_row_index | root_index | name | value | backend |" in markdown
+    assert "| input_row_index | root_index | name | value | classification_tags | backend |" in markdown
     assert "| uncertainty |" not in markdown
     assert payload["csv_headers"] == [
         "input_row_index",
@@ -974,6 +1542,7 @@ def test_execute_root_solving_job_payload_returns_markdown_csv_and_log() -> None
         "value",
         "uncertainty",
         "display_value",
+        "classification_tags",
         "backend",
         "mode",
         "residual_norm",
@@ -986,6 +1555,11 @@ def test_execute_root_solving_job_payload_returns_markdown_csv_and_log() -> None
     log = payload["log"]
     assert isinstance(log, str)
     assert "root solving completed" in log
+    assert isinstance(payload["batch"], dict)
+    assert payload["compute_digits"] == 50
+    assert payload["display_digits"] == 20
+    assert payload["uncertainty_digits"] == 1
+    assert payload["language"] == "en"
 
 
 def test_execute_root_solving_job_payload_skips_root_plot_when_disabled(
@@ -1181,6 +1755,7 @@ def test_execute_root_solving_job_payload_does_not_plot_failed_root_batch(
             rows=(SimpleNamespace(row_index=0, source_values={}, failure="no root", result=None, warnings=()),),
             warnings=(),
             headers=(),
+            details={},
         )
 
     def fake_render_root_batch_result(
@@ -1189,6 +1764,7 @@ def test_execute_root_solving_job_payload_does_not_plot_failed_root_batch(
         display_digits: int,
         uncertainty_digits: int,
         language: str,
+        root_units_by_name: object = None,
     ) -> tuple[str, list[dict[str, str]], list[str]]:
         return "failed", [], ["name"]
 
@@ -1239,7 +1815,7 @@ def test_execute_root_solving_job_payload_localizes_root_output_to_chinese() -> 
     payload = _execute_root_solving_job_payload(job)
 
     markdown = cast(str, payload["markdown"])
-    assert "| 输入行 | 根序号 | 名称 | 值 | 后端 |" in markdown
+    assert "| 输入行 | 根序号 | 名称 | 值 | 分类标签 | 后端 |" in markdown
     assert "不确定度" not in markdown.split("\n", maxsplit=1)[0]
     assert "求根完成" in cast(str, payload["log"])
     assert payload["csv_headers"] == [
@@ -1249,6 +1825,7 @@ def test_execute_root_solving_job_payload_localizes_root_output_to_chinese() -> 
         "value",
         "uncertainty",
         "display_value",
+        "classification_tags",
         "backend",
         "mode",
         "residual_norm",
@@ -1405,10 +1982,15 @@ def test_root_solving_worker_emits_cancelled_when_subprocess_interrupts(
     worker = RootSolvingWorker(job)
     worker.request_stop()
 
-    with qtbot.waitSignal(worker.cancelled, timeout=3000):
+    # cancelled is emitted from the worker QThread and delivered to the main-thread
+    # event loop. The connection is established before start() so the signal cannot be
+    # missed, only delayed; under a full parallel suite the loop can be contended, so a
+    # 3s budget is too tight. 10s fails fast on a genuine break but absorbs scheduling
+    # jitter (the worker itself completes in microseconds).
+    with qtbot.waitSignal(worker.cancelled, timeout=10000):
         worker.start()
 
-    assert worker.wait(3000)
+    assert worker.wait(10000)
     assert observed["job"] is job
     assert observed["timeout_seconds"] == workers_core.ROOT_SOLVING_SUBPROCESS_TIMEOUT_SECONDS
     assert callable(observed["should_cancel"])
@@ -1511,6 +2093,7 @@ def test_execute_fit_job_payload_direct_fit_uses_core_service_when_request_avail
                     "expression": "core-expression",
                     "logs": ["core fit complete"],
                     "warnings": [],
+                    "units": {"parameters": {"b0": {"unit": "m"}}},
                 },
             )
 
@@ -1550,6 +2133,7 @@ def test_execute_fit_job_payload_direct_fit_uses_core_service_when_request_avail
     assert payload.fit_result.params == {"b0": mp.mpf("10"), "b1": mp.mpf("20")}
     assert payload.expression == "core-expression"
     assert payload.logs == ["core fit complete"]
+    assert payload.units == {"parameters": {"b0": {"unit": "m"}}}
 
 
 def test_execute_fit_job_payload_self_consistent_does_not_use_core_service(
@@ -2344,10 +2928,13 @@ def test_fit_batch_worker_emits_cancelled_when_self_consistent_subprocess_interr
     monkeypatch.setattr(workers_core, "_execute_fit_job_payload_subprocess", fake_subprocess)
 
     worker = FitBatchWorker([FitBatchTask(index=0, fit_job=job)], capture_output=False)
-    with qtbot.waitSignal(worker.cancelled, timeout=3000):
+    # cancelled crosses from the worker QThread to the main-thread event loop; under a
+    # full parallel suite the loop can be contended, so 3s is too tight. 10s fails fast
+    # on a genuine break but absorbs scheduling jitter (the worker finishes instantly).
+    with qtbot.waitSignal(worker.cancelled, timeout=10000):
         worker.start()
 
-    assert worker.wait(3000)
+    assert worker.wait(10000)
 
 
 def test_execute_calc_job_extrapolation_returns_payload() -> None:
@@ -2479,10 +3066,100 @@ def test_execute_calc_job_error_returns_core_request_snapshot() -> None:
     assert payload["core_request"].inputs["propagation"] == {
         "method": "taylor",
         "order": 2,
-        "mc_samples": 123,
-        "mc_seed": 7,
+        "mc_samples": None,
+        "mc_seed": None,
+    }
+    assert payload["propagation"] == {
+        "method": "taylor",
+        "order": 2,
+        "mc_samples": None,
+        "mc_seed": None,
     }
     assert payload["core_request"].inputs["segments"] == [[0, 1]]
+
+
+def test_execute_calc_job_error_passes_units_to_core_request_payload_and_latex(tmp_path: Path) -> None:
+    output_path = tmp_path / "error_units.tex"
+    job = CalcJob(
+        mode="error",
+        data_path=None,
+        manual_content="x\n1.0(1)\n",
+        manual_constants="",
+        constants_file_path=None,
+        options=ExtrapolationOptions(mp_precision=50),
+        caption=None,
+        generate_latex=True,
+        output_path=str(output_path),
+        use_dcolumn=True,
+        verbose=False,
+        render_plots=False,
+        constants_enabled=False,
+        use_constants_file=False,
+        formula="x",
+        error_propagation_method="taylor",
+        error_propagation_order=1,
+        lang="en",
+        latex_digits=16,
+        latex_group_size=3,
+        uncertainty_digits=2,
+        units_config={
+            "enabled": True,
+            "mode": "display_only",
+            "inputs": {"x": "m"},
+            "outputs": {"result": "m"},
+        },
+    )
+
+    result = _execute_calc_job(job)
+
+    payload = result.payload
+    assert payload["core_request"].inputs["units"]["inputs"] == {"x": {"unit": "m"}}
+    assert payload["core_request"].inputs["units"]["outputs"] == {"result": {"unit": "m"}}
+    assert payload["units"] == payload["core_request"].inputs["units"]
+    latex = output_path.read_text(encoding="utf-8")
+    assert "\\multicolumn{1}{c}{x~[\\texttt{m}]}" in latex
+    assert "\\multicolumn{1}{c}{Result~[\\texttt{m}]}" in latex
+
+
+def test_execute_calc_job_error_units_allow_unused_configured_constants() -> None:
+    job = CalcJob(
+        mode="error",
+        data_path=None,
+        manual_content="x\n1.0(1)\n",
+        manual_constants="K 2.0(2)\nL 5.0(5)\n",
+        constants_file_path=None,
+        options=ExtrapolationOptions(mp_precision=50),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        constants_enabled=True,
+        use_constants_file=False,
+        formula="x + K",
+        error_propagation_method="taylor",
+        error_propagation_order=1,
+        lang="en",
+        latex_digits=16,
+        latex_group_size=3,
+        uncertainty_digits=2,
+        units_config={
+            "enabled": True,
+            "mode": "display_only",
+            "inputs": {"x": "m"},
+            "constants": {"K": "m", "L": "m"},
+            "outputs": {"result": "m"},
+        },
+    )
+
+    result = _execute_calc_job(job)
+
+    payload = result.payload
+    assert payload["core_request"].inputs["constants"]["K"]["value"] == "2.0"
+    assert payload["core_request"].inputs["constants"]["L"]["value"] == "5.0"
+    assert payload["units"]["constants"] == {"K": {"unit": "m"}, "L": {"unit": "m"}}
+    assert payload["results"][0].value == mp.mpf("3.0")
 
 
 def test_execute_calc_job_error_uses_core_service_when_request_available(
@@ -2523,6 +3200,101 @@ def test_execute_calc_job_error_uses_core_service_when_request_available(
     assert len(result.payload["results"]) == 1
     assert result.payload["results"][0].value == mp.mpf("1.0")
     assert mp.almosteq(result.payload["results"][0].uncertainty, mp.mpf("0.1"))
+
+
+def test_execute_calc_job_error_outputs_monte_carlo_distribution_row_plot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datalab_core.results import ResultEnvelope, ResultKind, ResultStatus
+
+    captured: dict[str, object] = {}
+
+    class FakeService:
+        def submit(self, request):
+            captured["collect"] = request.inputs["collect_monte_carlo_distribution"]
+            return ResultEnvelope(
+                kind=ResultKind.TABLE,
+                status=ResultStatus.SUCCEEDED,
+                payload={
+                    "headers": ["x"],
+                    "formula": "x",
+                    "segments": [[0, 1]],
+                    "precision_used": 50,
+                    "propagation": {
+                        "method": "monte_carlo",
+                        "order": 1,
+                        "mc_samples": 100,
+                        "mc_seed": 7,
+                    },
+                    "units": {
+                        "schema": "datalab.units.annotations.v1",
+                        "schema_version": 1,
+                        "enabled": True,
+                        "mode": "display_only",
+                        "inputs": {"x": {"unit": "m"}},
+                        "constants": {},
+                        "parameters": {},
+                        "outputs": {"result": {"unit": "m"}},
+                    },
+                    "results": [
+                        {
+                            "value": "1.0",
+                            "uncertainty": "0.2",
+                            "contributions": {"x": "0.04"},
+                            "monte_carlo_distribution": _valid_distribution_summary(),
+                        }
+                    ],
+                },
+            )
+
+    monkeypatch.setattr(workers_core, "create_core_session_service", lambda **_kwargs: FakeService())
+    monkeypatch.setattr(workers_core, "_render_contribution_plot", lambda *_args, **_kwargs: b"contrib")
+    distribution_kwargs: dict[str, object] = {}
+
+    def fake_distribution_plot(*_args: object, **kwargs: object) -> bytes:
+        distribution_kwargs.update(kwargs)
+        return b"distribution"
+
+    monkeypatch.setattr(workers_core, "_render_monte_carlo_distribution_plot", fake_distribution_plot)
+
+    job = CalcJob(
+        mode="error",
+        data_path=None,
+        manual_content="x\n1.0(1)\n",
+        manual_constants="",
+        constants_file_path=None,
+        options=ExtrapolationOptions(mp_precision=50),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=True,
+        constants_enabled=False,
+        use_constants_file=False,
+        formula="x",
+        error_propagation_method="monte_carlo",
+        error_propagation_order=1,
+        error_mc_samples=100,
+        error_mc_seed=7,
+        lang="en",
+        latex_digits=16,
+        latex_group_size=3,
+        uncertainty_digits=2,
+        units_config={
+            "enabled": True,
+            "mode": "display_only",
+            "inputs": {"x": "m"},
+            "outputs": {"result": "m"},
+        },
+    )
+
+    result = _execute_calc_job(job)
+
+    assert captured["collect"] is True
+    assert result.payload["row_contribution_plots"] == [b"contrib"]
+    assert result.payload["row_distribution_plots"] == [b"distribution"]
+    assert distribution_kwargs["value_unit"] == "m"
 
 
 def test_execute_calc_job_extrapolation_core_snapshot_failure_is_nonfatal(
@@ -2640,7 +3412,48 @@ def test_execute_calc_job_error_core_snapshot_failure_is_nonfatal(
     assert len(result.payload["results"]) == 1
 
 
-def test_run_calculation_excludes_disabled_error_constants_from_calc_job(
+def test_execute_calc_job_error_units_enabled_disables_legacy_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail_snapshot(**_kwargs: object) -> object:
+        raise RuntimeError("snapshot failed")
+
+    def _direct_apply_should_not_run(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("unit-enabled error jobs must not fall back to legacy apply")
+
+    monkeypatch.setattr(workers_core, "build_uncertainty_request", _fail_snapshot)
+    monkeypatch.setattr(workers_core, "apply_formula_to_data", _direct_apply_should_not_run)
+
+    job = CalcJob(
+        mode="error",
+        data_path=None,
+        manual_content="x\n1.0(1)\n",
+        manual_constants="",
+        constants_file_path=None,
+        options=ExtrapolationOptions(mp_precision=50),
+        caption=None,
+        generate_latex=False,
+        output_path="",
+        use_dcolumn=False,
+        verbose=False,
+        render_plots=False,
+        constants_enabled=False,
+        use_constants_file=False,
+        formula="x",
+        error_propagation_method="taylor",
+        error_propagation_order=1,
+        lang="en",
+        latex_digits=16,
+        latex_group_size=3,
+        uncertainty_digits=2,
+        units_config={"enabled": True, "mode": "display_only", "inputs": {"x": "m"}},
+    )
+
+    with pytest.raises(RuntimeError, match="snapshot failed"):
+        _execute_calc_job(job)
+
+
+def test_run_calculation_uses_content_driven_error_constants_from_calc_job(
     qtbot,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2685,5 +3498,5 @@ def test_run_calculation_excludes_disabled_error_constants_from_calc_job(
     assert isinstance(job, CalcJob)
     assert captured["started"] is True
     assert win.error_constants_editor.constants_dict(validate=False) == {"K": "1.23(4)"}
-    assert job.constants_enabled is False
-    assert job.manual_constants == ""
+    assert job.constants_enabled is True
+    assert job.manual_constants == "K 1.23(4)"

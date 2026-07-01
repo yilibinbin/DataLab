@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from contextvars import ContextVar
-from collections.abc import Callable, Mapping, MutableMapping
+from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import Event
@@ -71,6 +72,28 @@ def check_cancelled() -> None:
 
     if cancellation_requested():
         raise CoreJobCancelled("Core job was cancelled.")
+
+
+@contextmanager
+def external_cancellation_scope(checker: CancellationChecker | None) -> Iterator[None]:
+    """Make ``check_cancelled()`` honor ``checker`` inside this ``with`` block.
+
+    For compute entry points that run outside ``SessionService`` (e.g. the
+    fitting-comparison path, which calls ``run_fitting_comparison`` directly from
+    both frontends) but still need cooperative cancellation. Passing ``None``
+    leaves the current token untouched. The token is process-local via a
+    ContextVar and restored on exit, so nested/concurrent jobs stay isolated.
+    """
+
+    if checker is None:
+        yield
+        return
+    token = _CancellationToken(request_id="external", external_checker=checker)
+    reset = _CURRENT_CANCELLATION_TOKEN.set(token)
+    try:
+        yield
+    finally:
+        _CURRENT_CANCELLATION_TOKEN.reset(reset)
 
 
 @dataclass

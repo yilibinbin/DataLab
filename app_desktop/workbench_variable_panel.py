@@ -351,8 +351,10 @@ def _panel_title(owner: Any, mode: str) -> str:
     )
     if roles == ("constants",):
         return owner._tr("常数", "Constants")
-    if "unknowns" in roles:
+    if "unknowns" in roles and "constants" in roles:
         return owner._tr("未知量与常数", "Unknowns and constants")
+    if "unknowns" in roles:
+        return owner._tr("未知量", "Unknowns")
     if "constants" in roles and "parameters" in roles:
         if roles.index("parameters") < roles.index("constants"):
             return owner._tr("参数与常数", "Parameters and constants")

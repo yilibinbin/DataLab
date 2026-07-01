@@ -46,9 +46,17 @@ Log[x1/x2] + Sqrt[x3]          # log + sqrt
 - **Uncertainty synthesis**: combines contributions into total uncertainty (Taylor order 1/2)
 - **Monte Carlo**: more robust for strong nonlinearity / domain restrictions (returns mean ± std)
 - **Constants support**: propagate constants and data together
-- **Visualization**: contribution breakdown plot (available for Taylor modes with per-variable contributions)
+- **Visualization**: Taylor plots show contribution breakdown and cumulative contribution when contribution data exists; Monte Carlo plots show per-row sampled output distribution histograms with mean, standard-deviation, and percentile markers when Generate plots is enabled
+
+## Units
+
+The Web error-propagation page keeps unit-aware calculation inactive. Display-only
+unit metadata may be preserved as provenance, but active validation or conversion
+requests are rejected before evaluation. Use the Desktop app for unit labels in
+results and for `validate expression` checks when `pint` is installed.
 
 ## Notes
 
 - The default assumption is **independent** inputs (no covariance). For correlated inputs, prefer Monte Carlo or handle covariance externally.
 - Monte Carlo will skip failed evaluations (e.g. domain errors like `Sqrt[x]` with negative samples); it raises an error if too few samples remain.
+- Monte Carlo does not return per-variable contribution breakdown.

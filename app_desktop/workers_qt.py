@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-import io
 from contextlib import redirect_stdout, redirect_stderr, nullcontext
 from pathlib import Path
 
 import mpmath as mp
 from PySide6.QtCore import QThread, Signal
+
+from shared.error_contributions import (
+    aggregate_contribution_summary,
+    contribution_summary_rows,
+    render_error_contribution_plot,
+)
 
 from data_extrapolation_latex_latest import (
     detect_used_error_propagation_inputs,
@@ -18,6 +23,8 @@ from .workers_core import (
     CalcResult,
     FitBatchResultEntry,
     FitBatchTask,
+    FittingComparisonJob,
+    FittingComparisonResultPayload,
     FitJob,
     FitResultPayload,
     RootSolvingJob,
@@ -151,19 +158,9 @@ class CalcWorker(QThread):
     def _aggregate_error_contributions(
         self, results: list[UncertainValue], lang: str, render_plot: bool = True
     ) -> tuple[list[dict[str, object]], bytes | None]:
-        contrib_sum: dict[str, mp.mpf] = {}
-        for entry in results:
-            contribs = getattr(entry, "contributions", None)
-            if not contribs:
-                continue
-            for name, value in contribs.items():
-                try:
-                    contrib_sum[name] = contrib_sum.get(name, mp.mpf("0")) + mp.mpf(value)
-                except Exception:
-                    continue
-        if not contrib_sum:
+        summary = aggregate_contribution_summary(results)
+        if not summary:
             return [], None
-        summary = self._build_contribution_summary(contrib_sum)
         plot_bytes: bytes | None = None
         if render_plot:
             try:
@@ -173,57 +170,12 @@ class CalcWorker(QThread):
         return summary, plot_bytes
 
     def _build_contribution_summary(self, contrib_map: dict[str, mp.mpf]) -> list[dict[str, object]]:
-        if not contrib_map:
-            return []
-        total_var = sum(contrib_map.values())
-        if total_var <= 0:
-            total_var = mp.mpf("0")
-        summary: list[dict[str, object]] = []
-        for name, var in contrib_map.items():
-            sigma = mp.sqrt(var) if var >= 0 else mp.mpf("0")
-            percent = float(var / total_var * 100) if total_var != 0 else 0.0
-            summary.append({"name": name, "variance": var, "sigma": sigma, "percent": percent})
-        summary.sort(key=lambda item: item.get("variance", mp.mpf("0")), reverse=True)
-        return summary
+        return contribution_summary_rows(contrib_map)
 
     def _render_contribution_plot(
         self, summary: list[dict[str, object]], lang: str, title_suffix: str | None = None
     ) -> bytes | None:
-        if not summary:
-            return None
-        try:
-            import matplotlib
-
-            matplotlib.use("Agg")
-            import matplotlib.pyplot as plt
-        except Exception:
-            return None
-        try:
-            labels = [entry["name"] for entry in summary]
-            percents = [float(entry.get("percent", 0.0)) for entry in summary]
-            fig, ax = plt.subplots(figsize=(6.0, 0.45 * len(summary) + 1.2), dpi=180)
-            y_pos = list(range(len(labels)))
-            bars = ax.barh(y_pos, percents, color="#4f6bed")
-            ax.invert_yaxis()
-            xlabel = "Uncertainty contribution (%)" if lang == "en" else "不确定度贡献 (%)"
-            ax.set_xlabel(xlabel)
-            ax.set_xlim(0, max(100.0, (max(percents) if percents else 0) * 1.1))
-            ax.set_yticks(y_pos, labels)
-            for bar, pct in zip(bars, percents):
-                ax.text(bar.get_width() + 1.5, bar.get_y() + bar.get_height() / 2, f"{pct:.2f}%", va="center")
-            ax.grid(axis="x", alpha=0.3, linestyle="--")
-            base_title = "Uncertainty breakdown" if lang == "en" else "不确定度贡献分解"
-            if title_suffix:
-                base_title = f"{base_title} - {title_suffix}"
-            ax.set_title(base_title)
-            fig.tight_layout()
-            buf = io.BytesIO()
-            fig.savefig(buf, format="png")
-            plt.close(fig)
-            buf.seek(0)
-            return buf.getvalue()
-        except Exception:
-            return None
+        return render_error_contribution_plot(summary, lang, title_suffix=title_suffix)
 
     def _render_statistics_plot(
         self,
@@ -231,68 +183,78 @@ class CalcWorker(QThread):
         sigmas: list[mp.mpf | None] | None,
         stats_result: dict[str, object],
         batch_idx: int | None = None,
+        value_unit: str | None = None,
     ) -> bytes | None:
-        if not values:
-            return None
         try:
-            import matplotlib
-
-            matplotlib.use("Agg")
-            import matplotlib.pyplot as plt
+            from shared.plotting import (
+                render_statistics_plot_from_spec,
+                statistics_plot_labels_with_unit,
+                statistics_plot_spec_from_result,
+                StatisticsPlotLabels,
+            )
         except Exception:
             return None
-        try:
-            xs = list(range(1, len(values) + 1))
-            ys = [float(mp.mpf(v)) for v in values]
-            yerr = None
-            if sigmas and any(s is not None for s in sigmas):
-                yerr = [abs(float(mp.mpf(s))) if s is not None else 0.0 for s in sigmas]
-            mean_val = stats_result.get("mean", None)
-            std_mean = stats_result.get("std_mean", None)
-            mean_f = float(mean_val) if mean_val is not None else None
-            std_mean_f = abs(float(std_mean)) if std_mean is not None else None
-
-            fig, ax = plt.subplots(figsize=(6.0, 4.0), dpi=180)
-            if yerr:
-                ax.errorbar(
-                    xs,
-                    ys,
-                    yerr=yerr,
-                    fmt="o-",
-                    color="#1f77b4",
-                    ecolor="#555555",
-                    capsize=4,
-                    label=self._tr("数据", "Data"),
-                )
-            else:
-                ax.plot(xs, ys, "o-", color="#1f77b4", label=self._tr("数据", "Data"))
-            if mean_f is not None:
-                ax.axhline(mean_f, color="#d62728", linestyle="--", label=self._tr("平均值", "Mean"))
-                if std_mean_f is not None and std_mean_f > 0:
-                    ax.fill_between(
-                        [min(xs) - 0.2, max(xs) + 0.2],
-                        mean_f - std_mean_f,
-                        mean_f + std_mean_f,
-                        color="#d62728",
-                        alpha=0.15,
-                        label=self._tr("平均值±标准误差", "Mean ± standard error"),
-                    )
-            ax.set_xlabel(self._tr("点序号", "Point index"))
-            ax.set_ylabel(self._tr("数值", "Value"))
-            title = self._tr("统计平均", "Statistical mean")
-            if batch_idx is not None:
-                title = f"{title} - {batch_idx}"
-            ax.set_title(title)
-            ax.grid(True, alpha=0.3)
-            ax.legend(frameon=False)
-            fig.tight_layout()
-            buf = io.BytesIO()
-            fig.savefig(buf, format="png")
-            plt.close(fig)
-            buf.seek(0)
-            return buf.getvalue()
-        except Exception:
+        labels = StatisticsPlotLabels(
+            data=self._tr("数据", "Data"),
+            mean=self._tr("平均值", "Mean"),
+            mean_band=self._tr("平均值±标准误差", "Mean ± standard error"),
+            x_axis=self._tr("点序号", "Point index"),
+            y_axis=self._tr("数值", "Value"),
+            title=self._tr("统计平均", "Statistical mean"),
+        )
+        spec = statistics_plot_spec_from_result(
+            values,
+            sigmas,
+            stats_result,
+            statistics_plot_labels_with_unit(labels, value_unit),
+            batch_suffix=f" - {batch_idx}" if batch_idx is not None else "",
+        )
+        if spec is None:
             return None
+        return render_statistics_plot_from_spec(spec)
+
+    def _render_statistics_plots(
+        self,
+        values: list[mp.mpf],
+        sigmas: list[mp.mpf | None] | None,
+        stats_result: dict[str, object],
+        batch_idx: int | None = None,
+        value_unit: str | None = None,
+    ) -> list[bytes]:
+        try:
+            from shared.plotting import (
+                render_statistics_plots_from_specs,
+                statistics_plot_labels_with_unit,
+                statistics_plot_specs_from_result,
+                StatisticsPlotLabels,
+            )
+        except Exception:
+            return []
+        labels = StatisticsPlotLabels(
+            data=self._tr("数据", "Data"),
+            mean=self._tr("平均值", "Mean"),
+            mean_band=self._tr("平均值±标准误差", "Mean ± standard error"),
+            x_axis=self._tr("点序号", "Point index"),
+            y_axis=self._tr("数值", "Value"),
+            title=self._tr("统计平均", "Statistical mean"),
+            median=self._tr("中位数", "Median"),
+            histogram_title=self._tr("直方图", "Histogram"),
+            box_title=self._tr("箱线图", "Box plot"),
+            qq_title=self._tr("正态 QQ 图", "Normal QQ plot"),
+            weighted_residual_title=self._tr("加权残差", "Weighted residuals"),
+            frequency_axis=self._tr("频数", "Frequency"),
+            theoretical_quantile_axis=self._tr("理论正态分位数", "Theoretical normal quantile"),
+            sample_quantile_axis=self._tr("样本标准化分位数", "Sample standardized quantile"),
+            residual_axis=self._tr("标准化残差", "Standardized residual"),
+        )
+        spec = statistics_plot_specs_from_result(
+            values,
+            sigmas,
+            stats_result,
+            statistics_plot_labels_with_unit(labels, value_unit),
+            batch_suffix=f" - {batch_idx}" if batch_idx is not None else "",
+        )
+        return render_statistics_plots_from_specs(spec)
 
     def _detect_error_used_headers(self, headers: list[str], formula: str | None) -> list[str]:
         """Return headers referenced in the error formula based on AST parsing."""
@@ -395,6 +357,47 @@ class FitWorker(QThread):
                 should_cancel=lambda: self._stop_requested,
             )
         return workers_core._execute_fit_job_payload(
+            self.job,
+            should_cancel=lambda: self._stop_requested,
+        )
+
+
+class FittingComparisonWorker(QThread):
+    finished_ok = Signal(object)
+    failed = Signal(str)
+    log_ready = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, job: FittingComparisonJob):
+        super().__init__()
+        self.job = job
+        self._stop_requested = False
+
+    def request_stop(self):
+        self._stop_requested = True
+
+    def run(self):
+        if self._stop_requested:
+            self.cancelled.emit()
+            return
+        try:
+            if self.job.verbose:
+                self.log_ready.emit("[fit-comparison] start")
+            payload = self._run_comparison()
+            if self._stop_requested:
+                self.cancelled.emit()
+                return
+            if self.job.verbose:
+                self.log_ready.emit("[fit-comparison] finished")
+            self.finished_ok.emit(payload)
+        except Exception as exc:  # noqa: BLE001
+            if self._stop_requested:
+                self.cancelled.emit()
+                return
+            self.failed.emit(str(exc))
+
+    def _run_comparison(self) -> FittingComparisonResultPayload:
+        return workers_core._execute_fitting_comparison_job_payload(
             self.job,
             should_cancel=lambda: self._stop_requested,
         )
@@ -558,6 +561,7 @@ class FitBatchWorker(QThread):
 __all__ = [
     "CalcWorker",
     "FitBatchWorker",
+    "FittingComparisonWorker",
     "FitWorker",
     "RootSolvingWorker",
 ]

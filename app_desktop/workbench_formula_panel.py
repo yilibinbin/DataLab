@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QEvent, QObject, QTimer
+from PySide6.QtCore import QEvent, QObject, QSize, QTimer
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -38,14 +39,18 @@ from app_desktop.ui_schema_binder import (
     TOOLTIP_ZH_PROPERTY,
 )
 from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS, FormulaMount
-from datalab_latex.formula_render_service import InputLanguage
 
-_PREVIEW_LANGUAGES: tuple[InputLanguage, ...] = (
-    InputLanguage.DATALAB,
-    InputLanguage.PYTHON,
-    InputLanguage.MATHEMATICA,
-    InputLanguage.LATEX,
-)
+
+class _CurrentPageSizeStack(QStackedWidget):
+    """Stack whose layout footprint follows the visible action page."""
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override name
+        current = self.currentWidget()
+        return current.sizeHint() if current is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override name
+        current = self.currentWidget()
+        return current.minimumSizeHint() if current is not None else super().minimumSizeHint()
 
 
 def build_formula_workspace_panel(owner: Any) -> QWidget:
@@ -72,11 +77,11 @@ def build_formula_workspace_panel(owner: Any) -> QWidget:
     owner.workbench_formula_panel_title.setStyleSheet(workbench_title_text_style())
     title_layout.addWidget(owner.workbench_formula_panel_title, 1)
 
-    owner.workbench_formula_actions_stack = QStackedWidget()
+    owner.workbench_formula_actions_stack = _CurrentPageSizeStack()
     owner.workbench_formula_actions_stack.setObjectName("workbench_formula_actions_stack")
     owner.workbench_formula_actions_stack.setMaximumHeight(WORKBENCH_FORMULA_TITLE_ROW_MAX_HEIGHT)
     owner.workbench_formula_actions_stack.setSizePolicy(
-        QSizePolicy.Policy.Maximum,
+        QSizePolicy.Policy.Minimum,
         QSizePolicy.Policy.Maximum,
     )
     owner.workbench_formula_empty_actions_page = QWidget()
@@ -92,23 +97,8 @@ def build_formula_workspace_panel(owner: Any) -> QWidget:
     owner.workbench_formula_function_button.clicked.connect(lambda: owner._show_error_functions())
     _localize_function_button(owner)
     empty_actions_layout.addWidget(owner.workbench_formula_function_button)
+    _reserve_formula_actions_width(owner, owner.workbench_formula_empty_actions_page)
     layout.addWidget(title_row)
-
-    owner.workbench_formula_language_row = QWidget()
-    owner.workbench_formula_language_row.setObjectName("workbench_formula_language_row")
-    language_layout = QHBoxLayout(owner.workbench_formula_language_row)
-    language_layout.setContentsMargins(0, 0, 0, 0)
-    language_layout.setSpacing(6)
-    owner.workbench_formula_language_label = QLabel(owner._tr("预览语法：", "Preview syntax:"))
-    owner.workbench_formula_language_label.setObjectName("workbench_formula_language_label")
-    language_layout.addWidget(owner.workbench_formula_language_label)
-    owner.workbench_formula_language_combo = QComboBox()
-    owner.workbench_formula_language_combo.setObjectName("workbench_formula_language_combo")
-    for language in _PREVIEW_LANGUAGES:
-        owner.workbench_formula_language_combo.addItem(language.value, language.value)
-    language_layout.addWidget(owner.workbench_formula_language_combo)
-    language_layout.addStretch()
-    layout.addWidget(owner.workbench_formula_language_row)
 
     owner.workbench_formula_description_label = QLabel("")
     owner.workbench_formula_description_label.setObjectName("workbench_formula_description_label")
@@ -143,11 +133,6 @@ def build_formula_workspace_panel(owner: Any) -> QWidget:
     layout.addWidget(owner.workbench_formula_error_label)
 
     owner._workbench_active_formula_attr = ""
-    owner._workbench_formula_preview_languages = {}
-    owner._workbench_formula_language_syncing = False
-    owner.workbench_formula_language_combo.currentIndexChanged.connect(
-        lambda _index: _on_formula_language_changed(owner)
-    )
 
     owner._workbench_formula_refresh_timer = QTimer(owner)
     owner._workbench_formula_refresh_timer.setSingleShot(True)
@@ -443,7 +428,6 @@ def refresh_formula_workspace_panel(owner: Any) -> None:
     if mount is None:
         if title is not None:
             title.setText(owner._tr("公式预览", "Formula preview"))
-        _sync_formula_language_controls(owner, None)
         _show_formula_actions(owner, None)
         _show_formula_function_button(owner, False)
         if panel is not None:
@@ -456,20 +440,20 @@ def refresh_formula_workspace_panel(owner: Any) -> None:
 
     if panel is not None:
         panel.setVisible(True)
-    _show_formula_function_button(owner, True)
-    language = _formula_language_for_mount(owner, mount)
-    _sync_formula_language_controls(owner, mount)
     editor = getattr(owner, mount.editor_attr)
     if title is not None:
         title.setText(_formula_panel_title(owner, mode))
     _show_formula_actions(owner, mount)
+    _show_formula_function_button(owner, True)
+    actions_stack = getattr(owner, "workbench_formula_actions_stack", None)
+    if actions_stack is not None:
+        _reserve_formula_actions_width(owner, actions_stack.currentWidget())
     _set_formula_description(owner, mount)
     text = editor.toPlainText().strip() if hasattr(editor, "toPlainText") else editor.text().strip()
     result = update_formula_preview_with_empty_text(
         label,
         text,
         lhs=mount.lhs,
-        language=language,
         constrain_size=True,
         empty_text=owner._tr(
             "输入公式后将在此渲染预览；点击预览可放大查看。",
@@ -484,82 +468,6 @@ def refresh_formula_workspace_panel(owner: Any) -> None:
     else:
         _set_formula_error(owner, "")
     _localize_preview_label(owner, label)
-
-
-def _on_formula_language_changed(owner: Any) -> None:
-    if bool(getattr(owner, "_workbench_formula_language_syncing", False)):
-        return
-    mount = current_formula_mount(owner)
-    if mount is None:
-        return
-    combo = getattr(owner, "workbench_formula_language_combo", None)
-    if combo is None:
-        return
-    language = _coerce_preview_language(combo.currentData())
-    _formula_language_state(owner)[mount.schema_key] = language.value
-    if hasattr(owner, "_mark_workspace_dirty") and not getattr(owner, "_workspace_restoring", False):
-        owner._mark_workspace_dirty()
-    schedule_formula_workspace_refresh(owner, mount.editor_attr)
-
-
-def _formula_language_state(owner: Any) -> dict[str, str]:
-    state = getattr(owner, "_workbench_formula_preview_languages", None)
-    if not isinstance(state, dict):
-        state = {}
-        owner._workbench_formula_preview_languages = state
-    return state
-
-
-def _formula_language_for_mount(owner: Any, mount: FormulaMount) -> InputLanguage:
-    return _coerce_preview_language(_formula_language_state(owner).get(mount.schema_key))
-
-
-def _coerce_preview_language(value: object) -> InputLanguage:
-    try:
-        language = InputLanguage(str(value))
-    except ValueError:
-        return InputLanguage.DATALAB
-    if language not in _PREVIEW_LANGUAGES:
-        return InputLanguage.DATALAB
-    return language
-
-
-def _sync_formula_language_controls(owner: Any, mount: FormulaMount | None) -> None:
-    row = getattr(owner, "workbench_formula_language_row", None)
-    label = getattr(owner, "workbench_formula_language_label", None)
-    combo = getattr(owner, "workbench_formula_language_combo", None)
-    if row is None or label is None or combo is None:
-        return
-    if combo.count() == 0:
-        return
-    tooltip = owner._tr(
-        "仅影响预览解析方式；不会修改公式文本或计算。",
-        "Controls preview only; it does not modify formula text or computation.",
-    )
-    label.setText(owner._tr("预览语法：", "Preview syntax:"))
-    label.setToolTip(tooltip)
-    label.setAccessibleDescription(tooltip)
-    combo.setToolTip(tooltip)
-    combo.setAccessibleDescription(tooltip)
-    language_labels = {
-        InputLanguage.DATALAB: owner._tr("DataLab 兼容", "DataLab compatible"),
-        InputLanguage.PYTHON: owner._tr("Python 风格", "Python style"),
-        InputLanguage.MATHEMATICA: owner._tr("Mathematica 风格", "Mathematica style"),
-        InputLanguage.LATEX: owner._tr("LaTeX 源码", "LaTeX source"),
-    }
-    owner._workbench_formula_language_syncing = True
-    try:
-        for index, language in enumerate(_PREVIEW_LANGUAGES):
-            combo.setItemText(index, language_labels[language])
-        row.setVisible(mount is not None)
-        combo.setEnabled(mount is not None)
-        if mount is not None:
-            language = _formula_language_for_mount(owner, mount)
-            combo_index = combo.findData(language.value)
-            if combo_index >= 0:
-                combo.setCurrentIndex(combo_index)
-    finally:
-        owner._workbench_formula_language_syncing = False
 
 
 def _set_formula_error(owner: Any, message: str) -> None:
@@ -585,7 +493,18 @@ def _set_formula_description(owner: Any, mount: FormulaMount | None) -> None:
     label.setText(text)
     label.setToolTip(text)
     label.setAccessibleDescription(text)
-    label.setVisible(bool(text))
+    formula_text = _formula_editor_text(editor)
+    label.setVisible(bool(text) and not formula_text)
+
+
+def _formula_editor_text(editor: QWidget | None) -> str:
+    if editor is None:
+        return ""
+    if hasattr(editor, "toPlainText"):
+        return str(editor.toPlainText()).strip()
+    if hasattr(editor, "text"):
+        return str(editor.text()).strip()
+    return ""
 
 
 def _formula_description_text(owner: Any, editor: QWidget | None) -> str:
@@ -687,17 +606,20 @@ def _show_formula_actions(owner: Any, mount: FormulaMount | None) -> None:
         if empty_page is not None:
             _attach_formula_function_button(owner, empty_page)
             stack.setCurrentWidget(empty_page)
+            _reserve_formula_actions_width(owner, empty_page)
         return
     pages = getattr(owner, "_workbench_formula_action_pages", {})
     page = pages.get(mount.editor_attr)
     if page is not None:
         _attach_formula_function_button(owner, page)
         stack.setCurrentWidget(page)
+        _reserve_formula_actions_width(owner, page)
         return
     empty_page = getattr(owner, "workbench_formula_empty_actions_page", None)
     if empty_page is not None:
         _attach_formula_function_button(owner, empty_page)
         stack.setCurrentWidget(empty_page)
+        _reserve_formula_actions_width(owner, empty_page)
 
 
 def _attach_formula_function_button(owner: Any, page: QWidget) -> None:
@@ -708,9 +630,81 @@ def _attach_formula_function_button(owner: Any, page: QWidget) -> None:
     if layout is None:
         raise RuntimeError("Formula action page has no layout")
     if layout.indexOf(button) >= 0:
+        _reserve_formula_actions_width(owner, page)
         return
     _remove_from_parent_layout(button)
     layout.addWidget(button)
+    _reserve_formula_actions_width(owner, page)
+
+
+def _reserve_formula_actions_width(owner: Any, page: QWidget) -> None:
+    stack = getattr(owner, "workbench_formula_actions_stack", None)
+    if stack is None:
+        return
+    layout = page.layout()
+    if layout is not None:
+        layout.activate()
+    page.adjustSize()
+    required_width = _formula_action_page_required_width(page)
+    if required_width <= 0:
+        return
+    _clear_other_formula_action_page_minimums(stack, page)
+    page.setMinimumWidth(required_width)
+    stack.setMinimumWidth(required_width)
+    stack.updateGeometry()
+
+
+def _clear_other_formula_action_page_minimums(stack: QStackedWidget, current_page: QWidget) -> None:
+    for index in range(stack.count()):
+        candidate = stack.widget(index)
+        if candidate is not None and candidate is not current_page:
+            candidate.setMinimumWidth(0)
+
+
+def _formula_action_page_required_width(page: QWidget) -> int:
+    layout = page.layout()
+    if layout is None:
+        return page.sizeHint().width()
+    margins = layout.contentsMargins()
+    required_width = margins.left() + margins.right()
+    visible_items = 0
+    for index in range(layout.count()):
+        item = layout.itemAt(index)
+        if item is None:
+            continue
+        widget = item.widget()
+        if widget is not None and not widget.isHidden():
+            hint = widget.sizeHint()
+            minimum_hint = widget.minimumSizeHint()
+            required_width += max(hint.width(), minimum_hint.width(), widget.minimumWidth())
+            visible_items += 1
+            continue
+        spacer = item.spacerItem()
+        if spacer is not None:
+            required_width += spacer.minimumSize().width()
+            visible_items += 1
+            continue
+        nested_layout = item.layout()
+        if nested_layout is not None:
+            required_width += max(
+                nested_layout.minimumSize().width(),
+                nested_layout.sizeHint().width(),
+            )
+            visible_items += 1
+    if visible_items > 1:
+        required_width += _effective_layout_spacing(layout, page) * (visible_items - 1)
+    return max(required_width, page.sizeHint().width())
+
+
+def _effective_layout_spacing(layout: QLayout, page: QWidget) -> int:
+    spacing = layout.spacing()
+    if spacing >= 0:
+        return spacing
+    style = page.style() or QApplication.style()
+    pixel_spacing = style.pixelMetric(QStyle.PixelMetric.PM_LayoutHorizontalSpacing, None, page)
+    if pixel_spacing >= 0:
+        return pixel_spacing
+    return 6
 
 
 def _formula_editor_available(owner: Any, editor: QWidget | None) -> bool:

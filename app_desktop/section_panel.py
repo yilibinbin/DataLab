@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -37,6 +38,9 @@ class SectionPanel(QWidget):
         self._help_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._help_button.setAccessibleName("Section help")
         self._help_button.setVisible(bool(help_text))
+        # Clicking "?" pops the help text (also available as a hover tooltip), so the
+        # button does real work rather than being a no-op shell control.
+        self._help_button.clicked.connect(self._show_help_popup)
 
         self._collapse_toggle: QPushButton | None = None
         if collapsible:
@@ -86,6 +90,14 @@ class SectionPanel(QWidget):
         self._title_label.setText(title)
 
     def set_help_text(self, help_text: str) -> None:
+        self._help_text = help_text
         self._help_button.setToolTip(help_text)
         self._help_button.setAccessibleDescription(help_text)
         self._help_button.setVisible(bool(help_text))
+
+    def _show_help_popup(self) -> None:
+        text = getattr(self, "_help_text", "") or self._help_button.toolTip()
+        if not text:
+            return
+        pos = self._help_button.mapToGlobal(self._help_button.rect().bottomLeft())
+        QToolTip.showText(pos, text, self._help_button)

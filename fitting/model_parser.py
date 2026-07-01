@@ -20,14 +20,15 @@ from typing import Callable, Sequence
 
 from mpmath import mp
 
-# Note for test authors: to patch this in tests, patch
-# ``fitting.model_parser.safe_eval``, not the shared module —
-# ``from … import`` creates a fresh local binding here.
+# The fit hot path evaluates the model expression via ``compile_expression``,
+# which parses/validates once and returns a fast evaluator (P1-1). To patch the
+# evaluator in tests, patch ``fitting.model_parser.compile_expression`` — the
+# ``from … import`` above creates a fresh local binding here.
 from shared.derivatives import numerical_partial_derivative
 from shared.expression_engine import (
     _ALLOWED_CONSTANTS,
     _ALLOWED_FUNCTIONS,
-    safe_eval,
+    compile_expression,
 )
 from shared.bilingual import _dual_msg
 from shared.uncertainty import parse_numeric_value
@@ -139,6 +140,9 @@ def _build_safe_eval_callable(
     var_count = len(variable_names)
     param_count = len(parameter_names)
     constant_scope = _constant_values(constants)
+    # Parse/validate the model expression once; the fit loop evaluates it per
+    # data point per LM iteration, so hoisting the parse out is the P1-1 win.
+    evaluate = compile_expression(expression)
 
     def _call(
         var_tuple: tuple[mp.mpf, ...], param_tuple: tuple[mp.mpf, ...]
@@ -153,7 +157,7 @@ def _build_safe_eval_callable(
         values = tuple(var_tuple) + tuple(param_tuple)
         scope = {name: value for name, value in zip(all_names, values)}
         scope.update(constant_scope)
-        return mp.mpf(safe_eval(expression, scope))
+        return mp.mpf(evaluate(scope))
 
     return _call
 

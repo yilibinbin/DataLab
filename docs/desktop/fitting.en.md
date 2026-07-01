@@ -15,17 +15,58 @@ The desktop app provides explicit fitting models:
 - Inverse-power series
 - Padé and power-limit models
 - Custom nonlinear and self-consistent/implicit models
+- Explicit selected-fit comparison
 
 Model-specific parameters appear dynamically on the left.
+
+## Explicit Selected-Fit Comparison
+
+The explicit selected-fit comparison mode runs only the fits you enter in the candidate
+JSON editor. Each entry must provide its own identifier, label, and model
+settings. Supported candidate families are `polynomial`, `inverse_power`, and
+`custom`.
+
+Example candidate JSON:
+
+```json
+[
+  {
+    "candidate_id": "linear",
+    "label": "Linear",
+    "model_type": "polynomial",
+    "poly_degree": 1
+  },
+  {
+    "candidate_id": "inverse_1_2",
+    "label": "Inverse powers 1-2",
+    "model_type": "inverse_power",
+    "inverse_min": 1,
+    "inverse_max": 2
+  },
+  {
+    "candidate_id": "custom_a",
+    "label": "Custom a*x+b",
+    "model_type": "custom",
+    "model_expr": "a*x+b"
+  }
+]
+```
+
+The result panel shows a comparison table for the listed fits. CSV export uses
+the same comparison row order, and LaTeX output writes a comparison table when
+LaTeX generation is enabled. Workspaces save the candidate JSON under
+`config.fitting.comparison_candidates` so the same explicit list is restored
+with the project.
 
 ## Custom and Self-Consistent/Implicit Models
 
 Custom formulas and self-consistent/implicit models share the workbench formula
-card, parameter table, and constants table. Use the formula preview syntax
-selector to inspect DataLab-compatible, Python-style, or Mathematica-style
-display rendering. This is preview-only and does not change computation. The
-parameter table is still populated from the active formula and can be edited
-manually; disabled constants are not substituted into the fit.
+card, parameter table, and constants table. Formula input uses
+DataLab/Mathematica-compatible syntax, and the preview button renders the
+current expression as LaTeX-style math. Preview is display-only and does not
+change computation. The parameter table is still populated from the active
+formula and can be edited manually; disabled constants are not substituted into
+the fit.
 
 Self-consistent/implicit models cover problems such as `u = g(x, u, parameters)`
 and `y = f(x, u, parameters)`. For each data point, DataLab solves the

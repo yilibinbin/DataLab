@@ -20,12 +20,13 @@ def _ensure_repo_root_on_path() -> None:
 _ensure_repo_root_on_path()
 
 from PySide6.QtCore import QSize  # noqa: E402
-from PySide6.QtWidgets import QApplication, QComboBox  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from tools.scan_desktop_gui_schema import (  # noqa: E402
     FITTING_SUBMODES,
     MODES,
     ROOT_SOLVING_SUBMODES,
+    SCAN_WIDTHS,
     ScreenScenario,
     _apply_screen_scenario,
     _refresh_workbench_panels,
@@ -35,6 +36,8 @@ from app_desktop.workbench_visual_contract import (  # noqa: E402
     widget_metric,
     workbench_region_metrics,
 )
+
+LEFT_RAIL_CAPTURE_WIDTHS = SCAN_WIDTHS
 
 
 def _create_window() -> Any:
@@ -73,22 +76,6 @@ def _capture_scenarios(*, width: int, height: int) -> list[ScreenScenario]:
                             height=height,
                         )
                     )
-                # The ordinary fitting/custom scenario above covers the
-                # default DataLab preview syntax. These supplemental scenarios
-                # exercise only the alternate render-only preview syntaxes.
-                for formula_syntax in ("python", "mathematica"):
-                    scenarios.append(
-                        ScreenScenario(
-                            key=f"{language}:{mode}:custom:{formula_syntax}",
-                            language=language,
-                            mode=mode,
-                            root_mode="custom",
-                            formula_syntax=formula_syntax,
-                            result_tab="numeric",
-                            width=width,
-                            height=height,
-                        )
-                    )
             else:
                 scenarios.append(
                     ScreenScenario(
@@ -117,6 +104,28 @@ def _scenario_issues(window: Any) -> list[dict[str, Any]]:
                 }
             )
     return issues
+
+
+def _screenshot_size_issues(
+    *,
+    requested_size: dict[str, int],
+    actual_size: dict[str, int],
+) -> list[dict[str, Any]]:
+    if actual_size == requested_size:
+        return []
+    benign_width_expansion = (
+        actual_size["width"] >= requested_size["width"]
+        and actual_size["height"] == requested_size["height"]
+    )
+    if benign_width_expansion:
+        return []
+    return [
+        {
+            "kind": "screenshot_size_mismatch",
+            "requested_size": requested_size,
+            "actual_size": actual_size,
+        }
+    ]
 
 
 def _select_result_tab(window: Any, result_tab: str) -> None:
@@ -150,11 +159,7 @@ def _current_formula_syntax(window: Any, scenario: ScreenScenario) -> str:
     panel = getattr(window, "workbench_formula_panel", None)
     if panel is not None and not panel.isVisible():
         return ""
-    combo = getattr(window, "workbench_formula_language_combo", None)
-    if isinstance(combo, QComboBox):
-        data = combo.currentData()
-        return str(data) if data else "datalab"
-    return scenario.formula_syntax or "datalab"
+    return "datalab"
 
 
 def capture_desktop_gui_screens(
@@ -188,17 +193,17 @@ def capture_desktop_gui_screens(
                 window.resize(width, height)
                 QApplication.processEvents()
                 image = window.grab()
-                if image.size() != QSize(width, height):
-                    raise RuntimeError(
-                        f"screenshot size mismatch for {scenario.key}: "
-                        f"expected {width}x{height}, got {image.width()}x{image.height()}"
-                    )
+            requested_size = {"width": int(width), "height": int(height)}
+            actual_size = {"width": int(image.width()), "height": int(image.height())}
             filename = f"{scenario.key.replace(':', '-')}.png"
             target = out / filename
             if not image.save(str(target), "PNG"):
                 raise RuntimeError(f"failed to save screenshot: {target}")
             metrics = workbench_region_metrics(window)
-            scenario_issues = _scenario_issues(window)
+            scenario_issues = _scenario_issues(window) + _screenshot_size_issues(
+                requested_size=requested_size,
+                actual_size=actual_size,
+            )
             contract_issues = visual_contract_issues(window)
             issues = [
                 {"source": "screenshot", **issue}
@@ -221,6 +226,9 @@ def capture_desktop_gui_screens(
                     "path": str(target),
                     "width": int(image.width()),
                     "height": int(image.height()),
+                    "requested_size": requested_size,
+                    "actual_size": actual_size,
+                    "window_size_adjusted": actual_size != requested_size,
                     "mode": scenario.mode,
                     "root_mode": scenario.root_mode,
                     "language": scenario.language,
@@ -237,6 +245,14 @@ def capture_desktop_gui_screens(
             "width": width,
             "height": height,
             "count": len(screenshots),
+            "checks": {
+                "left_rail_capture_widths": list(LEFT_RAIL_CAPTURE_WIDTHS),
+                "left_panel_no_horizontal_scrollbar": not any(
+                    issue.get("kind") == "config_horizontal_scrollbar"
+                    for screenshot in screenshots
+                    for issue in screenshot.get("issues", [])
+                ),
+            },
             "screenshots": screenshots,
         }
         (out / "manifest.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

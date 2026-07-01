@@ -56,7 +56,7 @@
 - Modify: `app_desktop/panels.py`
 - Create: `tests/test_desktop_workbench_specs.py`
 
-- [ ] **Step 1: Write the failing descriptor tests**
+- [x] **Step 1: Write the failing descriptor tests**
 
 Create `tests/test_desktop_workbench_specs.py`:
 
@@ -164,7 +164,7 @@ Expected before implementation:
 ModuleNotFoundError: No module named 'app_desktop.workbench_specs'
 ```
 
-- [ ] **Step 2: Add the descriptor module**
+- [x] **Step 2: Add the descriptor module**
 
 Create `app_desktop/workbench_specs.py`:
 
@@ -307,7 +307,7 @@ MODE_WORKBENCH_SPECS: dict[ModeKey, ModeWorkbenchSpec] = {
 }
 ```
 
-- [ ] **Step 3: Wrap existing table-control headers and bind schema keys from descriptors**
+- [x] **Step 3: Wrap existing table-control headers and bind schema keys from descriptors**
 
 Modify `app_desktop/panels.py` so descriptor companion attributes exist.
 
@@ -383,7 +383,7 @@ def _bind_workbench_spec_schema_keys(self) -> None:
 
 Call `self._bind_workbench_spec_schema_keys()` once near the end of `build_ui()` after the mode pages have been constructed and any existing `bind_field(...)` calls have run. This helper is an idempotent backstop for formula editors, preview buttons, and state-owner widgets; it keeps descriptor schema strings and runtime widget properties aligned without changing visible text, tooltips, table data, constraints state, or constants contents.
 
-- [ ] **Step 4: Run descriptor tests**
+- [x] **Step 4: Run descriptor tests**
 
 Run:
 
@@ -397,7 +397,7 @@ Expected:
 4 passed
 ```
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 Run:
 
@@ -416,7 +416,7 @@ git commit -m "test: add high fidelity workbench descriptors"
 - Modify: `tools/scan_desktop_gui_schema.py`
 - Modify: `tests/test_desktop_gui_redesign_scan.py`
 
-- [ ] **Step 1: Write structural duplicate-state tests**
+- [x] **Step 1: Write structural duplicate-state tests**
 
 Create `tests/test_desktop_workbench_state_ownership.py`:
 
@@ -577,7 +577,7 @@ Expected before implementation:
 FAILED ... manual_data_owner
 ```
 
-- [ ] **Step 2: Mark existing owners with structural roles**
+- [x] **Step 2: Mark existing owners with structural roles**
 
 Modify `app_desktop/panels.py` inside `build_ui()` after `_build_left_panel()` and before the final `_on_mode_change()` call:
 
@@ -610,7 +610,7 @@ Add `MODE_WORKBENCH_SPECS` to the existing `app_desktop.panels.py` imports where
 Do not assign `manual_data_owner` to `manual_table` or `manual_data_edit`; they are child editors inside the real `manual_box` owner. Their child-editor roles exist only to prevent duplicate manual data editor clones.
 Likewise, do not create replacement `ParameterTable`, `DetectedRowsTable`, or `ConstantsEditor` instances for the new common panels. The roles above must stay on the existing owner widgets.
 
-- [ ] **Step 3: Add scanner duplicate-role support**
+- [x] **Step 3: Add scanner duplicate-role support**
 
 Modify `tools/scan_desktop_gui_schema.py` by adding this helper near the existing issue helpers:
 
@@ -791,7 +791,7 @@ structured_issues.extend(_state_ownership_issues(window, scenarios[0]))
 Ensure the module imports `Any` from `typing`, `QPlainTextEdit`, `QTableWidget`, and `QWidget` from `PySide6.QtWidgets`, `MODE_WORKBENCH_SPECS` from `app_desktop.workbench_specs`, and `ConstantsEditor`, `DetectedRowsTable`, and `ParameterTable` from their existing `app_desktop` modules.
 Place the `scenarios` guard immediately after `scenarios = _screen_scenarios(...)` in `scan_window()` and before any scenario-consuming helper runs. These structural duplicate-state checks are scenario-independent; emit them once against a representative `ScreenScenario` so a single duplicate does not create repeated report rows across the full scenario matrix. The `REQUIRED_BASELINE_STATE_ROLES` constant is intentionally separate from spec-derived roles because manual data, mode stack, and result tabs are required shell-level owners rather than mode-local mounts. Keep `duplicate_manual_data_editor` as its own issue kind so cloned manual table/text editors remain easy to identify. Expected editable owner detection must trust `datalab_state_role` first and object names second, so a correctly tagged owner with a missing object name reports `wrong_state_role_owner` without also creating a noisy `unexpected_editable_state_owner`. If a clone uses a reserved object name without being the actual `getattr(window, objectName)` owner, it must still be reported as `unexpected_editable_state_owner`; object-name equality alone is not a valid pass.
 
-- [ ] **Step 4: Cover scanner duplicate-state output**
+- [x] **Step 4: Cover scanner duplicate-state output**
 
 Modify `tests/test_desktop_gui_redesign_scan.py` by adding:
 
@@ -1053,7 +1053,7 @@ def test_gui_scan_rejects_empty_scenario_list(qtbot, monkeypatch) -> None:
         scan.scan_window(window)
 ```
 
-- [ ] **Step 5: Run structural gates**
+- [x] **Step 5: Run structural gates**
 
 Run:
 
@@ -1070,7 +1070,7 @@ passed
 
 The scan report must still contain 270 scenarios with no issues, including both custom fitting and self-consistent fitting submodes.
 
-- [ ] **Step 6: Commit Task 2**
+- [x] **Step 6: Commit Task 2**
 
 Run:
 
@@ -1095,7 +1095,7 @@ git commit -m "test: guard workbench state ownership"
 - Modify: `app_desktop/workspace_controller.py`
 - Modify: `tests/test_workspace_controller.py`
 
-- [ ] **Step 1: Add failing no-tabular and failed-state tests**
+- [x] **Step 1: Add failing no-tabular and failed-state tests**
 
 Append to `tests/test_desktop_workbench_results.py`:
 
@@ -1609,7 +1609,7 @@ Expected before implementation:
 FAILED ... previous valid result overview was cleared
 ```
 
-- [ ] **Step 2: Add typed summary state**
+- [x] **Step 2: Add typed summary state**
 
 Modify `app_desktop/workbench_results.py`:
 
@@ -1712,7 +1712,7 @@ Then update `refresh_result_overview()` so it uses `_overview_state(owner)` and 
 
 Keep `workbench_result_table` as a projection table only. Do not add a second result model.
 
-- [ ] **Step 3: Wire result state to real calculation paths**
+- [x] **Step 3: Wire result state to real calculation paths**
 
 Modify `app_desktop/window.py` near `_reset_csv_data()` and `_set_csv_data()`:
 
@@ -1816,7 +1816,7 @@ Also update success-handler `except` blocks that catch display/rendering excepti
 
 Statistics mode uses `CalcWorker` and connects `worker.failed` to the existing `_on_calc_failed()` path; there is no separate `_on_statistics_failed()` callback to edit. Keep this route covered by the `_on_calc_failed()` failed-state tests instead of adding a duplicate statistics-specific failure handler.
 
-- [ ] **Step 4: Refresh result overview after plot/image updates and workspace restore**
+- [x] **Step 4: Refresh result overview after plot/image updates and workspace restore**
 
 Modify `app_desktop/window_images_mixin.py::_update_result_plot()` to accept `final_result: bool = False`. After `_update_image_status()` in both success and empty-image branches, clear/complete only for final payloads:
 
@@ -1918,7 +1918,7 @@ def _tiny_png_bytes() -> bytes:
     )
 ```
 
-- [ ] **Step 5: Mark new runs as running only after validation and job construction**
+- [x] **Step 5: Mark new runs as running only after validation and job construction**
 
 Do not mark the overview `running` and do not hard-reset result payloads at the top of `run_calculation()`. Input validation must complete first. If validation fails, keep the previous valid result overview visible and show the existing validation dialog.
 
@@ -1957,11 +1957,11 @@ At each worker construction site, keep the existing worker handle assignment (`s
 Do not call `_reset_csv_data()` outside `_start_worker_with_workbench_result_state()` for the same branch. The helper's hard reset clears stale CSV/text/plot payloads and visible result widgets only after validation and worker construction have succeeded; `_mark_workbench_result_running()` then changes only the overview state and refreshes it. This prevents the overview from showing stale plot/text output after a real worker starts, while preserving previous valid results for validation errors that return before any worker exists.
 If a synchronous `worker.start()` failure occurs, the `except` path must clear `Running` through `_mark_workbench_result_failed()` before restoring the run button and re-raising so existing error handling/tests can still observe the original failure.
 
-- [ ] **Step 6: Preserve language refresh**
+- [x] **Step 6: Preserve language refresh**
 
 Check `app_desktop/window_i18n_mixin.py`; it already calls `refresh_workbench_result_rail()` after language changes. Keep that call. Add no new localized strings outside `workbench_results.py`.
 
-- [ ] **Step 7: Run result tests**
+- [x] **Step 7: Run result tests**
 
 Run:
 
@@ -1975,7 +1975,7 @@ Expected:
 passed
 ```
 
-- [ ] **Step 8: Commit Task 3**
+- [x] **Step 8: Commit Task 3**
 
 Run:
 
@@ -1993,7 +1993,7 @@ git commit -m "feat: distinguish workbench result overview states"
 - Modify: `tests/test_desktop_workbench_layout.py`
 - Run-only regression gate: `tests/test_splitter_persistence.py`
 
-- [ ] **Step 1: Add a regression test proving the three-pane contract**
+- [x] **Step 1: Add a regression test proving the three-pane contract**
 
 Append to `tests/test_desktop_workbench_layout.py`:
 
@@ -2073,7 +2073,7 @@ FAILED ... _clamp_workbench_splitter_sizes
 
 This is the intended RED boundary for Task 4: the pure clamp helper and the active three-pane clamp are created in Step 2.
 
-- [ ] **Step 2: Replace legacy fallback with ratio-preserving three-pane clamp**
+- [x] **Step 2: Replace legacy fallback with ratio-preserving three-pane clamp**
 
 Modify `app_desktop/panels.py` in `_refresh_main_splitter_left_min_width()` by deleting the branch that begins after the three-pane `return`:
 
@@ -2138,7 +2138,7 @@ Then replace the active three-pane branch with a call to that helper. The clamp 
 
 This keeps `left_layout`, `left_container`, and `_left_scroll` as compatibility aliases while making the three-pane workbench the only active geometry contract.
 
-- [ ] **Step 3: Run splitter persistence tests**
+- [x] **Step 3: Run splitter persistence tests**
 
 Run:
 
@@ -2154,7 +2154,7 @@ passed
 
 `tests/test_splitter_persistence.py` is a run-only regression gate here. If implementing the new clamp exposes a real persistence-test change, add that file to the Task 4 file list and the commit command in the same patch; otherwise do not stage it.
 
-- [ ] **Step 4: Commit Task 4**
+- [x] **Step 4: Commit Task 4**
 
 Run:
 
@@ -3129,7 +3129,7 @@ git commit -m "feat: synchronize shared workbench panels across modes"
 - Modify: `tests/test_desktop_workbench_visual_screenshots.py`
 - Modify: `tools/capture_desktop_gui_screens.py`
 
-- [ ] **Step 1: Update screenshot assertions for new common panels**
+- [x] **Step 1: Update screenshot assertions for new common panels**
 
 Modify `tests/test_desktop_workbench_visual_screenshots.py` to assert the screenshot manifest includes formula, variable, and result overview panel metrics. Formula and variable panels are visible only when the active `MODE_WORKBENCH_SPECS` entry has corresponding content; do not force empty statistics-mode panels to remain visible just to satisfy screenshots. For fitting screenshots, make the capture tool select a variable-bearing fitting submode such as `custom` before the metrics are recorded, so the screenshot gate is deterministic and does not depend on the default built-in model selection:
 
@@ -3201,7 +3201,7 @@ to:
 "regions": regions,
 ```
 
-- [ ] **Step 2: Update user docs**
+- [x] **Step 2: Update user docs**
 
 Update `docs/desktop/guide.en.md` and `docs/desktop/guide.zh.md` with concise sections that describe:
 
@@ -3217,7 +3217,7 @@ The right rail summarizes the real result state. If a calculation produces plots
 
 Use Chinese text in `guide.zh.md` with the same meaning.
 
-- [ ] **Step 3: Document the quality gate**
+- [x] **Step 3: Document the quality gate**
 
 Update `docs/TEST_MATRIX.md` with this command block:
 
@@ -3231,7 +3231,7 @@ QT_QPA_PLATFORM=offscreen python tools/capture_desktop_gui_screens.py --out buil
 QT_QPA_PLATFORM=offscreen pytest -q
 ```
 
-- [ ] **Step 4: Run the full quality gate**
+- [x] **Step 4: Run the full quality gate**
 
 Run exactly:
 
@@ -3251,11 +3251,11 @@ Expected:
 compileall passes
 focused pytest commands pass
 scan report has 270 scenarios and 0 issues
-screenshot capture writes 18 screenshots and 0 issues
+screenshot capture writes 22 screenshots and 0 issues
 full pytest passes with only existing documented skips/warnings
 ```
 
-- [ ] **Step 5: Run final post-implementation read-only reviews**
+- [x] **Step 5: Run final post-implementation read-only reviews**
 
 This is the only Claude review in the updated workflow. Run it only after Tasks 1-8 are implemented and Step 4's full local quality gate passes. Do not use Claude to gate individual tasks or plan chunks.
 
@@ -3283,7 +3283,11 @@ node ${CODEX_PLUGIN_CACHE:-~/.codex/plugins/cache}/external-models-for-codex/ant
 
 If Gemini times out, returns empty output, or emits malformed output, record that in `progress.md` and use main-thread judgment to decide whether a narrower Gemini follow-up is needed. If the final Claude review fails due to quota/tooling, record the exact blocker in `progress.md`; do not reintroduce per-task Claude gates.
 
-- [ ] **Step 6: Commit Task 8**
+Status update 2026-06-13: the final Claude job `job-mqbxmyd3-fb7387` was run as a tracked background job and allowed to complete naturally. It returned `PASS` with three accepted findings: section-card runtime theme refresh, statistics card height cap, and formula action stack monotonic width. All three findings were fixed and validated with focused tests, ruff, compileall, GUI schema scan, screenshot capture, and `git diff --check`.
+
+Gemini/Antigravity was also run through tracked background jobs. The first full workbench review job `agy-mqbyf3zf-18276c46d264` completed successfully; accepted findings around formula action width calculation, result-details empty-state ownership, and English singular/plural text were fixed and validated. Follow-up job `agy-mqbz7ha1-a3e8bf819327` completed successfully and found additional Qt layout edge cases; accepted findings around `QStackedWidget.minimumSizeHint()`, inherited layout spacing, nested layouts, empty-label i18n registration, section-card repeated stylesheet application, and the statistics uncapped-height test were fixed. The final narrowed confirmation job `agy-mqbzqz7q-f5b04242bf41` completed successfully; main-thread triage accepted the nested-layout/type-hardening and stylesheet no-op findings and rejected non-actionable or current-code-inaccurate claims about action-button shrinkability and future empty-state granularity. Local validation after the accepted fixes: focused regression tests passed, the related GUI partition passed, ruff passed, compileall passed, GUI schema scan reported 270 scenarios with no issues and `left_panel_no_horizontal_scrollbar=true`, screenshot capture reported 22 screenshots with no issues, and `git diff --check` passed.
+
+- [x] **Step 6: Commit Task 8**
 
 Run:
 
@@ -3296,16 +3300,16 @@ git commit -m "docs: document high fidelity workbench quality gate"
 
 ## Final Verification Checklist
 
-- [ ] `ModeWorkbenchSpec` exists, is frozen, and contains no `QWidget` or runtime values.
-- [ ] Common panels mount existing widgets only.
-- [ ] `manual_box`, `mode_stack`, `tabs`, `ParameterTable`, and `ConstantsEditor` remain the only state owners for their domains.
-- [ ] Structural duplicate-state scan passes.
-- [ ] Result overview distinguishes no result, tabular result, plot-only result, text-only result, and failed result.
-- [ ] Formula preview uses the shared renderer, remains non-blocking, and hides the common formula panel in modes without formula inputs.
-- [ ] Workspace round-trip tests pass for moved or wrapped widgets.
-- [ ] Bilingual/schema/help gates pass.
-- [ ] Screenshot capture includes formula and variable panel metrics, with visibility asserted only when the active mode spec has corresponding content.
-- [ ] Full pytest passes before any packaging or release task starts.
+- [x] `ModeWorkbenchSpec` exists, is frozen, and contains no `QWidget` or runtime values.
+- [x] Common panels mount existing widgets only.
+- [x] `manual_box`, `mode_stack`, `tabs`, `ParameterTable`, and `ConstantsEditor` remain the only state owners for their domains.
+- [x] Structural duplicate-state scan passes.
+- [x] Result overview distinguishes no result, tabular result, plot-only result, text-only result, and failed result.
+- [x] Formula preview uses the shared renderer, remains non-blocking, and hides the common formula panel in modes without formula inputs.
+- [x] Workspace round-trip tests pass for moved or wrapped widgets.
+- [x] Bilingual/schema/help gates pass.
+- [x] Screenshot capture includes formula and variable panel metrics, with visibility asserted only when the active mode spec has corresponding content.
+- [x] Full pytest passes before any packaging or release task starts.
 
 ## Self-Review Notes
 

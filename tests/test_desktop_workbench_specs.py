@@ -111,6 +111,7 @@ def test_workbench_model_path_helpers_are_canonical() -> None:
     )
 
     assert STATE_ROLE_MODEL_PATHS == {
+        "input_constants_owner": "compute.constants",
         "manual_data_owner": "compute.data",
         "manual_table_editor": "compute.data.canonical_table",
         "manual_text_editor": "compute.data.decoded_text",
@@ -154,6 +155,7 @@ def test_mode_workbench_specs_bind_model_paths(qtbot) -> None:
         "manual_box": "manual_data_owner",
         "manual_table": "manual_table_editor",
         "manual_data_edit": "manual_text_editor",
+        "input_constants_editor": "input_constants_owner",
         "mode_stack": "mode_stack_owner",
         "tabs": "result_tabs_owner",
     }

@@ -69,6 +69,7 @@ def test_apply_desktop_theme_does_not_reset_user_state(qtbot: Any, monkeypatch: 
 
 
 def test_apply_desktop_theme_refreshes_workbench_cards(qtbot: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app_desktop.theme import workbench_section_card_style
     from app_desktop.window import ExtrapolationWindow
 
     app = QApplication.instance() or QApplication([])
@@ -77,6 +78,7 @@ def test_apply_desktop_theme_refreshes_workbench_cards(qtbot: Any, monkeypatch: 
     window.show()
     app.processEvents()
 
+    window.stats_box.setStyleSheet(workbench_section_card_style(dark=False))
     monkeypatch.setattr("app_desktop.theme.is_dark_theme", lambda: True)
     monkeypatch.setattr("app_desktop.panels.is_dark_theme", lambda: True)
 
@@ -85,11 +87,17 @@ def test_apply_desktop_theme_refreshes_workbench_cards(qtbot: Any, monkeypatch: 
 
     assert "#262b34" in window.workbench_result_overview_panel.styleSheet()
     assert "#20242b" in window.workbench_variable_panel.styleSheet()
+    assert "#20242b" in window.stats_box.styleSheet()
 
 
 def test_theme_exposes_semantic_text_and_message_styles() -> None:
     from app_desktop import theme
 
+    config_style = theme.config_card_style(dark=False)
+    assert 'QWidget[datalab_config_card="true"] QGroupBox' in config_style
+    assert "border: none" in config_style
+    assert "background: transparent" in config_style
+    assert "QGroupBox::title" in config_style
     assert "font-weight" in theme.workbench_title_text_style()
     assert "#4b5563" in theme.workbench_muted_text_style(dark=False)
     assert "#9aa4b2" in theme.workbench_muted_text_style(dark=True)

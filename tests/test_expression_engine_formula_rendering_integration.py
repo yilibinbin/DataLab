@@ -38,7 +38,7 @@ def test_desktop_formula_preview_delegates_png_rendering_to_render_service(monke
             error_message="forced fallback",
         )
 
-    monkeypatch.setattr(preview, "render_formula", fake_render)
+    monkeypatch.setattr(preview, "render_desktop_preview", fake_render)
     label = QLabel()
     qtbot.addWidget(label)
 

@@ -40,9 +40,8 @@ The rearchitecture proceeds headless-core-first:
 2. Introduce `datalab_core` as a PySide-free layer for job builders, canonical
    results, session/job orchestration, `WorkbenchModel`, and workspace adapters.
 3. Execute the formula-rendering plan as a prerequisite, with a pure
-   `datalab_latex` render service and Qt/web adapters only. The
-   `ui.formula_preview[*]` preview-state contract must be defined before any
-   formula UI persists syntax selector state.
+   `datalab_latex` render service and Qt/web adapters only. Formula preview
+   uses one rendered style; legacy `ui.formula_preview` metadata is reader-only compatibility state and is not written by current workspaces.
 4. Keep workspace v1 writing as the default. Add v2 reading through
    `shared.workspace_io` version dispatch before any v2 writer is enabled.
 5. Treat QtWebEngine as a timeboxed spike with a default NO-GO outcome unless
@@ -60,7 +59,8 @@ The rearchitecture proceeds headless-core-first:
 - Existing subprocess kill/timeout/cancellation behavior remains intact.
 - `MODE_WORKBENCH_SPECS`, `shared/ui_specs.py`, and `shared/help_specs.json`
   remain the schema/help sources of truth.
-- Formula preview syntax is UI-only state under `ui.formula_preview[*]`; it
+- Formula preview uses a single rendered style. Legacy `ui.formula_preview`
+  metadata is ignored during model/controller restore, is not re-saved, and
   does not rewrite compute formulas, config, or workspace hashes.
 - Workspace v1 read compatibility is permanent. The v1 writer/export path
   remains available through the transition and may only be removed or narrowed

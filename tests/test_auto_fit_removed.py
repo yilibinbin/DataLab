@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import os
 import importlib.util
+import json
+import os
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -21,6 +22,53 @@ def _current_changelog_text(path: Path) -> str:
                 break
         current_lines.append(line)
     return "\n".join(current_lines)
+
+
+def _markdown_section(text: str, heading: str, *, label: str) -> str:
+    marker = f"## {heading}"
+    assert marker in text, f"{label} is missing section {heading!r}"
+    start = text.index(marker)
+    next_heading = text.find("\n## ", start + len(marker))
+    return text[start:] if next_heading == -1 else text[start:next_heading]
+
+
+def _candidate_json_fence(section: str, *, label: str) -> list[dict[str, object]]:
+    marker = "```json"
+    assert marker in section, f"{label} comparison section is missing a JSON fence"
+    start = section.index(marker) + len(marker)
+    end = section.find("```", start)
+    assert end != -1, f"{label} comparison JSON fence is not closed"
+    try:
+        payload = json.loads(section[start:end].strip())
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"{label} comparison JSON is malformed: {exc}") from exc
+    assert isinstance(payload, list), f"{label} comparison JSON must be a list"
+    assert all(isinstance(item, dict) for item in payload), (
+        f"{label} comparison JSON entries must be objects"
+    )
+    return payload
+
+
+def _assert_desktop_comparison_candidate_schema(
+    payload: list[dict[str, object]],
+    *,
+    label: str,
+) -> None:
+    by_type = {str(candidate.get("model_type")): candidate for candidate in payload}
+    assert set(by_type) == {"polynomial", "inverse_power", "custom"}, (
+        f"{label} comparison candidates should document the supported families"
+    )
+    for candidate in payload:
+        assert candidate.get("candidate_id"), (
+            f"{label} comparison candidate is missing candidate_id"
+        )
+        assert candidate.get("label"), f"{label} comparison candidate is missing label"
+    assert by_type["polynomial"]["poly_degree"] == 1
+    assert by_type["inverse_power"]["inverse_min"] == 1
+    assert by_type["inverse_power"]["inverse_max"] == 2
+    assert "power" not in by_type["inverse_power"]
+    assert by_type["custom"]["model_expr"] == "a*x+b"
+    assert "expression" not in by_type["custom"]
 
 
 def test_fitting_model_combo_contains_only_supported_explicit_models(qtbot):
@@ -46,6 +94,7 @@ def test_fitting_model_combo_contains_only_supported_explicit_models(qtbot):
         "inverse_power",
         "pade",
         "power_limit",
+        "comparison",
     ]
     assert "auto" not in values
     assert "log_poly" not in values
@@ -262,13 +311,86 @@ def test_web_fitting_template_exposes_only_explicit_supported_choices():
         'value="pade"',
         'value="power_limit"',
         'value="custom"',
+        'value="comparison"',
     ):
         assert allowed in text
+
+    assert 'name="fit_comparison_candidates"' in text
 
     # The exact six-model Task 1 set applies to desktop. The current web
     # flow has no self-consistent/implicit input fields, so it exposes only
     # the supported explicit subset and does not pretend to route it.
     assert 'value="self_consistent"' not in text
+
+
+def test_web_fitting_docs_describe_explicit_selected_fit_comparison():
+    root = Path(__file__).resolve().parents[1]
+    zh_text = (root / "docs" / "web" / "fitting.zh.md").read_text(encoding="utf-8")
+    en_text = (root / "docs" / "web" / "fitting.en.md").read_text(encoding="utf-8")
+
+    assert "选定拟合比较" in zh_text
+    assert "显式列出" in zh_text
+    assert "fit_comparison_candidates" in zh_text
+    assert "selected-fit comparison" in en_text
+    assert "explicitly list" in en_text
+    assert "fit_comparison_candidates" in en_text
+
+
+def test_desktop_fitting_docs_describe_explicit_selected_fit_comparison():
+    root = Path(__file__).resolve().parents[1]
+    zh_text = (root / "docs" / "desktop" / "fitting.zh.md").read_text(
+        encoding="utf-8"
+    )
+    en_text = (root / "docs" / "desktop" / "fitting.en.md").read_text(
+        encoding="utf-8"
+    )
+    zh_section = _markdown_section(
+        zh_text,
+        "显式选择的拟合比较",
+        label="Chinese desktop fitting docs",
+    )
+    en_section = _markdown_section(
+        en_text,
+        "Explicit Selected-Fit Comparison",
+        label="English desktop fitting docs",
+    )
+    section_combined = f"{zh_section}\n{en_section}".lower()
+    combined = f"{zh_text}\n{en_text}".lower()
+
+    assert "显式选择的拟合比较" in zh_text
+    assert "候选项 JSON" in zh_section
+    assert "config.fitting.comparison_candidates" in zh_section
+    assert "explicit selected-fit comparison" in en_text
+    assert "candidate JSON" in en_section
+    assert "config.fitting.comparison_candidates" in en_section
+    assert "comparison table" in en_section
+    assert "比较表格" in zh_section
+    for supported in ("polynomial", "inverse_power", "custom"):
+        assert supported in section_combined
+    for output in ("csv", "latex"):
+        assert output in section_combined
+
+    _assert_desktop_comparison_candidate_schema(
+        _candidate_json_fence(en_section, label="English desktop fitting docs"),
+        label="English desktop fitting docs",
+    )
+    _assert_desktop_comparison_candidate_schema(
+        _candidate_json_fence(zh_section, label="Chinese desktop fitting docs"),
+        label="Chinese desktop fitting docs",
+    )
+
+    forbidden = (
+        "auto-fit",
+        "automatic model selection",
+        "automatic fitting",
+        "best model",
+        "winner",
+        "recommendation",
+        "自动拟合",
+        "最佳",
+        "推荐",
+    )
+    assert all(term not in combined for term in forbidden)
 
 
 def test_cli_batch_config_no_longer_advertises_auto_fit(tmp_path):

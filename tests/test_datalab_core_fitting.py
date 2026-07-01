@@ -37,6 +37,14 @@ def test_core_fitting_request_builder_creates_string_payload() -> None:
         },
         parameter_names=("a", "b"),
         custom_constants={"C": mp.mpf("3.5")},
+        units={
+            "enabled": True,
+            "mode": "display_only",
+            "inputs": {"x": {"unit": "m"}, "z": {"unit": "s"}},
+            "parameters": {"a": {"unit": "kg"}, "b": {"unit": "mol"}},
+            "constants": {"C": {"unit": "J"}},
+            "outputs": {"y": {"unit": "Hz"}},
+        },
         weighted=True,
         label="Custom",
         is_multidim=True,
@@ -85,6 +93,12 @@ def test_core_fitting_request_builder_creates_string_payload() -> None:
     }
     assert request.inputs["parameter_names"] == ["a", "b"]
     assert request.inputs["custom_constants"] == {"C": "3.5"}
+    assert request.inputs["units"]["enabled"] is True
+    assert request.inputs["units"]["mode"] == "display_only"
+    assert request.inputs["units"]["inputs"] == {"x": {"unit": "m"}, "z": {"unit": "s"}}
+    assert request.inputs["units"]["parameters"] == {"a": {"unit": "kg"}, "b": {"unit": "mol"}}
+    assert request.inputs["units"]["constants"] == {"C": {"unit": "J"}}
+    assert request.inputs["units"]["outputs"] == {"y": {"unit": "Hz"}}
     assert request.inputs["template_expr"] == "a*x + b*z"
     assert request.inputs["template_params"] == {"a0": "1.125", "orders": ["1", "2"]}
     assert request.inputs["poly_degree"] == 3
@@ -110,6 +124,12 @@ def test_core_fitting_handler_runs_polynomial_direct_request() -> None:
         variable_map={"x": "x"},
         target_column="y",
         poly_degree=1,
+        units={
+            "enabled": True,
+            "mode": "display_only",
+            "inputs": {"x": {"unit": "m"}},
+            "outputs": {"y": {"unit": "J"}},
+        },
         precision_digits=80,
         request_id="fit-polynomial-core",
     )
@@ -119,9 +139,46 @@ def test_core_fitting_handler_runs_polynomial_direct_request() -> None:
     assert result.status is ResultStatus.SUCCEEDED
     assert result.payload["model_type"] == "polynomial"
     assert result.payload["expression"]
+    assert result.payload["units"]["inputs"] == {"x": {"unit": "m"}}
+    assert result.payload["units"]["outputs"] == {"y": {"unit": "J"}}
     fit = fitting_payload_to_fit_result(result.payload["fit_result"])
     assert mp.almosteq(fit.params["b0"], mp.mpf("1"), abs_eps=mp.mpf("1e-50"))
     assert mp.almosteq(fit.params["b1"], mp.mpf("2"), abs_eps=mp.mpf("1e-50"))
+
+
+def test_core_fitting_rejects_active_unit_modes() -> None:
+    from datalab_core.fitting import build_fitting_request, run_fitting
+    from datalab_core.jobs import ComputeJobRequest
+
+    request_kwargs = {
+        "model_type": "custom",
+        "headers": ("x", "y"),
+        "data_rows": (("1", "2"), ("2", "4")),
+        "variable_map": {"x": "x"},
+        "target_column": "y",
+        "model_expr": "a*x",
+        "parameter_config": {"a": {"initial": "1"}},
+        "parameter_names": ("a",),
+        "precision_digits": 80,
+    }
+    active_units = {
+        "enabled": True,
+        "mode": "validate_expression",
+        "inputs": {"x": {"unit": "m"}},
+    }
+
+    with pytest.raises(ValueError, match="fitting units only support display_only"):
+        build_fitting_request(**request_kwargs, units=active_units)
+
+    request = build_fitting_request(**request_kwargs)
+    manual_request = ComputeJobRequest(
+        mode=request.mode,
+        inputs={**request.inputs, "units": active_units},
+        options=request.options,
+        request_id=request.request_id,
+    )
+    with pytest.raises(ValueError, match="fitting units only support display_only"):
+        run_fitting(manual_request)
 
 
 def test_core_fitting_handler_rejects_self_consistent_direct_service_path() -> None:

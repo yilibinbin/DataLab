@@ -31,7 +31,7 @@ def test_mode_editors_reuse_existing_mode_stack_in_center_canvas(qtbot: Any) -> 
     stack = window.mode_stack
     assert isinstance(stack, QStackedWidget)
     assert stack.parentWidget() is window.workbench_workspace_content
-    assert window.workbench_workspace_layout.indexOf(window.manual_box) < window.workbench_workspace_layout.indexOf(stack)
+    assert window.manual_box.parentWidget() is window.input_section
     assert stack.count() >= 5
     for widget in (window.extrap_box, window.error_box, window.fit_box, window.root_box, window.stats_box):
         assert stack.indexOf(widget) >= 0
@@ -81,8 +81,10 @@ def test_common_workbench_panel_titles_refresh_on_language_change(qtbot: Any) ->
 
     window._apply_language("en")
     assert window.workbench_formula_panel_title.text() == "Formula preview"
-    assert window.workbench_variable_title.text() == "Parameters and constants"
+    # Constants now live in the shared input-section editor, so the fitting
+    # variable panel holds only parameter sections → title reads "Parameters".
+    assert window.workbench_variable_title.text() == "Parameters"
 
     window._apply_language("zh")
     assert window.workbench_formula_panel_title.text() == "公式预览"
-    assert window.workbench_variable_title.text() == "参数与常数"
+    assert window.workbench_variable_title.text() == "参数"

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
-import io
 import re
 from typing import Final
+
+from shared.formula_mathtext_png import render_mathtext_png as _render_mathtext_png
 
 
 class InputLanguage(str, Enum):
@@ -109,11 +111,6 @@ def format_formula_latex(source: str) -> str:
         return _format_latex_formula_sympy(text)
     except Exception:
         return _format_latex_formula_manual(text)
-
-
-def sanitize_formula_latex_source(source: str) -> str:
-    """Sanitize display-only LaTeX before any high-fidelity preview path."""
-    return _sanitize_latex_source(source or "")
 
 
 def render_formula(request: RenderRequest) -> RenderResult:
@@ -302,7 +299,7 @@ def _convert_expression(
     allow_python: bool = True,
 ) -> str:
     text = expression
-    text = re.sub(r"\bPi\b", r"\\pi", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?<!\\)\bPi\b", r"\\pi", text, flags=re.IGNORECASE)
     if allow_mathematica:
         text = _convert_mathematica_functions(text, allow_python=allow_python)
     if allow_python:
@@ -516,20 +513,27 @@ def _is_identifier(value: str) -> bool:
     return bool(_IDENTIFIER_RE.fullmatch((value or "").strip()))
 
 
-def _render_mathtext_png(mathtext: str, *, dpi: int, color: str) -> bytes:
-    import matplotlib
+def _reject_unsafe_formula_ast(formula_str: str) -> None:
+    """Reject sandbox-escape gadgets before the formula reaches ``parse_expr``.
 
-    matplotlib.use("Agg", force=False)
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
-    from matplotlib.figure import Figure
-
-    figure = Figure(figsize=(0.01, 0.01), dpi=dpi)
-    figure.patch.set_alpha(0.0)
-    FigureCanvasAgg(figure)
-    figure.text(0.0, 0.5, mathtext, fontsize=21, va="center", ha="left", color=color)
-    buffer = io.BytesIO()
-    figure.savefig(buffer, format="png", bbox_inches="tight", pad_inches=0.06)
-    return buffer.getvalue()
+    ``parse_expr`` will happily evaluate attribute access (``sqrt(1).__class__``)
+    and subscripting, which are the first rungs of a SymPy sandbox escape.  Mirror
+    the security-critical checks in ``shared.symbolic_math._validate_symbolic_ast``
+    here, but without its capitalized-function whitelist so lowercase names
+    (``sin``/``cos``/…) that this formatter accepts keep working.  ``^`` is a valid
+    formula operator but not valid Python, so translate it to ``**`` for the AST
+    check only — the real parse still applies ``convert_xor`` to the raw string.
+    """
+    try:
+        tree = ast.parse(formula_str.replace("^", "**"), mode="eval")
+    except SyntaxError:
+        # Let parse_expr surface the syntax error with its own message.
+        return
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute | ast.Subscript | ast.Lambda | ast.NamedExpr):
+            raise ValueError("Unsupported formula syntax.")
+        if isinstance(node, ast.Name) and "__" in node.id:
+            raise ValueError("Unsupported formula name.")
 
 
 def _format_latex_formula_sympy(formula_str: str) -> str:
@@ -539,6 +543,8 @@ def _format_latex_formula_sympy(formula_str: str) -> str:
     LaTeX output do not grow separate formatter ownership again.  Imports stay
     local to avoid making ordinary preview-service import do SymPy setup work.
     """
+    _reject_unsafe_formula_ast(formula_str)
+
     import sympy as sp
     from sympy.parsing.sympy_parser import convert_xor, parse_expr, standard_transformations
 
@@ -652,7 +658,7 @@ def _format_latex_formula_manual(formula_str: str) -> str:
 
     latex_str = formula_str.replace("**", "^")
     latex_str = latex_str.replace("*", " \\cdot ")
-    latex_str = re.sub(r"\bpi\b", r"\\pi", latex_str, flags=re.IGNORECASE)
+    latex_str = re.sub(r"(?<!\\)\bpi\b", r"\\pi", latex_str, flags=re.IGNORECASE)
     latex_str = re.sub(r"\be\b", "e", latex_str)
     latex_str = _wrap_calls(latex_str)
     latex_str = re.sub(r"\^(\w+)", r"^{\1}", latex_str)

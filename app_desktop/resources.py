@@ -92,6 +92,38 @@ def _detect_windows_light_mode() -> bool | None:
         return None
 
 
+def _detect_system_light_mode() -> bool | None:
+    """Return True/False for the OS light/dark preference, or None if unknown.
+
+    Cross-platform: Qt 6.5+ exposes the OS colour scheme via
+    ``QStyleHints.colorScheme()`` on macOS, Linux (xdg-desktop-portal), and
+    Windows — so DataLab's dark theme is no longer Windows-only. The Windows
+    registry read is kept as a fallback for the case where Qt reports
+    ``Unknown`` (e.g. an older style plugin) but the registry still knows.
+    """
+    app = QApplication.instance()
+    if app is not None:
+        hints = app.styleHints()
+        color_scheme = getattr(hints, "colorScheme", None)
+        if callable(color_scheme):
+            try:
+                # Qt.ColorScheme lives in the QtCore namespace; importing Qt from
+                # QtGui works on some PySide6 builds but not all, and a failure
+                # here is swallowed below — which would silently disable
+                # cross-platform detection. Import from the canonical QtCore.
+                from PySide6.QtCore import Qt
+
+                scheme = color_scheme()
+                if scheme == Qt.ColorScheme.Light:
+                    return True
+                if scheme == Qt.ColorScheme.Dark:
+                    return False
+            except Exception:
+                pass
+    # Fall back to the Windows registry when Qt could not tell us.
+    return _detect_windows_light_mode()
+
+
 def _build_palette(dark: bool) -> QPalette:
     palette = QPalette()
     if not dark:
@@ -131,7 +163,7 @@ def _build_palette(dark: bool) -> QPalette:
 
 
 def _apply_system_theme(app: QApplication, prefer_light: bool | None = None):
-    prefer_light = _detect_windows_light_mode() if prefer_light is None else prefer_light
+    prefer_light = _detect_system_light_mode() if prefer_light is None else prefer_light
     dark = prefer_light is not None and not prefer_light
     palette = _build_palette(dark=dark)
     try:
@@ -251,6 +283,7 @@ __all__ = [
     "PIL_AVAILABLE",
     "_apply_system_theme",
     "_compute_default_pdf_dpi",
+    "_detect_system_light_mode",
     "_detect_windows_light_mode",
     "_ensure_default_path_augmented",
     "_is_running_inside_macos_app_bundle",

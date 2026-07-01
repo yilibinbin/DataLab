@@ -346,6 +346,33 @@ class TestSecurityHeaders:
 
         assert 'X-XSS-Protection' in headers
 
+    def test_content_security_policy_present(self, client):
+        """P2-7: a CSP header locks external loads to self + the KaTeX CDN."""
+        response = client.get('/')
+        csp = response.headers.get('Content-Security-Policy', '')
+        assert csp, 'Content-Security-Policy header is missing'
+        assert "default-src 'self'" in csp
+        assert 'https://cdn.jsdelivr.net' in csp  # KaTeX
+        assert "object-src 'none'" in csp
+        assert "frame-ancestors 'none'" in csp
+
+    def test_katex_cdn_assets_have_sri(self, client):
+        """P2-7: the KaTeX CDN <script>/<link> must carry SRI integrity hashes so
+        a compromised CDN can't inject arbitrary JS/CSS. Bind the assertion to
+        the actual KaTeX tags — a loose count could pass if two unrelated assets
+        had integrity while the KaTeX tags did not."""
+        import re
+
+        html = client.get('/').data.decode()
+        katex_tags = re.findall(
+            r'<(?:script|link)\b(?=[^>]*(?:src|href)="[^"]*cdn\.jsdelivr\.net/npm/katex)[^>]*>',
+            html,
+        )
+        assert len(katex_tags) >= 2, "expected KaTeX CDN script and stylesheet tags"
+        assert all('integrity="sha384-' in tag for tag in katex_tags), (
+            "KaTeX CDN assets missing SRI"
+        )
+
 
 # ============================================================
 # Error Handling Tests

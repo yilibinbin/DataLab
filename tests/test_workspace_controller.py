@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 import mpmath as mp
 import pytest
-from PySide6.QtWidgets import QTableWidgetItem
+from PySide6.QtWidgets import QApplication, QTableWidgetItem
 from types import SimpleNamespace
 
 from fitting.hp_fitter import FitResult
@@ -74,6 +75,75 @@ class _FakeLineEdit:
 
     def setText(self, value: str) -> None:
         self._value = str(value)
+
+
+class _FakeTextEdit:
+    def __init__(self, value: str = "") -> None:
+        self._value = value
+
+    def toPlainText(self) -> str:
+        return self._value
+
+    def setPlainText(self, value: str) -> None:
+        self._value = str(value)
+
+    def clear(self) -> None:
+        self._value = ""
+
+    def textCursor(self):
+        return SimpleNamespace(blockNumber=lambda: 0, positionInBlock=lambda: 0)
+
+
+class _HistoryFakeWindow(SimpleNamespace):
+    def __init__(self, *, semantic: dict[str, object] | None = None, text: str = "Rendered") -> None:
+        super().__init__(
+            result_edit=_FakeTextEdit(text),
+            log_edit=_FakeTextEdit(""),
+            latex_edit=_FakeTextEdit(""),
+            _csv_rows=[],
+            _csv_headers=[],
+            _workbench_result_state="complete",
+            _last_result_kind="statistics_single",
+            _last_result_payloads={},
+            _last_result_semantic_snapshot=semantic,
+            _last_result_semantic_snapshot_kind="statistics_single" if semantic is not None else "",
+            result_plot_bytes=None,
+        )
+
+    def _set_csv_data(self, rows, headers, *_args) -> None:
+        self._csv_rows = list(rows)
+        self._csv_headers = list(headers)
+
+    def _reset_csv_data(self, **_kwargs) -> None:
+        self._csv_rows = []
+        self._csv_headers = []
+
+    def _set_result_text(self, value: str) -> None:
+        self.result_edit.setPlainText(value)
+
+
+def _history_statistics_semantic() -> dict[str, object]:
+    from datalab_core.statistics import build_statistics_result_snapshot
+
+    snapshot = build_statistics_result_snapshot(
+        "statistics_single",
+        {
+            "result": {
+                "mode": "mean",
+                "mean": "1.25",
+                "std": "0",
+                "v_min": "1.25",
+                "v_max": "2.5",
+                "source_row_ids": ["line-1", "line-2"],
+            },
+            "n": 2,
+            "value_col": "A",
+        },
+        overview_state="complete",
+        precision={"compute_digits": 50, "display_digits": 10},
+    )
+    assert snapshot is not None
+    return snapshot
 
 
 def _sample_fit_result() -> FitResult:
@@ -162,7 +232,41 @@ def test_workspace_preserves_raw_constants_text_view_draft(qtbot) -> None:
     ]
 
 
-def test_workspace_preserves_disabled_error_constants_draft(qtbot) -> None:
+def test_workspace_restores_file_backed_constants_as_embedded_text(qtbot, tmp_path: Path) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    constants_path = tmp_path / "constants.txt"
+    constants_path.write_text("ALPHA 7.29e-3\n", encoding="utf-8")
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+
+    bundle = capture_workspace(source, title="file backed constants")
+    constants = bundle.manifest["workspace"]["constants"]
+    constants.update(
+        {
+            "enabled": True,
+            "source_kind": "file",
+            "source_path_label": str(constants_path),
+            "decoded_text": constants_path.read_text(encoding="utf-8"),
+            "canonical_table": {"headers": ["Name", "Value"], "rows": []},
+            "numeric_mode": "uncertainty",
+        }
+    )
+    constants_path.unlink()
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.error_constants_editor.isChecked() is True
+    assert target.error_constants_editor.using_text_view() is True
+    assert "ALPHA 7.29e-3" in target.error_constants_editor.raw_text()
+    assert target.error_constants_editor.constants_dict() == {"ALPHA": "7.29e-3"}
+
+
+def test_workspace_preserves_legacy_disabled_error_constants_as_content_driven_draft(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace
 
@@ -178,7 +282,7 @@ def test_workspace_preserves_disabled_error_constants_draft(qtbot) -> None:
     bundle = capture_workspace(source, title="disabled constants")
     constants = bundle.manifest["workspace"]["constants"]
 
-    assert constants["enabled"] is False
+    assert constants["enabled"] is True
     assert constants["active_view"] == "table"
     assert constants["numeric_mode"] == "uncertainty"
     assert constants["decoded_text"] == raw_text
@@ -188,10 +292,108 @@ def test_workspace_preserves_disabled_error_constants_draft(qtbot) -> None:
     qtbot.addWidget(target)
     restore_workspace(target, bundle.manifest, bundle.attachments)
 
-    assert target.error_constants_editor.isChecked() is False
+    assert target.error_constants_editor.isChecked() is True
     assert target.error_constants_editor.using_text_view() is False
     assert target.error_constants_editor.raw_text() == raw_text
     assert target.error_constants_editor.rows() == [{"name": "ALPHA", "value": "1"}]
+
+
+def test_set_table_from_canonical_shrinks_and_clears_stale_cells(qtbot) -> None:
+    from PySide6.QtWidgets import QTableWidget
+
+    from app_desktop.workspace_controller import _set_table_from_canonical
+
+    table = QTableWidget(4, 3)
+    qtbot.addWidget(table)
+    table.setHorizontalHeaderLabels(["old_x", "old_y", "old_z"])
+    table.setItem(0, 0, QTableWidgetItem("stale 00"))
+    table.setItem(0, 1, QTableWidgetItem("stale 01"))
+    table.setItem(3, 2, QTableWidgetItem("stale 32"))
+
+    _set_table_from_canonical(table, {"headers": ["A"], "rows": [["1"], ["2"]]})
+
+    assert table.rowCount() == 2
+    assert table.columnCount() == 1
+    assert table.horizontalHeaderItem(0).text() == "A"
+    assert table.item(0, 0).text() == "1"
+    assert table.item(1, 0).text() == "2"
+
+
+def test_set_table_from_empty_canonical_resets_to_single_blank_column(qtbot) -> None:
+    from PySide6.QtWidgets import QTableWidget
+
+    from app_desktop.workspace_controller import _set_table_from_canonical
+
+    table = QTableWidget(4, 3)
+    qtbot.addWidget(table)
+    table.setHorizontalHeaderLabels(["old_x", "old_y", "old_z"])
+    table.setItem(0, 0, QTableWidgetItem("stale"))
+
+    _set_table_from_canonical(table, {"headers": [], "rows": []})
+
+    assert table.rowCount() == 1
+    assert table.columnCount() == 1
+    assert table.horizontalHeaderItem(0).text() == "A"
+    assert table.item(0, 0) is None
+
+
+def test_active_data_source_ignores_header_only_manual_table(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    window.use_file_checkbox.setChecked(False)
+    window._data_stack.setCurrentIndex(0)
+    window.manual_table.setRowCount(3)
+    window.manual_table.setColumnCount(2)
+    window.manual_table.setHorizontalHeaderLabels(["x", "y"])
+
+    assert window._active_data_source() == (None, "")
+
+    window.manual_table.setItem(0, 0, QTableWidgetItem("1"))
+
+    assert window._active_data_source() == (None, "x\ty\n1")
+
+
+def test_workspace_restore_refreshes_manual_summary_and_adaptive_height(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.manual_table.setRowCount(2)
+    source.manual_table.setColumnCount(2)
+    source.manual_table.setHorizontalHeaderLabels(["x", "y"])
+    source.manual_table.setItem(0, 0, QTableWidgetItem("1"))
+    source.manual_table.setItem(0, 1, QTableWidgetItem("2"))
+    source.manual_table.setItem(1, 0, QTableWidgetItem("3"))
+    source.manual_table.setItem(1, 1, QTableWidgetItem("4"))
+    bundle = capture_workspace(source, title="manual table")
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    target._apply_language("en")
+    QApplication.processEvents()
+    empty_height = target.manual_table.maximumHeight()
+
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+    QApplication.processEvents()
+
+    assert "2 rows" in target.manual_data_summary.text()
+    assert "2 columns" in target.manual_data_summary.text()
+    assert target.manual_table.maximumHeight() > empty_height
+
+
+def test_uncertainty_display_ignores_nonfinite_error_estimates(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+
+    finite_value = window._format_precision_value(mp.mpf("1.2345"))
+
+    assert window._format_uncertainty_value(mp.mpf("1.2345"), mp.inf) == finite_value
+    assert window._format_uncertainty_value(mp.mpf("1.2345"), mp.nan) == finite_value
 
 
 def test_workspace_controller_restores_snapshot_without_live_payloads(qtbot) -> None:
@@ -300,10 +502,9 @@ def test_workspace_round_trip_preserves_redesigned_shell_ui_state(qtbot, tmp_pat
     assert getattr(target, "_workspace_dirty", True) is False
 
 
-def test_workspace_round_trip_preserves_formula_preview_syntax_without_hash_change(qtbot) -> None:
+def test_workspace_round_trip_ignores_legacy_formula_preview_syntax_without_hash_change(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace
-    from datalab_latex.formula_render_service import InputLanguage
     from shared.workspace_schema import compute_workspace_hash
 
     source = ExtrapolationWindow()
@@ -313,12 +514,10 @@ def test_workspace_round_trip_preserves_formula_preview_syntax_without_hash_chan
     source.fit_expr_edit.setPlainText("Sin[x] + A")
 
     baseline = capture_workspace(source, title="formula syntax baseline").manifest["workspace"]
-    source.workbench_formula_language_combo.setCurrentIndex(
-        source.workbench_formula_language_combo.findData(InputLanguage.MATHEMATICA.value)
-    )
+    source._workbench_formula_preview_languages = {"fitting.custom.expression": "mathematica"}
     changed = capture_workspace(source, title="formula syntax changed").manifest["workspace"]
 
-    assert changed["ui"]["formula_preview"]["fitting.custom.expression"] == InputLanguage.MATHEMATICA.value
+    assert "formula_preview" not in changed["ui"]
     assert compute_workspace_hash(baseline) == compute_workspace_hash(changed)
     source.fit_expr_edit.setPlainText("Sin[x] + A + B")
     formula_changed = capture_workspace(source, title="formula text changed").manifest["workspace"]
@@ -329,14 +528,13 @@ def test_workspace_round_trip_preserves_formula_preview_syntax_without_hash_chan
     restore_workspace(target, {"workspace": changed}, {})
 
     assert target.mode_combo.currentData() == "fitting"
-    assert target.workbench_formula_language_combo.currentData() == InputLanguage.MATHEMATICA.value
+    assert not hasattr(target, "workbench_formula_language_combo")
     assert target._workspace_dirty is False
 
 
 def test_workspace_round_trip_omits_default_formula_preview_syntax(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace
-    from datalab_latex.formula_render_service import InputLanguage
 
     source = ExtrapolationWindow()
     qtbot.addWidget(source)
@@ -350,39 +548,32 @@ def test_workspace_round_trip_omits_default_formula_preview_syntax(qtbot) -> Non
 
     target = ExtrapolationWindow()
     qtbot.addWidget(target)
-    target._workbench_formula_preview_languages = {
-        "fitting.custom.expression": InputLanguage.MATHEMATICA.value
-    }
-    target.workbench_formula_language_combo.setCurrentIndex(
-        target.workbench_formula_language_combo.findData(InputLanguage.MATHEMATICA.value)
-    )
+    target._workbench_formula_preview_languages = {"fitting.custom.expression": "mathematica"}
 
     restore_workspace(target, {"workspace": workspace}, {})
 
-    assert target.workbench_formula_language_combo.currentData() == InputLanguage.DATALAB.value
+    assert not hasattr(target, "workbench_formula_language_combo")
+    assert not hasattr(target, "_workbench_formula_preview_languages")
 
 
 def test_workspace_capture_omits_unknown_formula_preview_schema_keys(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace
-    from datalab_latex.formula_render_service import InputLanguage
 
     source = ExtrapolationWindow()
     qtbot.addWidget(source)
     source._workbench_formula_preview_languages = {
-        "fitting.custom.expression": InputLanguage.MATHEMATICA.value,
-        "unknown.formula": InputLanguage.PYTHON.value,
+        "fitting.custom.expression": "mathematica",
+        "unknown.formula": "python",
     }
 
     workspace = capture_workspace(source, title="unknown formula preview key").manifest["workspace"]
 
-    assert workspace["ui"]["formula_preview"] == {
-        "fitting.custom.expression": InputLanguage.MATHEMATICA.value
-    }
+    assert "formula_preview" not in workspace["ui"]
 
 
 @pytest.mark.parametrize("corrupt_state", ["python", ["python"], {"fitting.custom.expression": 42}])
-def test_workspace_capture_rejects_corrupt_formula_preview_state(qtbot, corrupt_state) -> None:
+def test_workspace_capture_ignores_corrupt_formula_preview_state(qtbot, corrupt_state) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace
 
@@ -390,8 +581,9 @@ def test_workspace_capture_rejects_corrupt_formula_preview_state(qtbot, corrupt_
     qtbot.addWidget(source)
     source._workbench_formula_preview_languages = corrupt_state
 
-    with pytest.raises(TypeError, match="Formula preview UI state"):
-        capture_workspace(source, title="corrupt formula preview")
+    workspace = capture_workspace(source, title="corrupt formula preview").manifest["workspace"]
+
+    assert "formula_preview" not in workspace["ui"]
 
 
 def test_workspace_capture_treats_missing_formula_preview_state_as_default(qtbot) -> None:
@@ -401,7 +593,6 @@ def test_workspace_capture_treats_missing_formula_preview_state_as_default(qtbot
     source = ExtrapolationWindow()
     qtbot.addWidget(source)
 
-    delattr(source, "_workbench_formula_preview_languages")
     missing_workspace = capture_workspace(source, title="missing formula preview").manifest["workspace"]
     assert "formula_preview" not in missing_workspace["ui"]
 
@@ -446,30 +637,27 @@ def test_workspace_restore_ignores_malformed_formula_preview_state(qtbot) -> Non
     qtbot.addWidget(target)
     restore_workspace(target, {"workspace": workspace}, {})
 
-    assert target._workbench_formula_preview_languages == {}
+    assert not hasattr(target, "_workbench_formula_preview_languages")
 
 
 def test_workspace_restore_ignores_unknown_formula_preview_schema_keys(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace
-    from datalab_latex.formula_render_service import InputLanguage
 
     source = ExtrapolationWindow()
     qtbot.addWidget(source)
     bundle = capture_workspace(source, title="unknown preview restore")
     workspace = bundle.manifest["workspace"]
     workspace["ui"]["formula_preview"] = {
-        "fitting.custom.expression": InputLanguage.MATHEMATICA.value,
-        "unknown.formula": InputLanguage.PYTHON.value,
+        "fitting.custom.expression": "mathematica",
+        "unknown.formula": "python",
     }
 
     target = ExtrapolationWindow()
     qtbot.addWidget(target)
     restore_workspace(target, {"workspace": workspace}, {})
 
-    assert target._workbench_formula_preview_languages == {
-        "fitting.custom.expression": InputLanguage.MATHEMATICA.value
-    }
+    assert not hasattr(target, "_workbench_formula_preview_languages")
 
 
 def test_workspace_restore_routes_legacy_compute_float_through_workbench_model(qtbot) -> None:
@@ -795,6 +983,2014 @@ def test_workspace_preserves_rendered_result_markdown_table(qtbot) -> None:
     assert "| Parameter |" not in target.result_edit.toPlainText()
 
 
+def test_workspace_captures_semantic_statistics_snapshot_round_trip(qtbot, tmp_path) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from shared.workspace_io import read_workspace, write_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    result = {
+        "mode": "weighted_sigma",
+        "mean": mp.mpf("1.25"),
+        "std_mean": mp.mpf("0"),
+        "std": mp.mpf("0"),
+        "v_min": mp.mpf("1.25"),
+        "v_max": mp.mpf("2.5"),
+        "method_label": "Weighted mean (sigma=0 anchor)",
+        "dropped": 1,
+        "effective_n": mp.mpf("1"),
+        "zero_sigma_anchor": True,
+        "warnings": ["Detected zero sigma."],
+        "source_row_ids": ("line-10", "line-11"),
+    }
+    source._display_statistics_result(
+        result,
+        "A",
+        2,
+        values=[mp.mpf("1.25"), mp.mpf("2.5")],
+        sigmas=[mp.mpf("0"), mp.mpf("0.1")],
+        render_plots=False,
+    )
+
+    bundle = capture_workspace(source, title="semantic statistics")
+    semantic = bundle.manifest["workspace"]["result_snapshot"]["semantic"]
+
+    json.dumps(semantic)
+    assert semantic["schema_version"] == 1
+    assert semantic["family"] == "statistics"
+    assert semantic["mode"] == "weighted_sigma"
+    assert {row["key"] for row in semantic["metric_rows"]} >= {"mean", "row_count", "min", "max"}
+    assert {row["key"] for row in semantic["row_flags"]} == {"dropped", "zero_sigma_anchor"}
+    assert semantic["source"]["value_column"] == "A"
+    assert semantic["source"]["source_row_ids"] == ["line-10", "line-11"]
+    assert semantic["precision"]["display_digits"] == source.display_digits_spin.value()
+    assert semantic["compatibility"]["rendered_caches_authoritative"] is False
+
+    path = tmp_path / "semantic-statistics.datalab"
+    write_workspace(path, bundle.manifest, bundle.attachments)
+    loaded = read_workspace(path)
+    assert loaded.manifest["workspace"]["result_snapshot"]["semantic"] == semantic
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, loaded.manifest, loaded.attachments)
+
+    assert target._last_result_semantic_snapshot == semantic
+    assert "Mean" in target.result_edit.toPlainText()
+    assert target._csv_headers == ["batch", "metric", "value", "uncertainty"]
+    assert target._csv_rows
+
+    recaptured = capture_workspace(target, title="semantic statistics restored")
+    assert recaptured.manifest["workspace"]["result_snapshot"]["semantic"] == semantic
+
+
+def test_workspace_round_trips_statistics_matrix_config(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.stats_workflow_combo.setCurrentIndex(source.stats_workflow_combo.findData("covariance_correlation"))
+    source.stats_value_column_edit.setText("A, B")
+    source.stats_matrix_missing_policy_combo.setCurrentIndex(
+        source.stats_matrix_missing_policy_combo.findData("pairwise")
+    )
+
+    bundle = capture_workspace(source, title="statistics matrix config")
+    config = bundle.manifest["workspace"]["config"]["statistics"]
+
+    assert config["workflow_mode"] == "covariance_correlation"
+    assert config["value_columns"] == ["A", "B"]
+    assert config["matrix"]["missing_policy"] == "pairwise"
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.stats_workflow_combo.currentData() == "covariance_correlation"
+    assert target.stats_value_column_edit.text() == "A, B"
+    assert target.stats_matrix_missing_policy_combo.currentData() == "pairwise"
+
+
+def test_workspace_round_trips_statistics_grouped_config(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.stats_workflow_combo.setCurrentIndex(source.stats_workflow_combo.findData("grouped_statistics"))
+    source.stats_group_column_edit.setText("Group")
+    source.stats_value_column_edit.setText("A, B")
+    source.stats_sigma_column_edit.setText("sigma")
+    source.stats_mode_combo.setCurrentIndex(source.stats_mode_combo.findData("weighted_sigma"))
+    source.stats_weight_variance_checkbox.setChecked(True)
+
+    bundle = capture_workspace(source, title="statistics grouped config")
+    config = bundle.manifest["workspace"]["config"]["statistics"]
+
+    assert config["workflow_mode"] == "grouped_statistics"
+    assert config["group_column"] == "Group"
+    assert config["value_columns"] == ["A", "B"]
+    assert config["sigma_column"] == "sigma"
+    assert config["mode"] == "weighted_sigma"
+    assert config["weighted_variance"] is True
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.stats_workflow_combo.currentData() == "grouped_statistics"
+    assert target.stats_group_column_edit.text() == "Group"
+    assert target.stats_value_column_edit.text() == "A, B"
+    assert target.stats_sigma_column_edit.text() == "sigma"
+    assert target.stats_mode_combo.currentData() == "weighted_sigma"
+    assert target.stats_weight_variance_checkbox.isChecked() is True
+    assert not target.stats_group_column_edit.isHidden()
+
+
+def test_workspace_history_is_omitted_by_default_for_legacy_saves() -> None:
+    from app_desktop.workspace_controller import capture_workspace
+
+    source = _HistoryFakeWindow(text="Rendered only")
+
+    bundle = capture_workspace(source, title="legacy")
+
+    assert "history" not in bundle.manifest["workspace"]
+
+
+def test_workspace_persists_and_restores_semantic_history(tmp_path) -> None:
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from datalab_core.history import history_store_from_json
+    from shared.workspace_io import read_workspace, write_workspace
+
+    source = _HistoryFakeWindow(semantic=_history_statistics_semantic(), text="tampered rendered cache")
+
+    bundle = capture_workspace(source, title="history", include_history=True)
+    workspace = bundle.manifest["workspace"]
+    semantic = workspace["result_snapshot"]["semantic"]
+    history_payload = workspace["history"]
+    current = history_payload["current"]
+
+    assert history_payload["schema"] == "datalab.history.store.v1"
+    assert current["semantic_snapshot"]["result"]["family"] == semantic["family"]
+    assert current["semantic_snapshot"]["result"]["mode"] == semantic["mode"]
+    assert current["semantic_snapshot"]["result"]["metric_rows"] == semantic["metric_rows"]
+    assert "markdown" not in current["semantic_snapshot"]["result"]
+    assert "rendered_caches_authoritative" not in current["semantic_snapshot"]["result"]["compatibility"]
+    history_store_from_json(history_payload)
+
+    path = tmp_path / "history.datalab"
+    write_workspace(path, bundle.manifest, bundle.attachments)
+    loaded = read_workspace(path)
+
+    target = _HistoryFakeWindow(text="")
+    restore_workspace(target, loaded.manifest, loaded.attachments)
+
+    assert target._last_result_semantic_snapshot == semantic
+    assert target._workspace_history_enabled is True
+    assert target._workspace_history_store.to_json() == history_payload
+
+
+def test_workspace_history_save_prunes_optional_entries_and_preserves_current() -> None:
+    from app_desktop.workspace_controller import capture_workspace
+    from datalab_core.history import HistoryEntry, HistoryStore
+
+    source = _HistoryFakeWindow(semantic=_history_statistics_semantic())
+    old_workspace = {
+        "title": "old",
+        "current_mode": "statistics",
+        "language": "auto",
+        "ui": {},
+        "data": {},
+        "constants": {},
+        "config": {},
+        "result_snapshot": {"present": False},
+    }
+    old_entry = HistoryEntry.from_workspace_snapshot(
+        entry_id="old-too-large",
+        label="old",
+        created_at="2026-06-19T00:00:00Z",
+        workspace=old_workspace,
+        family="statistics",
+        kind="statistics_single",
+        result_snapshot={"status": "success", "value": "x" * (2 * 1024 * 1024 + 1)},
+    )
+    source._workspace_history_store = HistoryStore(entries=(old_entry,))
+    source._workspace_history_enabled = True
+
+    bundle = capture_workspace(source, title="history", include_history=True)
+
+    history_payload = bundle.manifest["workspace"]["history"]
+    assert history_payload["current"] is not None
+    assert history_payload["current"]["entry_id"] != "old-too-large"
+    assert history_payload["entries"] == []
+    assert source._workspace_history_prune_report.dropped_entry_ids == ("old-too-large",)
+
+
+def test_workspace_history_save_demotes_stale_current_when_current_result_has_no_semantic() -> None:
+    from app_desktop.workspace_controller import capture_workspace
+    from datalab_core.history import history_store_from_json
+
+    source = _HistoryFakeWindow(semantic=_history_statistics_semantic())
+    first = capture_workspace(source, title="history", include_history=True)
+    first_history = history_store_from_json(first.manifest["workspace"]["history"])
+    assert first_history.current is not None
+
+    source._workspace_history_store = first_history
+    source._workspace_history_enabled = True
+    source._last_result_semantic_snapshot = None
+    source._last_result_semantic_snapshot_kind = ""
+    source.result_edit.setPlainText("Rendered-only replacement")
+
+    second = capture_workspace(source, title="rendered-only", include_history=True)
+    second_history = second.manifest["workspace"]["history"]
+
+    assert "semantic" not in second.manifest["workspace"]["result_snapshot"]
+    assert second_history["current"] is None
+    assert [entry["entry_id"] for entry in second_history["entries"]] == [first_history.current.entry_id]
+
+
+def test_workspace_history_save_prunes_to_manifest_budget_and_remains_writable(tmp_path) -> None:
+    from app_desktop.workspace_controller import capture_workspace
+    from datalab_core.history import HistoryEntry, HistoryStore
+    from shared.workspace_io import write_workspace
+    from shared.workspace_schema import MAX_MANIFEST_BYTES
+
+    source = _HistoryFakeWindow(semantic=_history_statistics_semantic())
+    old_workspace = {
+        "title": "old",
+        "current_mode": "statistics",
+        "language": "auto",
+        "ui": {},
+        "data": {},
+        "constants": {},
+        "config": {},
+        "result_snapshot": {"present": False},
+    }
+    entries = tuple(
+        HistoryEntry.from_workspace_snapshot(
+            entry_id=f"old-{index}",
+            label=f"old {index}",
+            created_at=f"2026-06-19T00:00:0{index}Z",
+            workspace=old_workspace,
+            family="statistics",
+            kind="statistics_single",
+            result_snapshot={"status": "success", "value": f"{index}-" + ("x" * 500_000)},
+        )
+        for index in range(5)
+    )
+    source._workspace_history_store = HistoryStore(entries=entries)
+    source._workspace_history_enabled = True
+
+    bundle = capture_workspace(source, title="history", include_history=True)
+
+    manifest_bytes = json.dumps(
+        bundle.manifest,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ).encode("utf-8")
+    assert len(manifest_bytes) <= MAX_MANIFEST_BYTES
+    assert bundle.manifest["workspace"]["history"]["current"] is not None
+    assert len(bundle.manifest["workspace"]["history"]["entries"]) < len(entries)
+    assert source._workspace_history_prune_report.dropped_entry_ids
+    write_workspace(tmp_path / "history-budget.datalab", bundle.manifest, bundle.attachments)
+
+
+def test_workspace_malformed_history_fails_before_mutating_current_data() -> None:
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = _HistoryFakeWindow(text="current")
+    bundle = capture_workspace(source, title="bad history", include_history=True)
+    bundle.manifest["workspace"]["history"] = {
+        "schema": "datalab.history.store.v1",
+        "schema_version": 1,
+        "current": None,
+        "entries": "bad",
+    }
+
+    target = _HistoryFakeWindow(text="keep me")
+
+    with pytest.raises(ValueError, match="entries must be a JSON array"):
+        restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.result_edit.toPlainText() == "keep me"
+
+
+def test_workspace_history_float_fails_before_mutating_current_data() -> None:
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = _HistoryFakeWindow(semantic=_history_statistics_semantic(), text="current")
+    bundle = capture_workspace(source, title="bad history", include_history=True)
+    bundle.manifest["workspace"]["history"]["current"]["semantic_snapshot"]["result"]["value"] = 1.0
+
+    target = _HistoryFakeWindow(text="keep me")
+
+    with pytest.raises(TypeError, match="JSON floats are not allowed"):
+        restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.result_edit.toPlainText() == "keep me"
+
+
+def test_workspace_history_save_fails_when_current_semantic_snapshot_cannot_fit() -> None:
+    from app_desktop.workspace_controller import capture_workspace
+    from datalab_core.history import HistoryPruneError
+
+    source = _HistoryFakeWindow(semantic=_history_statistics_semantic())
+    semantic = dict(source._last_result_semantic_snapshot)
+    semantic["metric_rows"] = [
+        {"key": "huge", "label": "Huge", "value": "x" * (2 * 1024 * 1024 + 1)}
+    ]
+    source._last_result_payloads = {}
+    source._last_result_semantic_snapshot = semantic
+    source._last_result_semantic_snapshot_kind = "statistics_single"
+    source._last_result_kind = "statistics_single"
+
+    with pytest.raises(HistoryPruneError, match="current history entry exceeds"):
+        capture_workspace(source, title="too large", include_history=True)
+
+
+def test_workspace_restores_statistics_text_and_csv_from_semantic_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    result = {
+        "mode": "weighted_sigma",
+        "mean": mp.mpf("1.25"),
+        "std_mean": mp.mpf("0"),
+        "std": mp.mpf("0"),
+        "v_min": mp.mpf("1.25"),
+        "v_max": mp.mpf("2.5"),
+        "method_label": "Weighted mean (sigma=0 anchor)",
+        "dropped": 1,
+        "effective_n": mp.mpf("1"),
+        "zero_sigma_anchor": True,
+        "warnings": ["Detected zero sigma."],
+        "source_row_ids": ("line-10", "line-11"),
+    }
+    source._display_statistics_result(result, "A", 2, render_plots=False)
+    bundle = capture_workspace(source, title="semantic statistics stale caches")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+    snapshot["latex_source"] = "% stale latex cache remains cache-only"
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
+    metrics = {str(row["metric"]): row for row in target._csv_rows}
+    assert "=== Statistics ===" in restored_text
+    assert "Mode: weighted_sigma" in restored_text
+    assert "Mean | 1.25 | 0.0" in restored_text
+    assert target._csv_headers == ["batch", "metric", "value", "uncertainty"]
+    assert metrics["mean"]["value"] == "1.25"
+    assert metrics["mean"]["uncertainty"] == "0.0"
+    assert metrics["zero_sigma_anchor"]["value"] == "True"
+    assert target.latex_edit.toPlainText() == "% stale latex cache remains cache-only"
+    assert semantic["compatibility"]["rendered_caches_authoritative"] is False
+    assert semantic["compatibility"]["latex_regeneration"] == "cache_only_until_p0_5_shared_latex"
+
+
+def test_workspace_restores_fitting_comparison_rows_from_semantic_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from datalab_core.fitting_comparison import (
+        build_fitting_comparison_request,
+        run_fitting_comparison,
+    )
+    from fitting.comparison_formatting import COMPARISON_TABLE_HEADERS
+
+    request = build_fitting_comparison_request(
+        headers=("x", "y"),
+        data_rows=(("0", "1"), ("1", "3"), ("2", "5"), ("3", "7")),
+        variable_map={"x": "x"},
+        target_column="y",
+        candidates=(
+            {"candidate_id": "linear", "label": "Linear", "model_type": "polynomial", "poly_degree": 1},
+            {"candidate_id": "quadratic", "label": "Quadratic", "model_type": "polynomial", "poly_degree": 2},
+        ),
+        precision_digits=60,
+    )
+    envelope = run_fitting_comparison(request)
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    source.result_edit.setPlainText("rendered comparison cache")
+    source._last_result_kind = "fitting_comparison"
+    source._last_result_payloads = {"fitting_comparison": envelope.payload}
+    source._workbench_result_state = "complete"
+    source.latex_edit.setPlainText("% comparison latex cache remains cache-only")
+
+    bundle = capture_workspace(source, title="fitting comparison")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    assert semantic["family"] == "fitting_comparison"
+    assert [row["candidate_id"] for row in semantic["comparison_rows"]] == ["linear", "quadratic"]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
+    assert "Selected Fit Comparison" in restored_text
+    assert "Linear | success" in restored_text
+    assert target._csv_headers == COMPARISON_TABLE_HEADERS
+    assert [row["candidate_id"] for row in target._csv_rows] == ["linear", "quadratic"]
+    assert target.latex_edit.toPlainText() == "% comparison latex cache remains cache-only"
+    assert target._last_result_semantic_snapshot == semantic
+
+
+def test_workspace_restores_root_rows_from_semantic_snapshot(qtbot, monkeypatch) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from datalab_core.root_solving import build_root_solving_request, run_root_solving
+
+    monkeypatch.setattr("app_desktop.window_extrapolation_mixin.QMessageBox.information", lambda *args: None)
+    request = build_root_solving_request(
+        equations=("x^2 - A",),
+        unknown_rows=({"name": "x", "initial": "2", "lower": "0", "upper": "10"},),
+        data_headers=("A",),
+        data_rows=(("4",),),
+        mode="scalar",
+        precision_digits=50,
+        display_digits=12,
+        uncertainty_digits=2,
+    )
+    envelope = run_root_solving(request)
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    _set_combo_data(source.mode_combo, "root_solving")
+    source._on_root_solving_finished(
+        {
+            "kind": "root_solving",
+            "markdown": "stale rendered root cache",
+            "csv_headers": ["stale"],
+            "csv_rows": [{"name": "stale"}],
+            "batch": envelope.payload["batch"],
+            "display_digits": 12,
+            "uncertainty_digits": 2,
+            "language": "en",
+            "warnings": [],
+            "log": "root solving completed",
+        }
+    )
+    source.latex_edit.setPlainText("% root latex cache remains cache-only")
+
+    bundle = capture_workspace(source, title="semantic root")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    assert semantic["family"] == "root_solving"
+    assert semantic["compatibility"]["result_cache_kind"] == "root_solving"
+    assert semantic["compatibility"]["rendered_caches_authoritative"] is False
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
+    assert "stale rendered root cache" not in restored_text
+    assert "| input_row_index | root_index | A | name | value | classification_tags | backend |" in restored_text
+    assert target._csv_headers[:3] == ["input_row_index", "root_index", "A"]
+    assert "name" in target._csv_headers
+    assert "value" in target._csv_headers
+    assert "failure" in target._csv_headers
+    assert target._csv_rows[0]["name"] == "x"
+    assert target._csv_rows[0]["A"] == "4"
+    assert target._csv_rows[0]["value"].startswith("2")
+    assert target.latex_edit.toPlainText() == "% root latex cache remains cache-only"
+    assert target._last_result_semantic_snapshot == semantic
+
+    recaptured = capture_workspace(target, title="semantic root restored")
+    assert recaptured.manifest["workspace"]["result_snapshot"]["semantic"] == semantic
+
+
+def test_workspace_restores_error_rows_from_uncertainty_semantic_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from shared.uncertainty import UncertainValue
+
+    units_config = {
+        "schema": "datalab.units.annotations.v1",
+        "schema_version": 1,
+        "enabled": True,
+        "mode": "display_only",
+        "inputs": {"A": {"unit": "m"}, "B": {"unit": "m"}},
+        "constants": {},
+        "parameters": {},
+        "outputs": {"result": {"unit": "m"}},
+    }
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    _set_combo_data(source.mode_combo, "extrapolation")
+    source._show_error_results(
+        ["A", "B"],
+        [[mp.mpf("1.25"), mp.mpf("2.5")], [mp.mpf("2"), mp.mpf("2.5")]],
+        [
+            UncertainValue(
+                mp.mpf("3.75"),
+                mp.mpf("0.125"),
+                contributions={"A": mp.mpf("0.01"), "B": mp.mpf("0.005")},
+            ),
+            UncertainValue(mp.mpf("4.5"), mp.mpf("0.2"), contributions={"A": mp.mpf("0.04")}),
+        ],
+        "A + B",
+        precision_used=70,
+        warnings="single warning",
+        propagation={
+            "method": "monte_carlo",
+            "order": 2,
+            "mc_samples": 2048,
+            "mc_seed": 2468,
+        },
+        units=units_config,
+    )
+    source.latex_edit.setPlainText("% uncertainty latex cache remains cache-only")
+
+    bundle = capture_workspace(source, title="semantic uncertainty")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    assert semantic["family"] == "uncertainty"
+    assert semantic["compatibility"]["result_cache_kind"] == "error"
+    assert semantic["metric_rows"][0]["key"] == "result_value.1"
+    assert semantic["source"] == {"row_count": 2, "source_columns": ["A", "B"]}
+    assert semantic["results"][0]["contributions"] == {"A": "0.01", "B": "0.005"}
+    assert semantic["units"] == units_config
+    assert semantic["precision"]["compute_digits"] == 70
+    assert semantic["warnings"] == ["single warning"]
+    assert semantic["configuration"] == {
+        "propagation": {
+            "method": "monte_carlo",
+            "order": 2,
+            "mc_samples": 2048,
+            "mc_seed": 2468,
+        }
+    }
+    diagnostic_rows = {row["key"]: row for row in semantic["diagnostic_rows"]}
+    assert diagnostic_rows["configuration.propagation.method"]["value"] == "monte_carlo"
+    assert diagnostic_rows["configuration.propagation.order"]["value"] == 2
+    assert diagnostic_rows["configuration.propagation.mc_samples"]["value"] == 2048
+    assert diagnostic_rows["configuration.propagation.mc_seed"]["value"] == 2468
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
+    assert "## Error Propagation Results" in restored_text
+    assert "**Formula**: `A + B`" in restored_text
+    assert "**Rows**: 2" in restored_text
+    assert "| # | Value [m] | Uncertainty [m] | LaTeX |" in restored_text
+    assert "| 1 | 3.75 | 0.125 | 3.75 +/- 0.125 |" in restored_text
+    assert target._csv_headers == ["index", "value", "uncertainty", "latex", "output_unit"]
+    assert target._csv_rows == [
+        {"index": 1, "value": "3.75", "uncertainty": "0.125", "latex": "3.75 +/- 0.125", "output_unit": "m"},
+        {"index": 2, "value": "4.5", "uncertainty": "0.2", "latex": "4.5 +/- 0.2", "output_unit": "m"},
+    ]
+    assert target.latex_edit.toPlainText() == "% uncertainty latex cache remains cache-only"
+    assert target._last_result_semantic_snapshot == semantic
+
+    recaptured = capture_workspace(target, title="semantic uncertainty restored")
+    assert recaptured.manifest["workspace"]["result_snapshot"]["semantic"] == semantic
+
+
+def test_workspace_round_trips_error_units_config(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.formula_edit.setPlainText("distance")
+    source.error_units_enabled_checkbox.setChecked(True)
+    source.error_units_inputs_editor.set_rows([{"name": "distance", "value": "m"}])
+    source.error_units_output_edit.setText("m")
+
+    bundle = capture_workspace(source, title="error units")
+    normalized_units = bundle.manifest["workspace"]["config"]["error"]["units"]
+
+    assert normalized_units["inputs"] == {"distance": {"unit": "m"}}
+    assert normalized_units["outputs"] == {"result": {"unit": "m"}}
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.error_units_config == normalized_units
+    assert target.error_units_enabled_checkbox.isChecked()
+    assert target.error_units_inputs_editor.rows() == [{"name": "distance", "value": "m"}]
+    assert target.error_units_output_edit.text() == "m"
+
+
+def test_workspace_round_trips_display_units_for_root_statistics_and_fitting(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.root_units_enabled_checkbox.setChecked(True)
+    source.root_units_inputs_editor.set_rows([{"name": "A", "value": "m^2"}])
+    source.root_units_constants_editor.set_rows([{"name": "K", "value": "J"}])
+    source.root_units_output_edit.setText("m")
+    source.stats_units_enabled_checkbox.setChecked(True)
+    source.stats_units_inputs_editor.set_rows([{"name": "B", "value": "K"}])
+    source.stats_units_output_edit.setText("K")
+    source.fit_units_enabled_checkbox.setChecked(True)
+    source.fit_units_inputs_editor.set_rows([{"name": "x", "value": "s"}])
+    source.fit_units_constants_editor.set_rows([{"name": "C", "value": "m"}])
+    source.fit_units_parameters_editor.set_rows([{"name": "a", "value": "m/s"}])
+    source.fit_units_output_edit.setText("m")
+
+    bundle = capture_workspace(source, title="display units")
+    config = bundle.manifest["workspace"]["config"]
+
+    assert config["root_solving"]["units"]["inputs"] == {"A": {"unit": "m^2"}}
+    assert config["root_solving"]["units"]["constants"] == {"K": {"unit": "J"}}
+    assert config["statistics"]["units"]["outputs"] == {"result": {"unit": "K"}}
+    assert config["fitting"]["units"]["parameters"] == {"a": {"unit": "m/s"}}
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.root_units_enabled_checkbox.isChecked()
+    assert target.root_units_inputs_editor.rows() == [{"name": "A", "value": "m^2"}]
+    assert target.root_units_constants_editor.rows() == [{"name": "K", "value": "J"}]
+    assert target.root_units_output_edit.text() == "m"
+    assert target.stats_units_enabled_checkbox.isChecked()
+    assert target.stats_units_inputs_editor.rows() == [{"name": "B", "value": "K"}]
+    assert target.stats_units_output_edit.text() == "K"
+    assert target.fit_units_enabled_checkbox.isChecked()
+    assert target.fit_units_inputs_editor.rows() == [{"name": "x", "value": "s"}]
+    assert target.fit_units_constants_editor.rows() == [{"name": "C", "value": "m"}]
+    assert target.fit_units_parameters_editor.rows() == [{"name": "a", "value": "m/s"}]
+    assert target.fit_units_output_edit.text() == "m"
+
+
+def test_workspace_restore_without_error_config_clears_visible_error_units(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    bundle = capture_workspace(source, title="legacy without error config")
+    workspace = bundle.manifest["workspace"]
+    workspace["config"].pop("error", None)
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    target.error_units_enabled_checkbox.setChecked(True)
+    target.error_units_inputs_editor.set_rows([{"name": "stale", "value": "m"}])
+    target.error_units_constants_editor.set_rows([{"name": "K", "value": "s"}])
+    target.error_units_output_edit.setText("m")
+    target.error_units_config = {"enabled": True, "mode": "display_only", "inputs": {"stale": "m"}}
+
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.error_units_config is None
+    assert not target.error_units_enabled_checkbox.isChecked()
+    assert target.error_units_inputs_editor.rows() == []
+    assert target.error_units_constants_editor.rows() == []
+    assert target.error_units_output_edit.text() == ""
+
+
+def test_workspace_restore_without_display_units_clears_root_statistics_and_fitting_units(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    bundle = capture_workspace(source, title="legacy without display units")
+    config = bundle.manifest["workspace"]["config"]
+    config["root_solving"].pop("units", None)
+    config["statistics"].pop("units", None)
+    config["fitting"].pop("units", None)
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    target.root_units_enabled_checkbox.setChecked(True)
+    target.root_units_inputs_editor.set_rows([{"name": "stale", "value": "m"}])
+    target.stats_units_enabled_checkbox.setChecked(True)
+    target.stats_units_inputs_editor.set_rows([{"name": "stale", "value": "s"}])
+    target.fit_units_enabled_checkbox.setChecked(True)
+    target.fit_units_parameters_editor.set_rows([{"name": "stale", "value": "J"}])
+
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.root_units_config is None
+    assert target.stats_units_config is None
+    assert target.fit_units_config is None
+    assert not target.root_units_enabled_checkbox.isChecked()
+    assert not target.stats_units_enabled_checkbox.isChecked()
+    assert not target.fit_units_enabled_checkbox.isChecked()
+    assert target.root_units_inputs_editor.rows() == []
+    assert target.stats_units_inputs_editor.rows() == []
+    assert target.fit_units_parameters_editor.rows() == []
+
+
+def test_workspace_uncertainty_snapshot_nulls_inactive_taylor_monte_carlo_options(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace
+    from shared.uncertainty import UncertainValue
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    source._show_error_results(
+        ["A"],
+        [[mp.mpf("1")]],
+        [UncertainValue(mp.mpf("1"), mp.mpf("0.1"))],
+        "A",
+        precision_used=50,
+        propagation={
+            "method": "unknown-method",
+            "order": 0,
+            "mc_samples": 5000,
+            "mc_seed": 123,
+        },
+    )
+
+    bundle = capture_workspace(source, title="semantic uncertainty taylor")
+    semantic = bundle.manifest["workspace"]["result_snapshot"]["semantic"]
+
+    assert semantic["configuration"] == {
+        "propagation": {
+            "method": "taylor",
+            "order": 1,
+            "mc_samples": None,
+            "mc_seed": None,
+        }
+    }
+    diagnostic_rows = {row["key"]: row for row in semantic["diagnostic_rows"]}
+    assert diagnostic_rows["configuration.propagation.method"]["value"] == "taylor"
+    assert diagnostic_rows["configuration.propagation.order"]["value"] == 1
+    assert "value" not in diagnostic_rows["configuration.propagation.mc_samples"]
+    assert "value" not in diagnostic_rows["configuration.propagation.mc_seed"]
+
+
+def test_workspace_root_semantic_snapshot_uses_payload_compute_precision_after_ui_precision_change(
+    qtbot,
+    monkeypatch,
+) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from root_solving.models import RootBatchResult, RootBatchRowResult, RootResult, RootValue
+    from shared.root_solving_engine import serialize_root_batch_result
+
+    monkeypatch.setattr("app_desktop.window_extrapolation_mixin.QMessageBox.information", lambda *args: None)
+    value_text = "1.234567890123456789012345678901234567890123456789"
+    with mp.mp.workdps(90):
+        batch = RootBatchResult(
+            rows=(
+                RootBatchRowResult(
+                    row_index=None,
+                    source_values={},
+                    result=RootResult(
+                        roots=(RootValue(name="x", value=mp.mpf(value_text)),),
+                        backend="mpmath",
+                        mode="scalar",
+                        residual_norm=mp.mpf("0"),
+                    ),
+                ),
+            ),
+        )
+        batch_payload = serialize_root_batch_result(batch, digits=80)
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    _set_combo_data(source.mode_combo, "root_solving")
+    source._on_root_solving_finished(
+        {
+            "kind": "root_solving",
+            "markdown": "stale rendered root cache",
+            "csv_headers": ["stale"],
+            "csv_rows": [{"name": "stale"}],
+            "batch": batch_payload,
+            "compute_digits": 90,
+            "display_digits": 45,
+            "uncertainty_digits": 1,
+            "language": "en",
+            "warnings": [],
+            "log": "root solving completed",
+        }
+    )
+    source.mpmath_precision_spin.setValue(16)
+
+    bundle = capture_workspace(source, title="semantic high precision root")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    assert semantic["precision"]["compute_digits"] == 90
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    previous_dps = mp.mp.dps
+    try:
+        mp.mp.dps = 15
+        restore_workspace(target, bundle.manifest, bundle.attachments)
+    finally:
+        mp.mp.dps = previous_dps
+
+    assert target._csv_rows[0]["value"].startswith("1.23456789012345678901234567890123456789012")
+
+
+def test_desktop_refresh_display_formats_fitting_comparison_payload(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from datalab_core.fitting_comparison import (
+        build_fitting_comparison_request,
+        run_fitting_comparison,
+    )
+    from fitting.comparison_formatting import COMPARISON_TABLE_HEADERS
+
+    request = build_fitting_comparison_request(
+        headers=("x", "y"),
+        data_rows=(("0", "1"), ("1", "3"), ("2", "5"), ("3", "7")),
+        variable_map={"x": "x"},
+        target_column="y",
+        candidates=(
+            {"candidate_id": "linear", "label": "Linear", "model_type": "polynomial", "poly_degree": 1},
+            {"candidate_id": "quadratic", "label": "Quadratic", "model_type": "polynomial", "poly_degree": 2},
+        ),
+        precision_digits=60,
+    )
+    envelope = run_fitting_comparison(request)
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    window._apply_language("en")
+    window._remember_last_result("fitting_comparison", dict(envelope.payload))
+
+    window._refresh_display_format()
+
+    rendered_text = window.result_edit.toPlainText()
+    assert "Selected Fit Comparison" in rendered_text
+    assert "Linear" in rendered_text
+    assert "success" in rendered_text
+    assert "['" not in rendered_text
+    assert window._csv_headers == COMPARISON_TABLE_HEADERS
+    assert [row["candidate_id"] for row in window._csv_rows] == ["linear", "quadratic"]
+    assert window._csv_suggest_name == "fitting_comparison_results.csv"
+
+
+def test_desktop_refresh_display_formats_error_payload_with_semantic_metadata(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from shared.uncertainty import UncertainValue
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    window._apply_language("en")
+    window._show_error_results(
+        ["A"],
+        [[mp.mpf("1")]],
+        [UncertainValue(mp.mpf("1"), mp.mpf("0.1"))],
+        "A",
+        precision_used=50,
+        warnings=["warning"],
+        propagation={
+            "method": "monte_carlo",
+            "order": 1,
+            "mc_samples": 5000,
+            "mc_seed": None,
+        },
+        units={
+            "schema": "datalab.units.annotations.v1",
+            "schema_version": 1,
+            "enabled": True,
+            "mode": "display_only",
+            "inputs": {"A": {"unit": "m"}},
+            "constants": {},
+            "parameters": {},
+            "outputs": {"result": {"unit": "m"}},
+        },
+    )
+
+    window._refresh_display_format()
+
+    rendered_text = window.result_edit.toPlainText()
+    assert "Error Propagation Results" in rendered_text
+    assert "Formula: A" in rendered_text
+    assert "Value [m]" in rendered_text
+    assert "Uncertainty [m]" in rendered_text
+    assert window._csv_headers == ["index", "value", "uncertainty", "latex", "output_unit"]
+    assert window._csv_rows[0]["output_unit"] == "m"
+    assert window._last_result_payloads["error"]["propagation"] == {
+        "method": "monte_carlo",
+        "order": 1,
+        "mc_samples": 5000,
+        "mc_seed": None,
+    }
+
+
+def test_workspace_ignores_wrong_kind_fitting_comparison_semantic_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from datalab_core.fitting_comparison import (
+        build_fitting_comparison_request,
+        run_fitting_comparison,
+    )
+
+    request = build_fitting_comparison_request(
+        headers=("x", "y"),
+        data_rows=(("0", "1"), ("1", "3"), ("2", "5"), ("3", "7")),
+        variable_map={"x": "x"},
+        target_column="y",
+        candidates=(
+            {"candidate_id": "linear", "label": "Linear", "model_type": "polynomial", "poly_degree": 1},
+        ),
+        precision_digits=60,
+    )
+    envelope = run_fitting_comparison(request)
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.result_edit.setPlainText("cached root snapshot text")
+    source._last_result_kind = "fitting_comparison"
+    source._last_result_payloads = {"fitting_comparison": envelope.payload}
+    source._workbench_result_state = "complete"
+
+    bundle = capture_workspace(source, title="wrong kind fitting comparison")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+    snapshot["kind"] = "root_solving"
+    snapshot["markdown"] = "cached root fallback"
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": ["root"], "rows": [{"root": "2"}]}
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.result_edit.toPlainText() == "cached root fallback"
+    assert target._csv_headers == ["root"]
+    assert target._csv_rows == [{"root": "2"}]
+    assert target._last_result_semantic_snapshot is None
+
+    recaptured = capture_workspace(target, title="wrong kind fitting comparison recaptured")
+    recaptured_snapshot = recaptured.manifest["workspace"]["result_snapshot"]
+    assert "semantic" not in recaptured_snapshot
+    assert recaptured_snapshot["kind"] == "snapshot"
+    assert semantic["family"] == "fitting_comparison"
+
+
+def test_workspace_restores_weighted_consistency_rows_from_semantic_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    result = {
+        "mode": "weighted_sigma",
+        "mean": mp.mpf(16) / 9,
+        "std_mean": mp.mpf("0.6666666666666666667"),
+        "std": mp.mpf("1.3333333333333333333"),
+        "v_min": mp.mpf("1"),
+        "v_max": mp.mpf("4"),
+        "method_label": "Weighted mean (sample)",
+        "dropped": 0,
+        "effective_n": mp.mpf(81) / 33,
+        "weighted_chi_square": mp.mpf(17) / 9,
+        "weighted_consistency_dof": 2,
+        "weighted_reduced_chi_square": mp.mpf(17) / 18,
+        "birge_ratio": mp.sqrt(mp.mpf(17) / 18),
+        "source_row_ids": ("1", "2", "3"),
+    }
+    source._display_statistics_result(result, "A", 3, render_plots=False)
+    bundle = capture_workspace(source, title="weighted consistency statistics")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    assert {row["key"] for row in semantic["metric_rows"]} >= {
+        "weighted_chi_square",
+        "weighted_consistency_dof",
+        "weighted_reduced_chi_square",
+        "birge_ratio",
+    }
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
+    metrics = {str(row["metric"]): row for row in target._csv_rows}
+    assert "Weighted chi-square |" in restored_text
+    assert "Weighted consistency dof | 2" in restored_text
+    assert "weighted_chi_square" in metrics
+    assert metrics["weighted_consistency_dof"]["value"] == 2
+
+
+def test_workspace_restores_confidence_interval_rows_from_semantic_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    result = {
+        "mode": "mean_population",
+        "mean": mp.mpf("2.5"),
+        "std_mean": mp.sqrt(mp.mpf("1.25")) / 2,
+        "std": mp.sqrt(mp.mpf("1.25")),
+        "v_min": mp.mpf("1"),
+        "v_max": mp.mpf("4"),
+        "method_label": "Arithmetic mean (population)",
+        "dropped": 0,
+        "mean_ci_confidence_level": mp.mpf("0.95"),
+        "mean_ci_lower": mp.mpf("0.445739743239121"),
+        "mean_ci_upper": mp.mpf("4.554260256760879"),
+        "mean_ci_margin": mp.mpf("2.054260256760879"),
+        "mean_ci_method_label": "Student-t mean CI (sample standard deviation)",
+        "mean_ci_critical_value": mp.mpf("3.182446305284263"),
+        "mean_sample_se_for_ci": mp.mpf("0.6454972243679028"),
+        "mean_ci_dof": 3,
+        "source_row_ids": ("1", "2", "3", "4"),
+    }
+    source._display_statistics_result(result, "A", 4, render_plots=False)
+    bundle = capture_workspace(source, title="confidence interval statistics")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    assert {row["key"] for row in semantic["metric_rows"]} >= {
+        "mean_ci_lower",
+        "mean_ci_upper",
+        "mean_sample_se_for_ci",
+        "mean_ci_method",
+    }
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
+    metrics = {str(row["metric"]): row for row in target._csv_rows}
+    assert "Mean CI lower | 0.445739743239121" in restored_text
+    assert metrics["mean_ci_lower"]["value"] == "0.445739743239121"
+    assert metrics["mean_ci_method"]["value"] == "Student-t mean CI (sample standard deviation)"
+
+
+def test_workspace_restores_descriptive_statistics_rows_from_semantic_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    result = {
+        "mode": "descriptive",
+        "mean": mp.mpf("2.5"),
+        "std_mean": mp.mpf("0.6454972243679028142"),
+        "std": mp.mpf("1.2909944487358056284"),
+        "variance": mp.mpf("1.6666666666666666667"),
+        "v_min": mp.mpf("1"),
+        "v_max": mp.mpf("4"),
+        "count": 4,
+        "trimmed_mean": mp.mpf("2.5"),
+        "median": mp.mpf("2.5"),
+        "q1": mp.mpf("1.75"),
+        "q3": mp.mpf("3.25"),
+        "iqr": mp.mpf("1.5"),
+        "mad": mp.mpf("1"),
+        "skewness": mp.mpf("0"),
+        "excess_kurtosis": mp.mpf("-1.2"),
+        "method_label": "Descriptive statistics (sample)",
+        "dropped": 0,
+        "effective_n": None,
+        "zero_sigma_anchor": False,
+        "warnings": [],
+        "source_row_ids": ("1", "2", "3", "4"),
+    }
+    source.stats_trim_fraction_edit.setText("0.25")
+    source._display_statistics_result(result, "A", 4, render_plots=False)
+    bundle = capture_workspace(source, title="descriptive statistics")
+    assert bundle.manifest["workspace"]["config"]["statistics"]["trim_fraction"] == "0.25"
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    assert {row["key"] for row in semantic["metric_rows"]} >= {"trimmed_mean", "median", "q1", "q3", "iqr", "mad"}
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
+    assert target.stats_trim_fraction_edit.text() == "0.25"
+    assert "Trimmed mean | 2.5" in restored_text
+    assert "Median | 2.5" in restored_text
+    assert "Excess kurtosis | -1.2" in restored_text
+    assert {str(row["metric"]) for row in target._csv_rows} >= {"trimmed_mean", "median", "q1", "q3", "iqr", "mad"}
+
+
+def test_workspace_restores_outlier_row_flags_from_semantic_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    result = {
+        "mode": "mean_sample",
+        "mean": mp.mpf("3.3333333333333333333"),
+        "std_mean": mp.mpf("3.3333333333333333333"),
+        "std": mp.mpf("5.7735026918962576451"),
+        "v_min": mp.mpf("0"),
+        "v_max": mp.mpf("10"),
+        "method_label": "Arithmetic mean (sample)",
+        "dropped": 0,
+        "source_row_ids": ("r1", "r2", "r3"),
+        "outlier_flags": [
+            {
+                "source_row_id": "r3",
+                "value": "10.0",
+                "metric": "sigma",
+                "reason": "statistics.flag.outlier_sigma.residual_gt_3sigma",
+            }
+        ],
+    }
+    source._display_statistics_result(result, "A", 3, render_plots=False)
+    bundle = capture_workspace(source, title="outlier statistics")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    assert semantic["row_flags"][0]["key"] == "outlier.sigma.1"
+    assert semantic["row_flags"][0]["row_index"] == "r3"
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    # result_edit renders markdown (matching the live run); assert the markdown
+    # source via the cached _last_result_text, not the rendered toPlainText().
+    restored_text = target._last_result_text
+    metrics = {str(row["metric"]): row for row in target._csv_rows}
+    assert "Sigma outlier | 10.0 | source row r3; metric sigma; absolute residual exceeds 3 sigma" in restored_text
+    assert metrics["outlier.sigma.1"]["value"] == "10.0"
+    assert metrics["outlier.sigma.1"]["uncertainty"] == (
+        "source row r3; metric sigma; absolute residual exceeds 3 sigma"
+    )
+
+
+def test_workspace_restores_descriptive_warning_text_not_message_key(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from datalab_core.jobs import ComputeJobRequest, JobMode, JobOptions
+    from datalab_core.session import SessionService
+    from datalab_core.statistics import run_statistics, statistics_payload_to_compute_result
+
+    core_result = SessionService(handlers={JobMode.STATISTICS: run_statistics}).submit(
+        ComputeJobRequest(
+            mode=JobMode.STATISTICS,
+            inputs={"values": ["7"], "stats_mode": "descriptive", "use_sample": True},
+            options=JobOptions(precision_digits=60),
+            request_id="workspace-descriptive-warning-text",
+        )
+    )
+    result = statistics_payload_to_compute_result(core_result.payload, core_result.warnings)
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    source._display_statistics_result(result, "A", 1, render_plots=False)
+    bundle = capture_workspace(source, title="descriptive warning statistics")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    warning_rows = semantic["diagnostic_rows"]
+    assert any(row.get("message_key") == "statistics.warning.descriptive_zero_variance" for row in warning_rows)
+    assert any("Zero variance" in str(row.get("value")) for row in warning_rows)
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    restored_text = target.result_edit.toPlainText()
+    assert "Zero variance" in restored_text
+    assert "Sample descriptive statistics require n>=2" in restored_text
+    assert "statistics.warning.descriptive" not in restored_text
+
+
+def test_workspace_restores_statistics_batch_snapshot_from_semantic_source(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    batches = [
+        {
+            "index": 1,
+            "row_count": 2,
+            "value_col": "A",
+            "result": {
+                "mode": "mean",
+                "mean": mp.mpf("1.5"),
+                "std_mean": mp.mpf("0.5"),
+                "std": mp.mpf("0.7071067811865475"),
+                "v_min": mp.mpf("1"),
+                "v_max": mp.mpf("2"),
+                "method_label": "Arithmetic mean (sample)",
+                "dropped": 0,
+                "source_row_ids": ("batch-1-row-1", "batch-1-row-2"),
+            },
+        },
+        {
+            "index": 2,
+            "row_count": 3,
+            "value_col": "A",
+            "result": {
+                "mode": "mean",
+                "mean": mp.mpf("4"),
+                "std_mean": mp.mpf("1"),
+                "std": mp.mpf("1.7320508075688772"),
+                "v_min": mp.mpf("2"),
+                "v_max": mp.mpf("6"),
+                "method_label": "Arithmetic mean (sample)",
+                "dropped": 0,
+                "source_row_ids": ("batch-2-row-1", "batch-2-row-2", "batch-2-row-3"),
+            },
+        },
+    ]
+    source._display_statistics_batches(batches, "A", render_plots=False)
+
+    bundle = capture_workspace(source, title="semantic statistics batches")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+    assert semantic["compatibility"]["result_cache_kind"] == "statistics_batches"
+    assert semantic["source"]["batches"] == [
+        {
+            "index": 1,
+            "row_count": 2,
+            "value_column": "A",
+            "source_row_ids": ["batch-1-row-1", "batch-1-row-2"],
+        },
+        {
+            "index": 2,
+            "row_count": 3,
+            "value_column": "A",
+            "source_row_ids": ["batch-2-row-1", "batch-2-row-2", "batch-2-row-3"],
+        },
+    ]
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    restored_text = target.result_edit.toPlainText()
+    metrics = {(row["batch"], row["metric"]): row for row in target._csv_rows}
+    assert "=== Statistics: Batch 1 ===" in restored_text
+    assert "=== Statistics: Batch 2 ===" in restored_text
+    assert target._csv_headers == ["batch", "metric", "value", "uncertainty"]
+    assert metrics[(1, "mean")]["value"] == "1.5"
+    assert metrics[(2, "mean")]["value"] == "4.0"
+
+    recaptured = capture_workspace(target, title="semantic statistics batches restored")
+    assert recaptured.manifest["workspace"]["result_snapshot"]["semantic"] == semantic
+
+
+def test_workspace_preserves_statistics_value_columns_config(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.stats_value_column_edit.setText("B, A")
+
+    bundle = capture_workspace(source, title="statistics columns")
+    statistics_config = bundle.manifest["workspace"]["config"]["statistics"]
+    assert statistics_config["value_column"] == "B"
+    assert statistics_config["value_columns"] == ["B", "A"]
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.stats_value_column_edit.text() == "B, A"
+
+
+def test_workspace_preserves_statistics_bootstrap_config(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.stats_workflow_combo, "bootstrap_confidence_intervals")
+    _set_combo_data(source.stats_bootstrap_target_combo, "trimmed_mean")
+    source.stats_bootstrap_resamples_spin.setValue(125)
+    source.stats_bootstrap_seed_edit.setText("42")
+    source.stats_trim_fraction_edit.setText("0.2")
+    source.stats_sample_checkbox.setChecked(True)
+    source.stats_value_column_edit.setText("B, A")
+
+    bundle = capture_workspace(source, title="statistics bootstrap")
+    statistics_config = bundle.manifest["workspace"]["config"]["statistics"]
+
+    assert statistics_config["workflow_mode"] == "bootstrap_confidence_intervals"
+    assert statistics_config["value_columns"] == ["B", "A"]
+    assert statistics_config["bootstrap"] == {
+        "target_statistic": "trimmed_mean",
+        "confidence_level": "0.95",
+        "resample_count": 125,
+        "seed": "42",
+    }
+    assert statistics_config["trim_fraction"] == "0.2"
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.stats_workflow_combo.currentData() == "bootstrap_confidence_intervals"
+    assert target.stats_bootstrap_target_combo.currentData() == "trimmed_mean"
+    assert target.stats_bootstrap_resamples_spin.value() == 125
+    assert target.stats_bootstrap_seed_edit.text() == "42"
+    assert target.stats_trim_fraction_edit.text() == "0.2"
+    assert target.stats_value_column_edit.text() == "B, A"
+    assert target.stats_mode_combo.isHidden()
+    assert not target.stats_bootstrap_target_combo.isHidden()
+    assert not target.stats_trim_fraction_edit.isHidden()
+
+
+def test_workspace_preserves_statistics_hypothesis_config(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.stats_workflow_combo, "hypothesis_tests")
+    _set_combo_data(source.stats_hypothesis_test_combo, "welch_t")
+    _set_combo_data(source.stats_hypothesis_alternative_combo, "greater")
+    source.stats_value_column_edit.setText("A")
+    source.stats_hypothesis_b_column_edit.setText("B")
+    source.stats_hypothesis_null_edit.setText("0.25")
+    source.stats_hypothesis_alpha_edit.setText("0.01")
+
+    bundle = capture_workspace(source, title="statistics hypothesis")
+    statistics_config = bundle.manifest["workspace"]["config"]["statistics"]
+
+    assert statistics_config["workflow_mode"] == "hypothesis_tests"
+    assert statistics_config["hypothesis"] == {
+        "test_kind": "welch_t",
+        "second_column": "B",
+        "null_parameter": "0.25",
+        "alternative": "greater",
+        "alpha": "0.01",
+        "expected_source": "counts",
+        "fitted_parameter_count": 0,
+    }
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.stats_workflow_combo.currentData() == "hypothesis_tests"
+    assert target.stats_hypothesis_test_combo.currentData() == "welch_t"
+    assert target.stats_hypothesis_alternative_combo.currentData() == "greater"
+    assert target.stats_hypothesis_b_column_edit.text() == "B"
+    assert target.stats_hypothesis_null_edit.text() == "0.25"
+    assert target.stats_hypothesis_alpha_edit.text() == "0.01"
+    assert target.stats_mode_combo.isHidden()
+    assert not target.stats_hypothesis_b_column_edit.isHidden()
+
+
+def test_workspace_restore_resets_missing_statistics_bootstrap_config(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.stats_value_column_edit.setText("A")
+    bundle = capture_workspace(source, title="legacy statistics")
+    statistics_config = bundle.manifest["workspace"]["config"]["statistics"]
+    statistics_config.pop("bootstrap", None)
+    statistics_config["workflow_mode"] = "standard"
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    _set_combo_data(target.stats_workflow_combo, "bootstrap_confidence_intervals")
+    _set_combo_data(target.stats_bootstrap_target_combo, "trimmed_mean")
+    target.stats_bootstrap_resamples_spin.setValue(125)
+    target.stats_bootstrap_seed_edit.setText("42")
+
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.stats_workflow_combo.currentData() == "standard"
+    assert target.stats_bootstrap_target_combo.currentData() == "mean"
+    assert target.stats_bootstrap_confidence_edit.text() == "0.95"
+    assert target.stats_bootstrap_resamples_spin.value() == 2000
+    assert target.stats_bootstrap_seed_edit.text() == ""
+    restored = capture_workspace(target, title="restored legacy statistics")
+    assert restored.manifest["workspace"]["config"]["statistics"]["bootstrap"] == {
+        "target_statistic": "mean",
+        "confidence_level": "0.95",
+        "resample_count": 2000,
+        "seed": "",
+    }
+
+
+def test_desktop_statistics_bootstrap_controls_mark_workspace_dirty(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+
+    def reset_snapshot_state() -> None:
+        window._workspace_dirty = False
+        window._workspace_snapshot_only = True
+        window._workspace_snapshot_stale = False
+
+    reset_snapshot_state()
+    _set_combo_data(window.stats_workflow_combo, "bootstrap_confidence_intervals")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    _set_combo_data(window.stats_bootstrap_target_combo, "median")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    window.stats_bootstrap_resamples_spin.setValue(125)
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    window.stats_bootstrap_seed_edit.setText("42")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+
+def test_workspace_round_trips_statistics_time_series_config(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.stats_workflow_combo, "time_series_rolling")
+    source.stats_value_column_edit.setText("A, B")
+    source.stats_sigma_column_edit.setText("sA, sB")
+    _set_combo_data(source.stats_time_series_method_combo, "ewma")
+    source.stats_time_series_time_column_edit.setText("t")
+    source.stats_time_series_window_size_spin.setValue(7)
+    source.stats_time_series_min_periods_spin.setValue(3)
+    _set_combo_data(source.stats_time_series_alignment_combo, "center")
+    _set_combo_data(source.stats_time_series_denominator_combo, "population")
+    _set_combo_data(source.stats_time_series_ewma_parameter_combo, "span")
+    source.stats_time_series_ewma_value_edit.setText("5")
+    source.stats_time_series_ewma_adjust_checkbox.setChecked(True)
+
+    bundle = capture_workspace(source, title="time series config")
+    statistics_config = bundle.manifest["workspace"]["config"]["statistics"]
+
+    assert statistics_config["workflow_mode"] == "time_series_rolling"
+    assert statistics_config["time_series"] == {
+        "series_method": "ewma",
+        "time_column": "t",
+        "window_size": 7,
+        "min_periods": 3,
+        "alignment": "center",
+        "denominator": "population",
+        "ewma_parameter": "span",
+        "ewma_value": "5",
+        "adjust": True,
+    }
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.stats_workflow_combo.currentData() == "time_series_rolling"
+    assert target.stats_value_column_edit.text() == "A, B"
+    assert target.stats_sigma_column_edit.text() == "sA, sB"
+    assert target.stats_time_series_method_combo.currentData() == "ewma"
+    assert target.stats_time_series_time_column_edit.text() == "t"
+    assert target.stats_time_series_window_size_spin.value() == 7
+    assert target.stats_time_series_min_periods_spin.value() == 3
+    assert target.stats_time_series_alignment_combo.currentData() == "center"
+    assert target.stats_time_series_denominator_combo.currentData() == "population"
+    assert target.stats_time_series_ewma_parameter_combo.currentData() == "span"
+    assert target.stats_time_series_ewma_value_edit.text() == "5"
+    assert target.stats_time_series_ewma_adjust_checkbox.isChecked() is True
+
+
+def test_workspace_restores_file_backed_data_for_statistics_time_series(qtbot, tmp_path: Path) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    data_path = tmp_path / "series.txt"
+    data_path.write_text("t A\np1 1\np2 3\np3 5\n", encoding="utf-8")
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.use_file_checkbox.setChecked(True)
+    source.data_file_edit.setText(str(data_path))
+    _set_combo_data(source.stats_workflow_combo, "time_series_rolling")
+    source.stats_value_column_edit.setText("A")
+    source.stats_time_series_time_column_edit.setText("t")
+    source.stats_time_series_window_size_spin.setValue(2)
+    source.stats_time_series_min_periods_spin.setValue(2)
+
+    bundle = capture_workspace(source, title="file backed time series")
+    data_path.unlink()
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.use_file_checkbox.isChecked() is False
+    assert target._data_stack.currentIndex() == 1
+    assert "p1 1" in target.manual_data_edit.toPlainText()
+
+    target._run_statistics_mode(False, "")
+
+    assert target._last_result_kind == "statistics_time_series"
+    assert target._last_result_semantic_snapshot["source"]["time_column"] == "t"
+    assert any(row["time"] == "p2" for row in target._csv_rows)
+
+
+def test_desktop_statistics_hypothesis_controls_mark_workspace_dirty(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+
+    def reset_snapshot_state() -> None:
+        window._workspace_dirty = False
+        window._workspace_snapshot_only = True
+        window._workspace_snapshot_stale = False
+
+    reset_snapshot_state()
+    _set_combo_data(window.stats_workflow_combo, "hypothesis_tests")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    _set_combo_data(window.stats_hypothesis_test_combo, "welch_t")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    window.stats_hypothesis_b_column_edit.setText("C")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    window.stats_hypothesis_null_edit.setText("0.25")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    window.stats_hypothesis_alpha_edit.setText("0.01")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+
+def test_desktop_statistics_time_series_controls_mark_workspace_dirty(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+
+    def reset_snapshot_state() -> None:
+        window._workspace_dirty = False
+        window._workspace_snapshot_only = True
+        window._workspace_snapshot_stale = False
+
+    reset_snapshot_state()
+    _set_combo_data(window.stats_workflow_combo, "time_series_rolling")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    _set_combo_data(window.stats_time_series_method_combo, "rolling_std")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    window.stats_time_series_time_column_edit.setText("t")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    window.stats_time_series_window_size_spin.setValue(5)
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    window.stats_time_series_min_periods_spin.setValue(2)
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    _set_combo_data(window.stats_time_series_alignment_combo, "center")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    _set_combo_data(window.stats_time_series_denominator_combo, "population")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    _set_combo_data(window.stats_time_series_ewma_parameter_combo, "span")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    window.stats_time_series_ewma_value_edit.setText("0.25")
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+    reset_snapshot_state()
+    window.stats_time_series_ewma_adjust_checkbox.setChecked(True)
+    assert window._workspace_dirty is True
+    assert window._workspace_snapshot_stale is True
+
+
+def test_workspace_preserves_statistics_bootstrap_semantic_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    source.manual_data_edit.setPlainText("A\n1\n2\n3\n4\n")
+    source._data_stack.setCurrentIndex(1)
+    _set_combo_data(source.stats_workflow_combo, "bootstrap_confidence_intervals")
+    source.stats_value_column_edit.setText("A")
+    source.stats_bootstrap_resamples_spin.setValue(100)
+    source.stats_bootstrap_seed_edit.setText("42")
+
+    source._run_statistics_mode(False, "")
+
+    bundle = capture_workspace(source, title="statistics bootstrap semantic")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+
+    assert snapshot["kind"] == "statistics_bootstrap"
+    assert semantic["compatibility"]["result_cache_kind"] == "statistics_bootstrap"
+    assert semantic["bootstrap"]["seed"] == 42
+
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target._last_result_semantic_snapshot_kind == "statistics_bootstrap"
+    assert any(row["metric"] == "bootstrap_ci_lower" for row in target._csv_rows)
+    assert "Bootstrap CI lower" in target.result_edit.toPlainText()
+
+    recaptured = capture_workspace(target, title="statistics bootstrap semantic restored")
+    assert recaptured.manifest["workspace"]["result_snapshot"]["semantic"] == semantic
+
+
+def test_workspace_preserves_statistics_hypothesis_semantic_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    source.manual_data_edit.setPlainText("A\n2\n3\n4\n5\n6\n")
+    source._data_stack.setCurrentIndex(1)
+    _set_combo_data(source.stats_workflow_combo, "hypothesis_tests")
+    _set_combo_data(source.stats_hypothesis_test_combo, "one_sample_t")
+    source.stats_value_column_edit.setText("A")
+    source.stats_hypothesis_null_edit.setText("3")
+    source._run_statistics_mode(False, "")
+
+    bundle = capture_workspace(source, title="statistics hypothesis semantic")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+
+    assert snapshot["kind"] == "statistics_hypothesis_test"
+    assert semantic["compatibility"]["result_cache_kind"] == "statistics_hypothesis_test"
+    assert semantic["hypothesis_test"]["test_kind"] == "one_sample_t"
+
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target._last_result_semantic_snapshot_kind == "statistics_hypothesis_test"
+    assert any(row["metric"] == "p_value" for row in target._csv_rows)
+    assert "Hypothesis Test" in target.result_edit.toPlainText()
+
+    recaptured = capture_workspace(target, title="statistics hypothesis semantic restored")
+    assert recaptured.manifest["workspace"]["result_snapshot"]["semantic"] == semantic
+
+
+def test_workspace_preserves_statistics_matrix_semantic_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    source.manual_data_edit.setPlainText("A B\n1 2\n2 4\n3 6\n")
+    source._data_stack.setCurrentIndex(1)
+    _set_combo_data(source.stats_workflow_combo, "covariance_correlation")
+    source.stats_value_column_edit.setText("A, B")
+    source._run_statistics_mode(False, "")
+
+    bundle = capture_workspace(source, title="statistics matrix semantic")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+
+    assert snapshot["kind"] == "statistics_matrix"
+    assert semantic["compatibility"]["result_cache_kind"] == "statistics_matrix"
+    assert semantic["statistics_matrix"]["columns"] == ["A", "B"]
+
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target._last_result_semantic_snapshot_kind == "statistics_matrix"
+    assert any(row["matrix"] == "correlation" and row["row_column"] == "A" for row in target._csv_rows)
+    assert "Covariance/correlation matrix" in target.result_edit.toPlainText()
+
+    recaptured = capture_workspace(target, title="statistics matrix semantic restored")
+    assert recaptured.manifest["workspace"]["result_snapshot"]["semantic"] == semantic
+
+
+def test_workspace_preserves_statistics_grouped_semantic_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    source.manual_data_edit.setPlainText("Group A\ncontrol 1\ncontrol 3\ntreated 2\ntreated 4\n")
+    source._data_stack.setCurrentIndex(1)
+    _set_combo_data(source.stats_workflow_combo, "grouped_statistics")
+    source.stats_group_column_edit.setText("Group")
+    source.stats_value_column_edit.setText("A")
+    source._run_statistics_mode(False, "")
+
+    bundle = capture_workspace(source, title="statistics grouped semantic")
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    semantic = snapshot["semantic"]
+
+    assert snapshot["kind"] == "statistics_grouped"
+    assert semantic["compatibility"]["result_cache_kind"] == "statistics_grouped"
+    assert semantic["statistics_grouped"]["group_order"] == ["control", "treated"]
+
+    snapshot["markdown"] = ""
+    snapshot["markdown_format"] = "plain"
+    snapshot["csv"] = {"headers": [], "rows": []}
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target._last_result_semantic_snapshot_kind == "statistics_grouped"
+    assert any(row["group"] == "control" and row["metric"] == "mean" for row in target._csv_rows)
+    assert "Grouped statistics" in target.result_edit.toPlainText()
+
+    recaptured = capture_workspace(target, title="statistics grouped semantic restored")
+    assert recaptured.manifest["workspace"]["result_snapshot"]["semantic"] == semantic
+
+
+def test_workspace_preserves_statistics_plot_gallery(qtbot, tmp_path) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+    from PySide6.QtGui import QImage
+
+    first_plot = tmp_path / "stats-b.png"
+    second_plot = tmp_path / "stats-a.png"
+    image = QImage(1, 1, QImage.Format.Format_ARGB32)
+    image.fill(0xFF336699)
+    assert image.save(str(first_plot), "PNG")
+    image.fill(0xFF993366)
+    assert image.save(str(second_plot), "PNG")
+    first_plot_bytes = first_plot.read_bytes()
+    second_plot_bytes = second_plot.read_bytes()
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    source.result_edit.setPlainText("multi-column statistics")
+    source._last_result_text = "multi-column statistics"
+    source._last_result_text_format = "plain"
+    source._last_result_rendered_text = "multi-column statistics"
+    source._last_result_kind = "statistics_batches"
+    source._last_result_payloads = {
+        "statistics_batches": {
+            "value_col": "B, A",
+            "value_columns": ["B", "A"],
+            "batches": [
+                {
+                    "index": 1,
+                    "column_index": 1,
+                    "batch_index": 1,
+                    "row_count": 2,
+                    "value_col": "B",
+                    "result": {
+                        "mode": "mean",
+                        "mean": mp.mpf("10"),
+                        "std_mean": mp.mpf("1"),
+                        "std": mp.mpf("1.4142135623730951"),
+                        "v_min": mp.mpf("9"),
+                        "v_max": mp.mpf("11"),
+                        "method_label": "Arithmetic mean (sample)",
+                        "dropped": 0,
+                        "source_row_ids": ("b1", "b2"),
+                    },
+                },
+                {
+                    "index": 2,
+                    "column_index": 2,
+                    "batch_index": 1,
+                    "row_count": 2,
+                    "value_col": "A",
+                    "result": {
+                        "mode": "mean",
+                        "mean": mp.mpf("1.5"),
+                        "std_mean": mp.mpf("0.5"),
+                        "std": mp.mpf("0.7071067811865475"),
+                        "v_min": mp.mpf("1"),
+                        "v_max": mp.mpf("2"),
+                        "method_label": "Arithmetic mean (sample)",
+                        "dropped": 0,
+                        "source_row_ids": ("a1", "a2"),
+                    },
+                },
+            ],
+        }
+    }
+    source._set_image_list("stats", [first_plot, second_plot])
+    source._current_stats_plot_metadata = [
+        {"column": "B", "batch": 1, "plot_index": 1, "title": "B statistics"},
+        {"column": "A", "batch": 1, "plot_index": 1, "title": "A statistics"},
+    ]
+
+    bundle = capture_workspace(source, title="statistics plots", include_history=True)
+    snapshot = bundle.manifest["workspace"]["result_snapshot"]
+    current_history = bundle.manifest["workspace"]["history"]["current"]
+
+    assert [plot["path"] for plot in snapshot["plots"]] == [
+        "attachments/plots/plot-001.png",
+        "attachments/plots/plot-002.png",
+    ]
+    assert [plot["path"] for plot in current_history["rendered_cache"]["plots"]] == [
+        "attachments/plots/plot-001.png",
+        "attachments/plots/plot-002.png",
+    ]
+    assert [plot["column"] for plot in snapshot["plots"]] == ["B", "A"]
+    assert [plot["image_mode"] for plot in snapshot["plots"]] == ["stats", "stats"]
+    assert bundle.attachments["attachments/plots/plot-001.png"] == first_plot_bytes
+    assert bundle.attachments["attachments/plots/plot-002.png"] == second_plot_bytes
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target._image_mode == "stats"
+    assert len(target.current_stats_figures) == 2
+    assert target.result_plot_bytes == first_plot_bytes
+    assert target.image_page_spin.maximum() == 2
+
+
+def test_restored_statistics_semantic_snapshot_does_not_leak_to_new_result(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    result = {
+        "mode": "mean",
+        "mean": mp.mpf("1.5"),
+        "std_mean": mp.mpf("0.5"),
+        "std": mp.mpf("0.7071067811865475"),
+        "v_min": mp.mpf("1"),
+        "v_max": mp.mpf("2"),
+        "method_label": "Arithmetic mean (sample)",
+        "dropped": 0,
+        "source_row_ids": ("1", "2"),
+    }
+    source._display_statistics_result(result, "A", 2, render_plots=False)
+    bundle = capture_workspace(source, title="semantic statistics")
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+    assert target._last_result_semantic_snapshot is not None
+
+    target._set_result_text("root result", final_result=True)
+    target._set_csv_data([{"root": "2"}], ["root"])
+    target._remember_last_result("root_solving", {"markdown": "root result"})
+    assert target._last_result_semantic_snapshot is None
+
+    recaptured = capture_workspace(target, title="root after stats")
+    recaptured_snapshot = recaptured.manifest["workspace"]["result_snapshot"]
+    assert recaptured_snapshot["kind"] == "root_solving"
+    assert "semantic" not in recaptured_snapshot
+    assert recaptured_snapshot["csv"] == {"headers": ["root"], "rows": [{"root": "2"}]}
+
+
+def test_full_result_reset_clears_restored_statistics_semantic_snapshot(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source._apply_language("en")
+    result = {
+        "mode": "mean",
+        "mean": mp.mpf("1.5"),
+        "std_mean": mp.mpf("0.5"),
+        "std": mp.mpf("0.7071067811865475"),
+        "v_min": mp.mpf("1"),
+        "v_max": mp.mpf("2"),
+        "method_label": "Arithmetic mean (sample)",
+        "dropped": 0,
+        "source_row_ids": ("1", "2"),
+    }
+    source._display_statistics_result(result, "A", 2, render_plots=False)
+    bundle = capture_workspace(source, title="semantic statistics")
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+    assert target._last_result_semantic_snapshot is not None
+
+    target._reset_csv_data(clear_non_tabular_result=True)
+    assert target._last_result_semantic_snapshot is None
+    assert target._last_result_semantic_snapshot_kind is None
+    target._set_result_text("calculation failed before a new result payload", final_result=True)
+
+    recaptured = capture_workspace(target, title="failed before remembered result")
+    recaptured_snapshot = recaptured.manifest["workspace"]["result_snapshot"]
+    assert recaptured_snapshot["present"] is True
+    assert "semantic" not in recaptured_snapshot
+
+
 def test_legacy_result_snapshot_fixture_round_trips_display_and_attachment(qtbot, tmp_path) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import restore_workspace
@@ -817,6 +3013,7 @@ def test_legacy_result_snapshot_fixture_round_trips_display_and_attachment(qtbot
     assert restored._csv_headers == ["name", "value"]
     assert restored._csv_rows == [{"name": "legacy", "value": "1.23(4)"}]
     assert restored.result_plot_bytes == PNG_1X1
+    assert restored._last_result_semantic_snapshot is None
 
     round_trip_path = tmp_path / "round-trip.datalab"
     assert restored._save_workspace_to_path(round_trip_path)
@@ -852,9 +3049,7 @@ def test_v2_workspace_fixture_restores_and_saves_back_as_v1(qtbot, tmp_path) -> 
     assert restored.fit_expr_edit.toPlainText() == "a*x"
     assert restored.fit_target_edit.text() == "y"
     assert restored.custom_params_table.rows()[0]["name"] == "a"
-    assert restored._workbench_formula_preview_languages == {
-        "fitting.custom.expression": "latex"
-    }
+    assert not hasattr(restored, "_workbench_formula_preview_languages")
     assert restored._csv_rows == [{"name": "a", "value": "2.0"}]
     assert restored.result_plot_bytes == loaded.attachments["attachments/plots/plot-001.png"]
     assert getattr(restored, "_workspace_snapshot_only", False) is True
@@ -865,9 +3060,7 @@ def test_v2_workspace_fixture_restores_and_saves_back_as_v1(qtbot, tmp_path) -> 
 
     assert saved.manifest["schema"] == "datalab.workspace.v1"
     assert saved.manifest["schema_version"] == 1
-    assert saved.manifest["workspace"]["ui"]["formula_preview"] == {
-        "fitting.custom.expression": "latex"
-    }
+    assert "formula_preview" not in saved.manifest["workspace"]["ui"]
     assert saved.manifest["workspace"]["config"]["fitting"]["expression"] == "a*x"
     assert saved.manifest["workspace"]["result_snapshot"]["present"] is True
 
@@ -1267,6 +3460,51 @@ def test_workspace_restore_old_fitting_config_without_implicit(qtbot) -> None:
     assert [(row[0].text(), row[1].text()) for row in target.variable_rows] == [("x", "A")]
 
 
+def test_workspace_preserves_desktop_fitting_comparison_candidates(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    candidates = (
+        "[\n"
+        '  {"candidate_id": "linear", "label": "Linear", "model_type": "polynomial", "poly_degree": 1}\n'
+        "]"
+    )
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    _set_combo_data(source.mode_combo, "fitting")
+    _set_combo_data(source.fit_model_combo, "comparison")
+    source.fit_comparison_candidates_edit.setPlainText(candidates)
+
+    bundle = capture_workspace(source, title="comparison")
+    fitting = bundle.manifest["workspace"]["config"]["fitting"]
+
+    assert fitting["model"] == "comparison"
+    assert fitting["comparison_candidates"] == candidates
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.fit_model_combo.currentData() == "comparison"
+    assert target.fit_comparison_candidates_edit.toPlainText() == candidates
+
+
+def test_desktop_fitting_comparison_candidates_mark_workspace_dirty(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    _set_combo_data(window.mode_combo, "fitting")
+    _set_combo_data(window.fit_model_combo, "comparison")
+    window._workspace_dirty = False
+
+    window.fit_comparison_candidates_edit.setPlainText(
+        '[{"candidate_id":"linear","label":"Linear","model_type":"polynomial","poly_degree":1}]'
+    )
+
+    assert window._workspace_dirty is True
+
+
 def test_workspace_restore_rejects_malformed_custom_parameter_rows(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace
@@ -1315,6 +3553,12 @@ def test_workspace_restore_rejects_malformed_implicit_constants(qtbot) -> None:
     source.implicit_constants_editor.setChecked(True)
     source.implicit_constants_editor.set_rows([{"name": "K", "value": "1"}])
     bundle = capture_workspace(source, title="malformed implicit constants")
+    bundle.manifest["workspace"]["constants"] = {
+        "enabled": False,
+        "source_kind": "manual_table",
+        "decoded_text": "",
+        "canonical_table": {"headers": ["Name", "Value"], "rows": []},
+    }
     bundle.manifest["workspace"]["config"]["fitting"]["implicit"]["constants"] = [
         {"name": "K", "value": "1"},
         3,
@@ -1473,6 +3717,55 @@ def test_workspace_preserves_custom_constants_table_rows(qtbot) -> None:
     assert target.custom_constants_editor.isChecked() is True
     assert target.custom_constants_editor.using_text_view() is False
     assert target.custom_constants_editor.rows() == [{"name": "K", "value": "1"}]
+
+
+def test_workspace_restore_migrates_only_active_legacy_constants(qtbot) -> None:
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    bundle = capture_workspace(source, title="legacy active constants")
+    workspace = bundle.manifest["workspace"]
+    workspace["current_mode"] = "root_solving"
+    workspace["constants"] = {
+        "enabled": False,
+        "source_kind": "manual_table",
+        "decoded_text": "",
+        "canonical_table": {"headers": ["Name", "Value"], "rows": []},
+    }
+    config = workspace["config"]
+    config["fitting"]["model"] = "custom"
+    config["fitting"]["custom_constants"] = {
+        "enabled": True,
+        "view": "table",
+        "rows": [{"name": "K", "value": "1"}],
+        "text": "",
+        "numeric_mode": "mpmath",
+    }
+    config["fitting"]["implicit"] = {
+        "schema": 2,
+        "constants": [{"name": "I", "value": "2"}],
+        "constants_enabled": True,
+        "constants_view": "table",
+        "constants_text": "",
+        "constants_numeric_mode": "mpmath",
+    }
+    config["root_solving"]["constants"] = {
+        "enabled": True,
+        "view": "table",
+        "rows": [{"name": "R", "value": "3"}],
+        "text": "",
+        "numeric_mode": "uncertainty",
+    }
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.mode_combo.currentData() == "root_solving"
+    assert target.input_constants_editor.numeric_mode() == "uncertainty"
+    assert target.input_constants_editor.rows() == [{"name": "R", "value": "3"}]
 
 
 def test_workspace_preserves_custom_constants_table_view_raw_text_draft(qtbot) -> None:

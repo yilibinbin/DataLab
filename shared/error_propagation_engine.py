@@ -4,7 +4,8 @@ import ast
 import math
 import random
 import re
-from typing import cast
+from collections.abc import Callable
+from typing import Any, cast
 
 from mpmath import mp
 
@@ -16,7 +17,14 @@ from shared.derivatives import (
     numerical_second_partial_derivative,
 )
 from shared.expression_engine import _mp, _normalize_expression, safe_eval
+from shared.distribution_summary import build_monte_carlo_distribution_summary
 from shared.uncertainty import UncertainValue
+
+
+class _CancellationRequested(Exception):
+    def __init__(self, original: BaseException) -> None:
+        super().__init__(str(original))
+        self.original = original
 
 
 def _normalize_header_to_symbol(header: str, index: int) -> str:
@@ -27,10 +35,11 @@ def _normalize_header_to_symbol(header: str, index: int) -> str:
 
 
 def _apply_aliases(formula: str, alias_map: dict[str, str]) -> str:
-    result = formula
-    for alias in sorted(alias_map.keys(), key=len, reverse=True):
-        result = re.sub(r"\b" + re.escape(alias) + r"\b", alias_map[alias], result)
-    return result
+    if not alias_map:
+        return formula
+    aliases = sorted(alias_map, key=lambda alias: (-len(alias), alias))
+    pattern = r"\b(" + "|".join(re.escape(alias) for alias in aliases) + r")\b"
+    return re.sub(pattern, lambda match: alias_map[match.group(1)], formula)
 
 
 def _extract_referenced_names(expression: str | None) -> set[str] | None:
@@ -106,6 +115,9 @@ def apply_formula_to_data(
     propagation_order: int = 1,
     mc_samples: int | None = None,
     mc_seed: int | None = None,
+    return_sensitivities: bool = False,
+    collect_monte_carlo_distribution: bool = False,
+    cancellation_checker: Callable[[], None] | None = None,
 ) -> list[UncertainValue]:
     results: list[UncertainValue] = []
     canonical_vars: list[str] = []
@@ -152,13 +164,16 @@ def apply_formula_to_data(
     const_uncertainties_used = [constants[name].uncertainty for name in used_const_names]
 
     first_error: str | None = None
+    row_cancellation_checker = _row_cancellation_checker(cancellation_checker)
     for row_num, row_data in enumerate(parsed_data):
+        _check_cancelled(cancellation_checker)
         row_values = [row_data[idx].value for idx in used_header_indices]
         row_uncertainties = [row_data[idx].uncertainty for idx in used_header_indices]
         row_values.extend(const_values_used)
         row_uncertainties.extend(const_uncertainties_used)
         try:
             components: list[tuple[str, mp.mpf]] | None = None
+            monte_carlo_distribution: dict[str, object] | None = None
             if return_components:
                 propagated = error_propagation(
                     rewritten_formula,
@@ -171,11 +186,19 @@ def apply_formula_to_data(
                     order=propagation_order,
                     mc_samples=mc_samples,
                     mc_seed=mc_seed,
+                    collect_monte_carlo_distribution=collect_monte_carlo_distribution,
+                    cancellation_checker=row_cancellation_checker,
                 )
-                result_value, result_uncertainty, components = cast(
-                    tuple[mp.mpf, mp.mpf, list[tuple[str, mp.mpf]]],
-                    propagated,
-                )
+                if collect_monte_carlo_distribution and _is_monte_carlo_method(propagation_method):
+                    result_value, result_uncertainty, components, monte_carlo_distribution = cast(
+                        tuple[mp.mpf, mp.mpf, list[tuple[str, mp.mpf]], dict[str, object] | None],
+                        propagated,
+                    )
+                else:
+                    result_value, result_uncertainty, components = cast(
+                        tuple[mp.mpf, mp.mpf, list[tuple[str, mp.mpf]]],
+                        propagated,
+                    )
             else:
                 propagated = error_propagation(
                     rewritten_formula,
@@ -188,11 +211,19 @@ def apply_formula_to_data(
                     order=propagation_order,
                     mc_samples=mc_samples,
                     mc_seed=mc_seed,
+                    collect_monte_carlo_distribution=collect_monte_carlo_distribution,
+                    cancellation_checker=row_cancellation_checker,
                 )
-                result_value, result_uncertainty = cast(
-                    tuple[mp.mpf, mp.mpf],
-                    propagated,
-                )
+                if collect_monte_carlo_distribution and _is_monte_carlo_method(propagation_method):
+                    result_value, result_uncertainty, monte_carlo_distribution = cast(
+                        tuple[mp.mpf, mp.mpf, dict[str, object] | None],
+                        propagated,
+                    )
+                else:
+                    result_value, result_uncertainty = cast(
+                        tuple[mp.mpf, mp.mpf],
+                        propagated,
+                    )
             contributions_map: dict[str, mp.mpf] | None = None
             if return_components and components:
                 contributions_map = {}
@@ -203,9 +234,28 @@ def apply_formula_to_data(
                     except Exception:
                         contrib_val = contrib_var
                     contributions_map[label] = contributions_map.get(label, mp.mpf("0")) + contrib_val
-            results.append(UncertainValue(result_value, result_uncertainty, contributions=contributions_map))
+            sensitivities_map: dict[str, dict[str, object]] | None = None
+            if return_sensitivities and _is_taylor_method(propagation_method):
+                sensitivities_map = _taylor_sensitivity_metadata(
+                    rewritten_formula,
+                    canonical_vars_used,
+                    row_values,
+                    result_value,
+                    label_by_canonical=label_by_canonical,
+                )
+            results.append(
+                UncertainValue(
+                    result_value,
+                    result_uncertainty,
+                    contributions=contributions_map,
+                    sensitivities=sensitivities_map,
+                    monte_carlo_distribution=monte_carlo_distribution,
+                )
+            )
             if verbose:
                 print(f"Row {row_num + 1}: {results[-1]}")
+        except _CancellationRequested as exc:
+            raise exc.original from exc
         except Exception as exc:
             zh_e, en_e = _split_dual(str(exc))
             message = _dual_msg(
@@ -274,7 +324,14 @@ def error_propagation(
     order: int = 1,
     mc_samples: int | None = None,
     mc_seed: int | None = None,
-) -> tuple[mp.mpf, mp.mpf] | tuple[mp.mpf, mp.mpf, list[tuple[str, mp.mpf]]]:
+    collect_monte_carlo_distribution: bool = False,
+    cancellation_checker: Callable[[], None] | None = None,
+) -> (
+    tuple[mp.mpf, mp.mpf]
+    | tuple[mp.mpf, mp.mpf, list[tuple[str, mp.mpf]]]
+    | tuple[mp.mpf, mp.mpf, dict[str, object] | None]
+    | tuple[mp.mpf, mp.mpf, list[tuple[str, mp.mpf]], dict[str, object] | None]
+):
     method_key = (method or "taylor").strip().lower()
     if method_key in {"mc", "montecarlo", "monte_carlo", "monte-carlo"}:
         method_key = "monte_carlo"
@@ -300,6 +357,8 @@ def error_propagation(
             return_components,
             samples=mc_samples,
             seed=mc_seed,
+            collect_distribution=collect_monte_carlo_distribution,
+            cancellation_checker=cancellation_checker,
         )
     if order_val not in {1, 2}:
         raise ValueError(
@@ -313,19 +372,17 @@ def error_propagation(
     contrib_map: dict[str, mp.mpf] = {}
     symbolic_partials = _get_symbolic_partials(formula_str, list(variables))
     for i, name in enumerate(variables):
+        _check_cancelled(cancellation_checker)
         sigma = sigma_vec[i]
         if sigma <= 0:
             continue
-        partial_derivative = None
-        if symbolic_partials and i < len(symbolic_partials):
-            sym_func = symbolic_partials[i]
-            if sym_func is not None:
-                try:
-                    partial_derivative = mp.mpf(sym_func(*values))
-                except Exception:
-                    partial_derivative = None
-        if partial_derivative is None:
-            partial_derivative = numerical_partial_derivative(formula_str, variables, values, i, h=None)
+        partial_derivative = _first_order_partial_derivative(
+            formula_str,
+            variables,
+            values,
+            i,
+            symbolic_partials,
+        )
         contrib_var = (partial_derivative * sigma) ** 2
         total_variance += contrib_var
         contrib_map[name] = contrib_map.get(name, mp.mpf("0")) + mp.mpf(contrib_var)
@@ -343,6 +400,97 @@ def error_propagation(
     if return_components:
         return result_value, result_uncertainty, [(name, value) for name, value in contrib_map.items() if value != 0]
     return result_value, result_uncertainty
+
+
+def _is_taylor_method(method: str) -> bool:
+    method_key = (method or "taylor").strip().lower()
+    return method_key not in {"mc", "montecarlo", "monte_carlo", "monte-carlo"}
+
+
+def _is_monte_carlo_method(method: str) -> bool:
+    return (method or "taylor").strip().lower() in {"mc", "montecarlo", "monte_carlo", "monte-carlo"}
+
+
+def _first_order_partial_derivative(
+    formula_str: str,
+    variables: list[str],
+    values: list[mp.mpf],
+    index: int,
+    symbolic_partials: list[Any] | None,
+) -> mp.mpf:
+    partial_derivative = None
+    if symbolic_partials and index < len(symbolic_partials):
+        sym_func = symbolic_partials[index]
+        if sym_func is not None:
+            try:
+                partial_derivative = mp.mpf(sym_func(*values))
+            except Exception:
+                partial_derivative = None
+    if partial_derivative is None:
+        partial_derivative = numerical_partial_derivative(formula_str, variables, values, index, h=None)
+    return mp.mpf(partial_derivative)
+
+
+def _taylor_sensitivity_metadata(
+    formula_str: str,
+    variables: list[str],
+    values: list[mp.mpf],
+    result_value: mp.mpf,
+    *,
+    label_by_canonical: dict[str, str],
+) -> dict[str, dict[str, object]] | None:
+    symbolic_partials = _get_symbolic_partials(formula_str, list(variables))
+    sensitivities: dict[str, dict[str, object]] = {}
+    for index, name in enumerate(variables):
+        try:
+            derivative = _first_order_partial_derivative(
+                formula_str,
+                list(variables),
+                list(values),
+                index,
+                symbolic_partials,
+            )
+        except Exception:
+            continue
+        absolute = mp.fabs(derivative)
+        relative: mp.mpf | None = None
+        relative_omission_reason: str | None = None
+        input_value = mp.mpf(values[index])
+        output_value = mp.mpf(result_value)
+        if not mp.isfinite(absolute) or not mp.isfinite(input_value) or not mp.isfinite(output_value):
+            relative_omission_reason = "nonfinite"
+        elif output_value == 0:
+            relative_omission_reason = "zero_output"
+        elif input_value == 0:
+            relative_omission_reason = "zero_input"
+        else:
+            relative_candidate = mp.fabs(derivative * input_value / output_value)
+            if mp.isfinite(relative_candidate):
+                relative = relative_candidate
+            else:
+                relative_omission_reason = "nonfinite"
+        label = label_by_canonical.get(name, name)
+        existing = sensitivities.get(label)
+        if existing is None:
+            sensitivities[label] = {
+                "absolute": absolute,
+                "relative": relative,
+                "relative_omission_reason": relative_omission_reason,
+            }
+            continue
+        # Two distinct canonical variables share this display label (duplicate column
+        # headers). Aggregate rather than overwrite, mirroring contributions_map. Sum
+        # absolute sensitivities; sum relatives only when every contributor supplied one,
+        # otherwise drop the relative and record the first omission reason.
+        existing["absolute"] = cast(mp.mpf, existing["absolute"]) + absolute
+        existing_relative = cast("mp.mpf | None", existing["relative"])
+        if existing_relative is not None and relative is not None:
+            existing["relative"] = existing_relative + relative
+        else:
+            existing["relative"] = None
+            if existing.get("relative_omission_reason") is None:
+                existing["relative_omission_reason"] = relative_omission_reason or "aggregated"
+    return sensitivities or None
 
 
 def _safe_sigma(sigma: object) -> mp.mpf:
@@ -372,19 +520,48 @@ def _monte_carlo_propagation(
     *,
     samples: int | None,
     seed: int | None,
-) -> tuple[mp.mpf, mp.mpf] | tuple[mp.mpf, mp.mpf, list[tuple[str, mp.mpf]]]:
+    collect_distribution: bool = False,
+    cancellation_checker: Callable[[], None] | None = None,
+) -> (
+    tuple[mp.mpf, mp.mpf]
+    | tuple[mp.mpf, mp.mpf, list[tuple[str, mp.mpf]]]
+    | tuple[mp.mpf, mp.mpf, dict[str, object] | None]
+    | tuple[mp.mpf, mp.mpf, list[tuple[str, mp.mpf]], dict[str, object] | None]
+):
     sample_count = int(samples) if samples is not None else 5000
     if sample_count < 100:
         raise ValueError(_dual_msg("Monte Carlo 样本数至少为 100。", "Monte Carlo sample count must be at least 100."))
+    _check_cancelled(cancellation_checker)
     nominal_value = _evaluate_formula(formula_str, {name: mp.mpf(values[idx]) for idx, name in enumerate(variables)})
     if all(sigma <= 0 for sigma in sigma_vec):
+        summary = (
+            _monte_carlo_distribution_summary(
+                sample_count=sample_count,
+                accepted_count=sample_count,
+                rejected_count=0,
+                mean=nominal_value,
+                std=mp.mpf("0"),
+                accepted_samples=[nominal_value] * sample_count,
+            )
+            if collect_distribution
+            else None
+        )
+        if collect_distribution:
+            return (
+                (nominal_value, mp.mpf("0"), [], summary)
+                if return_components
+                else (nominal_value, mp.mpf("0"), summary)
+            )
         return (nominal_value, mp.mpf("0"), []) if return_components else (nominal_value, mp.mpf("0"))
     rng = random.Random(int(seed) if seed is not None else None)
     mean = mp.mpf("0")
     m2 = mp.mpf("0")
     used = 0
     rejected = 0
-    for _ in range(sample_count):
+    accepted_samples: list[mp.mpf] | None = [] if collect_distribution else None
+    for sample_index in range(sample_count):
+        if sample_index % 128 == 0:
+            _check_cancelled(cancellation_checker)
         sample_scope = {}
         for idx, name in enumerate(variables):
             sig = sigma_vec[idx]
@@ -395,6 +572,8 @@ def _monte_carlo_propagation(
             rejected += 1
             continue
         used += 1
+        if accepted_samples is not None:
+            accepted_samples.append(y)
         delta = y - mean
         mean += delta / used
         m2 += delta * (y - mean)
@@ -414,7 +593,58 @@ def _monte_carlo_propagation(
         )
     variance = m2 / (used - 1) if used > 1 else mp.mpf("0")
     std = mp.sqrt(variance) if variance >= 0 else mp.nan
+    summary = (
+        _monte_carlo_distribution_summary(
+            sample_count=sample_count,
+            accepted_count=used,
+            rejected_count=rejected,
+            mean=mean,
+            std=std,
+            accepted_samples=accepted_samples or [],
+        )
+        if collect_distribution
+        else None
+    )
+    if collect_distribution:
+        return (mean, std, [], summary) if return_components else (mean, std, summary)
     return (mean, std, []) if return_components else (mean, std)
+
+
+def _monte_carlo_distribution_summary(
+    *,
+    sample_count: int,
+    accepted_count: int,
+    rejected_count: int,
+    mean: mp.mpf,
+    std: mp.mpf,
+    accepted_samples: list[mp.mpf],
+) -> dict[str, object]:
+    return build_monte_carlo_distribution_summary(
+        sample_count=sample_count,
+        accepted_count=accepted_count,
+        rejected_count=rejected_count,
+        mean=mean,
+        std=std,
+        accepted_samples=accepted_samples,
+    )
+
+
+def _check_cancelled(cancellation_checker: Callable[[], None] | None) -> None:
+    if cancellation_checker is not None:
+        cancellation_checker()
+
+
+def _row_cancellation_checker(cancellation_checker: Callable[[], None] | None) -> Callable[[], None] | None:
+    if cancellation_checker is None:
+        return None
+
+    def wrapped() -> None:
+        try:
+            cancellation_checker()
+        except BaseException as exc:
+            raise _CancellationRequested(exc) from exc
+
+    return wrapped
 
 
 def _randn(rng: random.Random) -> float:

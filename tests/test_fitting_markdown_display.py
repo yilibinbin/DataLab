@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 from mpmath import mp
 
+from fitting.diagnostics import attach_fit_diagnostics
 from fitting.hp_fitter import FitResult
 
 
@@ -76,6 +77,9 @@ class _MinimalSelf:
             return mp.nstr(v, 6)
         return f"{mp.nstr(v, 6)} ± {mp.nstr(e, 4)}"
 
+    def _format_display_value(self, value: object) -> str:
+        return self._format_precision_value(value)
+
     def _localize_text(self, text: str) -> str:
         if not text:
             return text
@@ -83,6 +87,28 @@ class _MinimalSelf:
             zh, _, en = text.partition(" / ")
             return en if self.is_en else zh
         return text
+
+    def _fit_output_unit(self, units: dict[str, object] | None, target_column: str | None = None) -> str:
+        from shared.unit_annotations import unit_annotation_text
+
+        return unit_annotation_text(units, "outputs", "result")
+
+    def _fit_parameter_units(self, units: dict[str, object] | None, names) -> dict[str, str]:
+        from shared.unit_annotations import unit_annotations_for_labels
+
+        return unit_annotations_for_labels(
+            units,
+            "parameters",
+            list(names),
+            fallback_prefix="parameter",
+        )
+
+    def _fit_csv_headers(self, rows: list[dict[str, object]]) -> list[str]:
+        headers = ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error"]
+        if any("unit" in row for row in rows):
+            headers.append("unit")
+        headers.append("note")
+        return headers
 
 
 def _make_fit_result(
@@ -138,6 +164,7 @@ def _format(
     fit_result: FitResult,
     expression: str | None = "a*x + b",
     substituted: str | None = "1.5*x + 2.0",
+    units: dict[str, object] | None = None,
 ) -> str:
     """Invoke the fitting mixin's formatter via the bound method.
 
@@ -148,7 +175,7 @@ def _format(
 
     return WindowFittingMixin._format_fit_result_text(
         instance,  # type: ignore[arg-type]
-        fit_result, expression, substituted,
+        fit_result, expression, substituted, units=units,
     )
 
 
@@ -232,6 +259,101 @@ def test_fit_text_renders_metrics_in_markdown_table() -> None:
             f"Metric {metric!r} must appear as a Markdown table row "
             f"(``| {metric} | ... |``). Output was:\n{text}"
         )
+
+
+def test_fit_text_and_csv_include_display_only_units_when_present() -> None:
+    from app_desktop.window_fitting_mixin import WindowFittingMixin
+
+    instance = _MinimalSelf(is_en=True)
+    fit = _make_fit_result(
+        params={"a": mp.mpf("1.5")},
+        stat={"a": mp.mpf("0.01")},
+    )
+    units = {
+        "parameters": {"a": {"unit": "m/s"}},
+        "outputs": {"result": {"unit": "J"}},
+    }
+
+    text = _format(instance, fit, units=units)
+    rows = WindowFittingMixin._build_fit_csv_rows(  # type: ignore[misc]
+        instance,  # type: ignore[arg-type]
+        fit,
+        "a*x",
+        units=units,
+    )
+    headers = WindowFittingMixin._fit_csv_headers(  # type: ignore[misc]
+        instance,  # type: ignore[arg-type]
+        rows,
+    )
+
+    assert "| Parameter | Unit | Value ± Error |" in text
+    assert "| a | m/s |" in text
+    assert "| RMSE | J |" in text
+    by_name = {str(row["name"]): row for row in rows}
+    assert by_name["a"]["unit"] == "m/s"
+    assert by_name["rmse"]["unit"] == "J"
+    assert headers == [
+        "batch",
+        "section",
+        "name",
+        "value",
+        "uncertainty",
+        "stat_error",
+        "sys_error",
+        "unit",
+        "note",
+    ]
+
+
+def test_fit_text_reads_sentinel_metrics_from_fit_result() -> None:
+    instance = _MinimalSelf(is_en=False)
+    fit = _make_fit_result(params={"a": mp.mpf("1.0")})
+    fit.chi2 = mp.mpf("101")
+    fit.reduced_chi2 = mp.mpf("202")
+    fit.aic = mp.mpf("303")
+    fit.bic = mp.mpf("404")
+    fit.r2 = mp.mpf("0.505")
+    fit.rmse = mp.mpf("0.606")
+
+    text = _format(instance, fit)
+
+    for value in ("101", "202", "303", "404", "0.505", "0.606"):
+        assert value in text
+
+
+def test_fit_text_and_csv_include_attached_diagnostics() -> None:
+    from app_desktop.window_fitting_mixin import WindowFittingMixin
+
+    instance = _MinimalSelf(is_en=True)
+    fit = _make_fit_result(
+        params={"a": mp.mpf("1"), "b": mp.mpf("2")},
+        stat={"a": mp.mpf("2"), "b": mp.mpf("3")},
+    )
+    fit.chi2 = mp.mpf("4.6051701859880913680359829093687284152022029772575")
+    fit.reduced_chi2 = fit.chi2 / 2
+    fit.residuals = [mp.mpf("1"), mp.mpf("-2")]
+    fit.rmse = mp.mpf("2")
+    fit.covariance = [[mp.mpf("4"), mp.mpf("6")], [mp.mpf("6"), mp.mpf("9")]]
+    fit.details["dof"] = 2
+    fit.details["covariance_parameters"] = ["a", "b"]
+    attach_fit_diagnostics(fit, sigma_series=[mp.mpf("2"), mp.mpf("4")])
+
+    text = _format(instance, fit)
+    rows = WindowFittingMixin._build_fit_csv_rows(  # type: ignore[misc]
+        instance,  # type: ignore[arg-type]
+        fit,
+        "a*x + b",
+    )
+
+    assert "χ² p-value" in text
+    assert "Max standardized residual" in text
+    assert "Parameter Correlation Matrix" in text
+    assert "Sigma-standardized residual" in text
+    by_name = {str(row["name"]): row for row in rows}
+    assert by_name["chi_square_p_value"]["section"] == "metric"
+    assert by_name["max_standardized_residual"]["value"] == "0.5"
+    assert by_name["corr[a,b]"]["section"] == "correlation"
+    assert by_name["standardized_residual[1]"]["note"] == "Sigma-standardized residual"
 
 
 def test_fit_text_includes_model_and_substituted_as_bold_metadata() -> None:

@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
-from typing import Any
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any, cast
 
 from ._payload import normalize_json_payload
 
 
 _V1_SCHEMA_VERSION = 1
-FORMULA_PREVIEW_LANGUAGES = frozenset(("datalab", "python", "mathematica", "latex"))
+_DISPLAY_ONLY_UNIT_FAMILIES = ("root_solving", "fitting", "statistics")
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,8 @@ class WorkbenchModel:
     compute: Mapping[str, Any]
     ui: Mapping[str, Any] = field(default_factory=dict)
     result_snapshot: Mapping[str, Any] = field(default_factory=dict)
+    provenance: Mapping[str, Any] | None = None
+    history: Mapping[str, Any] | None = None
     title: str = "Untitled"
     language: str = "auto"
     schema_version: int = _V1_SCHEMA_VERSION
@@ -68,6 +70,24 @@ class WorkbenchModel:
             ),
             path="result_snapshot",
         )
+        history = None
+        if "history" in workspace:
+            from .history import history_store_from_json
+
+            history_payload = normalize_json_payload(
+                _mapping_or_empty(workspace.get("history"), field_name="history"),
+                path="history",
+            )
+            history = normalize_json_payload(
+                history_store_from_json(history_payload).to_json(),
+                path="history",
+            )
+        provenance = None
+        if "provenance" in workspace:
+            from .recipe_provenance import normalize_workspace_provenance
+
+            provenance_payload = normalize_workspace_provenance(workspace.get("provenance"))
+            provenance = normalize_json_payload(provenance_payload, path="provenance")
 
         return cls(
             title=_optional_text(workspace.get("title"), default="Untitled", field_name="title"),
@@ -76,6 +96,8 @@ class WorkbenchModel:
             compute=compute,
             ui=_normalize_ui(workspace.get("ui"), lenient=lenient_ui),
             result_snapshot=result_snapshot,
+            provenance=provenance,
+            history=history,
         )
 
     def compute_hash(self) -> str:
@@ -85,7 +107,7 @@ class WorkbenchModel:
 
     def to_v1_workspace(self) -> dict[str, Any]:
         compute = copy.deepcopy(self.compute)
-        return {
+        workspace = {
             "title": self.title,
             "current_mode": self.current_mode,
             "language": self.language,
@@ -95,40 +117,30 @@ class WorkbenchModel:
             "config": compute.get("config") or {},
             "result_snapshot": copy.deepcopy(self.result_snapshot),
         }
+        if self.history is not None:
+            workspace["history"] = copy.deepcopy(self.history)
+        if self.provenance is not None:
+            workspace["provenance"] = copy.deepcopy(self.provenance)
+        return workspace
 
     @property
     def formula_preview_languages(self) -> dict[str, str]:
-        raw_preview = self.ui.get("formula_preview")
-        if not isinstance(raw_preview, Mapping):
-            return {}
-        return _normalize_formula_preview(raw_preview)
+        """Deprecated compatibility view for removed preview-language UI state."""
+        return {}
 
     def formula_preview_language(self, schema_key: str) -> str | None:
         if not isinstance(schema_key, str):
             raise TypeError("formula preview schema key must be a string.")
-        return self.formula_preview_languages.get(schema_key)
+        return None
 
     def with_formula_preview_language(self, schema_key: str, language: str) -> "WorkbenchModel":
-        schema_key = _formula_preview_text(schema_key, field_name="schema key")
-        language = _formula_preview_text(language, field_name="language")
-        preview = self.formula_preview_languages
-        preview[schema_key] = language
-        return self._replace_formula_preview_languages(preview)
+        _formula_preview_text(schema_key, field_name="schema key")
+        _formula_preview_text(language, field_name="language")
+        return self
 
     def without_formula_preview_language(self, schema_key: str) -> "WorkbenchModel":
-        schema_key = _formula_preview_text(schema_key, field_name="schema key")
-        preview = self.formula_preview_languages
-        preview.pop(schema_key, None)
-        return self._replace_formula_preview_languages(preview)
-
-    def _replace_formula_preview_languages(self, preview: Mapping[str, str]) -> "WorkbenchModel":
-        ui = copy.deepcopy(dict(self.ui))
-        normalized = _normalize_formula_preview(preview)
-        if normalized:
-            ui["formula_preview"] = normalized
-        else:
-            ui.pop("formula_preview", None)
-        return replace(self, ui=ui)
+        _formula_preview_text(schema_key, field_name="schema key")
+        return self
 
 
 def _normalize_compute_workspace(
@@ -137,12 +149,13 @@ def _normalize_compute_workspace(
     current_mode: str,
     allow_legacy_floats: bool,
 ) -> Mapping[str, Any]:
-    compute_workspace = {
+    compute_workspace: Mapping[str, Any] = {
         "current_mode": current_mode,
         "data": _mapping_or_empty(workspace.get("data"), field_name="data"),
         "constants": _mapping_or_empty(workspace.get("constants"), field_name="constants"),
         "config": _mapping_or_empty(workspace.get("config"), field_name="config"),
     }
+    compute_workspace = _normalize_raw_unit_configs_before_legacy_float(compute_workspace)
     compute_workspace = _legacy_float_payload(
         compute_workspace,
         allow_legacy_floats=allow_legacy_floats,
@@ -150,7 +163,69 @@ def _normalize_compute_workspace(
     normalized = normalize_json_payload(compute_workspace, path="compute")
     if not isinstance(normalized, Mapping):
         raise TypeError("compute workspace must be a mapping.")
-    return normalized
+    return _normalize_unit_configs_in_compute(normalized)
+
+
+def _normalize_raw_unit_configs_before_legacy_float(compute: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _normalize_unit_configs(compute, refreeze=False)
+
+
+def _normalize_unit_configs_in_compute(compute: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _normalize_unit_configs(compute, refreeze=True)
+
+
+def _normalize_unit_configs(compute: Mapping[str, Any], *, refreeze: bool) -> Mapping[str, Any]:
+    config = compute.get("config")
+    if not isinstance(config, Mapping):
+        return compute
+    families = ("error", *_DISPLAY_ONLY_UNIT_FAMILIES)
+    has_unit_config = False
+    for family in families:
+        family_config = config.get(family)
+        if isinstance(family_config, Mapping) and "units" in family_config:
+            has_unit_config = True
+            break
+    if not has_unit_config:
+        return compute
+
+    normalized = _mutable_json_copy(compute)
+    mutable_config = normalized.get("config")
+    if not isinstance(mutable_config, dict):
+        return compute
+    for family in families:
+        mutable_family = mutable_config.get(family)
+        if not isinstance(mutable_family, dict) or "units" not in mutable_family:
+            continue
+        mutable_family["units"] = _normalize_unit_config_for_family(family, mutable_family.get("units"))
+    if not refreeze:
+        return cast(Mapping[str, Any], normalized)
+    refrozen = normalize_json_payload(normalized, path="compute")
+    if not isinstance(refrozen, Mapping):
+        raise TypeError("compute workspace must be a mapping.")
+    return refrozen
+
+
+def _normalize_unit_config_for_family(family: str, units: Any) -> dict[str, Any] | None:
+    from shared.unit_annotations import (
+        UnitAnnotationError,
+        normalize_display_only_family_units,
+        normalize_unit_annotations,
+    )
+
+    try:
+        if family == "error":
+            return normalize_unit_annotations(units)
+        return normalize_display_only_family_units(units, family=family)
+    except UnitAnnotationError as exc:
+        raise TypeError(f"config.{family}.units is invalid: {exc}") from exc
+
+
+def _mutable_json_copy(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {copy.deepcopy(key): _mutable_json_copy(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray, memoryview)):
+        return [_mutable_json_copy(item) for item in value]
+    return copy.deepcopy(value)
 
 
 def _normalize_ui(raw_ui: Any, *, lenient: bool = False) -> dict[str, Any]:
@@ -159,47 +234,16 @@ def _normalize_ui(raw_ui: Any, *, lenient: bool = False) -> dict[str, Any]:
     if not isinstance(raw_ui, Mapping):
         raise TypeError("ui must be a mapping.")
     ui = copy.deepcopy(dict(raw_ui))
-    if "formula_preview" in ui:
-        preview = ui.get("formula_preview")
-        if preview is None:
-            ui.pop("formula_preview", None)
-        else:
-            try:
-                ui["formula_preview"] = _normalize_formula_preview(preview)
-            except (TypeError, ValueError):
-                if not lenient:
-                    raise
-                ui.pop("formula_preview", None)
+    # Preview-language UI state was removed. Keep old workspaces readable, but
+    # do not expose or re-save their legacy formula_preview metadata.
+    ui.pop("formula_preview", None)
     return ui
-
-
-def _normalize_formula_preview(raw_preview: Any) -> dict[str, str]:
-    if not isinstance(raw_preview, Mapping):
-        raise TypeError("ui.formula_preview must be a mapping.")
-    normalized: dict[str, str] = {}
-    for key, value in raw_preview.items():
-        if not isinstance(key, str) or not isinstance(value, str):
-            raise TypeError("ui.formula_preview keys and values must be strings.")
-        if key and value:
-            normalized[key] = _normalize_formula_preview_language(value)
-    return normalized
 
 
 def _formula_preview_text(value: Any, *, field_name: str) -> str:
     if not isinstance(value, str) or not value:
         raise TypeError(f"formula preview {field_name} must be a non-empty string.")
     return value
-
-
-def _normalize_formula_preview_language(language: str) -> str:
-    normalized = _formula_preview_text(language, field_name="language")
-    if normalized not in FORMULA_PREVIEW_LANGUAGES:
-        allowed = ", ".join(sorted(FORMULA_PREVIEW_LANGUAGES))
-        raise ValueError(
-            f"Unsupported formula preview language: {normalized!r}. "
-            f"Expected one of: {allowed}."
-        )
-    return normalized
 
 
 def _legacy_float_payload(value: Any, *, allow_legacy_floats: bool) -> Any:

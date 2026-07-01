@@ -50,6 +50,30 @@ print("ok")
     assert completed.stdout.strip() == "ok"
 
 
+def test_render_formula_metadata_does_not_import_desktop_renderer() -> None:
+    script = r"""
+import sys
+
+from datalab_latex.formula_render_service import RenderRequest, render_formula_metadata
+
+result = render_formula_metadata(RenderRequest(source="x^2 + 1"))
+if not result.ok:
+    raise SystemExit(result.error_message)
+if "app_desktop.formula_renderer" in sys.modules:
+    raise SystemExit("desktop renderer imported by metadata service")
+print("ok")
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    )
+
+    assert completed.stdout.strip() == "ok"
+
+
 def test_datalab_latex_package_import_stays_lightweight() -> None:
     script = r"""
 import sys
@@ -126,6 +150,26 @@ def test_render_service_accepts_datalab_python_and_mathematica_sources() -> None
     assert mathematica.ok
     assert r"\sin" in mathematica.latex
     assert r"\sqrt{A}" in mathematica.latex
+
+
+def test_render_service_does_not_double_escape_pi_inside_nested_calls() -> None:
+    from datalab_latex.formula_render_service import (
+        InputLanguage,
+        RenderRequest,
+        render_formula,
+    )
+
+    result = render_formula(
+        RenderRequest(
+            source="Exp[-x] + Log[Pi*x]",
+            language=InputLanguage.MATHEMATICA,
+        )
+    )
+
+    assert result.ok, result.error_message
+    assert r"\pi\cdot x" in result.latex
+    assert r"\\pi" not in result.latex
+    assert result.png_bytes.startswith(b"\x89PNG")
 
 
 def test_python_formula_preview_handles_nested_calls_and_function_exponents() -> None:
@@ -390,3 +434,22 @@ def test_render_service_returns_structured_error_for_bad_input() -> None:
     assert result.png_bytes == b""
     assert result.fallback_text == "A + )"
     assert result.error_message
+
+
+def test_sympy_formatter_rejects_attribute_access_gadget() -> None:
+    # P0-2: the SymPy formatter parses arbitrary expressions with parse_expr. Without an
+    # AST pre-check, attribute-access gadgets (e.g. `.__class__`) slip through and render
+    # to an object repr instead of being rejected — the first rung of a sandbox escape.
+    from datalab_latex.formula_render_service import _format_latex_formula_sympy
+
+    with pytest.raises(ValueError):
+        _format_latex_formula_sympy("sqrt(1).__class__")
+
+
+def test_sympy_formatter_still_renders_ordinary_lowercase_formula() -> None:
+    # Regression guard: the renderer accepts lowercase function names (sin, cos, ...),
+    # so the AST hardening must not reject legitimate formulas.
+    from datalab_latex.formula_render_service import _format_latex_formula_sympy
+
+    out = _format_latex_formula_sympy("sin(x) + a*x^2")
+    assert isinstance(out, str) and out.strip()

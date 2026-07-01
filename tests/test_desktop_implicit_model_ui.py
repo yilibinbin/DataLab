@@ -7,7 +7,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QFrame, QWidget  # noqa: E402
 
 from fitting.auto_models import AUTO_MODELS  # noqa: E402
 
@@ -50,6 +50,28 @@ def test_implicit_controls_exist_and_method_options(window) -> None:
         for index in range(window.implicit_method_combo.count())
     } == {"fixed_point", "root"}
     assert not window.implicit_model_widget.isHidden()
+
+
+def test_fitting_panel_uses_workbench_section_card_for_model_controls(window) -> None:
+    assert window.fit_box.objectName() == "fitting_mode_view"
+    assert window.fit_box.property("datalab_view_module") == "app_desktop.views.fitting"
+    assert window.fit_box.property("datalab_workbench_section_host") is True
+
+    card = window.fit_box.findChild(QFrame, "fitting_settings_card")
+
+    assert card is not None
+    assert card.property("datalab_workbench_section_role") == "fitting"
+    card_children = card.findChildren(QWidget)
+    for widget in (
+        window.fit_model_combo,
+        window.fit_mcmc_refine,
+        window.fit_model_hint,
+        window.inverse_power_widget,
+        window.pade_widget,
+        window.poly_degree_widget,
+        window.implicit_model_widget,
+    ):
+        assert widget.parentWidget() is card or widget.parentWidget() in card_children
 
 
 def test_implicit_ui_is_formula_first_and_generic(window) -> None:
@@ -110,6 +132,9 @@ def test_non_custom_model_preview_is_populated_and_read_only(window) -> None:
 def test_fitting_and_implicit_controls_have_schema_bindings(window) -> None:
     assert window.fit_model_combo.property("datalab_schema_key") == "fitting.model"
     assert window.fit_model_combo.property("datalab_schema_choices") is True
+    # The shared constants editor is bound to the active mode's schema key, so
+    # enter fitting/custom before asserting the custom constants binding.
+    _select_model(window, "custom")
     assert window.custom_constants_editor.property("datalab_schema_key") == "fitting.custom.constants"
     assert window.custom_params_table.property("datalab_schema_key") == "fitting.custom.parameters"
 
@@ -341,29 +366,23 @@ def test_implicit_parameter_table_remains_visible_when_constraints_disabled(wind
     assert window.implicit_param_refresh_btn.isVisible()
 
 
-def test_implicit_constraints_checkbox_is_above_constants(window) -> None:
+def test_implicit_constraints_checkbox_lives_in_variable_page_and_constants_are_shared(window) -> None:
     window.show()
     _select_model(window, "self_consistent")
 
-    page_layout = window.workbench_variable_stack.currentWidget().layout()
-    sections = [
-        page_layout.itemAt(index).widget()
-        for index in range(page_layout.count())
-        if page_layout.itemAt(index).widget() is not None
-    ]
+    # The implicit constraints checkbox belongs to the mode's variable page.
+    page = window.workbench_variable_stack.currentWidget()
     constraint_section = window.implicit_constraints_checkbox.parentWidget()
     while constraint_section is not None and not constraint_section.property("datalab_variable_section_card"):
         constraint_section = constraint_section.parentWidget()
-    constants_section = window.implicit_constants_editor.parentWidget()
-    while constants_section is not None and not constants_section.property("datalab_variable_section_card"):
-        constants_section = constants_section.parentWidget()
+    assert constraint_section is not None
+    assert page.isAncestorOf(window.implicit_constraints_checkbox)
 
-    constraint_index = sections.index(constraint_section) if constraint_section in sections else -1
-    constants_index = sections.index(constants_section) if constants_section in sections else -1
-
-    assert constraint_index >= 0
-    assert constants_index >= 0
-    assert constraint_index < constants_index
+    # Constants moved to the single shared input-section editor (no longer a
+    # per-mode card inside the variable page).
+    assert window.implicit_constants_editor is window.input_constants_editor
+    assert window.input_section.isAncestorOf(window.implicit_constants_editor)
+    assert not page.isAncestorOf(window.implicit_constants_editor)
 
 
 def test_implicit_parameter_table_preserves_high_precision_text(window) -> None:

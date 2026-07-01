@@ -5,6 +5,29 @@ from PySide6.QtWidgets import QApplication
 PANEL_MARGIN = 10
 SECTION_SPACING = 8
 CONTROL_SPACING = 6
+
+# --- Unified spacing scale (px) ---
+# One source of truth for inter-control / card / gutter spacing so panels stop
+# hardcoding divergent literals. Legacy names above remain valid aliases.
+SPACE_XS = 4    # deliberately tight control rows
+SPACE_SM = 6    # default control-row gap   (== CONTROL_SPACING)
+SPACE_MD = 8    # section/card row gap       (== SECTION_SPACING)
+SPACE_LG = 12   # workspace gutter           (== WORKSPACE_GUTTER)
+
+# Inner titled-box content margin (replaces ad-hoc 8,8,8,8).
+INNER_BOX_MARGIN = SPACE_MD            # 8
+# Card content margins (replaces ad-hoc 12,10,12,12).
+CARD_MARGIN_H = SPACE_LG               # 12
+CARD_MARGIN_V = PANEL_MARGIN           # 10
+
+# Vertical space a *styled* QGroupBox (one whose QSS sets a border) must reserve
+# above its content so the title band never overlaps the first control. Must be
+# >= the rendered title height (~19px on this theme). Any QSS rule that gives a
+# QGroupBox a border MUST pair it with `margin-top: {GROUPBOX_TITLE_CLEARANCE}px`
+# and a `QGroupBox::title { subcontrol-origin: margin; ... }` block, or the
+# title overlaps the content (see the canvas rule below).
+GROUPBOX_TITLE_CLEARANCE = 18
+
 MIN_LEFT_PANEL_WIDTH = 420
 SUPPORTED_MIN_WINDOW_WIDTH = 1280
 TOOLBAR_HEIGHT = 54
@@ -170,6 +193,39 @@ def workbench_message_surface_style(
     return f"color: {color}; background: {background}; border: 1px solid {border}; border-radius: 6px; padding: 6px;"
 
 
+def workbench_section_card_style(*, dark: bool | None = None) -> str:
+    dark = is_dark_theme() if dark is None else bool(dark)
+    if dark:
+        card_bg = "#20242b"
+        border = "rgba(255, 255, 255, 0.10)"
+        title_fg = "#e5e7eb"
+        muted_fg = "#a5b4c3"
+    else:
+        card_bg = "#ffffff"
+        border = "#d8dee8"
+        title_fg = "#0f172a"
+        muted_fg = "#64748b"
+    return f"""
+QGroupBox[datalab_workbench_section_host="true"] {{
+    border: none;
+    margin: 0;
+    padding: 0;
+}}
+QFrame[datalab_workbench_section_card="true"] {{
+    background: {card_bg};
+    border: 1px solid {border};
+    border-radius: {REGION_RADIUS}px;
+}}
+QLabel[datalab_workbench_section_title="true"] {{
+    color: {title_fg};
+    font-weight: 600;
+}}
+QLabel[datalab_workbench_section_description="true"] {{
+    color: {muted_fg};
+}}
+"""
+
+
 def formula_preview_surface_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
     background = "#1f2328" if dark else "#ffffff"
@@ -256,7 +312,19 @@ QWidget[datalab_config_card="true"] {{
     border-radius: {REGION_RADIUS}px;
 }}
 QWidget[datalab_config_card="true"] QGroupBox {{
+    background: transparent;
+    border: none;
+    margin-top: 18px;
+    padding: 0px;
     color: {title_fg};
+    font-weight: 600;
+}}
+QWidget[datalab_config_card="true"] QGroupBox::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 0px;
+    top: 0px;
+    padding: 0px;
 }}
 QWidget[datalab_config_card="true"] QPushButton[datalab_primary_run_button="true"] {{
     min-height: 28px;
@@ -312,8 +380,12 @@ QLabel#workbench_result_details_title {{
     color: {title_fg};
     font-weight: 600;
 }}
+QWidget#workbench_result_details_empty_panel {{
+    background: transparent;
+}}
 QLabel#workbench_result_details_empty_label {{
     color: {muted_fg};
+    font-size: 13px;
 }}
 QTabWidget#result_detail_tabs::pane {{
     border: 1px solid {border};
@@ -654,6 +726,19 @@ QFrame#workbench_result_rail QWidget#workbench_result_overview_panel {{
     border: 1px solid {border};
     border-radius: {REGION_RADIUS}px;
     background: {panel_bg};
+}}
+/* A styled QGroupBox border drops Qt's native title-band reservation, so the
+   title overlaps the first control. Reserve the band (mirrors the config_card
+   rule) for every titled box reparented into the canvas. */
+QFrame#workbench_workspace_canvas_content QGroupBox {{
+    margin-top: {GROUPBOX_TITLE_CLEARANCE}px;
+}}
+QFrame#workbench_workspace_canvas_content QGroupBox::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 8px;
+    top: 0px;
+    padding: 0 3px;
 }}
 QFrame#workbench_workspace_canvas_content QLabel,
 QFrame#workbench_config_rail_content QLabel,

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import mpmath as mp
 
@@ -13,6 +15,9 @@ from app_desktop.fitting_input_normalization import (
     normalize_data_uncertainty,
 )
 from extrapolation_methods import PowerLawConfig
+from shared.input_normalization import normalize_constants_state, parse_constants_text, parse_input_sections
+from shared.parsing import parse_clipboard_tabular
+from shared.uncertainty import has_explicit_uncertainty
 
 from .panels import (
     _REFCOL_AUTO_MAX_DIFF_EN,
@@ -20,6 +25,59 @@ from .panels import (
     _REFCOL_AUTO_MAX_DIFF_ZH,
 )
 from .workers_core import _mp_precision_guard, _safe_read_text, _safe_resolve_path
+
+
+@dataclass(frozen=True)
+class InputBundle:
+    data_path: Path | None
+    data_text: str
+    constants_text: str
+    constants_rows: tuple[dict[str, str], ...]
+    source_kind: str
+    explicit_sections: bool
+    constants_view: str = "table"
+    constants_numeric_mode: str = "uncertainty"
+
+
+@dataclass(frozen=True)
+class InputConstantsSource:
+    rows_value: tuple[dict[str, str], ...]
+    text_value: str
+    view_value: str
+    numeric_mode_value: str
+
+    def isChecked(self) -> bool:  # noqa: N802 - Qt-style adapter API
+        return bool(self.rows_value or self.text_value.strip())
+
+    def using_text_view(self) -> bool:
+        return self.view_value == "text"
+
+    def rows(self) -> list[dict[str, str]]:
+        return [dict(row) for row in self.rows_value]
+
+    def raw_text(self) -> str:
+        return self.text_value
+
+    def text(self) -> str:
+        if self.text_value.strip():
+            return self.text_value
+        return "\n".join(
+            f"{row.get('name', '')} {row.get('value', '')}".strip()
+            for row in self.rows_value
+            if row.get("name") or row.get("value")
+        )
+
+    def numeric_mode(self) -> str:
+        return self.numeric_mode_value
+
+    def constants_dict(self, *, validate: bool = True) -> dict[str, str]:
+        return normalize_constants_state(
+            enabled=True,
+            view=self.view_value,
+            rows=self.rows_value,
+            text=self.text_value,
+            numeric_mode=self.numeric_mode_value,
+        ).compute_dict(validate=validate)
 
 
 class WindowDataMixin:
@@ -221,7 +279,14 @@ class WindowDataMixin:
             )
             return
         try:
-            headers, rows, _ = self._parse_generic_table(text)
+            if self._statistics_grouped_workflow_active():
+                parsed = parse_clipboard_tabular(text, has_headers=True)
+                headers = parsed.headers
+                rows: list[tuple[mp.mpf, ...]] = []
+                if not headers:
+                    raise ValueError(_dual_msg("表头至少需要一列。", "Header must contain at least one column."))
+            else:
+                headers, rows, _ = self._parse_generic_table(text)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(
                 self,
@@ -233,6 +298,18 @@ class WindowDataMixin:
         self._refresh_uncertainty_selector(headers, rows)
         note = self._tr("已刷新不确定度参考列。", "Uncertainty reference columns refreshed.")
         self._append_log(f"{note} {source_desc}".strip())
+
+    def _statistics_grouped_workflow_active(self) -> bool:
+        mode_combo = getattr(self, "mode_combo", None)
+        workflow_combo = getattr(self, "stats_workflow_combo", None)
+        if mode_combo is None or workflow_combo is None:
+            return False
+        try:
+            mode = str(mode_combo.currentData() or "")
+            workflow = str(workflow_combo.currentData() or "")
+        except Exception:
+            return False
+        return mode == "statistics" and workflow == "grouped_statistics"
 
     def _parse_generic_table(
         self, text: str
@@ -275,7 +352,7 @@ class WindowDataMixin:
                     ) from exc
                 try:
                     values.append(mp.mpf(uncertain.value))
-                    sigma_val = mp.mpf(uncertain.uncertainty)
+                    _ = mp.mpf(uncertain.uncertainty)
                 except Exception as exc:
                     raise ValueError(
                         _dual_msg(
@@ -284,7 +361,7 @@ class WindowDataMixin:
                         )
                     ) from exc
                 # 保留原始不确定度位数信息，后续格式化使用；加权等计算再转为 mp.mpf
-                sigmas.append(uncertain if sigma_val > 0 else None)
+                sigmas.append(uncertain if has_explicit_uncertainty(token) else None)
             rows.append(tuple(values))
             sigma_rows.append(tuple(sigmas))
         return headers, rows, sigma_rows
@@ -305,23 +382,125 @@ class WindowDataMixin:
             raise ValueError(self._tr("已勾选标题但未填写。", "Caption is enabled but empty."))
         return text or None
 
-    def _active_data_source(self) -> tuple[Path | None, str]:
+    def _constants_editor_has_content(self, editor: Any | None) -> bool:
+        if editor is None:
+            return False
+        if getattr(editor, "using_text_view", lambda: False)():
+            return bool(str(getattr(editor, "raw_text", lambda: "")()).strip())
+        for row in getattr(editor, "rows", lambda: [])():
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("name") or "").strip() or str(row.get("value") or "").strip():
+                return True
+        return False
+
+    def _input_bundle_from_source(
+        self,
+        *,
+        data_path: Path | None,
+        manual_content: str,
+        source_kind: str,
+    ) -> InputBundle:
+        source_text = ""
+        if data_path and data_path.exists() and not data_path.is_dir():
+            source_text = _safe_read_text(data_path)
+        elif manual_content:
+            source_text = manual_content
+        sections = parse_input_sections(source_text)
+
+        effective_data_path = data_path if data_path and not sections.explicit_sections else None
+        data_text = sections.data_text.strip() if (manual_content or sections.explicit_sections) else ""
+
+        editor = getattr(self, "input_constants_editor", None)
+        numeric_mode = (
+            str(editor.numeric_mode())
+            if editor is not None and hasattr(editor, "numeric_mode")
+            else "uncertainty"
+        )
+        if self._constants_editor_has_content(editor):
+            view = "text" if editor.using_text_view() else "table"
+            rows = tuple(dict(row) for row in editor.rows())
+            text = editor.raw_text().strip() if view == "text" else editor.text().strip()
+        else:
+            text = sections.constants_text.strip()
+            rows = tuple(parse_constants_text(text)) if text else ()
+            view = "text" if text else "table"
+        return InputBundle(
+            data_path=effective_data_path,
+            data_text=data_text,
+            constants_text=text,
+            constants_rows=rows,
+            source_kind=source_kind,
+            explicit_sections=sections.explicit_sections,
+            constants_view=view,
+            constants_numeric_mode=numeric_mode,
+        )
+
+    def _active_input_bundle(
+        self,
+        *,
+        data_path: Path | None = None,
+        manual_content: str | None = None,
+        source_kind: str | None = None,
+    ) -> InputBundle:
         _cb = getattr(self, "use_file_checkbox", None)
         use_file = _cb.isChecked() if _cb is not None else False
-        data_path = None
-        manual_content = ""
+        if data_path is not None or manual_content is not None:
+            return self._input_bundle_from_source(
+                data_path=data_path,
+                manual_content=manual_content or "",
+                source_kind=source_kind or ("file" if data_path else "manual_text"),
+            )
+
+        active_data_path = None
+        active_manual_content = ""
+        active_source_kind = "manual_table"
         if use_file:
             data_path_text = self.data_file_edit.text().strip()
-            data_path = _safe_resolve_path(data_path_text) if data_path_text else None
+            active_data_path = _safe_resolve_path(data_path_text) if data_path_text else None
+            active_source_kind = "file"
         else:
             # Read from table view if active, otherwise from text view
             from app_desktop.panels import _serialize_table
             stack = getattr(self, "_data_stack", None)
             if stack is not None and stack.currentIndex() == 0:
-                manual_content = _serialize_table(self).strip()
+                has_table_content = getattr(self, "_manual_table_has_content", None)
+                if callable(has_table_content) and not has_table_content():
+                    active_manual_content = ""
+                else:
+                    serialized = _serialize_table(self).strip()
+                    active_manual_content = serialized if len(serialized.splitlines()) > 1 else ""
             else:
-                manual_content = self.manual_data_edit.toPlainText().strip()
-        return data_path, manual_content
+                active_manual_content = self.manual_data_edit.toPlainText().strip()
+                active_source_kind = "manual_text"
+        return self._input_bundle_from_source(
+            data_path=active_data_path,
+            manual_content=active_manual_content,
+            source_kind=active_source_kind,
+        )
+
+    def _active_constants_source(
+        self,
+        *,
+        data_path: Path | None = None,
+        manual_content: str | None = None,
+        source_kind: str | None = None,
+    ) -> InputConstantsSource:
+        bundle = self._active_input_bundle(
+            data_path=data_path,
+            manual_content=manual_content,
+            source_kind=source_kind,
+        )
+        return InputConstantsSource(
+            rows_value=bundle.constants_rows,
+            text_value=bundle.constants_text,
+            view_value=bundle.constants_view,
+            numeric_mode_value=bundle.constants_numeric_mode,
+        )
+
+    def _active_data_source(self) -> tuple[Path | None, str]:
+        bundle = self._active_input_bundle()
+        return bundle.data_path, bundle.data_text
 
     def _collect_batched_fitting_dataset(
         self,
@@ -448,6 +627,8 @@ class WindowDataMixin:
         sigma_rows: list[tuple[object | None, ...]],
         target_column: str,
         sigma_column: str | None = None,
+        *,
+        absolute: bool = True,
     ) -> list[mp.mpf | None]:
         return normalize_data_uncertainty(
             headers=headers,
@@ -455,6 +636,7 @@ class WindowDataMixin:
             sigma_rows=sigma_rows,
             target_column=target_column,
             sigma_column=sigma_column,
+            absolute=absolute,
         )
 
     def _build_weight_vector(self, sigma_values: list[mp.mpf | None]) -> list[mp.mpf]:

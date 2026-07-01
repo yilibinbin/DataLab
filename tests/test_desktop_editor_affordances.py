@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QLabel, QTableWidgetItem
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTableWidgetItem
 
 from app_desktop.constants_editor import ConstantsEditor
 from app_desktop.detected_rows_table import DetectedRowsTable, SOURCE_DETECTED
@@ -262,3 +262,39 @@ def test_editor_header_tooltips_follow_canonical_widget_specs_after_language_swi
             assert label.toolTip()
             assert label.toolTip() == widget.toolTip(), key
             assert label.accessibleDescription() == label.toolTip(), key
+
+
+def test_all_formula_preview_buttons_are_connected(window: Any, monkeypatch: Any) -> None:
+    # Guard against shell preview buttons: make_formula_preview_button only connects
+    # itself when edit_widget is given, otherwise the caller must wire it externally.
+    # Every preview button on the window must actually open a preview when clicked.
+    import app_desktop.views.helpers as view_helpers
+    import app_desktop.formula_preview as formula_preview
+
+    triggered: list[str] = []
+    monkeypatch.setattr(
+        view_helpers, "open_formula_preview", lambda *a, **k: triggered.append("preview")
+    )
+    monkeypatch.setattr(
+        formula_preview, "open_formula_preview_dialog", lambda *a, **k: triggered.append("dialog")
+    )
+    # Root mode routes through a module-level wrapper; patch its reference too.
+    import app_desktop.views.root_solving as root_view
+
+    if hasattr(root_view, "open_formula_preview_dialog"):
+        monkeypatch.setattr(
+            root_view, "open_formula_preview_dialog", lambda *a, **k: triggered.append("dialog")
+        )
+
+    button_names = [
+        name
+        for name in dir(window)
+        if name.endswith("_preview_button")
+        and isinstance(getattr(window, name, None), QPushButton)
+    ]
+    assert button_names, "expected formula preview buttons on the window"
+
+    for name in button_names:
+        triggered.clear()
+        getattr(window, name).click()
+        assert triggered, f"{name} is a shell button: clicking it opened no preview"

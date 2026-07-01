@@ -18,6 +18,7 @@ from shared.fitting_engine import (
     serialize_fit_result,
 )
 from shared.precision import precision_guard
+from shared.unit_annotations import canonical_unit_symbol_map, normalize_display_only_family_units
 
 
 _PARAMETER_FIELDS = ("initial", "fixed", "min", "max", "expr")
@@ -45,11 +46,13 @@ def build_fitting_request(
     pade_n: int = 1,
     auto_identifier: str | None = None,
     weighted: bool = False,
+    refine_with_mcmc: bool = False,
     label: str = "",
     is_multidim: bool | None = None,
     implicit_definition: Mapping[str, Any] | object | None = None,
     timeout_seconds: Any | None = None,
     custom_constants: Mapping[str, Any] | None = None,
+    units: Mapping[str, Any] | None = None,
     weights: Sequence[Any | None] | None = None,
     precision_digits: int | None = None,
     uncertainty_digits: int | None = None,
@@ -99,59 +102,75 @@ def build_fitting_request(
         normalized_sigma_series = [_sigma_series_value(row[target_index]) for row in normalized_sigmas]
     primary_variable = "x" if "x" in variable_data else next(iter(variable_data))
     parameter_payload = _normalize_parameter_config(parameter_config or {}, digit_hint=digit_hint)
+    normalized_parameter_names = _normalize_parameter_names(parameter_names, parameter_payload=parameter_payload)
+    normalized_implicit_definition = _normalize_implicit_definition(
+        implicit_definition,
+        digit_hint=digit_hint,
+    )
+    normalized_custom_constants = _normalize_string_mapping(
+        custom_constants or {},
+        field_name="custom_constants",
+        digit_hint=digit_hint,
+    )
+    inputs: dict[str, Any] = {
+        "model_type": _required_text(model_type, field_name="model_type"),
+        "headers": normalized_headers,
+        "data_rows": normalized_rows,
+        "sigma_rows": normalized_sigmas,
+        "x_series": list(variable_data[primary_variable]),
+        "y_series": target_series,
+        "sigma_series": normalized_sigma_series,
+        "weights": _normalize_optional_numeric_sequence(
+            weights,
+            field_name="weights",
+            expected_length=len(normalized_rows),
+            digit_hint=digit_hint,
+        ),
+        "variable_map": normalized_variable_map,
+        "variable_data": variable_data,
+        "target_series": target_series,
+        "target_column": normalized_target,
+        "model_expr": _text_value(model_expr, field_name="model_expr"),
+        "parameter_config": parameter_payload,
+        "parameter_names": normalized_parameter_names,
+        "template_expr": _optional_text(template_expr, field_name="template_expr"),
+        "template_params": numeric_payload_tree(
+            dict(template_params or {}),
+            field_name="template_params",
+            digit_hint=digit_hint,
+        ),
+        "poly_degree": _validate_int(poly_degree, field_name="poly_degree"),
+        "inverse_min": _validate_int(inverse_min, field_name="inverse_min"),
+        "inverse_max": _validate_int(inverse_max, field_name="inverse_max"),
+        "pade_m": _validate_int(pade_m, field_name="pade_m"),
+        "pade_n": _validate_int(pade_n, field_name="pade_n"),
+        "auto_identifier": _optional_text(auto_identifier, field_name="auto_identifier"),
+        "weighted": _validate_bool(weighted, field_name="weighted"),
+        "refine_with_mcmc": _validate_bool(refine_with_mcmc, field_name="refine_with_mcmc"),
+        "label": _text_value(label, field_name="label"),
+        "is_multidim": bool(len(normalized_variable_map) > 1) if is_multidim is None else _validate_bool(is_multidim, field_name="is_multidim"),
+        "implicit_definition": normalized_implicit_definition,
+        "timeout_seconds": _optional_numeric_text(
+            timeout_seconds,
+            field_name="timeout_seconds",
+            digit_hint=digit_hint,
+        ),
+        "custom_constants": normalized_custom_constants,
+    }
+    units_config = _normalize_fitting_units_config(
+        units,
+        variable_map=normalized_variable_map,
+        target_column=normalized_target,
+        parameter_names=normalized_parameter_names,
+        parameter_config=parameter_payload,
+        custom_constants=normalized_custom_constants,
+        implicit_definition=normalized_implicit_definition,
+    )
+    if units_config is not None:
+        inputs["units"] = units_config
     return ComputeJobRequest(
         mode=JobMode.FITTING,
-        inputs={
-            "model_type": _required_text(model_type, field_name="model_type"),
-            "headers": normalized_headers,
-            "data_rows": normalized_rows,
-            "sigma_rows": normalized_sigmas,
-            "x_series": list(variable_data[primary_variable]),
-            "y_series": target_series,
-            "sigma_series": normalized_sigma_series,
-            "weights": _normalize_optional_numeric_sequence(
-                weights,
-                field_name="weights",
-                expected_length=len(normalized_rows),
-                digit_hint=digit_hint,
-            ),
-            "variable_map": normalized_variable_map,
-            "variable_data": variable_data,
-            "target_series": target_series,
-            "target_column": normalized_target,
-            "model_expr": _text_value(model_expr, field_name="model_expr"),
-            "parameter_config": parameter_payload,
-            "parameter_names": _normalize_parameter_names(parameter_names, parameter_payload=parameter_payload),
-            "template_expr": _optional_text(template_expr, field_name="template_expr"),
-            "template_params": numeric_payload_tree(
-                dict(template_params or {}),
-                field_name="template_params",
-                digit_hint=digit_hint,
-            ),
-            "poly_degree": _validate_int(poly_degree, field_name="poly_degree"),
-            "inverse_min": _validate_int(inverse_min, field_name="inverse_min"),
-            "inverse_max": _validate_int(inverse_max, field_name="inverse_max"),
-            "pade_m": _validate_int(pade_m, field_name="pade_m"),
-            "pade_n": _validate_int(pade_n, field_name="pade_n"),
-            "auto_identifier": _optional_text(auto_identifier, field_name="auto_identifier"),
-            "weighted": _validate_bool(weighted, field_name="weighted"),
-            "label": _text_value(label, field_name="label"),
-            "is_multidim": bool(len(normalized_variable_map) > 1) if is_multidim is None else _validate_bool(is_multidim, field_name="is_multidim"),
-            "implicit_definition": _normalize_implicit_definition(
-                implicit_definition,
-                digit_hint=digit_hint,
-            ),
-            "timeout_seconds": _optional_numeric_text(
-                timeout_seconds,
-                field_name="timeout_seconds",
-                digit_hint=digit_hint,
-            ),
-            "custom_constants": _normalize_string_mapping(
-                custom_constants or {},
-                field_name="custom_constants",
-                digit_hint=digit_hint,
-            ),
-        },
+        inputs=inputs,
         options=JobOptions(
             precision_digits=precision_digits,
             uncertainty_digits=uncertainty_digits,
@@ -172,6 +191,23 @@ def run_fitting(request: ComputeJobRequest) -> ResultEnvelope:
         raise ValueError(
             "self_consistent fitting still requires the subprocess execution path."
         )
+    units_config = _normalize_fitting_units_config(
+        request.inputs.get("units") if "units" in request.inputs else None,
+        variable_map=_required_string_mapping(request.inputs.get("variable_map"), field_name="variable_map"),
+        target_column=_required_text(request.inputs.get("target_column"), field_name="target_column"),
+        parameter_names=_required_string_sequence(
+            request.inputs.get("parameter_names", ()),
+            field_name="parameter_names",
+        ),
+        parameter_config=_mapping_or_empty(request.inputs.get("parameter_config"), field_name="parameter_config"),
+        custom_constants=_mapping_or_empty(request.inputs.get("custom_constants"), field_name="custom_constants"),
+        implicit_definition=_mapping_or_empty(
+            request.inputs.get("implicit_definition"),
+            field_name="implicit_definition",
+        )
+        if request.inputs.get("implicit_definition") is not None
+        else None,
+    )
     precision_digits = (
         DEFAULT_FITTING_PRECISION_DIGITS
         if request.options.precision_digits is None
@@ -187,6 +223,9 @@ def run_fitting(request: ComputeJobRequest) -> ResultEnvelope:
         check_cancelled()
         output = execute_direct_fit(fit_input)
         check_cancelled()
+        if fit_input.refine_with_mcmc:
+            _maybe_refine_with_mcmc(fit_input, output.fit_result)
+            check_cancelled()
         keep_digits = max(precision_used + 10, 30)
         payload = {
             "model_type": model_type,
@@ -196,6 +235,8 @@ def run_fitting(request: ComputeJobRequest) -> ResultEnvelope:
             "logs": list(output.logs),
             "warnings": list(output.warnings),
         }
+        if units_config is not None:
+            payload["units"] = units_config
     return ResultEnvelope(
         kind=ResultKind.TABLE,
         status=ResultStatus.SUCCEEDED,
@@ -205,8 +246,121 @@ def run_fitting(request: ComputeJobRequest) -> ResultEnvelope:
     )
 
 
+def _maybe_refine_with_mcmc(fit_input: Any, fit_result: Any) -> None:
+    """Run MCMC posterior refinement on a freshly-computed core fit (P1-3).
+
+    Called inside ``run_fitting`` while the live evaluator still exists in
+    ``fit_result.details`` (it is never serialized). Self-skips for models
+    without an evaluator (custom/pade/power_limit), matching desktop coverage.
+    Imports are local so ``datalab_core`` keeps no module-level emcee dependency.
+    """
+    from datalab_core.mcmc_refine import (
+        free_parameter_names,
+        likelihood_weights_from_series,
+        refine_fit_with_mcmc,
+    )
+
+    params = getattr(fit_result, "params", {}) or {}
+    param_names = free_parameter_names(fit_input.parameter_names, params, fit_input.parameter_config)
+    if not param_names:
+        return
+    base_params = {name: mp.mpf(value) for name, value in params.items()}
+    targets = [mp.mpf(value) for value in fit_input.target_series]
+    variable_data = fit_input.variable_data
+    observations: list[object] = [
+        {name: mp.mpf(variable_data[name][index]) for name in variable_data}
+        for index in range(len(targets))
+    ]
+    # Only reweight the MCMC likelihood when the base fit was itself weighted;
+    # otherwise a request carrying sigma/weight data with weighted=False would
+    # run an unweighted LSQ fit and then silently reweight the refinement.
+    weights = likelihood_weights_from_series(
+        fit_input.weights if fit_input.weighted else None,
+        fit_input.sigma_series if fit_input.weighted else None,
+        len(targets),
+    )
+    refine_fit_with_mcmc(
+        fit_result,
+        param_names=param_names,
+        base_params=base_params,
+        observations=observations,
+        targets=targets,
+        likelihood_weights=weights,
+    )
+
+
 def fitting_payload_to_fit_result(payload: Mapping[str, Any]) -> Any:
     return deserialize_fit_result(payload)
+
+
+def _normalize_fitting_units_config(
+    units: Any,
+    *,
+    variable_map: Mapping[str, str],
+    target_column: str,
+    parameter_names: Sequence[str],
+    parameter_config: Mapping[str, Mapping[str, Any]],
+    custom_constants: Mapping[str, Any],
+    implicit_definition: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if units is None:
+        return None
+    input_labels = list(dict.fromkeys([*variable_map.keys(), *variable_map.values()]))
+    input_symbols = set(
+        canonical_unit_symbol_map(
+            input_labels,
+            field_name="fitting inputs",
+            fallback_prefix="input",
+        ).values()
+    )
+    parameter_labels = list(dict.fromkeys([*parameter_names, *parameter_config.keys()]))
+    if implicit_definition:
+        parameter_labels.extend(
+            name for name in _required_string_sequence(
+                implicit_definition.get("parameters", ()),
+                field_name="implicit_definition.parameters",
+            )
+            if name not in parameter_labels
+        )
+    parameter_symbols = set(
+        canonical_unit_symbol_map(
+            parameter_labels,
+            field_name="fitting parameters",
+            fallback_prefix="parameter",
+        ).values()
+    )
+    constant_labels = list(custom_constants)
+    if implicit_definition:
+        implicit_constants = _mapping_or_empty(
+            implicit_definition.get("constants"),
+            field_name="implicit_definition.constants",
+        )
+        constant_labels.extend(name for name in implicit_constants if name not in constant_labels)
+    constant_symbols = set(
+        canonical_unit_symbol_map(
+            constant_labels,
+            field_name="fitting constants",
+            fallback_prefix="constant",
+        ).values()
+    )
+    output_symbols = set(
+        canonical_unit_symbol_map(
+            (target_column,),
+            field_name="fitting outputs",
+            fallback_prefix="output",
+        ).values()
+    )
+    output_symbols.add("result")
+    return normalize_display_only_family_units(
+        units,
+        family="fitting",
+        allowed_symbols={
+            "inputs": input_symbols,
+            "constants": constant_symbols,
+            "parameters": parameter_symbols,
+            "outputs": output_symbols,
+        },
+    )
 
 
 def _direct_fit_input_from_request(
@@ -262,6 +416,7 @@ def _direct_fit_input_from_request(
             field_name="custom_constants",
             digit_hint=precision,
         ),
+        refine_with_mcmc=_validate_bool(inputs.get("refine_with_mcmc", False), field_name="refine_with_mcmc"),
     )
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import zipfile
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -75,6 +76,36 @@ def _minimal_v2_manifest() -> dict[str, object]:
     }
 
 
+def _history_payload_for_workspace(workspace: dict[str, Any]) -> dict[str, Any]:
+    from datalab_core.history import HistoryEntry, HistoryStore
+
+    entry = HistoryEntry.from_workspace_snapshot(
+        entry_id="e01",
+        label="root",
+        created_at="2026-06-20T00:00:00Z",
+        workspace=workspace,
+        family=str(workspace.get("current_mode") or "root_solving"),
+        kind=str(workspace.get("current_mode") or "root_solving"),
+        result_snapshot={"status": "success", "root": "1"},
+    )
+    return HistoryStore(current=entry).to_json()
+
+
+def _v2_compatible_workspace(manifest: dict[str, object]) -> dict[str, Any]:
+    model = cast(dict[str, Any], manifest["model"])
+    compute = cast(dict[str, Any], model["compute"])
+    return {
+        "title": model["title"],
+        "current_mode": model["current_mode"],
+        "language": model["language"],
+        "ui": model["ui"],
+        "data": compute["data"],
+        "constants": compute["constants"],
+        "config": compute["config"],
+        "result_snapshot": model["result_snapshot"],
+    }
+
+
 def _write_workspace_archive(
     path: Path,
     manifest: dict[str, object],
@@ -84,6 +115,43 @@ def _write_workspace_archive(
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False).encode("utf-8"))
         for name, payload in sorted((attachments or {}).items()):
             zf.writestr(name, payload)
+
+
+def _patch_zip_headers(
+    path: Path,
+    *,
+    target_name: str,
+    flag_bits: int | None = None,
+    compression_method: int | None = None,
+) -> None:
+    patched = bytearray(path.read_bytes())
+
+    def patch_headers(
+        signature: bytes,
+        flag_offset: int,
+        method_offset: int,
+        name_len_offset: int,
+        extra_len_offset: int,
+        name_offset: int,
+    ) -> None:
+        start = 0
+        while True:
+            index = patched.find(signature, start)
+            if index < 0:
+                return
+            name_len = int.from_bytes(patched[index + name_len_offset : index + name_len_offset + 2], "little")
+            extra_len = int.from_bytes(patched[index + extra_len_offset : index + extra_len_offset + 2], "little")
+            name = bytes(patched[index + name_offset : index + name_offset + name_len]).decode("utf-8")
+            if name == target_name:
+                if flag_bits is not None:
+                    patched[index + flag_offset : index + flag_offset + 2] = flag_bits.to_bytes(2, "little")
+                if compression_method is not None:
+                    patched[index + method_offset : index + method_offset + 2] = compression_method.to_bytes(2, "little")
+            start = index + name_offset + name_len + extra_len
+
+    patch_headers(b"PK\x03\x04", 6, 8, 26, 28, 30)
+    patch_headers(b"PK\x01\x02", 8, 10, 28, 30, 46)
+    path.write_bytes(bytes(patched))
 
 
 def test_workspace_write_read_round_trip_with_plot_attachment(tmp_path: Path) -> None:
@@ -141,6 +209,56 @@ def test_workspace_writer_uses_byte_stable_archive_layout(tmp_path: Path) -> Non
     )
 
 
+def test_workspace_write_read_round_trip_with_history_payload(tmp_path: Path) -> None:
+    from datalab_core.history import HistoryEntry, HistoryStore
+    from shared.workspace_io import read_workspace, write_workspace
+
+    manifest = _minimal_manifest()
+    workspace = cast(dict[str, Any], manifest["workspace"])
+    entry = HistoryEntry.from_workspace_snapshot(
+        entry_id="e01",
+        label="fit",
+        created_at="2026-06-20T00:00:00Z",
+        workspace=workspace,
+        family="fitting",
+        kind="fit_single",
+        result_snapshot={"status": "success", "value": "1"},
+    )
+    workspace["history"] = HistoryStore(current=entry).to_json()
+
+    target = tmp_path / "history.datalab"
+    write_workspace(target, manifest, {})
+
+    loaded = read_workspace(target)
+
+    assert loaded.manifest["workspace"]["history"] == workspace["history"]
+    assert loaded.manifest["workspace"]["result_snapshot"] == {"present": False}
+
+
+def test_workspace_writer_rejects_malformed_history_payload(tmp_path: Path) -> None:
+    from datalab_core.history import HistoryEntry, HistoryStore
+    from shared.workspace_io import write_workspace
+    from shared.workspace_schema import WorkspaceValidationError
+
+    manifest = _minimal_manifest()
+    workspace = cast(dict[str, Any], manifest["workspace"])
+    entry = HistoryEntry.from_workspace_snapshot(
+        entry_id="e01",
+        label="fit",
+        created_at="2026-06-20T00:00:00Z",
+        workspace=workspace,
+        family="fitting",
+        kind="fit_single",
+        result_snapshot={"status": "success", "value": "1"},
+    )
+    history = HistoryStore(current=entry).to_json()
+    history["current"]["semantic_snapshot"]["result"]["value"] = 1.0
+    workspace["history"] = history
+
+    with pytest.raises(WorkspaceValidationError, match="workspace.history is invalid"):
+        write_workspace(tmp_path / "bad-history.datalab", manifest, {})
+
+
 def test_workspace_rejects_future_schema(tmp_path: Path) -> None:
     from shared.workspace_io import write_workspace
     from shared.workspace_schema import WorkspaceValidationError
@@ -165,7 +283,7 @@ def test_workspace_read_dispatches_v2_manifest_through_public_zip_path(tmp_path:
     assert loaded.manifest["workspace"]["title"] == "V2 Case"
     assert loaded.manifest["workspace"]["current_mode"] == "root_solving"
     assert loaded.manifest["workspace"]["config"]["root_solving"]["mode"] == "scalar"
-    assert loaded.manifest["workspace"]["ui"]["formula_preview"] == {"root_solving.equations": "latex"}
+    assert "formula_preview" not in loaded.manifest["workspace"]["ui"]
 
 
 def test_workspace_read_dispatches_v2_attachments_and_validates_hashes(tmp_path: Path) -> None:
@@ -215,9 +333,7 @@ def test_v2_fixture_reads_through_public_io_path() -> None:
     assert loaded.manifest["workspace"]["title"] == "Model-native v2 fixture"
     assert loaded.manifest["workspace"]["current_mode"] == "fitting"
     assert loaded.manifest["workspace"]["config"]["fitting"]["expression"] == "a*x"
-    assert loaded.manifest["workspace"]["ui"]["formula_preview"] == {
-        "fitting.custom.expression": "latex"
-    }
+    assert "formula_preview" not in loaded.manifest["workspace"]["ui"]
     assert loaded.attachments["attachments/plots/plot-001.png"].startswith(b"\x89PNG")
 
 
@@ -256,6 +372,19 @@ def test_workspace_v2_validation_rejects_non_mapping_result_snapshot() -> None:
         workspace_v2.validate_manifest(manifest)
 
 
+def test_workspace_v2_validation_rejects_malformed_history() -> None:
+    from datalab_core import workspace_v2
+    from shared.workspace_schema import WorkspaceValidationError
+
+    manifest = _minimal_v2_manifest()
+    history = _history_payload_for_workspace(_v2_compatible_workspace(manifest))
+    history["current"]["semantic_snapshot"]["result"]["root"] = 1.0
+    cast(dict[str, Any], manifest["model"])["history"] = history
+
+    with pytest.raises(WorkspaceValidationError, match="model.history is invalid"):
+        workspace_v2.validate_manifest(manifest)
+
+
 def test_workspace_v2_model_conversion_preserves_empty_result_snapshot() -> None:
     from datalab_core import workspace_v2
 
@@ -265,6 +394,21 @@ def test_workspace_v2_model_conversion_preserves_empty_result_snapshot() -> None
     workspace = workspace_v2.to_v1_workspace(manifest)
 
     assert workspace["result_snapshot"] == {}
+
+
+def test_workspace_read_v2_rejects_malformed_history_as_validation_error(tmp_path: Path) -> None:
+    from shared.workspace_io import read_workspace
+    from shared.workspace_schema import WorkspaceValidationError
+
+    manifest = _minimal_v2_manifest()
+    history = _history_payload_for_workspace(_v2_compatible_workspace(manifest))
+    history["current"]["semantic_snapshot"]["result"]["root"] = 1.0
+    cast(dict[str, Any], manifest["model"])["history"] = history
+    target = tmp_path / "v2-bad-history.datalab"
+    _write_workspace_archive(target, manifest)
+
+    with pytest.raises(WorkspaceValidationError, match="model.history is invalid"):
+        read_workspace(target)
 
 
 def test_workspace_read_v2_rejects_compute_json_floats_as_validation_error(tmp_path: Path) -> None:
@@ -371,6 +515,47 @@ def test_workspace_rejects_duplicate_manifest(tmp_path: Path) -> None:
         read_workspace(target)
 
 
+def test_workspace_rejects_encrypted_manifest_as_validation_error(tmp_path: Path) -> None:
+    from shared.workspace_io import read_workspace
+    from shared.workspace_schema import WorkspaceValidationError
+
+    target = tmp_path / "encrypted-manifest.datalab"
+    _write_workspace_archive(target, _minimal_manifest())
+    _patch_zip_headers(target, target_name="manifest.json", flag_bits=0x1)
+
+    with pytest.raises(WorkspaceValidationError, match="encrypted archive entries are not allowed: manifest.json"):
+        read_workspace(target)
+
+
+def test_workspace_rejects_unsupported_compression_attachment_as_validation_error(tmp_path: Path) -> None:
+    from shared.workspace_io import read_workspace
+    from shared.workspace_schema import WorkspaceValidationError, sha256_bytes
+
+    manifest = _minimal_manifest()
+    cast(dict[str, Any], manifest["workspace"])["result_snapshot"] = {
+        "present": True,
+        "plots": [
+            {
+                "path": "attachments/plots/plot-001.png",
+                "role": "primary",
+                "order": 0,
+                "title": "Plot",
+                "format": "png",
+                "sha256": sha256_bytes(PNG_BYTES),
+            }
+        ],
+    }
+    target = tmp_path / "unsupported-compression.datalab"
+    _write_workspace_archive(target, manifest, {"attachments/plots/plot-001.png": PNG_BYTES})
+    _patch_zip_headers(target, target_name="attachments/plots/plot-001.png", compression_method=99)
+
+    with pytest.raises(
+        WorkspaceValidationError,
+        match="unsupported archive compression method: attachments/plots/plot-001.png",
+    ):
+        read_workspace(target)
+
+
 def test_workspace_rejects_bad_plot_hash(tmp_path: Path) -> None:
     from shared.workspace_io import write_workspace
     from shared.workspace_schema import WorkspaceValidationError
@@ -392,17 +577,35 @@ def test_workspace_rejects_bad_plot_hash(tmp_path: Path) -> None:
 
 
 def test_workspace_hash_ignores_display_only_fields() -> None:
-    from shared.workspace_schema import compute_workspace_hash
+    from shared.workspace_schema import compute_workspace_hash, sha256_bytes, workspace_hash_canonical_bytes
 
-    left = _minimal_manifest()["workspace"]
-    right = _minimal_manifest()["workspace"]
-    left["config"]["common"]["display_digits"] = 10  # type: ignore[index]
-    right["config"]["common"]["display_digits"] = 40  # type: ignore[index]
+    left = cast(dict[str, Any], _minimal_manifest()["workspace"])
+    right = cast(dict[str, Any], _minimal_manifest()["workspace"])
+    left["config"]["common"]["display_digits"] = 10
+    right["config"]["common"]["display_digits"] = 40
 
     assert compute_workspace_hash(left) == compute_workspace_hash(right)
+    assert compute_workspace_hash(left) == sha256_bytes(workspace_hash_canonical_bytes(left))
 
-    right["config"]["common"]["mpmath_precision"] = 80  # type: ignore[index]
+    right["config"]["common"]["mpmath_precision"] = 80
     assert compute_workspace_hash(left) != compute_workspace_hash(right)
+
+
+def test_workspace_hash_payload_is_detached_from_workspace_mutations() -> None:
+    from shared.workspace_schema import workspace_hash_payload
+
+    workspace = cast(dict[str, Any], _minimal_manifest()["workspace"])
+    payload = workspace_hash_payload(workspace)
+
+    payload["data"]["canonical_table"]["rows"].append(["payload", "mutation"])
+    payload["constants"]["enabled"] = True
+    assert workspace["data"]["canonical_table"]["rows"] == [["1", "2"]]
+    assert workspace["constants"] == {"enabled": False}
+
+    workspace["data"]["canonical_table"]["rows"].append(["workspace", "mutation"])
+    workspace["constants"]["value"] = "workspace"
+    assert payload["data"]["canonical_table"]["rows"] == [["1", "2"], ["payload", "mutation"]]
+    assert payload["constants"] == {"enabled": True}
 
 
 def test_workspace_atomic_save_keeps_previous_file_on_validation_failure(tmp_path: Path) -> None:

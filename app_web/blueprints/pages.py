@@ -45,14 +45,26 @@ SAMPLE_STATS_DATA = """A
 1152842742.721(9)
 """
 
+SAMPLE_ROOT_EQUATIONS = "x**2 - 2"
+
+SAMPLE_ROOT_UNKNOWNS = "x = 1"
+
 
 def _error_key_for_exception(exc: Exception) -> str:
     msg = str(exc) or ""
     msg_lower = msg.lower()
     if "utf-8" in msg_lower or "decode" in msg_lower:
         return "errors.file_parse_failed"
-    if "formula" in msg_lower or "parse" in msg_lower or "解析" in msg:
+    if (
+        "formula" in msg_lower
+        or "parse" in msg_lower
+        or "解析" in msg
+        or "valid json" in msg_lower
+        or "candidates" in msg_lower
+    ):
         return "errors.formula_parse_failed"
+    if "unit_evaluation_unsupported_on_web" in msg_lower:
+        return "errors.units_unsupported_on_web"
     if (
         "requires all x > 0" in msg_lower
         or "requires all y > 0" in msg_lower
@@ -85,6 +97,12 @@ def _run_statistics(data_text, form, *, lang: str):
     from ..logic.statistics import _run_statistics as run
 
     return run(data_text, form, lang=lang)
+
+
+def _run_root_solving(form, *, lang: str):
+    from ..logic.root_solving import _run_root_solving as run
+
+    return run(form, lang=lang)
 
 
 @bp.route("/", methods=["GET", "POST"])
@@ -194,6 +212,7 @@ def fit():
         "use_file_checked": use_file_checked,
         "fit_mode": fit_mode,
         "fit_weighted": weighted_checked,
+        "fit_mcmc_refine": _is_checked(request.form, "fit_mcmc_refine", False),
         "use_dcolumn_checked": _is_checked(request.form, "fit_use_dcolumn", True),
         "use_caption_checked": _is_checked(request.form, "fit_use_caption", False),
         "compile_pdf_checked": _is_checked(request.form, "fit_compile_pdf", False),
@@ -265,3 +284,32 @@ def stats():
         except Exception as exc:  # pragma: no cover
             flash(f"i18n:{_error_key_for_exception(exc)}", "error")
     return render_template("stats.html", **context)
+
+
+@bp.route("/roots", methods=["GET", "POST"])
+@csrf_protect
+def root_solving():
+    context: dict[str, object] = {
+        "sample_equations": SAMPLE_ROOT_EQUATIONS,
+        "sample_unknowns": SAMPLE_ROOT_UNKNOWNS,
+        "result": None,
+        "warnings": [],
+        "active_page": "root_solving",
+        "root_mode": request.form.get("root_mode", "scalar"),
+        "root_uncertainty_method": request.form.get("root_uncertainty_method", "off"),
+    }
+    if request.method == "POST":
+        form = request.form
+        if not (form.get("root_equations") or "").strip():
+            flash("i18n:errors.missing_equations", "error")
+            return render_template("roots.html", **context)
+        if not (form.get("root_unknowns") or "").strip():
+            flash("i18n:errors.missing_unknowns", "error")
+            return render_template("roots.html", **context)
+        try:
+            lang = get_lang()
+            result = _run_root_solving(form, lang=lang)
+            context.update(result=result, warnings=result.warnings)
+        except Exception as exc:  # pragma: no cover
+            flash(f"i18n:{_error_key_for_exception(exc)}", "error")
+    return render_template("roots.html", **context)

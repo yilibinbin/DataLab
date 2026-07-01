@@ -63,12 +63,14 @@ def test_shell_sections_are_visible_in_expected_order(qtbot: Any) -> None:
 
     assert not hasattr(window, "parameters_section")
     assert not hasattr(window, "parameters_section_layout")
+    # The mode selector sits at the top of the left panel (pick the analysis
+    # mode first, then enter data), above the input section.
     assert [
-        window.input_section.objectName(),
         window.mode_section.objectName(),
+        window.input_section.objectName(),
         window.output_setup_section.objectName(),
         window.run_section.objectName(),
-    ] == ["input_section", "mode_section", "output_setup_section", "run_section"]
+    ] == ["mode_section", "input_section", "output_setup_section", "run_section"]
 
     layout_names = [
         window.left_layout.itemAt(index).widget().objectName()
@@ -76,8 +78,8 @@ def test_shell_sections_are_visible_in_expected_order(qtbot: Any) -> None:
         if window.left_layout.itemAt(index).widget() is not None
     ]
     assert layout_names[:4] == [
-        "input_section",
         "mode_section",
+        "input_section",
         "output_setup_section",
         "run_section",
     ]
@@ -88,6 +90,9 @@ def test_shell_sections_are_visible_in_expected_order(qtbot: Any) -> None:
 
 def test_left_configuration_sections_are_visual_cards(qtbot: Any) -> None:
     window = _make_window(qtbot)
+    window.resize(1440, 900)
+    window.show()
+    QApplication.processEvents()
 
     for section in (
         window.input_section,
@@ -105,6 +110,8 @@ def test_left_configuration_sections_are_visual_cards(qtbot: Any) -> None:
     assert window.run_button.property("datalab_primary_run_button") is True
     assert window.run_button.property("datalab_run_state") == "run"
     assert 'QPushButton[datalab_primary_run_button="true"]' in window.run_section.styleSheet()
+    assert window.mode_combo.geometry().top() >= 24
+    assert window.mpmath_precision_spin.geometry().top() >= 24
 
 
 def test_legacy_run_button_click_reaches_current_run_calculation(

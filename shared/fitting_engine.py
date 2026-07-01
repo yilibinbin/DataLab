@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import mpmath as mp
 
@@ -19,6 +19,7 @@ from fitting.auto_models import (
     fit_linear_model,
 )
 from fitting.hp_fitter import FitResult
+from fitting.diagnostics import attach_fit_diagnostics
 from shared.bilingual import _dual_msg
 from shared.precision import precision_guard
 
@@ -51,6 +52,7 @@ class DirectFitInput:
     weighted: bool = False
     label: str = ""
     custom_constants: Mapping[str, str] | None = None
+    refine_with_mcmc: bool = False
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,13 @@ def execute_direct_fit(fit_input: DirectFitInput, *, verbose: bool = False) -> D
             raise AssertionError(f"Unhandled direct fit model: {model_type}")
         if verbose:
             _emit_verbose_result(fit_result)
+        diagnostic_warnings = attach_fit_diagnostics(
+            fit_result,
+            sigma_series=fit_input.sigma_series,
+            weights=fit_input.weights,
+            precision=fit_input.precision,
+        )
+        warnings.extend(diagnostic_warnings)
     return DirectFitOutput(
         fit_result=fit_result,
         expression=expression,
@@ -297,4 +306,8 @@ def _required_sequence(payload: Mapping[str, Any], key: str) -> Sequence[Any]:
     value = payload[key]
     if isinstance(value, (str, bytes, bytearray, memoryview)) or not isinstance(value, Sequence):
         raise TypeError(f"fit_result.{key} must be a sequence.")
-    return cast(Sequence[Any], value)
+    # Annotate explicitly rather than cast(): older mypy sees the narrowed value
+    # as Any (needs the annotation), newer mypy flags a cast as redundant. The
+    # typed assignment satisfies both.
+    result: Sequence[Any] = value
+    return result

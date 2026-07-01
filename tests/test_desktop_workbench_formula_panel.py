@@ -18,6 +18,9 @@ def _window(qtbot: Any) -> Any:
 
     QApplication.instance() or QApplication([])
     window = ExtrapolationWindow()
+    # Pin the language so assertions are deterministic regardless of the runner's
+    # system locale (CI defaults to English, local dev often to Chinese).
+    window._apply_language("zh")
     qtbot.addWidget(window)
     window.resize(1440, 900)
     window.show()
@@ -66,32 +69,26 @@ def test_formula_workspace_moves_formula_actions_to_title_row(qtbot: Any) -> Non
     assert header.schema_label.isVisible() is False
 
 
-def test_formula_workspace_language_combo_matches_render_service_languages(qtbot: Any) -> None:
-    from datalab_core.workbench_model import FORMULA_PREVIEW_LANGUAGES
-
+def test_formula_workspace_has_no_preview_language_selector(qtbot: Any) -> None:
     window = _window(qtbot)
 
-    values = {
-        str(window.workbench_formula_language_combo.itemData(index))
-        for index in range(window.workbench_formula_language_combo.count())
-    }
-
-    assert values == set(FORMULA_PREVIEW_LANGUAGES)
+    assert not hasattr(window, "workbench_formula_language_row")
+    assert not hasattr(window, "workbench_formula_language_label")
+    assert not hasattr(window, "workbench_formula_language_combo")
 
 
-def test_formula_workspace_restores_latex_preview_language(qtbot: Any) -> None:
-    from datalab_latex.formula_render_service import InputLanguage
-
+def test_formula_workspace_ignores_legacy_preview_language_state(qtbot: Any) -> None:
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
     window._workbench_formula_preview_languages = {
-        "fitting.custom.expression": InputLanguage.LATEX.value
+        "fitting.custom.expression": "latex"
     }
 
     window.refresh_workbench_formula_panel()
 
-    assert window.workbench_formula_language_combo.currentData() == InputLanguage.LATEX.value
+    assert not hasattr(window, "workbench_formula_language_combo")
+    assert window.workbench_formula_preview_label.text() or not window.workbench_formula_preview_label.pixmap().isNull()
 
 
 def test_formula_workspace_spec_duplicate_guards_report_editor_and_schema_keys(
@@ -226,28 +223,22 @@ def test_formula_workspace_preview_uses_current_editor_text(qtbot: Any) -> None:
     assert window.workbench_formula_preview_label.text() or not window.workbench_formula_preview_label.pixmap().isNull()
 
 
-def test_formula_workspace_preview_syntax_selector_matches_render_service(qtbot: Any) -> None:
-    from datalab_latex.formula_render_service import InputLanguage
-
+def test_formula_workspace_preview_has_single_rendered_style(qtbot: Any) -> None:
     window = _window(qtbot)
-    combo = window.workbench_formula_language_combo
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
+    window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
+    window.fit_expr_edit.setPlainText("Sin[x] + Sqrt[A]")
+    window.refresh_workbench_formula_panel()
 
-    assert window.workbench_formula_language_label.text() == "预览语法："
-    assert combo.currentData() == InputLanguage.DATALAB.value
-    expected_languages = [language.value for language in InputLanguage]
-    assert [combo.itemData(index) for index in range(combo.count())] == expected_languages
-    assert combo.findData(InputLanguage.LATEX.value) >= 0
-    assert "仅影响预览" in combo.toolTip()
-
-    window._apply_language("en")
-    assert window.workbench_formula_language_label.text() == "Preview syntax:"
-    assert "preview only" in combo.toolTip().lower()
+    assert not hasattr(window, "workbench_formula_language_combo")
+    assert window.workbench_formula_preview_label.text() or not window.workbench_formula_preview_label.pixmap().isNull()
 
 
 def test_formula_workspace_description_uses_schema_metadata(qtbot: Any) -> None:
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
+    window.fit_expr_edit.setPlainText("")
     window.refresh_workbench_formula_panel()
 
     description = window.workbench_formula_description_label
@@ -258,16 +249,34 @@ def test_formula_workspace_description_uses_schema_metadata(qtbot: Any) -> None:
     assert "自定义模型表达式" in description.text()
     assert description.accessibleDescription() == description.text()
 
-    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    window.fit_expr_edit.setPlainText("a*x + b")
     window.refresh_workbench_formula_panel()
 
+    assert not description.isVisibleTo(window.workbench_formula_panel)
+    assert description.property("datalab_schema_key") == "fitting.custom.expression"
+    assert "输入自定义拟合表达式" in description.toolTip()
+    assert description.accessibleDescription() == description.text()
+
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
+    window.root_equations_edit.setPlainText("")
+    window.refresh_workbench_formula_panel()
+
+    assert description.isVisibleTo(window.workbench_formula_panel)
     assert description.property("datalab_schema_key") == "root.equations"
     assert "输入要求解的方程" in description.text()
     assert "x^2 - A" in description.text()
 
+    window.root_equations_edit.setPlainText("x^2 - A")
+    window.refresh_workbench_formula_panel()
+
+    assert not description.isVisibleTo(window.workbench_formula_panel)
+    assert "输入要求解的方程" in description.toolTip()
+
+    window.root_equations_edit.setPlainText("")
     window._apply_language("en")
     window.refresh_workbench_formula_panel()
 
+    assert description.isVisibleTo(window.workbench_formula_panel)
     assert "Enter equations to solve" in description.text()
     assert "example: x^2 - a" in description.text().lower()
 
@@ -303,6 +312,170 @@ def test_formula_workspace_function_entry_reuses_function_help(qtbot: Any, monke
     assert button.parentWidget().objectName() == "workbench_formula_actions_root_equations_edit"
 
 
+def test_formula_workspace_action_buttons_do_not_overlap_in_english_self_consistent(
+    qtbot: Any,
+) -> None:
+    window = _window(qtbot)
+    window._apply_language("en")
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
+    window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("self_consistent"))
+    window.implicit_equation_edit.setPlainText("u - a*x")
+    window.implicit_output_edit.setPlainText("u + b")
+    window.implicit_output_edit.setFocus()
+    window.refresh_workbench_formula_panel()
+    QApplication.processEvents()
+
+    action_page = window.workbench_formula_actions_stack.currentWidget()
+    preview_button = window.implicit_output_preview_button
+    function_button = window.workbench_formula_function_button
+
+    assert action_page is preview_button.parentWidget()
+    assert action_page is function_button.parentWidget()
+    assert preview_button.isVisibleTo(action_page)
+    assert function_button.isVisibleTo(action_page)
+    assert [
+        button
+        for button in (
+            window.fit_formula_preview_button,
+            window.implicit_equation_preview_button,
+            window.implicit_output_preview_button,
+        )
+        if button.isVisibleTo(window)
+    ] == [preview_button]
+    assert window.workbench_formula_actions_stack.minimumWidth() >= action_page.sizeHint().width()
+    assert preview_button.width() >= preview_button.sizeHint().width()
+    assert function_button.width() >= function_button.sizeHint().width()
+    assert not preview_button.geometry().intersects(function_button.geometry())
+
+
+def test_formula_workspace_action_stack_width_tracks_current_page(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QHBoxLayout, QPushButton
+
+    from app_desktop.workbench_formula_panel import (
+        _CurrentPageSizeStack,
+        _formula_action_page_required_width,
+        _reserve_formula_actions_width,
+    )
+
+    class Owner:
+        pass
+
+    owner = Owner()
+    owner.workbench_formula_actions_stack = _CurrentPageSizeStack()
+    qtbot.addWidget(owner.workbench_formula_actions_stack)
+
+    wide_page = QWidget()
+    wide_layout = QHBoxLayout(wide_page)
+    wide_button = QPushButton("wide")
+    wide_button.setMinimumWidth(220)
+    wide_layout.addWidget(wide_button)
+
+    narrow_page = QWidget()
+    narrow_layout = QHBoxLayout(narrow_page)
+    narrow_button = QPushButton("narrow")
+    narrow_button.setMinimumWidth(60)
+    narrow_layout.addWidget(narrow_button)
+
+    owner.workbench_formula_actions_stack.addWidget(wide_page)
+    owner.workbench_formula_actions_stack.addWidget(narrow_page)
+
+    owner.workbench_formula_actions_stack.setCurrentWidget(wide_page)
+    _reserve_formula_actions_width(owner, wide_page)
+    wide_width = owner.workbench_formula_actions_stack.minimumWidth()
+    owner.workbench_formula_actions_stack.setCurrentWidget(narrow_page)
+    _reserve_formula_actions_width(owner, narrow_page)
+
+    assert _formula_action_page_required_width(narrow_page) < _formula_action_page_required_width(wide_page)
+    assert owner.workbench_formula_actions_stack.minimumWidth() < wide_width
+    assert owner.workbench_formula_actions_stack.minimumWidth() == _formula_action_page_required_width(narrow_page)
+    assert owner.workbench_formula_actions_stack.minimumSizeHint().width() == narrow_page.minimumSizeHint().width()
+    assert owner.workbench_formula_actions_stack.minimumSizeHint().width() < wide_page.minimumSizeHint().width()
+
+
+def test_formula_action_required_width_includes_fixed_spacers(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QHBoxLayout, QPushButton
+
+    from app_desktop.workbench_formula_panel import _formula_action_page_required_width
+
+    page = QWidget()
+    qtbot.addWidget(page)
+    layout = QHBoxLayout(page)
+    layout.setSpacing(8)
+    first = QPushButton("first")
+    first.setMinimumWidth(100)
+    second = QPushButton("second")
+    second.setMinimumWidth(120)
+    layout.addWidget(first)
+    layout.addSpacing(40)
+    layout.addWidget(second)
+    layout.activate()
+    page.adjustSize()
+
+    margins = layout.contentsMargins()
+    expected_minimum = margins.left() + margins.right() + 100 + 40 + 120 + (8 * 2)
+
+    assert _formula_action_page_required_width(page) >= expected_minimum
+
+
+def test_formula_action_required_width_uses_style_spacing_when_layout_inherits_spacing(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QHBoxLayout, QPushButton, QStyle
+
+    from app_desktop.workbench_formula_panel import _formula_action_page_required_width
+
+    page = QWidget()
+    qtbot.addWidget(page)
+    layout = QHBoxLayout(page)
+    layout.setSpacing(-1)
+    first = QPushButton("first")
+    first.setMinimumWidth(100)
+    second = QPushButton("second")
+    second.setMinimumWidth(120)
+    layout.addWidget(first)
+    layout.addWidget(second)
+    layout.activate()
+    page.adjustSize()
+
+    margins = layout.contentsMargins()
+    style_spacing = page.style().pixelMetric(QStyle.PixelMetric.PM_LayoutHorizontalSpacing, None, page)
+    if style_spacing < 0:
+        style_spacing = 6
+    expected_minimum = margins.left() + margins.right() + 100 + 120 + style_spacing
+
+    assert _formula_action_page_required_width(page) >= expected_minimum
+
+
+def test_formula_action_required_width_includes_nested_layouts(qtbot: Any) -> None:
+    from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout
+
+    from app_desktop.workbench_formula_panel import _formula_action_page_required_width
+
+    page = QWidget()
+    qtbot.addWidget(page)
+    outer_layout = QHBoxLayout(page)
+    outer_layout.setSpacing(6)
+    nested_layout = QVBoxLayout()
+    nested_button = QPushButton("nested")
+    nested_button.setMinimumWidth(140)
+    nested_layout.addWidget(nested_button)
+    sibling = QPushButton("sibling")
+    sibling.setMinimumWidth(80)
+    outer_layout.addLayout(nested_layout)
+    outer_layout.addWidget(sibling)
+    outer_layout.activate()
+    page.adjustSize()
+
+    margins = outer_layout.contentsMargins()
+    expected_minimum = (
+        margins.left()
+        + margins.right()
+        + nested_layout.minimumSize().width()
+        + sibling.minimumSizeHint().width()
+        + outer_layout.spacing()
+    )
+
+    assert _formula_action_page_required_width(page) >= expected_minimum
+
+
 def test_formula_workspace_function_entry_requires_action_page_layout(qtbot: Any) -> None:
     from app_desktop.workbench_formula_panel import _attach_formula_function_button
 
@@ -315,7 +488,7 @@ def test_formula_workspace_function_entry_requires_action_page_layout(qtbot: Any
     assert window.workbench_formula_function_button.parentWidget() is not layoutless_page
 
 
-def test_formula_workspace_preview_syntax_selector_controls_render_language(
+def test_formula_workspace_preview_uses_datalab_render_language(
     qtbot: Any,
     monkeypatch: Any,
 ) -> None:
@@ -338,41 +511,37 @@ def test_formula_workspace_preview_syntax_selector_controls_render_language(
             error_message="forced fallback",
         )
 
-    monkeypatch.setattr(preview, "render_formula", fake_render)
+    monkeypatch.setattr(preview, "render_desktop_preview", fake_render)
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
     window.fit_expr_edit.setPlainText("Sin[x]")
-    window.workbench_formula_language_combo.setCurrentIndex(
-        window.workbench_formula_language_combo.findData(InputLanguage.MATHEMATICA.value)
-    )
     window.refresh_workbench_formula_panel()
 
     assert calls
-    assert calls[-1] is InputLanguage.MATHEMATICA
+    assert calls[-1] is InputLanguage.DATALAB
 
 
-def test_formula_workspace_language_change_during_restore_does_not_mark_dirty(
+def test_formula_workspace_legacy_language_state_during_restore_does_not_mark_dirty(
     qtbot: Any,
     monkeypatch: Any,
 ) -> None:
-    from datalab_latex.formula_render_service import InputLanguage
-
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
     window.refresh_workbench_formula_panel()
-    combo = window.workbench_formula_language_combo
     called: list[str] = []
     monkeypatch.setattr(window, "_mark_workspace_dirty", lambda: called.append("dirty"))
 
     window._workspace_restoring = True
-    combo.setCurrentIndex(combo.findData(InputLanguage.PYTHON.value))
+    window._workbench_formula_preview_languages = {"fitting.custom.expression": "python"}
+    window.refresh_workbench_formula_panel()
     assert called == []
 
     window._workspace_restoring = False
-    combo.setCurrentIndex(combo.findData(InputLanguage.MATHEMATICA.value))
-    assert called == ["dirty"]
+    window._workbench_formula_preview_languages = {"fitting.custom.expression": "mathematica"}
+    window.refresh_workbench_formula_panel()
+    assert called == []
 
 
 def test_formula_workspace_refresh_populates_panel_if_needed(qtbot: Any, monkeypatch: Any) -> None:
@@ -411,15 +580,10 @@ def test_formula_workspace_visible_mounts_empty_before_population(qtbot: Any) ->
     assert _visible_formula_mounts(window, "fitting") == []
 
 
-def test_formula_workspace_language_sync_ignores_empty_combo(qtbot: Any) -> None:
-    from app_desktop.workbench_formula_panel import _sync_formula_language_controls
-    from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
-
+def test_formula_workspace_does_not_create_preview_language_controls(qtbot: Any) -> None:
     window = _window(qtbot)
-    mount = MODE_WORKBENCH_SPECS["fitting"].formulas[0]
-    window.workbench_formula_language_combo.clear()
 
-    _sync_formula_language_controls(window, mount)
+    assert not window.workbench_formula_panel.findChildren(type(window.mode_combo), "workbench_formula_language_combo")
 
 
 def test_formula_workspace_population_failure_is_cached(qtbot: Any) -> None:
@@ -653,7 +817,7 @@ def test_formula_workspace_error_strip_tracks_bad_preview_input(qtbot: Any, monk
             error_message="",
         )
 
-    monkeypatch.setattr(preview, "render_formula", fake_render)
+    monkeypatch.setattr(preview, "render_desktop_preview", fake_render)
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))

@@ -312,8 +312,15 @@ export DATALAB_DEBUG=1
 # 1. Install Gunicorn
 pip install gunicorn
 
-# 2. Start Gunicorn (4 workers)
-gunicorn -w 4 -b 127.0.0.1:8000 app_web.server:app
+# 2. Start Gunicorn (recommended: use the bundled gunicorn.conf.py, which sizes
+#    workers from the CPU count automatically)
+gunicorn -c gunicorn.conf.py app_web.server:app
+
+# Why multiple workers: mpmath's precision (mp.dps) is process-global, so each
+# worker handles one fit at a time. Concurrency comes from multiple worker
+# PROCESSES (not threads), so one user's long fit can't block everyone else.
+# gunicorn.conf.py defaults to 2*cores+1 with a FLOOR of 2 workers; override
+# with WEB_CONCURRENCY. Manual form: gunicorn -w 9 ... (a 4-core example).
 
 # 3. Configure Nginx reverse proxy
 # /etc/nginx/sites-available/datalab
@@ -349,7 +356,10 @@ WorkingDirectory=/path/to/data_extrapolation_source
 Environment="DATALAB_WEB_SECRET=your-secret-key-here"
 Environment="DATALAB_HOST=127.0.0.1"
 Environment="DATALAB_PORT=8000"
-ExecStart=/usr/bin/gunicorn -w 4 -b 127.0.0.1:8000 app_web.server:app
+# Behind the Nginx reverse proxy above: trust X-Forwarded-For so per-IP rate
+# limiting uses the real client IP, not the proxy's.
+Environment="DATALAB_TRUST_PROXY_HEADERS=1"
+ExecStart=/usr/bin/gunicorn -c gunicorn.conf.py app_web.server:app
 Restart=always
 
 [Install]

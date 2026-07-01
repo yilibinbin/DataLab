@@ -3,7 +3,10 @@ from __future__ import annotations
 import mpmath as mp
 import pytest
 
-from fitting.statistics import compute_fit_statistics
+import fitting.auto_models as auto_models
+import fitting.implicit_model as implicit_model
+from fitting.constraints import build_parameter_state
+from fitting.statistics import FitStatistics, compute_fit_statistics
 
 
 def test_compute_fit_statistics_empty_input_contract() -> None:
@@ -105,3 +108,114 @@ def test_compute_fit_statistics_validates_lengths_and_weights() -> None:
             free_param_count=1,
             validate_weights=True,
         )
+
+
+def test_auto_linear_model_uses_shared_fit_statistics(monkeypatch: pytest.MonkeyPatch) -> None:
+    sentinel = FitStatistics(
+        chi2=mp.mpf("101"),
+        reduced_chi2=mp.mpf("202"),
+        r2=mp.mpf("0.303"),
+        rmse=mp.mpf("0.404"),
+        aic=mp.mpf("505"),
+        bic=mp.mpf("606"),
+        dof=3,
+    )
+    calls = []
+
+    def fake_compute_fit_statistics(targets, residuals, weights, *, free_param_count, validate_weights=False):
+        calls.append(
+            {
+                "targets": list(targets),
+                "residuals": list(residuals),
+                "weights": weights,
+                "free_param_count": free_param_count,
+                "validate_weights": validate_weights,
+            }
+        )
+        return sentinel
+
+    monkeypatch.setattr(auto_models, "compute_fit_statistics", fake_compute_fit_statistics)
+
+    model = auto_models.AUTO_MODEL_MAP["M1"]
+    result = auto_models.fit_linear_model(
+        model,
+        [mp.mpf(i) for i in range(5)],
+        [mp.mpf(2 * i + 1) for i in range(5)],
+        precision=50,
+    )
+
+    assert calls
+    assert calls[0]["targets"] == [mp.mpf(2 * i + 1) for i in range(5)]
+    assert calls[0]["free_param_count"] == 2
+    assert calls[0]["validate_weights"] is False
+    assert result.chi2 == sentinel.chi2
+    assert result.reduced_chi2 == sentinel.reduced_chi2
+    assert result.aic == sentinel.aic
+    assert result.bic == sentinel.bic
+    assert result.r2 == sentinel.r2
+    assert result.rmse == sentinel.rmse
+    assert all(mp.almosteq(residual, mp.mpf("0")) for residual in result.residuals)
+    assert [len(row) for row in result.covariance] == [2, 2]
+
+
+def test_observed_implicit_linear_model_uses_shared_fit_statistics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = FitStatistics(
+        chi2=mp.mpf("707"),
+        reduced_chi2=mp.mpf("808"),
+        r2=mp.mpf("0.909"),
+        rmse=mp.mpf("1.010"),
+        aic=mp.mpf("111"),
+        bic=mp.mpf("212"),
+        dof=3,
+    )
+    calls = []
+
+    def fake_compute_fit_statistics(targets, residuals, weights, *, free_param_count, validate_weights=False):
+        calls.append(
+            {
+                "targets": list(targets),
+                "residuals": list(residuals),
+                "weights": weights,
+                "free_param_count": free_param_count,
+                "validate_weights": validate_weights,
+            }
+        )
+        return sentinel
+
+    monkeypatch.setattr(implicit_model, "compute_fit_statistics", fake_compute_fit_statistics)
+
+    definition = implicit_model.ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a + b*x",
+        output_expression="u",
+        parameters=("a", "b"),
+    )
+    parameter_state = build_parameter_state({}, ["a", "b"])
+    xs = [mp.mpf(i) for i in range(5)]
+    targets = [mp.mpf(2 * i + 1) for i in range(5)]
+    result = implicit_model._solve_observed_linear_least_squares(
+        definition=definition,
+        parameter_state=parameter_state,
+        targets=targets,
+        offsets=[mp.mpf("0") for _ in xs],
+        basis_rows=[[mp.mpf("1"), x] for x in xs],
+        weights=None,
+        data_sigmas=None,
+    )
+
+    assert calls
+    assert calls[0]["targets"] == targets
+    assert calls[0]["free_param_count"] == 2
+    assert calls[0]["validate_weights"] is False
+    assert result.chi2 == sentinel.chi2
+    assert result.reduced_chi2 == sentinel.reduced_chi2
+    assert result.aic == sentinel.aic
+    assert result.bic == sentinel.bic
+    assert result.r2 == sentinel.r2
+    assert result.rmse == sentinel.rmse
+    assert result.details["dof"] == sentinel.dof
+    assert all(mp.almosteq(residual, mp.mpf("0")) for residual in result.residuals)
+    assert [len(row) for row in result.covariance] == [2, 2]

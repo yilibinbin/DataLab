@@ -4,7 +4,7 @@ from decimal import Decimal, localcontext
 import json
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -338,7 +338,7 @@ def _root_payload(config: dict[str, Any], data: dict[str, Any]) -> dict[str, Any
         display_digits=int(config.get("common", {}).get("display_digits") or 10),
         uncertainty_options=dict(root_config.get("uncertainty_options") or {"method": "auto"}),
     )
-    return _execute_root_solving_job_payload(job)
+    return cast(dict[str, Any], _execute_root_solving_job_payload(job))
 
 
 def _root_manifest(
@@ -376,7 +376,7 @@ def build_examples() -> dict[str, dict[str, Any]]:
     )
 
     error_config = _base_config()
-    error_config["error"]["formula"] = "sqrt((x*dy)^2 + (y*dx)^2)"
+    error_config["error"]["formula"] = "V1 * V2"
     error = _manifest(
         title="Example - Error Propagation",
         mode="error",
@@ -385,12 +385,66 @@ def build_examples() -> dict[str, dict[str, Any]]:
         config=error_config,
         markdown="First-order uncertainty propagation example for a product quantity.",
         csv_rows=[{"row": "1", "value": "3.000", "sigma": "0.091"}, {"row": "2", "value": "3.190", "sigma": "0.083"}],
-        examples={"category": "error-propagation", "source_files": ["examples/error_propagation.txt", "examples/constants.txt"]},
+        examples={
+            "category": "error-propagation",
+            "source_files": ["examples/error_propagation.txt", "examples/constants.txt"],
+            "recipe_files": ["examples/recipes/error-product-basic.json"],
+        },
+    )
+
+    error_units_config = _base_config()
+    error_units_config["error"]["formula"] = "Distance / Time"
+    error_units_config["error"]["method"] = "taylor"
+    error_units_config["error"]["order"] = 1
+    error_units_config["error"]["units"] = {
+        "schema": "datalab.units.annotations.v1",
+        "schema_version": 1,
+        "enabled": True,
+        "mode": "display_only",
+        "inputs": {
+            "Distance": {"unit": "m"},
+            "Time": {"unit": "s"},
+        },
+        "constants": {},
+        "parameters": {},
+        "outputs": {
+            "result": {"unit": "m/s"},
+        },
+    }
+    error_units = _manifest(
+        title="Example - Error Propagation With Units",
+        mode="error",
+        data=_table_section_from_rows(
+            ["Distance", "Time"],
+            [
+                ["12.00(5)", "2.000(3)"],
+                ["13.20(6)", "2.200(4)"],
+                ["11.50(5)", "1.950(3)"],
+            ],
+        ),
+        config=error_units_config,
+        markdown=(
+            "Display-only unit annotation example for speed = Distance / Time. "
+            "It runs without pint; when pint is installed, switch the unit mode "
+            "to validate-expression to check dimensional compatibility before evaluation."
+        ),
+        csv_headers=["row", "value", "sigma", "output_unit"],
+        csv_rows=[
+            {"row": "1", "value": "6.000", "sigma": "0.026", "output_unit": "m/s"},
+            {"row": "2", "value": "6.000", "sigma": "0.029", "output_unit": "m/s"},
+            {"row": "3", "value": "5.897", "sigma": "0.027", "output_unit": "m/s"},
+        ],
+        examples={
+            "category": "error-propagation",
+            "source_files": [],
+            "variants": ["taylor", "units", "display_only", "validation_ready"],
+        },
     )
 
     stats_config = _base_config()
     stats_config["statistics"]["value_column"] = "Value"
-    stats_config["statistics"]["sigma_column"] = "Sigma"
+    stats_config["statistics"]["sigma_column"] = ""
+    stats_config["statistics"]["mode"] = "weighted_sigma"
     statistics = _manifest(
         title="Example - Statistics",
         mode="statistics",
@@ -398,7 +452,247 @@ def build_examples() -> dict[str, dict[str, Any]]:
         config=stats_config,
         markdown="Weighted mean and sample-spread statistics example.",
         csv_rows=[{"quantity": "weighted_mean", "value": "1.232"}, {"quantity": "standard_error", "value": "0.006"}],
-        examples={"category": "statistics", "source_files": ["examples/statistics_weighted.txt"]},
+        examples={
+            "category": "statistics",
+            "source_files": ["examples/statistics_weighted.txt"],
+            "recipe_files": ["examples/recipes/statistics-mean-basic.json"],
+        },
+    )
+
+    stats_bootstrap_config = _base_config()
+    stats_bootstrap_config["statistics"].update(
+        {
+            "workflow_mode": "bootstrap_confidence_intervals",
+            "value_column": "Value",
+            "value_columns": ["Value"],
+            "sigma_column": "",
+            "mode": "mean",
+            "bootstrap": {
+                "target_statistic": "mean",
+                "confidence_level": "0.95",
+                "resample_count": 100,
+                "seed": "12345",
+            },
+        }
+    )
+    statistics_bootstrap = _manifest(
+        title="Example - Bootstrap Confidence Interval",
+        mode="statistics",
+        data=_table_section_from_rows(
+            ["Value"],
+            [["1.02"], ["0.97"], ["1.05"], ["1.01"], ["0.99"], ["1.04"]],
+        ),
+        config=stats_bootstrap_config,
+        markdown="Bootstrap confidence-interval example with a deterministic seed and embedded data.",
+        csv_rows=[
+            {"quantity": "target_statistic", "value": "mean"},
+            {"quantity": "confidence_level", "value": "0.95"},
+            {"quantity": "resample_count", "value": "100"},
+        ],
+        examples={"category": "statistics", "source_files": [], "variants": ["bootstrap", "confidence_interval", "seeded"]},
+    )
+
+    stats_hypothesis_config = _base_config()
+    stats_hypothesis_config["statistics"].update(
+        {
+            "workflow_mode": "hypothesis_tests",
+            "value_column": "A",
+            "value_columns": ["A"],
+            "sigma_column": "",
+            "mode": "mean",
+            "hypothesis": {
+                "test_kind": "one_sample_t",
+                "second_column": "",
+                "null_parameter": "3",
+                "alternative": "two_sided",
+                "alpha": "0.05",
+                "expected_source": "counts",
+                "fitted_parameter_count": 0,
+            },
+        }
+    )
+    statistics_hypothesis = _manifest(
+        title="Example - Hypothesis Test",
+        mode="statistics",
+        data=_table_section_from_rows(
+            ["A"],
+            [["2"], ["3"], ["4"], ["5"], ["6"]],
+        ),
+        config=stats_hypothesis_config,
+        markdown="One-sample t-test example comparing column A against the null mean mu0=3.",
+        csv_rows=[
+            {"quantity": "test_kind", "value": "one_sample_t"},
+            {"quantity": "mu0", "value": "3"},
+            {"quantity": "alpha", "value": "0.05"},
+        ],
+        examples={"category": "statistics", "source_files": [], "variants": ["hypothesis_test", "one_sample_t"]},
+    )
+
+    stats_matrix_config = _base_config()
+    stats_matrix_config["statistics"].update(
+        {
+            "workflow_mode": "covariance_correlation",
+            "value_column": "A",
+            "value_columns": ["A", "B", "C"],
+            "sigma_column": "",
+            "mode": "mean",
+            "sample": True,
+            "weighted_variance": False,
+            "matrix": {"missing_policy": "listwise"},
+        }
+    )
+    statistics_matrix = _manifest(
+        title="Example - Covariance Correlation Matrix",
+        mode="statistics",
+        data=_table_section_from_rows(
+            ["A", "B", "C"],
+            [
+                ["1.0", "2.0", "5.0"],
+                ["2.0", "4.0", "4.0"],
+                ["3.0", "6.0", "3.0"],
+                ["4.0", "8.0", "2.0"],
+                ["5.0", "10.0", "1.0"],
+            ],
+        ),
+        config=stats_matrix_config,
+        markdown="Covariance/correlation matrix example with three embedded numeric columns.",
+        csv_rows=[
+            {"quantity": "workflow_mode", "value": "covariance_correlation"},
+            {"quantity": "missing_policy", "value": "listwise"},
+            {"quantity": "value_columns", "value": "A, B, C"},
+        ],
+        examples={"category": "statistics", "source_files": [], "variants": ["covariance_correlation", "matrix", "listwise"]},
+    )
+
+    stats_grouped_config = _base_config()
+    stats_grouped_config["statistics"].update(
+        {
+            "workflow_mode": "grouped_statistics",
+            "group_column": "Group",
+            "value_column": "Signal, Reference",
+            "value_columns": ["Signal", "Reference"],
+            "sigma_column": "Sigma",
+            "mode": "weighted_sigma",
+            "sample": True,
+            "weighted_variance": True,
+        }
+    )
+    statistics_grouped = _manifest(
+        title="Example - Grouped Statistics",
+        mode="statistics",
+        data=_table_section_from_rows(
+            ["Group", "Signal", "Reference", "Sigma"],
+            [
+                ["Control", "10.0", "9.8", "0.20"],
+                ["Control", "10.4", "10.1", "0.20"],
+                ["Control", "10.2", "10.0", "0.25"],
+                ["Treatment", "12.5", "11.9", "0.30"],
+                ["Treatment", "12.8", "12.2", "0.30"],
+                ["Treatment", "13.1", "12.4", "0.35"],
+            ],
+        ),
+        config=stats_grouped_config,
+        markdown="Grouped statistics example with two numeric columns, a shared sigma column, and embedded data.",
+        csv_rows=[
+            {"quantity": "workflow_mode", "value": "grouped_statistics"},
+            {"quantity": "group_column", "value": "Group"},
+            {"quantity": "value_columns", "value": "Signal, Reference"},
+        ],
+        examples={"category": "statistics", "source_files": [], "variants": ["grouped_statistics", "multi_column", "weighted"]},
+    )
+
+    stats_time_series_rolling_config = _base_config()
+    stats_time_series_rolling_config["statistics"].update(
+        {
+            "workflow_mode": "time_series_rolling",
+            "value_column": "Signal",
+            "value_columns": ["Signal"],
+            "sigma_column": "Sigma",
+            "mode": "mean",
+            "time_series": {
+                "series_method": "rolling_mean",
+                "time_column": "Day",
+                "window_size": 3,
+                "min_periods": 2,
+                "alignment": "right",
+                "denominator": "sample",
+                "ewma_parameter": "alpha",
+                "ewma_value": "0.5",
+                "adjust": False,
+            },
+        }
+    )
+    statistics_time_series_rolling = _manifest(
+        title="Example - Time-Series Rolling Mean",
+        mode="statistics",
+        data=_table_section_from_rows(
+            ["Day", "Signal", "Sigma"],
+            [
+                ["1", "10.0", "0.20"],
+                ["2", "10.8", "0.20"],
+                ["3", "11.4", "0.25"],
+                ["4", "11.9", "0.25"],
+                ["5", "12.6", "0.30"],
+                ["6", "13.0", "0.30"],
+            ],
+        ),
+        config=stats_time_series_rolling_config,
+        markdown="Rolling mean example with embedded time labels and independent sigma propagation.",
+        csv_rows=[
+            {"quantity": "workflow_mode", "value": "time_series_rolling"},
+            {"quantity": "series_method", "value": "rolling_mean"},
+            {"quantity": "window_size", "value": "3"},
+        ],
+        examples={
+            "category": "statistics",
+            "source_files": [],
+            "variants": ["time_series", "rolling_mean", "uncertainty"],
+        },
+    )
+
+    stats_time_series_ewma_config = _base_config()
+    stats_time_series_ewma_config["statistics"].update(
+        {
+            "workflow_mode": "time_series_rolling",
+            "value_column": "Signal",
+            "value_columns": ["Signal"],
+            "sigma_column": "",
+            "mode": "mean",
+            "time_series": {
+                "series_method": "ewma",
+                "time_column": "Index",
+                "window_size": 3,
+                "min_periods": 3,
+                "alignment": "right",
+                "denominator": "sample",
+                "ewma_parameter": "span",
+                "ewma_value": "3",
+                "adjust": True,
+            },
+        }
+    )
+    statistics_time_series_ewma = _manifest(
+        title="Example - Time-Series EWMA",
+        mode="statistics",
+        data=_table_section_from_rows(
+            ["Index", "Signal"],
+            [
+                ["1", "4.0"],
+                ["2", "5.5"],
+                ["3", "5.0"],
+                ["4", "7.0"],
+                ["5", "6.5"],
+                ["6", "8.0"],
+            ],
+        ),
+        config=stats_time_series_ewma_config,
+        markdown="EWMA smoothing example with adjusted normalization and embedded data.",
+        csv_rows=[
+            {"quantity": "workflow_mode", "value": "time_series_rolling"},
+            {"quantity": "series_method", "value": "ewma"},
+            {"quantity": "span", "value": "3"},
+        ],
+        examples={"category": "statistics", "source_files": [], "variants": ["time_series", "ewma", "smoothing"]},
     )
 
     fitting_config = _base_config()
@@ -417,6 +711,7 @@ def build_examples() -> dict[str, dict[str, Any]]:
         examples={
             "category": "fitting",
             "source_files": ["examples/fitting_powerlaw.txt"],
+            "recipe_files": ["examples/recipes/fitting-custom-powerlaw.json"],
             "variants": ["custom", "implicit", "weighted", "constraints", "high_precision", "scipy_precision_16"],
         },
     )
@@ -543,12 +838,24 @@ def build_examples() -> dict[str, dict[str, Any]]:
         title="Example - Batch Root Solving",
         data=_table_section_from_rows(["A"], [["1.0(1)"], ["4.0(2)"], ["9.0(3)"]]),
         config=root_batch_config,
-        examples={"category": "root-solving", "source_files": [], "variants": ["batch", "linear_uncertainty"]},
+        examples={
+            "category": "root-solving",
+            "source_files": [],
+            "recipe_files": ["examples/recipes/root-batch-quadratic.json"],
+            "variants": ["batch", "linear_uncertainty"],
+        },
     )
     return {
         "extrapolation.datalab": extrapolation,
         "error-propagation.datalab": error,
+        "error-propagation-units.datalab": error_units,
         "statistics.datalab": statistics,
+        "statistics-bootstrap.datalab": statistics_bootstrap,
+        "statistics-hypothesis.datalab": statistics_hypothesis,
+        "statistics-matrix.datalab": statistics_matrix,
+        "statistics-grouped.datalab": statistics_grouped,
+        "statistics-time-series-rolling.datalab": statistics_time_series_rolling,
+        "statistics-time-series-ewma.datalab": statistics_time_series_ewma,
         "fitting.datalab": fitting,
         "quantum-defect-implicit.datalab": quantum,
         "root-scalar-with-uncertainty.datalab": root_scalar,

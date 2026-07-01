@@ -6,7 +6,9 @@ from data_extrapolation_latex_latest import safe_eval
 
 
 def test_safe_eval_limits_ast_nodes(monkeypatch) -> None:
-    import datalab_latex.expression_engine as engine
+    # datalab_latex.expression_engine is a shim; the constant lives on the shared
+    # implementation module that safe_eval actually reads from (P0-3 collapse).
+    import shared.expression_engine as engine
 
     monkeypatch.setattr(engine, "MAX_AST_NODES", 50)
 

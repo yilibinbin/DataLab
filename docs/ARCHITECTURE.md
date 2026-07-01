@@ -82,6 +82,18 @@ A TeX distribution providing `pdflatex` or `xelatex` is required for PDF export.
 - **`datalab_latex/`** — LaTeX table generation. `latex_tables.py` is the public facade; `latex_formatting.py` handles number-with-uncertainty formatting (dcolumn / siunitx); `expression_engine.py` is the **safe formula evaluator** (Mathematica-style `Sin[x]`, whitelist of ~30 functions, AST node/depth caps); `derivatives.py` computes numerical partial derivatives for error propagation.
 - **`shared/`** — `ui_specs.py` (parameter-widget specs consumed by **both** desktop and web — single source of truth for method parameters), `precision.py` (`precision_guard()` context manager wrapping `mp.dps` changes, clamped to [10, 1 000 000]), `pdf_preview*.py` (pdftoppm with Ghostscript fallback for inline PDF preview), `help_specs.json` (single source for "?" help popovers in both UIs).
 
+> **Layering guard (P2-5).** `datalab_latex/` is presentation and must not import
+> upward into `datalab_core/`. `tests/test_layering_latex_no_core_imports.py`
+> enforces this via a static AST scan. One documented exception remains:
+> `datalab_latex/latex_tables_common.py` still imports five statistics *display*
+> helpers (`statistics_output_value_unit`, `statistics_row_flag_detail`, …) from
+> `datalab_core.statistics`. These are UI-neutral and also called inside
+> `datalab_core`, so the fix is to relocate them to `shared/statistics_display.py`
+> (tracked as P2-5 Stage B — a larger core-schema move); the guard lists this file
+> as a known exception until then. `statistics_utils.py` at the repo root is a
+> *frontend-glue bridge* (a LaTeX generator that consumes both core results and
+> `datalab_latex` renderers), not compute — its name predates the layering split.
+
 ### Cross-cutting conventions (follow these)
 
 - **Bilingual messages**: user-facing errors and labels use `_dual_msg(zh, en)` returning `"汉语 / English"`. The locale layer splits on `" / "` to extract the active language. Don't return single-language strings from new code paths.

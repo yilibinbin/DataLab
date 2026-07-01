@@ -62,7 +62,10 @@ def normalize_root_problem(
         numeric_mode="uncertainty",
     )
     with precision_guard(clean_precision, clamp_min=MIN_MPMATH_DPS, clamp_max=MAX_MPMATH_DPS):
-        constants = constants_state.compute_dict(validate=True)
+        # compute_dict() returns rows regardless of the enabled flag (its shared
+        # contract). For root solving, disabled constants must not enter the
+        # problem or create uncertain inputs, so gate on constants_enabled here.
+        constants = constants_state.compute_dict(validate=True) if constants_enabled else {}
         for name, value in constants.items():
             uncertain_inputs[name] = parse_uncertainty_format(value, precision=clean_precision)
 

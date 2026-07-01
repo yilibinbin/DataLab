@@ -3,6 +3,7 @@ from __future__ import annotations
 import mpmath as mp
 
 from app_desktop import fitting_latex_writer as writer
+from fitting.diagnostics import attach_fit_diagnostics
 from fitting.hp_fitter import FitResult
 
 
@@ -70,6 +71,39 @@ def test_build_fit_latex_block_generates_siunitx_column_spec():
     assert any("\\begin{tabular}{l S[table-format=" in line for line in lines)
 
 
+def test_build_fit_latex_block_adds_text_only_unit_column_when_units_present():
+    fit_result = _sample_fit_result()
+    lines = writer.build_fit_latex_block(
+        headers=["x", "y"],
+        rows=[(mp.mpf("1.0"), mp.mpf("2.0"))],
+        sigma_rows=[(None, None)],
+        fit_result=fit_result,
+        expression="A*x",
+        substituted="1.5*x",
+        image_path=None,
+        use_dcolumn=True,
+        digits=6,
+        latex_group_size=3,
+        batch_index=None,
+        target_column="y",
+        variable_pairs=[("x", "x")],
+        caption_text="Fit results",
+        default_uncertainty_digits=1,
+        cleaned_substituted="1.5*x",
+        units={
+            "parameters": {"A": {"unit": "m/s"}},
+            "outputs": {"y": {"unit": "J"}},
+        },
+    )
+
+    text = "\n".join(lines)
+    assert "\\begin{tabular}{l l d{" in text
+    assert "Entry & Unit & \\multicolumn{1}{c}{Value}" in text
+    assert "(x=1.0) & J &" in text
+    assert "Param A & m/s &" in text
+    assert "RMSE & J &" in text
+
+
 def test_build_fit_latex_block_generates_dcolumn_column_spec_and_batch_header():
     fit_result = _sample_fit_result()
     lines = writer.build_fit_latex_block(
@@ -121,6 +155,128 @@ def test_build_fit_latex_block_adds_stat_sys_rows_when_present():
 
     assert any(line.startswith("A stat &") for line in lines)
     assert any(line.startswith("A sys &") for line in lines)
+
+
+def test_build_fit_latex_block_reads_sentinel_metrics_from_fit_result():
+    fit_result = _sample_fit_result()
+    fit_result.chi2 = mp.mpf("101")
+    fit_result.reduced_chi2 = mp.mpf("202")
+    fit_result.aic = mp.mpf("303")
+    fit_result.bic = mp.mpf("404")
+    fit_result.r2 = mp.mpf("0.505")
+    fit_result.rmse = mp.mpf("0.606")
+
+    lines = writer.build_fit_latex_block(
+        headers=["x", "y"],
+        rows=[(mp.mpf("1.0"), mp.mpf("2.0"))],
+        sigma_rows=[(None, None)],
+        fit_result=fit_result,
+        expression="A*x",
+        substituted="1.5*x",
+        image_path=None,
+        use_dcolumn=False,
+        digits=6,
+        latex_group_size=3,
+        batch_index=None,
+        target_column="y",
+        variable_pairs=[("x", "x")],
+        caption_text="Fit results",
+        default_uncertainty_digits=1,
+        cleaned_substituted="1.5*x",
+    )
+
+    text = "\n".join(lines)
+    for value in ("101", "202", "303", "404", "0.505", "0.606"):
+        assert value in text
+
+
+def test_build_fit_latex_block_includes_attached_diagnostics():
+    fit_result = FitResult(
+        params={"A": mp.mpf("1"), "B": mp.mpf("2")},
+        param_errors={"A": mp.mpf("2"), "B": mp.mpf("3")},
+        chi2=mp.mpf("4.6051701859880913680359829093687284152022029772575"),
+        reduced_chi2=mp.mpf("2.3025850929940456840179914546843642076011011014886288"),
+        aic=mp.mpf("1.0"),
+        bic=mp.mpf("1.0"),
+        r2=mp.mpf("0.9"),
+        rmse=mp.mpf("2"),
+        residuals=[mp.mpf("1"), mp.mpf("-2")],
+        fitted_curve=[mp.mpf("0"), mp.mpf("0")],
+        covariance=[[mp.mpf("4"), mp.mpf("6")], [mp.mpf("6"), mp.mpf("9")]],
+        param_errors_stat={"A": mp.mpf("2"), "B": mp.mpf("3")},
+        param_errors_total={"A": mp.mpf("2"), "B": mp.mpf("3")},
+        details={"dof": 2, "covariance_parameters": ["A", "B"]},
+    )
+    attach_fit_diagnostics(fit_result, sigma_series=[mp.mpf("2"), mp.mpf("4")])
+
+    lines = writer.build_fit_latex_block(
+        headers=["x", "y"],
+        rows=[(mp.mpf("1.0"), mp.mpf("2.0"))],
+        sigma_rows=[(None, None)],
+        fit_result=fit_result,
+        expression="A*x + B",
+        substituted="1*x + 2",
+        image_path=None,
+        use_dcolumn=False,
+        digits=6,
+        latex_group_size=3,
+        batch_index=None,
+        target_column="y",
+        variable_pairs=[("x", "x")],
+        caption_text="Fit results",
+        default_uncertainty_digits=1,
+        cleaned_substituted="1*x + 2",
+    )
+
+    text = "\n".join(lines)
+    assert "$\\chi^2$ p-value" in text
+    assert "Max standardized residual" in text
+    assert "Corr A,B" in text
+    assert "Sigma-standardized residual 1" in text
+
+
+def test_build_fit_latex_block_handles_nonfinite_diagnostics():
+    fit_result = FitResult(
+        params={"A": mp.mpf("1"), "B": mp.mpf("2")},
+        param_errors={"A": mp.mpf("0"), "B": mp.mpf("3")},
+        chi2=mp.mpf("1"),
+        reduced_chi2=mp.mpf("0"),
+        aic=mp.mpf("0"),
+        bic=mp.mpf("0"),
+        r2=mp.mpf("1"),
+        rmse=mp.mpf("0"),
+        residuals=[mp.mpf("0"), mp.mpf("0")],
+        fitted_curve=[mp.mpf("0"), mp.mpf("0")],
+        covariance=[[mp.nan, mp.nan], [mp.nan, mp.mpf("9")]],
+        param_errors_stat={"A": mp.mpf("0"), "B": mp.mpf("3")},
+        param_errors_total={"A": mp.mpf("0"), "B": mp.mpf("3")},
+        details={"dof": 0, "covariance_parameters": ["A", "B"]},
+    )
+    attach_fit_diagnostics(fit_result)
+
+    lines = writer.build_fit_latex_block(
+        headers=["x", "y"],
+        rows=[(mp.mpf("1.0"), mp.mpf("2.0"))],
+        sigma_rows=[(None, None)],
+        fit_result=fit_result,
+        expression="A*x + B",
+        substituted="1*x + 2",
+        image_path=None,
+        use_dcolumn=True,
+        digits=6,
+        latex_group_size=3,
+        batch_index=None,
+        target_column="y",
+        variable_pairs=[("x", "x")],
+        caption_text="Fit results",
+        default_uncertainty_digits=1,
+        cleaned_substituted="1*x + 2",
+    )
+
+    text = "\n".join(lines)
+    assert "$\\chi^2$ p-value" in text
+    assert "Corr A,A" in text
+    assert r"\multicolumn{1}{c}{Unavailable}" in text
 
 
 def test_build_fit_latex_block_tolerates_invalid_x_sigma_objects():

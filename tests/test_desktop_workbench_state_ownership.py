@@ -46,10 +46,7 @@ def test_workbench_has_one_owner_for_primary_editable_state(qtbot: Any) -> None:
         "custom_parameters_owner": window.custom_params_table,
         "implicit_parameters_owner": window.implicit_params_table,
         "root_unknowns_owner": window.root_unknowns_table,
-        "error_constants_owner": window.error_constants_editor,
-        "custom_constants_owner": window.custom_constants_editor,
-        "implicit_constants_owner": window.implicit_constants_editor,
-        "root_constants_owner": window.root_constants_editor,
+        "input_constants_owner": window.input_constants_editor,
     }
     for role, expected in expected_singletons.items():
         assert roles[role] == [expected], (role, [widget.objectName() for widget in roles[role]])
@@ -120,10 +117,7 @@ def test_no_unowned_parameter_or_constant_state_widgets(qtbot: Any) -> None:
         "custom_params_table": "custom_parameters_owner",
         "implicit_params_table": "implicit_parameters_owner",
         "root_unknowns_table": "root_unknowns_owner",
-        "error_constants_editor": "error_constants_owner",
-        "custom_constants_editor": "custom_constants_owner",
-        "implicit_constants_editor": "implicit_constants_owner",
-        "root_constants_editor": "root_constants_owner",
+        "input_constants_editor": "input_constants_owner",
     }
     owner_types = (ParameterTable, ConstantsEditor, DetectedRowsTable)
     expected_widgets = {getattr(window, attr) for attr in expected_by_attr}
@@ -131,6 +125,13 @@ def test_no_unowned_parameter_or_constant_state_widgets(qtbot: Any) -> None:
     for owner_type in owner_types:
         owner_widgets.extend(window.findChildren(owner_type))
     for widget in owner_widgets:
+        # Units editors reuse the ConstantsEditor widget to map symbols → units;
+        # they are not constant/parameter *state* owners (they carry a
+        # ``*.units.*`` schema key and never a ``datalab_state_role``), so they
+        # are outside this ownership guard.
+        schema_key = str(widget.property("datalab_schema_key") or "")
+        if ".units." in schema_key:
+            continue
         assert widget in expected_widgets, (
             "unexpected editable state owner",
             widget.__class__.__name__,

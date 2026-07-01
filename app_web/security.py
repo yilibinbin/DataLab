@@ -17,6 +17,7 @@ from functools import wraps
 from flask import request, session, abort, current_app, has_app_context, has_request_context, render_template
 
 from shared.bilingual import _dual_msg
+from shared.latex_escaping import latex_escape as _canonical_latex_escape
 
 # ============================================================
 # CSRF Protection
@@ -213,38 +214,16 @@ def mpmath_synchronized(f):
 # LaTeX Content Escaping
 # ============================================================
 
-LATEX_SPECIAL_CHARS = {
-    '&': r'\&',
-    '%': r'\%',
-    '$': r'\$',
-    '#': r'\#',
-    '_': r'\_',
-    '{': r'\{',
-    '}': r'\}',
-    '~': r'\textasciitilde{}',
-    '^': r'\textasciicircum{}',
-    '\\': r'\textbackslash{}',
-}
-
-
 def latex_escape(text: str) -> str:
     """
     Escape special LaTeX characters to prevent injection.
 
-    Args:
-        text: Raw text that may contain special chars
-
-    Returns:
-        LaTeX-safe text
+    Delegates to the single canonical implementation (P2-6). The former local
+    version used sequential ``str.replace``, which re-escaped the backslashes its
+    own replacements introduced (``a~b`` -> ``a\\textbackslash{}textasciitilde{}b``);
+    the canonical helper is single-pass and correct.
     """
-    if not isinstance(text, str):
-        text = str(text)
-
-    # Sort by length descending to handle multi-char sequences first
-    for char, escaped in sorted(LATEX_SPECIAL_CHARS.items(), key=lambda x: -len(x[0])):
-        text = text.replace(char, escaped)
-
-    return text
+    return _canonical_latex_escape(text)
 
 
 # ============================================================
@@ -311,6 +290,23 @@ def configure_app_security(app):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['X-XSS-Protection'] = '1; mode=block'
+        # Content-Security-Policy (P2-7). Locks external loads to the app itself
+        # and the SRI-pinned KaTeX CDN. 'unsafe-inline' is required because the
+        # templates carry inline <script>/<style> (theme + i18n bootstrapping and
+        # inline style= attributes); img data: covers base64-rendered plots;
+        # connect 'self' covers the SSE stream and /api fetches. Nonces would let
+        # us drop 'unsafe-inline' but need per-request injection — out of scope.
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "font-src 'self' data: https://cdn.jsdelivr.net; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "frame-ancestors 'none'"
+        )
         # CSRF is session-scoped by design (see get_csrf_token()); no CSRF
         # cookie is emitted here.
         return response

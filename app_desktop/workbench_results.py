@@ -348,11 +348,15 @@ def refresh_result_overview(owner: Any) -> None:
 
 def _refresh_result_details_empty_label(owner: Any, state: ResultOverviewState) -> None:
     label = getattr(owner, "workbench_result_details_empty_label", None)
+    panel = getattr(owner, "workbench_result_details_empty_panel", None)
     if label is None:
         return
     is_empty = state.kind == "none"
     label.setText(owner._tr("暂无结果详情", "No result details") if is_empty else "")
-    label.setVisible(is_empty)
+    if panel is not None:
+        panel.setVisible(is_empty)
+    else:
+        label.setVisible(is_empty)
     tabs = getattr(owner, "tabs", None)
     if tabs is not None:
         tabs.setVisible(not is_empty)

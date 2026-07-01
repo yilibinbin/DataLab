@@ -11,10 +11,10 @@ from typing import Any, Callable, Sequence, cast
 from mpmath import mp
 
 from shared.expression_engine import safe_eval
-from shared.numerics import noise_floor
 from fitting.model_parser import ModelSpecification, MpfCallable
 from fitting.constraints import ParameterState
 from fitting.hp_fitter import FitResult, combine_error_components
+from fitting.statistics import compute_fit_statistics
 from shared.bilingual import _dual_msg
 from shared.precision import precision_guard
 from shared.uncertainty import parse_numeric_value
@@ -768,39 +768,18 @@ def _solve_observed_linear_least_squares(
         for i in range(row_count)
     ]
     residuals = [fitted_curve[i] - targets[i] for i in range(row_count)]
-    if weights:
-        chi2 = mp.fsum(weight * (residual * residual) for weight, residual in zip(weights, residuals))
-        total_weight = mp.fsum(weights)
-        mean_target = (
-            mp.fsum(weight * target for weight, target in zip(weights, targets)) / total_weight
-            if total_weight > 0 else mp.fsum(targets) / row_count
-        )
-        sst = mp.fsum(weight * (target - mean_target) ** 2 for weight, target in zip(weights, targets))
-        rmse = mp.sqrt(chi2 / total_weight)
-    else:
-        chi2 = mp.fsum(residual * residual for residual in residuals)
-        mean_target = mp.fsum(targets) / row_count
-        sst = mp.fsum((target - mean_target) ** 2 for target in targets)
-        rmse = mp.sqrt(chi2 / row_count)
-    dof = row_count - col_count
-    if dof <= 0:
-        reduced = mp.nan
-        r2 = mp.nan
-        aic = mp.nan
-        bic = mp.nan
-    else:
-        reduced = chi2 / dof
-        r2 = mp.mpf("1") - (chi2 / sst if sst != 0 else mp.mpf("0"))
-        eps = noise_floor()
-        noise = chi2 / row_count if chi2 > eps else eps
-        aic = 2 * col_count + row_count * mp.log(noise)
-        bic = col_count * mp.log(row_count) + row_count * mp.log(noise)
+    statistics = compute_fit_statistics(
+        targets,
+        residuals,
+        weights,
+        free_param_count=col_count,
+    )
 
     covariance, stat_errors, cov_warning = _linear_covariance(
         design=design,
         free_params=free_params,
-        chi2=chi2,
-        dof=dof if dof > 0 else 1,
+        chi2=statistics.chi2,
+        dof=statistics.dof if statistics.dof > 0 else 1,
     )
     for name in definition.parameters:
         stat_errors.setdefault(name, mp.mpf("0"))
@@ -808,7 +787,8 @@ def _solve_observed_linear_least_squares(
     stat_errors, sys_errors, total_errors = combine_error_components(params, stat_errors, sys_errors)
     details: dict[str, object] = {
         "expression": definition.equation,
-        "dof": int(dof),
+        "dof": int(statistics.dof),
+        "covariance_parameters": list(free_params),
         "implicit_fast_path": "observed_implicit_linear",
     }
     if weights:
@@ -829,12 +809,12 @@ def _solve_observed_linear_least_squares(
     return FitResult(
         params=params,
         param_errors=total_errors,
-        chi2=chi2,
-        reduced_chi2=reduced,
-        aic=aic,
-        bic=bic,
-        r2=r2,
-        rmse=rmse,
+        chi2=statistics.chi2,
+        reduced_chi2=statistics.reduced_chi2,
+        aic=statistics.aic,
+        bic=statistics.bic,
+        r2=statistics.r2,
+        rmse=statistics.rmse,
         residuals=residuals,
         fitted_curve=fitted_curve,
         covariance=covariance,
