@@ -4,8 +4,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from datalab_core.statistics_matrix import validate_statistics_matrix_payload
-
 from .latex_tables_common import (
     _build_standalone_preamble,
     _estimate_page_geometry,
@@ -25,7 +23,9 @@ def generate_statistics_matrix_latex(
 ) -> str:
     """Generate a standalone LaTeX document for statistics matrix payloads."""
 
-    validate_statistics_matrix_payload(payload)
+    # Payload is already validated in datalab_core before it reaches the renderer
+    # (statistics_matrix.py:77); re-validating here forced a datalab_latex ->
+    # datalab_core layering inversion (P2-5). The renderer trusts its typed input.
     columns = tuple(str(column) for column in payload["columns"])
     matrices = payload["matrices"]
     row_count = sum(len(columns) for _ in ("covariance", "correlation"))

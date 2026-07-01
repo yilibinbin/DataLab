@@ -4,8 +4,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from datalab_core.statistics_grouped import validate_statistics_grouped_payload
-
 from .latex_tables_common import (
     _build_standalone_preamble,
     _estimate_page_geometry,
@@ -34,7 +32,9 @@ def generate_statistics_grouped_latex(
 
     from datalab_latex.latex_formatting import calculate_dcolumn_format_for_column, siunitx_column_spec
 
-    validate_statistics_grouped_payload(payload)
+    # Payload is already validated in datalab_core before it reaches the renderer
+    # (statistics_grouped.py:235); re-validating here forced a datalab_latex ->
+    # datalab_core layering inversion (P2-5). The renderer trusts its typed input.
     group_size = max(0, int(latex_group_size))
     rows = _grouped_summary_rows(
         payload,
