@@ -899,27 +899,76 @@ def _execute_calc_job(
     latex_path: str | None = None
     payload: dict[str, object] = {}
     core_warnings: list[str] = []
-
-    _check_cancelled()
-    with _mp_precision_guard(options.mp_precision) as applied_precision:
-        if job.mode == "extrapolation":
-            data_rows: list[tuple[mp.mpf, ...]] = []
-            results: list[object] = []
-            plot_bytes_list: list[bytes | None] = []
-            seg_lengths: list[int] = []
-            input_sources: list[str] = []
-            if job.data_path:
-                _check_cancelled()
-                text = _safe_read_text(job.data_path)
-                h, rows = parse_extrapolation_string(text, job.verbose, options=options)
+    def _run_extrapolation_mode(applied_precision):
+        nonlocal headers, latex_path, payload
+        data_rows: list[tuple[mp.mpf, ...]] = []
+        results: list[object] = []
+        plot_bytes_list: list[bytes | None] = []
+        seg_lengths: list[int] = []
+        input_sources: list[str] = []
+        if job.data_path:
+            _check_cancelled()
+            text = _safe_read_text(job.data_path)
+            h, rows = parse_extrapolation_string(text, job.verbose, options=options)
+            headers = h
+            data_rows.extend(rows)
+            seg_lengths.extend(_segment_lengths_from_text(text, len(rows)))
+            input_sources.append(text)
+            logs.append(f"Loaded file data: {job.data_path}")
+        if job.manual_content:
+            _check_cancelled()
+            h, rows = parse_extrapolation_string(job.manual_content, job.verbose, options=options)
+            if headers is None:
                 headers = h
-                data_rows.extend(rows)
-                seg_lengths.extend(_segment_lengths_from_text(text, len(rows)))
-                input_sources.append(text)
-                logs.append(f"Loaded file data: {job.data_path}")
-            if job.manual_content:
-                _check_cancelled()
-                h, rows = parse_extrapolation_string(job.manual_content, job.verbose, options=options)
+            elif headers != h:
+                raise ValueError(
+                    _dual_msg(
+                        "文件与手动输入的表头不一致。",
+                        "File headers do not match the manual header.",
+                    )
+                )
+            data_rows.extend(rows)
+            seg_lengths.extend(_segment_lengths_from_text(job.manual_content, len(rows)))
+            input_sources.append(job.manual_content)
+            logs.append("Manual input data used.")
+        if not headers or not data_rows:
+            raise ValueError(
+                _dual_msg(
+                    "没有可用于外推的有效数据。",
+                    "No valid data available for extrapolation.",
+                )
+            )
+        _v(f"[extrapolation] rows={len(data_rows)} headers={headers}")
+        table_segments = _table_segments_from_lengths(len(data_rows), seg_lengths)
+        core_request = _safe_extrapolation_core_request(
+            headers=headers,
+            data_rows=data_rows,
+            options=options,
+            table_segments=table_segments,
+            precision_digits=applied_precision,
+            uncertainty_digits=job.uncertainty_digits,
+        )
+        if core_request is not None:
+            extrapolation_service = create_core_session_service(
+                cancellation_checker=_service_cancel_requested,
+            )
+            envelope = extrapolation_service.submit(core_request)
+            if envelope.status is not ResultStatus.SUCCEEDED:
+                payload_map = envelope.payload if isinstance(envelope.payload, Mapping) else {}
+                message_text = str(payload_map.get("message") or "Extrapolation failed.")
+                raise ValueError(message_text)
+            if options.warnings is not None:
+                options.warnings.extend(str(item) for item in envelope.warnings)
+            data_rows = extrapolation_payload_to_rows(envelope.payload)
+            results = extrapolation_payload_to_results(envelope.payload)
+            headers = [str(item) for item in envelope.payload.get("headers", headers)]
+        else:
+            headers = None
+            data_rows = []
+            results = []
+            seg_lengths = []
+            for text in input_sources:
+                h, rows, res = process_data_string(text, job.verbose, options=options)
                 if headers is None:
                     headers = h
                 elif headers != h:
@@ -930,9 +979,8 @@ def _execute_calc_job(
                         )
                     )
                 data_rows.extend(rows)
-                seg_lengths.extend(_segment_lengths_from_text(job.manual_content, len(rows)))
-                input_sources.append(job.manual_content)
-                logs.append("Manual input data used.")
+                results.extend(res)
+                seg_lengths.extend(_segment_lengths_from_text(text, len(rows)))
             if not headers or not data_rows:
                 raise ValueError(
                     _dual_msg(
@@ -940,527 +988,491 @@ def _execute_calc_job(
                         "No valid data available for extrapolation.",
                     )
                 )
-            _v(f"[extrapolation] rows={len(data_rows)} headers={headers}")
             table_segments = _table_segments_from_lengths(len(data_rows), seg_lengths)
-            core_request = _safe_extrapolation_core_request(
-                headers=headers,
-                data_rows=data_rows,
-                options=options,
-                table_segments=table_segments,
-                precision_digits=applied_precision,
-                uncertainty_digits=job.uncertainty_digits,
-            )
-            if core_request is not None:
-                extrapolation_service = create_core_session_service(
-                    cancellation_checker=_service_cancel_requested,
-                )
-                envelope = extrapolation_service.submit(core_request)
-                if envelope.status is not ResultStatus.SUCCEEDED:
-                    payload_map = envelope.payload if isinstance(envelope.payload, Mapping) else {}
-                    message_text = str(payload_map.get("message") or "Extrapolation failed.")
-                    raise ValueError(message_text)
-                if options.warnings is not None:
-                    options.warnings.extend(str(item) for item in envelope.warnings)
-                data_rows = extrapolation_payload_to_rows(envelope.payload)
-                results = extrapolation_payload_to_results(envelope.payload)
-                headers = [str(item) for item in envelope.payload.get("headers", headers)]
-            else:
-                headers = None
-                data_rows = []
-                results = []
-                seg_lengths = []
-                for text in input_sources:
-                    h, rows, res = process_data_string(text, job.verbose, options=options)
-                    if headers is None:
-                        headers = h
-                    elif headers != h:
-                        raise ValueError(
-                            _dual_msg(
-                                "文件与手动输入的表头不一致。",
-                                "File headers do not match the manual header.",
-                            )
-                        )
-                    data_rows.extend(rows)
-                    results.extend(res)
-                    seg_lengths.extend(_segment_lengths_from_text(text, len(rows)))
-                if not headers or not data_rows:
-                    raise ValueError(
-                        _dual_msg(
-                            "没有可用于外推的有效数据。",
-                            "No valid data available for extrapolation.",
-                        )
-                    )
-                table_segments = _table_segments_from_lengths(len(data_rows), seg_lengths)
-            if job.generate_latex:
-                _check_cancelled()
-                generate_latex_table(
-                    headers,
-                    data_rows,
-                    results,
-                    job.output_path,
-                    caption=job.caption,
-                    precision=job.latex_digits,
-                    verbose=job.verbose,
-                    use_dcolumn=job.use_dcolumn,
-                    table_segments=table_segments,
-                    result_uncertainty_digits=job.uncertainty_digits,
-                    latex_group_size=job.latex_group_size,
-                )
-                latex_path = job.output_path
-                logs.append(f"LaTeX written: {job.output_path}")
-            if job.render_plots:
-                is_en = job.lang == "en"
-                for idx, (row, res) in enumerate(zip(data_rows, results), 1):
-                    _check_cancelled()
-                    value, sigma, _ = split_extrapolation_result(res)
-                    plot_bytes = _render_extrapolation_plot_bytes(row, value, sigma, idx, is_en=is_en)
-                    plot_bytes_list.append(plot_bytes)
-            payload = {
-                "headers": headers,
-                "data_rows": data_rows,
-                "results": results,
-                "table_segments": table_segments,
-                "precision_used": applied_precision,
-                "render_plots": job.render_plots,
-            }
-            if core_request is not None:
-                payload["core_request"] = core_request
-            if plot_bytes_list:
-                payload["plots"] = plot_bytes_list
-        elif job.mode == "error":
+        if job.generate_latex:
             _check_cancelled()
-            if not job.formula:
-                raise ValueError(
-                    _dual_msg(
-                        "误差传递需要填写公式。",
-                        "Error propagation requires a formula.",
-                    )
+            generate_latex_table(
+                headers,
+                data_rows,
+                results,
+                job.output_path,
+                caption=job.caption,
+                precision=job.latex_digits,
+                verbose=job.verbose,
+                use_dcolumn=job.use_dcolumn,
+                table_segments=table_segments,
+                result_uncertainty_digits=job.uncertainty_digits,
+                latex_group_size=job.latex_group_size,
+            )
+            latex_path = job.output_path
+            logs.append(f"LaTeX written: {job.output_path}")
+        if job.render_plots:
+            is_en = job.lang == "en"
+            for idx, (row, res) in enumerate(zip(data_rows, results), 1):
+                _check_cancelled()
+                value, sigma, _ = split_extrapolation_result(res)
+                plot_bytes = _render_extrapolation_plot_bytes(row, value, sigma, idx, is_en=is_en)
+                plot_bytes_list.append(plot_bytes)
+        payload = {
+            "headers": headers,
+            "data_rows": data_rows,
+            "results": results,
+            "table_segments": table_segments,
+            "precision_used": applied_precision,
+            "render_plots": job.render_plots,
+        }
+        if core_request is not None:
+            payload["core_request"] = core_request
+        if plot_bytes_list:
+            payload["plots"] = plot_bytes_list
+
+    def _run_error_mode(applied_precision):
+        nonlocal headers, latex_path, payload
+        _check_cancelled()
+        if not job.formula:
+            raise ValueError(
+                _dual_msg(
+                    "误差传递需要填写公式。",
+                    "Error propagation requires a formula.",
                 )
-            constants: dict[str, object] = {}
-            if job.options and job.options.warnings is None:
-                job.options.warnings = []
-            if job.constants_enabled:
-                if job.use_constants_file:
-                    const_path_text = job.constants_file_path or ""
-                    if not const_path_text:
-                        raise ValueError(
-                            _loc(
-                                "已启用常数，但未提供常数文件。",
-                                "Constants enabled but no constants file provided.",
-                            )
+            )
+        constants: dict[str, object] = {}
+        if job.options and job.options.warnings is None:
+            job.options.warnings = []
+        if job.constants_enabled:
+            if job.use_constants_file:
+                const_path_text = job.constants_file_path or ""
+                if not const_path_text:
+                    raise ValueError(
+                        _loc(
+                            "已启用常数，但未提供常数文件。",
+                            "Constants enabled but no constants file provided.",
                         )
-                    path = _safe_resolve_path(const_path_text)
-                    if not path.exists():
-                        raise ValueError(_loc("常数文件不存在。", "Constants file not found."))
-                    constants = process_constants_file(str(path), job.verbose)
-                    logs.append(f"Loaded constants file: {path}")
-                else:
-                    if job.manual_constants:
-                        constants = process_constants_string(job.manual_constants, job.verbose)
-                        if constants:
-                            logs.append("Manual constants appended.")
-                        else:
-                            raise ValueError(
-                                _loc(
-                                    "未能解析手动常数，请检查格式。",
-                                    "Failed to parse manual constants, please check the format.",
-                                )
-                            )
+                    )
+                path = _safe_resolve_path(const_path_text)
+                if not path.exists():
+                    raise ValueError(_loc("常数文件不存在。", "Constants file not found."))
+                constants = process_constants_file(str(path), job.verbose)
+                logs.append(f"Loaded constants file: {path}")
+            else:
+                if job.manual_constants:
+                    constants = process_constants_string(job.manual_constants, job.verbose)
+                    if constants:
+                        logs.append("Manual constants appended.")
                     else:
                         raise ValueError(
                             _loc(
-                                "已启用常数，但未提供手动常数。",
-                                "Constants enabled but no manual constants provided.",
+                                "未能解析手动常数，请检查格式。",
+                                "Failed to parse manual constants, please check the format.",
                             )
                         )
+                else:
+                    raise ValueError(
+                        _loc(
+                            "已启用常数，但未提供手动常数。",
+                            "Constants enabled but no manual constants provided.",
+                        )
+                    )
 
-            parsed_data = []
-            seg_lengths: list[int] = []
-            if job.data_path:
-                text = _safe_read_text(job.data_path)
-                h, rows = process_uncertainty_string(text, job.verbose)
+        parsed_data = []
+        seg_lengths: list[int] = []
+        if job.data_path:
+            text = _safe_read_text(job.data_path)
+            h, rows = process_uncertainty_string(text, job.verbose)
+            headers = h
+            parsed_data.extend(rows)
+            seg_lengths.extend(_segment_lengths_from_text(text, len(rows)))
+            logs.append(f"Loaded file data: {job.data_path}")
+        if job.manual_content:
+            h, rows = process_uncertainty_string(job.manual_content, job.verbose)
+            if headers is None:
                 headers = h
-                parsed_data.extend(rows)
-                seg_lengths.extend(_segment_lengths_from_text(text, len(rows)))
-                logs.append(f"Loaded file data: {job.data_path}")
-            if job.manual_content:
-                h, rows = process_uncertainty_string(job.manual_content, job.verbose)
-                if headers is None:
-                    headers = h
-                elif headers != h:
-                    raise ValueError(
-                        _dual_msg(
-                            "文件与手动输入的表头不一致。",
-                            "File headers do not match the manual header.",
-                        )
-                    )
-                parsed_data.extend(rows)
-                seg_lengths.extend(_segment_lengths_from_text(job.manual_content, len(rows)))
-                logs.append("Manual data used.")
-            if not headers or not parsed_data:
+            elif headers != h:
                 raise ValueError(
                     _dual_msg(
-                        "未能解析出任何误差传递数据。",
-                        "No error-propagation data could be parsed.",
+                        "文件与手动输入的表头不一致。",
+                        "File headers do not match the manual header.",
                     )
                 )
-            _v(f"[error] rows={len(parsed_data)} headers={headers} formula={job.formula}")
-            table_segments = _table_segments_from_lengths(len(parsed_data), seg_lengths)
-            used_headers, used_constants = detect_used_error_propagation_inputs(headers, constants, job.formula or "")
-            constants_used = {name: constants[name] for name in used_constants if name in constants}
-            collect_distribution = _should_collect_monte_carlo_distribution(
-                propagation_method=job.error_propagation_method,
-                propagation_order=job.error_propagation_order,
-                mc_samples=job.error_mc_samples,
-                mc_seed=job.error_mc_seed,
-                render_plots=job.render_plots,
+            parsed_data.extend(rows)
+            seg_lengths.extend(_segment_lengths_from_text(job.manual_content, len(rows)))
+            logs.append("Manual data used.")
+        if not headers or not parsed_data:
+            raise ValueError(
+                _dual_msg(
+                    "未能解析出任何误差传递数据。",
+                    "No error-propagation data could be parsed.",
+                )
             )
-            core_request = _safe_uncertainty_core_request(
-                headers=headers,
-                parsed_data=parsed_data,
-                constants=constants,
-                formula=job.formula or "",
-                propagation_method=job.error_propagation_method,
-                propagation_order=job.error_propagation_order,
-                mc_samples=job.error_mc_samples,
-                mc_seed=job.error_mc_seed,
-                precision_digits=applied_precision,
-                uncertainty_digits=job.uncertainty_digits,
-                table_segments=table_segments,
-                collect_monte_carlo_distribution=collect_distribution,
-                units=job.units_config,
-            )
-            _check_cancelled()
-            core_payload: Mapping[str, Any] | None = None
-            if core_request is not None:
-                uncertainty_service = create_core_session_service(
-                    cancellation_checker=_service_cancel_requested,
-                )
-                envelope = uncertainty_service.submit(core_request)
-                if envelope.status is not ResultStatus.SUCCEEDED:
-                    payload_map = envelope.payload if isinstance(envelope.payload, Mapping) else {}
-                    message_text = str(payload_map.get("message") or "Uncertainty propagation failed.")
-                    raise ValueError(message_text)
-                if options.warnings is not None:
-                    options.warnings.extend(str(item) for item in envelope.warnings)
-                core_payload = envelope.payload if isinstance(envelope.payload, Mapping) else None
-                results = uncertainty_payload_to_results(envelope.payload)
-            else:
-                results = apply_formula_to_data(
-                    headers,
-                    parsed_data,
-                    constants_used,
-                    job.formula,
-                    job.verbose,
-                    warnings=options.warnings,
-                    return_components=True,
-                    propagation_method=job.error_propagation_method,
-                    propagation_order=job.error_propagation_order,
-                    mc_samples=job.error_mc_samples,
-                    mc_seed=job.error_mc_seed,
-                )
-            normalized_units_payload = (
-                core_payload.get("units")
-                if core_payload is not None and isinstance(core_payload.get("units"), Mapping)
-                else None
-            )
-            row_plot_bytes: list[bytes | None] = []
-            if job.render_plots:
-                for idx_row, res in enumerate(results, 1):
-                    contrib_map = getattr(res, "contributions", None)
-                    if not contrib_map:
-                        row_plot_bytes.append(None)
-                        continue
-                    summary = _build_contribution_summary({k: mp.mpf(v) for k, v in contrib_map.items() if v is not None})
-                    if not summary:
-                        row_plot_bytes.append(None)
-                        continue
-                    try:
-                        plot_bytes = _render_contribution_plot(summary, lang, title_suffix=f"row {idx_row}")
-                    except Exception:
-                        plot_bytes = None
-                    row_plot_bytes.append(plot_bytes)
-            row_distribution_plot_bytes: list[bytes | None] = []
-            if job.render_plots:
-                for idx_row, res in enumerate(results, 1):
-                    summary = getattr(res, "monte_carlo_distribution", None)
-                    if not summary:
-                        row_distribution_plot_bytes.append(None)
-                        continue
-                    plot_bytes = _render_monte_carlo_distribution_plot(
-                        summary if isinstance(summary, Mapping) else None,
-                        lang,
-                        row_index=idx_row,
-                        value_unit=_result_unit_from_units(normalized_units_payload),
-                    )
-                    row_distribution_plot_bytes.append(plot_bytes)
-            contrib_summary, contrib_plot = _aggregate_error_contributions(results, lang, render_plot=job.render_plots)
-            if contrib_summary:
-                title = "[error] uncertainty breakdown" if lang == "en" else "[误差] 不确定度贡献分解"
-                logs.append(title)
-                for entry in contrib_summary:
-                    name = entry["name"]
-                    percent = entry["percent"]
-                    sigma_txt = mp.nstr(entry["sigma"], 8)
-                    logs.append(f" - {name}: {percent:.2f}% (σ_contrib={sigma_txt})")
-            payload = {
-                "headers": headers,
-                "parsed_data": parsed_data,
-                "results": results,
-                "table_segments": table_segments,
-                "constants": constants_used,
-                "formula": job.formula or "",
-                "precision_used": applied_precision,
-                "propagation": normalize_uncertainty_propagation_config(
-                    method=job.error_propagation_method,
-                    order=job.error_propagation_order,
-                    mc_samples=job.error_mc_samples,
-                    mc_seed=job.error_mc_seed,
-                ),
-            }
-            if core_request is not None:
-                payload["core_request"] = core_request
-            if isinstance(normalized_units_payload, Mapping):
-                payload["units"] = normalized_units_payload
-            has_row_plots = any(plot for plot in row_plot_bytes)
-            has_distribution_plots = any(plot for plot in row_distribution_plot_bytes)
-            if contrib_summary:
-                payload["contribution_breakdown"] = contrib_summary
-            if job.render_plots and contrib_plot:
-                payload["contribution_plot"] = contrib_plot
-            if job.render_plots and has_row_plots:
-                payload["row_contribution_plots"] = row_plot_bytes
-            if job.render_plots and has_distribution_plots:
-                payload["row_distribution_plots"] = row_distribution_plot_bytes
-            if job.generate_latex:
-                units_payload = payload.get("units")
-                generate_error_propagation_table(
-                    headers,
-                    parsed_data,
-                    results,
-                    constants_used,
-                    job.formula,
-                    job.output_path,
-                    caption=job.caption,
-                    verbose=job.verbose,
-                    use_dcolumn=job.use_dcolumn,
-                    table_segments=table_segments,
-                    precision=job.latex_digits,
-                    result_uncertainty_digits=job.uncertainty_digits,
-                    used_columns=used_headers,
-                    latex_group_size=job.latex_group_size,
-                    input_units=_input_units_for_headers(headers, units_payload),
-                    result_unit=_result_unit_from_units(units_payload),
-                )
-                latex_path = job.output_path
-                logs.append(f"Error propagation LaTeX written: {job.output_path}")
-        elif job.mode == "statistics":
-            _check_cancelled()
-            if not job.dataset:
-                raise ValueError(
-                    _dual_msg(
-                        "统计数据缺失，无法计算。",
-                        "Statistics data is missing; cannot compute.",
-                    )
-                )
-            headers, rows, sigma_rows = job.dataset
-            value_columns_text = (job.stats_value_col or "").strip()
-            if not value_columns_text:
-                raise ValueError(
-                    _dual_msg(
-                        "请在统计设置中指定数值列。",
-                        "Please select the value column(s) in statistics settings.",
-                    )
-                )
-            sigma_col = (job.stats_sigma_col or "").strip()
-            sigma_idx = None
-            if sigma_col:
-                if sigma_col not in headers:
-                    raise ValueError(
-                        _dual_msg(
-                            f"未找到列 {sigma_col}。",
-                            f"Column not found: {sigma_col}.",
-                        )
-                    )
-                sigma_idx = headers.index(sigma_col)
-            segments = job.segments or [(0, len(rows))]
-            batches: list[dict[str, object]] = []
-            normalized_segments = [
-                (start, end) for start, end in normalize_segments(segments, row_count=len(rows))
-            ]
-            non_empty_segments = normalized_segments
-            _v(f"[statistics] rows={len(rows)} value_columns={value_columns_text} batches={len(normalized_segments)}")
-            if job.verbose:
-                print(
-                    "[statistics] mode="
-                    f"{job.stats_mode or 'mean'} use_sample={job.stats_sample} "
-                    f"use_weighted_variance={job.stats_weighted_variance}"
-                )
-                print(
-                    f"[statistics] value_columns={value_columns_text} sigma_cols={'yes' if sigma_rows else 'no'} "
-                    f"total_rows={len(rows)} batches={len(normalized_segments)}"
-                )
-            try:
-                column_groups = build_multi_column_statistics_requests(
-                    headers=headers,
-                    rows=rows,
-                    sigma_rows=sigma_rows,
-                    value_columns=value_columns_text,
-                    sigma_col=sigma_col or None,
-                    stats_mode=job.stats_mode or "mean",
-                    use_sample=job.stats_sample,
-                    use_weighted_variance=job.stats_weighted_variance,
-                    trim_fraction=job.stats_trim_fraction,
-                    precision_digits=applied_precision,
-                    uncertainty_digits=job.uncertainty_digits,
-                    segments=normalized_segments,
-                    units=job.units_config,
-                )
-            except Exception as exc:  # noqa: BLE001
-                raise ValueError(str(exc)) from exc
-            statistics_service = create_core_session_service(
+        _v(f"[error] rows={len(parsed_data)} headers={headers} formula={job.formula}")
+        table_segments = _table_segments_from_lengths(len(parsed_data), seg_lengths)
+        used_headers, used_constants = detect_used_error_propagation_inputs(headers, constants, job.formula or "")
+        constants_used = {name: constants[name] for name in used_constants if name in constants}
+        collect_distribution = _should_collect_monte_carlo_distribution(
+            propagation_method=job.error_propagation_method,
+            propagation_order=job.error_propagation_order,
+            mc_samples=job.error_mc_samples,
+            mc_seed=job.error_mc_seed,
+            render_plots=job.render_plots,
+        )
+        core_request = _safe_uncertainty_core_request(
+            headers=headers,
+            parsed_data=parsed_data,
+            constants=constants,
+            formula=job.formula or "",
+            propagation_method=job.error_propagation_method,
+            propagation_order=job.error_propagation_order,
+            mc_samples=job.error_mc_samples,
+            mc_seed=job.error_mc_seed,
+            precision_digits=applied_precision,
+            uncertainty_digits=job.uncertainty_digits,
+            table_segments=table_segments,
+            collect_monte_carlo_distribution=collect_distribution,
+            units=job.units_config,
+        )
+        _check_cancelled()
+        core_payload: Mapping[str, Any] | None = None
+        if core_request is not None:
+            uncertainty_service = create_core_session_service(
                 cancellation_checker=_service_cancel_requested,
             )
-            for column_group in column_groups:
-                value_col = column_group.value_col
-                val_idx = headers.index(value_col)
-                for core_batch, (start, end) in zip(column_group.batches, non_empty_segments, strict=True):
-                    _check_cancelled()
-                    batch_rows = rows[start:end]
-                    if not batch_rows:
-                        continue
-                    batch_sigmas = sigma_rows[start:end] if sigma_rows else []
-                    request_sigmas = list(core_batch.request.inputs["sigmas"])
-                    values = [
-                        cell if isinstance(cell, mp.mpf) else mp.mpf(str(cell))
-                        for row in batch_rows
-                        for cell in (row[val_idx],)
-                    ]
-                    sigmas = [None if sigma is None else mp.mpf(str(sigma)) for sigma in request_sigmas]
-                    if sigma_idx is not None:
-                        latex_sigmas: list[tuple[mp.mpf | None, ...]] = []
-                        for sigma in sigmas:
-                            sigma_cells: list[mp.mpf | None] = [None] * len(headers)
-                            sigma_cells[val_idx] = sigma
-                            latex_sigmas.append(tuple(sigma_cells))
-                        batch_sigmas = latex_sigmas
-                    if job.verbose:
-                        print(
-                            f"[statistics] column {value_col} batch {core_batch.index} size={len(values)} "
-                            f"use_sample={job.stats_sample} use_weighted_variance={job.stats_weighted_variance}"
-                        )
-                        for i, (v, s) in enumerate(zip(values, sigmas), 1):
-                            print(f"[statistics] column {value_col} batch {core_batch.index} point {i}: value={v} sigma={s}")
-                    try:
-                        envelope = statistics_service.submit(core_batch.request)
-                    except Exception as exc:  # noqa: BLE001 - preserve per-batch worker context.
-                        message = _loc(
-                            f"批次 {core_batch.index} 统计失败: {exc}",
-                            f"Batch {core_batch.index} failed: {exc}",
-                        )
-                        raise ValueError(message) from exc
-                    if envelope.status is not ResultStatus.SUCCEEDED:
-                        payload = envelope.payload if isinstance(envelope.payload, Mapping) else {}
-                        message_text = str(payload.get("message") or "Statistics failed.")
-                        message = _loc(
-                            f"批次 {core_batch.index} 统计失败: {message_text}",
-                            f"Batch {core_batch.index} failed: {message_text}",
-                        )
-                        raise ValueError(message)
-                    try:
-                        result = statistics_payload_to_compute_result(envelope.payload, envelope.warnings)
-                    except Exception as exc:  # noqa: BLE001 - preserve per-batch worker context.
-                        message = _loc(
-                            f"批次 {core_batch.index} 统计失败: {exc}",
-                            f"Batch {core_batch.index} failed: {exc}",
-                        )
-                        raise ValueError(message) from exc
-                    core_warnings.extend(str(warning) for warning in result.get("warnings", []) or [])
-                    if job.verbose:
-                        print(
-                            f"[statistics] column {value_col} batch {core_batch.index} mean={result.get('mean')} "
-                            f"std={result.get('std')} std_mean={result.get('std_mean')} "
-                            f"v_min={result.get('v_min')} v_max={result.get('v_max')} "
-                            f"n_eff={result.get('effective_n')}"
-                        )
-                    result_source_row_ids = result.get("source_row_ids")
-                    source_row_ids: tuple[str | int, ...]
-                    if isinstance(result_source_row_ids, Sequence) and not isinstance(
-                        result_source_row_ids,
-                        (str, bytes, bytearray, memoryview),
-                    ):
-                        source_row_ids = tuple(cast(Sequence[str | int], result_source_row_ids))
-                    else:
-                        source_row_ids = core_batch.source_row_ids
-                    batches.append(
-                        {
-                            "index": len(batches) + 1,
-                            "column_index": column_group.column_index,
-                            "batch_index": core_batch.index,
-                            "headers": headers,
-                            "value_col": value_col,
-                            "rows": batch_rows,
-                            "sigma_rows": batch_sigmas,
-                            "values": values,
-                            "sigmas": sigmas,
-                            "result": result,
-                            "row_count": len(batch_rows),
-                            "source_row_ids": source_row_ids,
-                            "units": envelope.payload.get("units") if isinstance(envelope.payload, Mapping) else None,
-                        }
-                    )
-            if not batches:
+            envelope = uncertainty_service.submit(core_request)
+            if envelope.status is not ResultStatus.SUCCEEDED:
+                payload_map = envelope.payload if isinstance(envelope.payload, Mapping) else {}
+                message_text = str(payload_map.get("message") or "Uncertainty propagation failed.")
+                raise ValueError(message_text)
+            if options.warnings is not None:
+                options.warnings.extend(str(item) for item in envelope.warnings)
+            core_payload = envelope.payload if isinstance(envelope.payload, Mapping) else None
+            results = uncertainty_payload_to_results(envelope.payload)
+        else:
+            results = apply_formula_to_data(
+                headers,
+                parsed_data,
+                constants_used,
+                job.formula,
+                job.verbose,
+                warnings=options.warnings,
+                return_components=True,
+                propagation_method=job.error_propagation_method,
+                propagation_order=job.error_propagation_order,
+                mc_samples=job.error_mc_samples,
+                mc_seed=job.error_mc_seed,
+            )
+        normalized_units_payload = (
+            core_payload.get("units")
+            if core_payload is not None and isinstance(core_payload.get("units"), Mapping)
+            else None
+        )
+        row_plot_bytes: list[bytes | None] = []
+        if job.render_plots:
+            for idx_row, res in enumerate(results, 1):
+                contrib_map = getattr(res, "contributions", None)
+                if not contrib_map:
+                    row_plot_bytes.append(None)
+                    continue
+                summary = _build_contribution_summary({k: mp.mpf(v) for k, v in contrib_map.items() if v is not None})
+                if not summary:
+                    row_plot_bytes.append(None)
+                    continue
+                try:
+                    plot_bytes = _render_contribution_plot(summary, lang, title_suffix=f"row {idx_row}")
+                except Exception:
+                    plot_bytes = None
+                row_plot_bytes.append(plot_bytes)
+        row_distribution_plot_bytes: list[bytes | None] = []
+        if job.render_plots:
+            for idx_row, res in enumerate(results, 1):
+                summary = getattr(res, "monte_carlo_distribution", None)
+                if not summary:
+                    row_distribution_plot_bytes.append(None)
+                    continue
+                plot_bytes = _render_monte_carlo_distribution_plot(
+                    summary if isinstance(summary, Mapping) else None,
+                    lang,
+                    row_index=idx_row,
+                    value_unit=_result_unit_from_units(normalized_units_payload),
+                )
+                row_distribution_plot_bytes.append(plot_bytes)
+        contrib_summary, contrib_plot = _aggregate_error_contributions(results, lang, render_plot=job.render_plots)
+        if contrib_summary:
+            title = "[error] uncertainty breakdown" if lang == "en" else "[误差] 不确定度贡献分解"
+            logs.append(title)
+            for entry in contrib_summary:
+                name = entry["name"]
+                percent = entry["percent"]
+                sigma_txt = mp.nstr(entry["sigma"], 8)
+                logs.append(f" - {name}: {percent:.2f}% (σ_contrib={sigma_txt})")
+        payload = {
+            "headers": headers,
+            "parsed_data": parsed_data,
+            "results": results,
+            "table_segments": table_segments,
+            "constants": constants_used,
+            "formula": job.formula or "",
+            "precision_used": applied_precision,
+            "propagation": normalize_uncertainty_propagation_config(
+                method=job.error_propagation_method,
+                order=job.error_propagation_order,
+                mc_samples=job.error_mc_samples,
+                mc_seed=job.error_mc_seed,
+            ),
+        }
+        if core_request is not None:
+            payload["core_request"] = core_request
+        if isinstance(normalized_units_payload, Mapping):
+            payload["units"] = normalized_units_payload
+        has_row_plots = any(plot for plot in row_plot_bytes)
+        has_distribution_plots = any(plot for plot in row_distribution_plot_bytes)
+        if contrib_summary:
+            payload["contribution_breakdown"] = contrib_summary
+        if job.render_plots and contrib_plot:
+            payload["contribution_plot"] = contrib_plot
+        if job.render_plots and has_row_plots:
+            payload["row_contribution_plots"] = row_plot_bytes
+        if job.render_plots and has_distribution_plots:
+            payload["row_distribution_plots"] = row_distribution_plot_bytes
+        if job.generate_latex:
+            units_payload = payload.get("units")
+            generate_error_propagation_table(
+                headers,
+                parsed_data,
+                results,
+                constants_used,
+                job.formula,
+                job.output_path,
+                caption=job.caption,
+                verbose=job.verbose,
+                use_dcolumn=job.use_dcolumn,
+                table_segments=table_segments,
+                precision=job.latex_digits,
+                result_uncertainty_digits=job.uncertainty_digits,
+                used_columns=used_headers,
+                latex_group_size=job.latex_group_size,
+                input_units=_input_units_for_headers(headers, units_payload),
+                result_unit=_result_unit_from_units(units_payload),
+            )
+            latex_path = job.output_path
+            logs.append(f"Error propagation LaTeX written: {job.output_path}")
+
+    def _run_statistics_mode(applied_precision):
+        nonlocal headers, latex_path, payload
+        _check_cancelled()
+        if not job.dataset:
+            raise ValueError(
+                _dual_msg(
+                    "统计数据缺失，无法计算。",
+                    "Statistics data is missing; cannot compute.",
+                )
+            )
+        headers, rows, sigma_rows = job.dataset
+        value_columns_text = (job.stats_value_col or "").strip()
+        if not value_columns_text:
+            raise ValueError(
+                _dual_msg(
+                    "请在统计设置中指定数值列。",
+                    "Please select the value column(s) in statistics settings.",
+                )
+            )
+        sigma_col = (job.stats_sigma_col or "").strip()
+        sigma_idx = None
+        if sigma_col:
+            if sigma_col not in headers:
                 raise ValueError(
                     _dual_msg(
-                        "统计列中没有数据。",
-                        "No data in the statistics column.",
+                        f"未找到列 {sigma_col}。",
+                        f"Column not found: {sigma_col}.",
                     )
                 )
-            if job.generate_latex:
-                value_columns = [group.value_col for group in column_groups]
-                if len(batches) == 1:
-                    entry = batches[0]
-                    entry_units = entry.get("units") if isinstance(entry.get("units"), Mapping) else None
-                    generate_statistics_latex(
-                        str(entry.get("value_col") or value_columns[0]),
-                        list(entry.get("rows") or []),
-                        list(entry.get("sigma_rows") or []),
-                        dict(entry.get("result") or {}),
-                        job.latex_digits,
-                        job.output_path,
-                        job.use_dcolumn,
-                        caption=job.caption,
-                        uncertainty_digits=job.uncertainty_digits,
-                        latex_group_size=job.latex_group_size,
-                        units=entry_units,
+            sigma_idx = headers.index(sigma_col)
+        segments = job.segments or [(0, len(rows))]
+        batches: list[dict[str, object]] = []
+        normalized_segments = [
+            (start, end) for start, end in normalize_segments(segments, row_count=len(rows))
+        ]
+        non_empty_segments = normalized_segments
+        _v(f"[statistics] rows={len(rows)} value_columns={value_columns_text} batches={len(normalized_segments)}")
+        if job.verbose:
+            print(
+                "[statistics] mode="
+                f"{job.stats_mode or 'mean'} use_sample={job.stats_sample} "
+                f"use_weighted_variance={job.stats_weighted_variance}"
+            )
+            print(
+                f"[statistics] value_columns={value_columns_text} sigma_cols={'yes' if sigma_rows else 'no'} "
+                f"total_rows={len(rows)} batches={len(normalized_segments)}"
+            )
+        try:
+            column_groups = build_multi_column_statistics_requests(
+                headers=headers,
+                rows=rows,
+                sigma_rows=sigma_rows,
+                value_columns=value_columns_text,
+                sigma_col=sigma_col or None,
+                stats_mode=job.stats_mode or "mean",
+                use_sample=job.stats_sample,
+                use_weighted_variance=job.stats_weighted_variance,
+                trim_fraction=job.stats_trim_fraction,
+                precision_digits=applied_precision,
+                uncertainty_digits=job.uncertainty_digits,
+                segments=normalized_segments,
+                units=job.units_config,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(str(exc)) from exc
+        statistics_service = create_core_session_service(
+            cancellation_checker=_service_cancel_requested,
+        )
+        for column_group in column_groups:
+            value_col = column_group.value_col
+            val_idx = headers.index(value_col)
+            for core_batch, (start, end) in zip(column_group.batches, non_empty_segments, strict=True):
+                _check_cancelled()
+                batch_rows = rows[start:end]
+                if not batch_rows:
+                    continue
+                batch_sigmas = sigma_rows[start:end] if sigma_rows else []
+                request_sigmas = list(core_batch.request.inputs["sigmas"])
+                values = [
+                    cell if isinstance(cell, mp.mpf) else mp.mpf(str(cell))
+                    for row in batch_rows
+                    for cell in (row[val_idx],)
+                ]
+                sigmas = [None if sigma is None else mp.mpf(str(sigma)) for sigma in request_sigmas]
+                if sigma_idx is not None:
+                    latex_sigmas: list[tuple[mp.mpf | None, ...]] = []
+                    for sigma in sigmas:
+                        sigma_cells: list[mp.mpf | None] = [None] * len(headers)
+                        sigma_cells[val_idx] = sigma
+                        latex_sigmas.append(tuple(sigma_cells))
+                    batch_sigmas = latex_sigmas
+                if job.verbose:
+                    print(
+                        f"[statistics] column {value_col} batch {core_batch.index} size={len(values)} "
+                        f"use_sample={job.stats_sample} use_weighted_variance={job.stats_weighted_variance}"
                     )
+                    for i, (v, s) in enumerate(zip(values, sigmas), 1):
+                        print(f"[statistics] column {value_col} batch {core_batch.index} point {i}: value={v} sigma={s}")
+                try:
+                    envelope = statistics_service.submit(core_batch.request)
+                except Exception as exc:  # noqa: BLE001 - preserve per-batch worker context.
+                    message = _loc(
+                        f"批次 {core_batch.index} 统计失败: {exc}",
+                        f"Batch {core_batch.index} failed: {exc}",
+                    )
+                    raise ValueError(message) from exc
+                if envelope.status is not ResultStatus.SUCCEEDED:
+                    payload = envelope.payload if isinstance(envelope.payload, Mapping) else {}
+                    message_text = str(payload.get("message") or "Statistics failed.")
+                    message = _loc(
+                        f"批次 {core_batch.index} 统计失败: {message_text}",
+                        f"Batch {core_batch.index} failed: {message_text}",
+                    )
+                    raise ValueError(message)
+                try:
+                    result = statistics_payload_to_compute_result(envelope.payload, envelope.warnings)
+                except Exception as exc:  # noqa: BLE001 - preserve per-batch worker context.
+                    message = _loc(
+                        f"批次 {core_batch.index} 统计失败: {exc}",
+                        f"Batch {core_batch.index} failed: {exc}",
+                    )
+                    raise ValueError(message) from exc
+                core_warnings.extend(str(warning) for warning in result.get("warnings", []) or [])
+                if job.verbose:
+                    print(
+                        f"[statistics] column {value_col} batch {core_batch.index} mean={result.get('mean')} "
+                        f"std={result.get('std')} std_mean={result.get('std_mean')} "
+                        f"v_min={result.get('v_min')} v_max={result.get('v_max')} "
+                        f"n_eff={result.get('effective_n')}"
+                    )
+                result_source_row_ids = result.get("source_row_ids")
+                source_row_ids: tuple[str | int, ...]
+                if isinstance(result_source_row_ids, Sequence) and not isinstance(
+                    result_source_row_ids,
+                    (str, bytes, bytearray, memoryview),
+                ):
+                    source_row_ids = tuple(cast(Sequence[str | int], result_source_row_ids))
                 else:
-                    generate_statistics_latex_batches(
-                        ", ".join(value_columns),
-                        batches,
-                        job.latex_digits,
-                        job.output_path,
-                        job.use_dcolumn,
-                        caption=job.caption,
-                        uncertainty_digits=job.uncertainty_digits,
-                        latex_group_size=job.latex_group_size,
-                    )
-                latex_path = job.output_path
-                logs.append(f"统计平均 LaTeX 已写入: {job.output_path}")
+                    source_row_ids = core_batch.source_row_ids
+                batches.append(
+                    {
+                        "index": len(batches) + 1,
+                        "column_index": column_group.column_index,
+                        "batch_index": core_batch.index,
+                        "headers": headers,
+                        "value_col": value_col,
+                        "rows": batch_rows,
+                        "sigma_rows": batch_sigmas,
+                        "values": values,
+                        "sigmas": sigmas,
+                        "result": result,
+                        "row_count": len(batch_rows),
+                        "source_row_ids": source_row_ids,
+                        "units": envelope.payload.get("units") if isinstance(envelope.payload, Mapping) else None,
+                    }
+                )
+        if not batches:
+            raise ValueError(
+                _dual_msg(
+                    "统计列中没有数据。",
+                    "No data in the statistics column.",
+                )
+            )
+        if job.generate_latex:
             value_columns = [group.value_col for group in column_groups]
-            value_col_display = ", ".join(value_columns)
-            payload = {
-                "batches": batches,
-                "value_col": value_col_display,
-                "row_count": len(rows),
-                "headers": headers,
-                "values": batches[0]["values"] if len(batches) == 1 else None,
-                "sigmas": batches[0]["sigmas"] if len(batches) == 1 else None,
-                "render_plots": job.render_plots,
-                "precision_used": applied_precision,
-            }
-            if len(value_columns) > 1:
-                payload["value_columns"] = value_columns
+            if len(batches) == 1:
+                entry = batches[0]
+                entry_units = entry.get("units") if isinstance(entry.get("units"), Mapping) else None
+                generate_statistics_latex(
+                    str(entry.get("value_col") or value_columns[0]),
+                    list(entry.get("rows") or []),
+                    list(entry.get("sigma_rows") or []),
+                    dict(entry.get("result") or {}),
+                    job.latex_digits,
+                    job.output_path,
+                    job.use_dcolumn,
+                    caption=job.caption,
+                    uncertainty_digits=job.uncertainty_digits,
+                    latex_group_size=job.latex_group_size,
+                    units=entry_units,
+                )
+            else:
+                generate_statistics_latex_batches(
+                    ", ".join(value_columns),
+                    batches,
+                    job.latex_digits,
+                    job.output_path,
+                    job.use_dcolumn,
+                    caption=job.caption,
+                    uncertainty_digits=job.uncertainty_digits,
+                    latex_group_size=job.latex_group_size,
+                )
+            latex_path = job.output_path
+            logs.append(f"统计平均 LaTeX 已写入: {job.output_path}")
+        value_columns = [group.value_col for group in column_groups]
+        value_col_display = ", ".join(value_columns)
+        payload = {
+            "batches": batches,
+            "value_col": value_col_display,
+            "row_count": len(rows),
+            "headers": headers,
+            "values": batches[0]["values"] if len(batches) == 1 else None,
+            "sigmas": batches[0]["sigmas"] if len(batches) == 1 else None,
+            "render_plots": job.render_plots,
+            "precision_used": applied_precision,
+        }
+        if len(value_columns) > 1:
+            payload["value_columns"] = value_columns
+
+
+    _check_cancelled()
+    with _mp_precision_guard(options.mp_precision) as applied_precision:
+        if job.mode == "extrapolation":
+            _run_extrapolation_mode(applied_precision)
+        elif job.mode == "error":
+            _run_error_mode(applied_precision)
+        elif job.mode == "statistics":
+            _run_statistics_mode(applied_precision)
         else:
             raise ValueError(f"Unsupported mode for async calculation: {job.mode}")
 
