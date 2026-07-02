@@ -35,6 +35,60 @@ def test_build_parameter_state_unknown_parameter_reference_is_bilingual():
     assert "Unknown parameter" in msg
 
 
+@pytest.mark.parametrize(
+    "malicious_expr",
+    [
+        "a.__class__.__subclasses__()",   # attribute + no-arg call gadget
+        "a.__class__.__base__",            # attribute chain
+        "sqrt.__globals__",                # module-namespace info disclosure
+        "a[0]",                            # subscript gadget
+        "(lambda: a)()",                   # lambda smuggling
+        "__import__",                       # dunder name
+    ],
+)
+def test_build_parameter_state_rejects_sandbox_escape_expressions(malicious_expr):
+    """Constraint expressions must go through the whitelisted AST validator like
+    every other user-formula path — attribute/subscript/lambda/dunder gadgets
+    must be REJECTED, not executed at parse time (audit finding F7)."""
+    with pytest.raises(ValueError):
+        build_parameter_state({"b": {"expr": malicious_expr}}, ["a", "b"])
+
+
+@pytest.mark.parametrize(
+    "malicious_expr",
+    [
+        "a.__class__.__subclasses__()",
+        "a.__class__.__base__",
+        "sqrt.__globals__",
+        "a[0]",
+        "(lambda: a)()",
+        "__import__",
+    ],
+)
+def test_sandbox_escape_is_caught_by_the_ast_validator_not_symbol_resolution(malicious_expr):
+    """Assert the gadgets are rejected by the AST security validator itself, not
+    incidentally by SymPy's unknown-symbol path — otherwise a future refactor of
+    the validator could silently stop guarding while the test still passed
+    (verifies intent, audit finding F7)."""
+    from fitting.constraints import _validate_constraint_ast
+
+    with pytest.raises(ValueError, match="unsupported|Unsupported|Keyword|Invalid expression syntax"):
+        _validate_constraint_ast(malicious_expr)
+
+
+def test_build_parameter_state_still_accepts_legitimate_expressions():
+    """The security hardening must not break normal constraint expressions."""
+    state = build_parameter_state(
+        {
+            "a": {"initial": mp.mpf("2.0")},
+            "b": {"expr": "sqrt(a) + 2*a"},
+        },
+        ["a", "b"],
+    )
+    composed = state.compose((mp.mpf("4.0"),))
+    assert composed["b"] == mp.mpf("10.0")  # sqrt(4)+2*4 = 2+8
+
+
 def test_build_parameter_state_cycle_raises_bilingual_on_compose():
     state = build_parameter_state(
         {
