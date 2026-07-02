@@ -33,6 +33,19 @@ def _set_combo_data(combo: Any, value: str) -> None:
     QApplication.processEvents()
 
 
+def test_mode_switch_clears_previous_mode_result(window: Any) -> None:
+    """Switching modes must clear the previous mode's result text and CSV export
+    buffer so stale wrong-mode data is never shown or exported (audit F10)."""
+    window._set_csv_data([{"x": "1", "y": "2"}], ["x", "y"])
+    window.result_edit.setPlainText("stale fit result from a previous mode")
+    assert window._csv_rows
+
+    _set_combo_data(window.mode_combo, "statistics")
+
+    assert window._csv_rows == []
+    assert window.result_edit.toPlainText() == ""
+
+
 def _measure_mode_stack_width(window: Any) -> int:
     QApplication.processEvents()
     return int(window.mode_stack.sizeHint().width())

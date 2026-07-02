@@ -74,6 +74,30 @@ def build_extrapolation_request(
     )
 
 
+def _clamp_segments(segments: Any, row_count: int) -> list[list[int]]:
+    """Clamp requested segment [start, end] ranges to the surviving row count.
+
+    Extrapolation drops rows that fail (with a warning), so a request's segments
+    (built for the original row count) can reference discarded rows. Clamp each
+    segment's end to row_count and drop segments that start past the data; if
+    nothing valid remains, return a single full segment (audit F3)."""
+    if not row_count:
+        return [[0, 0]]
+    if not isinstance(segments, (list, tuple)) or not segments:
+        return [[0, row_count]]
+    clamped: list[list[int]] = []
+    for seg in segments:
+        try:
+            start, end = int(seg[0]), int(seg[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        start = max(0, min(start, row_count))
+        end = max(start, min(end, row_count))
+        if end > start:
+            clamped.append([start, end])
+    return clamped or [[0, row_count]]
+
+
 def run_extrapolation(request: ComputeJobRequest) -> ResultEnvelope:
     """Run extrapolation through the UI-neutral core service boundary."""
 
@@ -111,7 +135,11 @@ def run_extrapolation(request: ComputeJobRequest) -> ResultEnvelope:
             "data_rows": [[_format_mpf(value, precision_used) for value in row] for row in data_rows],
             "method": method,
             "method_options": dict(method_options),
-            "segments": request.inputs.get("segments") or [[0, len(data_rows)]],
+            # Rows that fail to extrapolate are dropped (with a warning). Clamp
+            # the requested segments to the surviving row count so segment indices
+            # never reference a discarded row; fall back to a single full segment
+            # if the request's segments no longer fit (audit F3).
+            "segments": _clamp_segments(request.inputs.get("segments"), len(data_rows)),
             "precision_used": precision_used,
             "results": [_result_payload(result, precision_used) for result in results],
         }
