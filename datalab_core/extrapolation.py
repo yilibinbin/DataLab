@@ -89,7 +89,9 @@ def _clamp_segments(segments: Any, row_count: int) -> list[list[int]]:
     for seg in segments:
         try:
             start, end = int(seg[0]), int(seg[1])
-        except (TypeError, ValueError, IndexError):
+        except (TypeError, ValueError, IndexError, KeyError):
+            # KeyError covers mapping-shaped entries ({}[0]); the rest cover
+            # non-sequence, too-short, and non-integer segment items.
             continue
         start = max(0, min(start, row_count))
         end = max(start, min(end, row_count))
