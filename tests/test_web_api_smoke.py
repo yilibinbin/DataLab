@@ -159,3 +159,26 @@ print("ok")
     )
 
     assert completed.stdout.strip() == "ok"
+
+
+def test_api_help_specs_error_does_not_leak_exception_text(monkeypatch):
+    """The public /api/help_specs endpoint must not echo raw exception text
+    (filesystem paths / internals) on failure — only the exception class name
+    (audit R3 D5)."""
+    import app_web.blueprints.api as api_bp
+
+    secret = "/secret/internal/path/should-not-leak.json"
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(api_bp.json, "loads", boom)
+
+    app = create_app()
+    client = app.test_client()
+    resp = client.get("/api/help_specs?lang=en")
+
+    assert resp.status_code == 500
+    body = resp.data.decode("utf-8")
+    assert secret not in body, "endpoint leaked raw exception text"
+    assert "RuntimeError" in body, "endpoint should surface the exception class name"

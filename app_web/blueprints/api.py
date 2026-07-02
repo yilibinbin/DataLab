@@ -265,8 +265,15 @@ def api_help_specs():
             mimetype="application/json",
         )
     except Exception as exc:
+        # Do not leak the raw exception text (filesystem paths / internals) to
+        # this public endpoint — expose only the exception class name and log the
+        # full detail server-side (audit R3 D5).
+        current_app.logger.warning("Failed to load help specs", exc_info=True)
         return current_app.response_class(
-            response=json.dumps({"error": f"Failed to load help specs: {str(exc)}"}, ensure_ascii=False),
+            response=json.dumps(
+                {"error": f"Failed to load help specs: {type(exc).__name__}"},
+                ensure_ascii=False,
+            ),
             status=500,
             mimetype="application/json",
         )
