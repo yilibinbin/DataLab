@@ -5,10 +5,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QEventLoop, Qt, QThread, Signal
+from PySide6.QtCore import QEventLoop, Qt
 from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
@@ -30,241 +29,32 @@ from shared.latex_engine import (
     MissingHomeDirectoryError,
     TectonicInstallCancelled,
     UnsupportedPlatformError,
-    ensure_tectonic_installed,
     find_app_root,
     resolve_engine,
-    tectonic_compile_argv,
 )
 
 from . import theme
 from .resources import _ensure_default_path_augmented, _pil_to_qpixmap
 from .workers_core import _safe_read_text, _safe_resolve_path
 
+# The two LaTeX QThread workers and their tightly-coupled helpers live in
+# ``workers_qt.py`` alongside CalcWorker/FitWorker/RootSolvingWorker (all other
+# workers live there — a reviewer flagged that these two were the only workers
+# defined inside a mixin file). They are re-imported here so that:
+#   * ``compile_latex_to_pdf`` / ``_offer_tectonic_install`` keep resolving them
+#     as module globals (call-time lookup, which lets tests monkeypatch
+#     ``window_latex_pdf_mixin._LatexCompileWorker``), and
+#   * external imports (``from app_desktop.window_latex_pdf_mixin import
+#     _LatexCompileWorker, _looks_like_plain_tex_output``) keep working.
+from .workers_qt import (  # noqa: F401 — re-exported for callers/tests
+    _TECTONIC_STAGE_LABELS,
+    _LatexCompileOutcome,
+    _LatexCompileWorker,
+    _LatexEngineRun,
+    _TectonicInstallWorker,
+    _looks_like_plain_tex_output,
+)
 
-# Bilingual labels for every Tectonic install stage in one place — adding
-# a new stage requires editing only this table (was two parallel dicts in
-# the previous revision; quality reviewer flagged the drift risk).
-_TECTONIC_STAGE_LABELS: dict[str, tuple[str, str]] = {
-    "downloading": ("下载中…", "Downloading…"),
-    "extracting": ("解压中…", "Extracting…"),
-    "installed": ("安装完成。", "Installed."),
-    "already-installed": ("已安装。", "Already installed."),
-}
-
-
-class _TectonicInstallWorker(QThread):
-    """Background worker for ``ensure_tectonic_installed``.
-
-    Runs the synchronous urllib download + tar/zip extract on a Qt
-    thread so the GUI event loop stays responsive — a 30 MB pull on a
-    slow connection would otherwise freeze the main thread for tens
-    of seconds, and ``QApplication.processEvents()`` from a foreground
-    busy-loop opens the door to re-entrant event-processing bugs.
-
-    The worker exposes its outcome via two attributes:
-    - ``result``: ``EngineChoice`` on success, ``None`` on failure
-    - ``error``: the exception raised, or ``None`` on success
-    Storing the exception itself (rather than a stringly-typed
-    discriminator) lets the caller branch with ``isinstance`` against
-    ``UnsupportedPlatformError`` / ``TectonicInstallCancelled``
-    without re-encoding the type as a string.
-
-    Cancellation is cooperative: ``request_stop()`` flips a flag that
-    ``ensure_tectonic_installed`` polls between download chunks and
-    raises ``TectonicInstallCancelled`` from. The caller wires the
-    ``QProgressDialog.canceled`` signal to ``request_stop`` so the
-    visible Cancel button actually does something.
-    """
-
-    stage = Signal(str)
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.result: EngineChoice | None = None
-        self.error: BaseException | None = None
-        self._stop_requested = False
-
-    def request_stop(self) -> None:
-        self._stop_requested = True
-
-    def run(self) -> None:
-        # Reset state so a reused worker doesn't leak the previous
-        # run's outcome into the next.
-        self.result = None
-        self.error = None
-        try:
-            self.result = ensure_tectonic_installed(
-                progress_callback=self.stage.emit,
-                cancel_check=lambda: self._stop_requested,
-            )
-        except Exception as exc:  # noqa: BLE001 — surface any error/cancel
-            # Catch ``Exception`` (not ``BaseException``) so SystemExit
-            # and KeyboardInterrupt propagate normally — swallowing
-            # them into ``worker.error`` would silently subvert
-            # interpreter-level shutdown.
-            self.error = exc
-
-
-@dataclass(frozen=True)
-class _LatexEngineRun:
-    engine: str
-    returncode: int
-    stdout: str
-    stderr: str
-
-
-@dataclass(frozen=True)
-class _LatexCompileOutcome:
-    runs: tuple[_LatexEngineRun, ...] = ()
-    pdf_path: Path | None = None
-    error: str | None = None
-    timed_out: bool = False
-    cancelled: bool = False
-    used_fallback: str | None = None
-
-    @property
-    def succeeded(self) -> bool:
-        return bool(self.runs) and self.runs[-1].returncode == 0 and not self.error
-
-
-def _looks_like_plain_tex_output(output: str) -> bool:
-    lower = output.lower()
-    return "format=pdftex" in lower or "\\documentclass" in lower and "undefined control sequence" in lower
-
-
-class _LatexCompileWorker(QThread):
-    """Run external LaTeX compilers without blocking the Qt GUI thread."""
-
-    completed = Signal(object)
-
-    def __init__(
-        self,
-        *,
-        target: Path,
-        pdf_dir: Path,
-        engine_name: str,
-        engine_path: Path,
-        pdf_path: Path,
-        fallback_name: str | None = None,
-        fallback_path: Path | None = None,
-        parent=None,
-    ) -> None:
-        super().__init__(parent)
-        self._target = target
-        self._pdf_dir = pdf_dir
-        self._engine_name = engine_name
-        self._engine_path = engine_path
-        self._pdf_path = pdf_path
-        self._fallback_name = fallback_name
-        self._fallback_path = fallback_path
-        self._process: subprocess.Popen[str] | None = None
-        self._cancel_requested = False
-
-    def request_cancel(self) -> None:
-        self._cancel_requested = True
-        proc = self._process
-        if proc is not None and proc.poll() is None:
-            proc.terminate()
-
-    def request_kill(self) -> None:
-        self._cancel_requested = True
-        proc = self._process
-        if proc is not None and proc.poll() is None:
-            proc.kill()
-
-    def run(self) -> None:
-        runs: list[_LatexEngineRun] = []
-        try:
-            first = self._run_engine(self._engine_name, self._engine_path)
-            runs.append(first)
-            output_blob = f"{first.stdout}\n{first.stderr}"
-            if (
-                first.returncode != 0
-                and self._fallback_name
-                and self._fallback_path
-                and self._fallback_path.exists()
-                and _looks_like_plain_tex_output(output_blob)
-                and not self._cancel_requested
-            ):
-                runs.append(self._run_engine(self._fallback_name, self._fallback_path))
-                self.completed.emit(
-                    _LatexCompileOutcome(
-                        runs=tuple(runs),
-                        pdf_path=self._pdf_path,
-                        cancelled=self._cancel_requested,
-                        used_fallback=self._fallback_name,
-                    )
-                )
-                return
-            self.completed.emit(
-                _LatexCompileOutcome(
-                    runs=tuple(runs),
-                    pdf_path=self._pdf_path,
-                    cancelled=self._cancel_requested,
-                )
-            )
-        except FileNotFoundError as exc:
-            self.completed.emit(_LatexCompileOutcome(runs=tuple(runs), pdf_path=self._pdf_path, error=str(exc)))
-        except subprocess.TimeoutExpired:
-            self.completed.emit(_LatexCompileOutcome(runs=tuple(runs), pdf_path=self._pdf_path, timed_out=True))
-        except Exception as exc:  # noqa: BLE001
-            import traceback
-
-            self.completed.emit(
-                _LatexCompileOutcome(
-                    runs=tuple(runs),
-                    pdf_path=self._pdf_path,
-                    error=f"{exc}\n{traceback.format_exc()}",
-                )
-            )
-
-    def _run_engine(self, engine: str, path: Path) -> _LatexEngineRun:
-        if path.stem.lower().endswith("tectonic"):
-            cmd = tectonic_compile_argv(str(path), self._target)
-            timeout = 300
-        else:
-            # -no-shell-escape disables \write18 / \input{|...} so opening and compiling
-            # an untrusted .tex cannot run shell commands, matching the hardened web path.
-            cmd = [
-                str(path),
-                "-no-shell-escape",
-                "-interaction=nonstopmode",
-                "-halt-on-error",
-                self._target.name,
-            ]
-            timeout = 120
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(self._pdf_dir),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        self._process = proc
-        if self._cancel_requested and proc.poll() is None:
-            proc.kill()
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait()
-            raise
-        except Exception:
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait()
-            raise
-        finally:
-            self._process = None
-        if self._cancel_requested:
-            return _LatexEngineRun(engine=engine, returncode=-15, stdout=stdout or "", stderr=stderr or "")
-        return _LatexEngineRun(
-            engine=engine,
-            returncode=proc.returncode if proc is not None and proc.returncode is not None else -1,
-            stdout=stdout or "",
-            stderr=stderr or "",
-        )
 
 class WindowLatexPdfMixin:
     # ----------------------------------------------------------- LaTeX ops --
