@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
@@ -263,6 +264,53 @@ def _lambdify_expression(
     return tuple(dependencies), _evaluate
 
 
+# AST node types that must never appear in a user constraint expression —
+# attribute/subscript/lambda/comprehension gadgets are the standard sympy
+# parse_expr sandbox-escape vectors. Mirrors shared.symbolic_math's whitelist
+# so constraints get the same protection as every other user-formula path.
+_FORBIDDEN_CONSTRAINT_NODES = (
+    ast.Attribute,
+    ast.Subscript,
+    ast.Lambda,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+    ast.NamedExpr,
+    ast.Tuple,
+    ast.List,
+    ast.Dict,
+    ast.Set,
+    ast.Starred,
+)
+
+
+def _validate_constraint_ast(expr_text: str) -> None:
+    """Reject sandbox-escape gadgets BEFORE sympy parses the string.
+
+    ``parse_expr`` executes attribute chains and no-arg method calls at parse
+    time, so an unguarded constraint like ``a.__class__.__subclasses__()`` is a
+    sandbox escape / info-disclosure primitive. Every other user-formula path in
+    the repo pre-validates with an AST allowlist; constraints must too.
+    """
+    try:
+        tree = ast.parse(expr_text, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(_dual_msg(f"表达式语法无效: {exc}", f"Invalid expression syntax: {exc}")) from exc
+    for node in ast.walk(tree):
+        if isinstance(node, _FORBIDDEN_CONSTRAINT_NODES):
+            raise ValueError(_dual_msg("表达式包含不支持的语法。", "Expression contains unsupported syntax."))
+        if isinstance(node, ast.Name) and "__" in node.id:
+            raise ValueError(_dual_msg("表达式包含不支持的名称。", "Expression contains an unsupported name."))
+        if isinstance(node, ast.Constant) and not isinstance(node.value, (int, float, complex)):
+            raise ValueError(_dual_msg("表达式包含不支持的字面量。", "Expression contains an unsupported literal."))
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name) or node.func.id not in _SAFE_MATH_FUNCS:
+                raise ValueError(_dual_msg("不支持的函数调用。", "Unsupported function call."))
+            if node.keywords:
+                raise ValueError(_dual_msg("表达式不支持关键字参数。", "Keyword arguments are not supported."))
+
+
 def _parse_expr_safe(
     expr_text: str, available_symbols: dict[str, sp.Symbol]
 ) -> Any:
@@ -272,12 +320,21 @@ def _parse_expr_safe(
     type stubs (and the runtime expression-tree API is too dynamic to
     annotate usefully).
     """
+    _validate_constraint_ast(expr_text)
     local_dict: dict[str, object] = {**available_symbols, **_SAFE_MATH_FUNCS}
     try:
         return parse_expr(
             expr_text,
             local_dict=local_dict,
-            global_dict={"__builtins__": {}, "Symbol": sp.Symbol},
+            # auto_number transform emits Integer/Float/Rational, so those names
+            # must resolve; without them any numeric literal (2*a, a**2) fails.
+            global_dict={
+                "__builtins__": {},
+                "Symbol": sp.Symbol,
+                "Integer": sp.Integer,
+                "Float": sp.Float,
+                "Rational": sp.Rational,
+            },
             transformations=_SAFE_TRANSFORMS,
             evaluate=True,
         )
