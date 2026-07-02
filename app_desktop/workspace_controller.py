@@ -730,6 +730,36 @@ def _restore_root_config(window: Any, config: Any, *, restore_constants: bool = 
     _restore_display_units_controls(window, "root", units, include_constants=True)
 
 
+def _set_checked_if(window: Any, attr: str, value: Any) -> None:
+    widget = getattr(window, attr, None)
+    if widget is not None and value is not None and hasattr(widget, "setChecked"):
+        widget.setChecked(bool(value))
+
+
+def _restore_common_config(window: Any, common: Any, latex: Any) -> None:
+    """Restore the mode-independent common + latex settings. These are captured
+    at save (config.common / config.latex) but were never read back, silently
+    resetting compute-affecting precision and display options to defaults on
+    reload (audit F11). mpmath_precision in particular changes the numerical
+    result, so it must survive a round-trip."""
+    if isinstance(common, dict):
+        _set_value(getattr(window, "mpmath_precision_spin", None), common.get("mpmath_precision"))
+        _set_value(getattr(window, "uncertainty_digits_spin", None), common.get("uncertainty_digits"))
+        _set_value(getattr(window, "display_digits_spin", None), common.get("display_digits"))
+        _set_checked_if(window, "generate_latex_checkbox", common.get("generate_latex"))
+        _set_checked_if(window, "generate_plots_checkbox", common.get("generate_plots"))
+        _set_checked_if(window, "verbose_checkbox", common.get("verbose"))
+        _set_checked_if(window, "scientific_checkbox", common.get("display_scientific"))
+    if isinstance(latex, dict):
+        _set_value(getattr(window, "latex_input_precision_spin", None), latex.get("input_digits"))
+        _set_value(getattr(window, "latex_group_size_spin", None), latex.get("group_size"))
+        _set_checked_if(window, "dcolumn_checkbox", latex.get("use_dcolumn"))
+        _set_checked_if(window, "caption_checkbox", latex.get("use_caption"))
+        _set_text(getattr(window, "output_file_edit", None), str(latex.get("output_path") or ""))
+        _set_text(getattr(window, "caption_edit", None), str(latex.get("caption") or ""))
+        _set_combo_data(getattr(window, "latex_engine_combo", None), str(latex.get("engine") or "tectonic"))
+
+
 def _restore_extrapolation_config(window: Any, config: Any) -> None:
     if not isinstance(config, dict):
         return
@@ -1910,6 +1940,7 @@ def _restore_workspace_contents(window: Any, manifest: dict[str, Any], attachmen
     _restore_data_section(window, unified_constants, constants=True)
 
     config = workspace.get("config") or {}
+    _restore_common_config(window, config.get("common"), config.get("latex"))
     _restore_extrapolation_config(window, config.get("extrapolation"))
     _restore_error_config(window, config.get("error"))
     _restore_statistics_config(window, config.get("statistics"))
