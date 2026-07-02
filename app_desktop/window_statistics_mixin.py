@@ -43,6 +43,7 @@ from datalab_latex.latex_tables_statistics_grouped import generate_statistics_gr
 from datalab_latex.latex_tables_statistics_matrix import generate_statistics_matrix_latex
 
 from .parallel_preferences import current_parallel_config_from_widgets
+from .result_csv_spec import result_csv_filename, result_csv_headers
 from .workers_core import _mp_precision_guard, _safe_read_text
 
 
@@ -1643,10 +1644,10 @@ class WindowStatisticsMixin:
         self._append_statistics_warning_logs(result)
         self._set_result_text(text, final_result=True)
         if csv_rows:
-            headers = ["batch", "metric", "value", "uncertainty"]
+            headers = result_csv_headers("statistics")
             if any("value_unit" in row or "uncertainty_unit" in row for row in csv_rows):
                 headers.extend(["value_unit", "uncertainty_unit"])
-            self._set_csv_data(csv_rows, headers, suggestion="statistics_results.csv")
+            self._set_csv_data(csv_rows, headers, suggestion=result_csv_filename("statistics"))
         else:
             self._reset_csv_data()
         remembered: dict[str, object] = {"result": result, "value_col": value_col, "n": n}

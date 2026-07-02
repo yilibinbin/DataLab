@@ -169,6 +169,7 @@ _REFCOL_AUTO_MAX_DIFF_EN = "Max-diff column"
 
 from .about_dialog import show_about_dialog
 from .docs_dialog import DocsDialog
+from .result_csv_spec import result_csv_filename, result_csv_headers
 from .resources import (
     _apply_system_theme,
     _compute_default_pdf_dpi,
@@ -2912,7 +2913,7 @@ class ExtrapolationWindow(
                 text, csv_rows = self._format_extrapolation_display(**payload)
                 self._set_result_text(text)
                 if csv_rows:
-                    self._set_csv_data(csv_rows, ["index", "value", "uncertainty", "latex"], suggestion="extrapolation_results.csv")
+                    self._set_csv_data(csv_rows, result_csv_headers("extrapolation"), suggestion=result_csv_filename("extrapolation"))
                 else:
                     self._reset_csv_data()
             elif kind == "error":
@@ -2932,14 +2933,14 @@ class ExtrapolationWindow(
                 text, csv_rows = self._format_statistics_display(**payload)
                 self._set_result_text(text)
                 if csv_rows:
-                    self._set_csv_data(csv_rows, ["batch", "metric", "value", "uncertainty"], suggestion="statistics_results.csv")
+                    self._set_csv_data(csv_rows, result_csv_headers("statistics"), suggestion=result_csv_filename("statistics"))
                 else:
                     self._reset_csv_data()
             elif kind == "statistics_batches":
                 text, csv_rows = self._format_statistics_batches_display(**payload)
                 self._set_result_text(text)
                 if csv_rows:
-                    self._set_csv_data(csv_rows, ["batch", "metric", "value", "uncertainty"], suggestion="statistics_results.csv")
+                    self._set_csv_data(csv_rows, result_csv_headers("statistics"), suggestion=result_csv_filename("statistics"))
                 else:
                     self._reset_csv_data()
             elif kind in {
@@ -2966,8 +2967,8 @@ class ExtrapolationWindow(
                 if csv_rows:
                     self._set_csv_data(
                         csv_rows,
-                        ["batch", "section", "name", "value", "uncertainty", "stat_error", "sys_error", "note"],
-                        suggestion="fitting_results.csv",
+                        result_csv_headers("fit_single"),
+                        suggestion=result_csv_filename("fit_single"),
                     )
                 else:
                     self._reset_csv_data()
