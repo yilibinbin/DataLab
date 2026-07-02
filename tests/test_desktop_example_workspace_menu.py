@@ -260,13 +260,20 @@ def test_example_workspace_can_run_default_calculation(qtbot, monkeypatch, examp
         assert win._open_workspace_from_path(source, as_template=True), source.name
         win.generate_latex_checkbox.setChecked(False)
         win.generate_plots_checkbox.setChecked(False)
+        # The implicit example ships a 300s self-consistent-fit timeout. On slow
+        # shared CI runners (~2-3x slower, suite run concurrently) the fit needs
+        # more than 300s and self-aborts as "failed" — an environment artifact,
+        # not a logic error. Disable the internal cap for the test (0 = no auto
+        # timeout); the qtbot.waitUntil budget below still bounds the run, so a
+        # genuine hang is still caught.
+        if "implicit" in example_name and hasattr(win, "implicit_timeout_spin"):
+            win.implicit_timeout_spin.setValue(0)
         win.run_calculation()
         # The implicit (self-consistent) example runs a per-point inner root-find
         # for every seed variant, so it is far heavier than the others (~1-2 min
         # locally). Shared CI runners are ~2-3x slower and run the suite
-        # concurrently, so 300s intermittently timed out on the implicit case;
-        # 600s gives headroom without masking a real hang (a genuine stall still
-        # trips the budget, just later).
+        # concurrently, so give the wait a generous 600s budget (a genuine stall
+        # still trips it, just later).
         run_timeout_ms = 600000 if "implicit" in example_name else 120000
         qtbot.waitUntil(
             lambda: getattr(win, "_workbench_result_state", "") != "running" and not win._has_running_worker(),
