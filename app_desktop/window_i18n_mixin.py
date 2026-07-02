@@ -85,7 +85,7 @@ class WindowI18nMixin:
             "x 级数 / 1/x series": "1/x series",
             "1/x^3~1/x^5 / 1/x^3~1/x^5": "1/x^3~1/x^5",
             "幂律外推(三点外推)": "Power-law (3-point)",
-            "Richardson 序列加速(三点外推)": "Richardson (3-point)",
+            "Richardson 序列加速": "Richardson",
             "Shanks 变换": "Shanks transform",
             "Levin u-transform": "Levin u-transform",
             "自定义公式(三点外推) (A,B,C)": "Custom (A,B,C)",

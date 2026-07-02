@@ -78,7 +78,12 @@ if [[ -n "$TINYTEX_INSTALLER_SHA256" ]]; then
     echo "[tinytex] ERROR: TINYTEX_INSTALLER_SHA256 set but no sha256sum/shasum available." >&2
     exit 2
   fi
-  if [[ "$ACTUAL_SHA256" != "$TINYTEX_INSTALLER_SHA256" ]]; then
+  # Compare case-insensitively: shasum/sha256sum emit lowercase, but a pin may be
+  # pasted uppercase. `tr` keeps this compatible with macOS's Bash 3.2 (the ${x,,}
+  # lowercase expansion is Bash 4+).
+  actual_lc="$(printf '%s' "$ACTUAL_SHA256" | tr 'A-F' 'a-f')"
+  expected_lc="$(printf '%s' "$TINYTEX_INSTALLER_SHA256" | tr 'A-F' 'a-f')"
+  if [[ "$actual_lc" != "$expected_lc" ]]; then
     echo "[tinytex] ERROR: installer SHA-256 mismatch." >&2
     echo "[tinytex]   expected: $TINYTEX_INSTALLER_SHA256" >&2
     echo "[tinytex]   actual:   $ACTUAL_SHA256" >&2

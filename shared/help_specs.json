@@ -42,13 +42,13 @@
     },
     "richardson": {
       "zh": {
-        "name": "Richardson 序列加速(三点外推)",
+        "name": "Richardson 序列加速",
         "description": "Richardson 序列加速\n\n适用场景：\n  • 误差展开形式已知：f(h) ≈ f∞ + c₁h^p₁ + c₂h^p₂ + ...\n  • 数值积分、微分的Richardson外推\n  • 有限差分方法的精度提升\n\n方法原理：\n  • 利用不同步长的结果构造更高阶的近似\n  • 消除误差展开的前导项\n  • 自动依据序列估计收敛阶\n\n注意事项：\n  • 要求误差展开形式规则\n  • 步长应成一定比例关系\n  • 至少需要四列数据",
         "parameters": {},
         "use_cases": "数值微分、积分、有限差分方法等场景。"
       },
       "en": {
-        "name": "Richardson (3-point)",
+        "name": "Richardson",
         "description": "Richardson Extrapolation\n\nApplicable for:\n  • Known error expansion: f(h) ≈ f∞ + c₁h^p₁ + c₂h^p₂ + ...\n  • Numerical integration/differentiation\n  • Finite difference accuracy improvement\n\nMethod:\n  • Constructs higher-order approximations from different step sizes\n  • Eliminates leading error terms\n  • Estimates the convergence order automatically from the sequence\n\nCautions:\n  • Needs regular error expansion\n  • Step sizes should be in proportion\n  • Requires at least four columns of data",
         "parameters": {},
         "use_cases": "Numerical differentiation, integration, finite difference methods, etc."

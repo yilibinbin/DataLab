@@ -392,8 +392,8 @@ EXTRAPOLATION_METHOD_SPECS: dict[str, MethodSpec] = {
     ),
     "richardson": MethodSpec(
         key="richardson",
-        name_zh="Richardson 序列加速(三点外推)",
-        name_en="Richardson (3-point)",
+        name_zh="Richardson 序列加速",
+        name_en="Richardson",
         description_zh=get_method_description("richardson", "zh"),
         description_en=get_method_description("richardson", "en"),
         parameter_groups=[RICHARDSON_PARAMS],
@@ -1015,13 +1015,10 @@ def get_parameter_visibility_rules() -> dict[str, dict[str, Any]]:
             ...
         }
     """
-    return {
-        # Levin beta parameter only visible when weight = "reciprocal_beta"
-        "levin_u.beta": {
-            "depends_on": "levin_u.weight",
-            "visible_when": "reciprocal_beta",
-        },
-    }
+    # No dynamic visibility rules remain: the levin_u.beta rule depended on the
+    # levin_u.weight control, both removed as dead knobs (audit F4). Kept as a
+    # function so both frontends keep a stable rules source to consume.
+    return {}
 
 
 # ============================================================
