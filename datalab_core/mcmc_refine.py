@@ -174,7 +174,9 @@ def refine_fit_with_mcmc(
                 if not math.isfinite(pred):
                     return float("-inf")  # float-bridge: emcee log-prob sentinel
                 residual = float(target) - pred  # float-bridge: emcee log-prob
-                weight = float(likelihood_weights[index]) if weighted else 1.0  # float-bridge: emcee log-prob
+                # Index against the direct None-check (not the hoisted `weighted`
+                # flag) so mypy --strict narrows Sequence | None to indexable.
+                weight = float(likelihood_weights[index]) if likelihood_weights is not None else 1.0  # float-bridge: emcee log-prob
                 residuals_sq += weight * (residual**2)
                 if not math.isfinite(residuals_sq):
                     return float("-inf")  # float-bridge: emcee log-prob sentinel
