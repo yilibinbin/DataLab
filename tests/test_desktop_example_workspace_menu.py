@@ -263,8 +263,11 @@ def test_example_workspace_can_run_default_calculation(qtbot, monkeypatch, examp
         win.run_calculation()
         # The implicit (self-consistent) example runs a per-point inner root-find
         # for every seed variant, so it is far heavier than the others (~1-2 min
-        # locally, more on slower shared CI runners). Give it a generous budget.
-        run_timeout_ms = 300000 if "implicit" in example_name else 120000
+        # locally). Shared CI runners are ~2-3x slower and run the suite
+        # concurrently, so 300s intermittently timed out on the implicit case;
+        # 600s gives headroom without masking a real hang (a genuine stall still
+        # trips the budget, just later).
+        run_timeout_ms = 600000 if "implicit" in example_name else 120000
         qtbot.waitUntil(
             lambda: getattr(win, "_workbench_result_state", "") != "running" and not win._has_running_worker(),
             timeout=run_timeout_ms,
