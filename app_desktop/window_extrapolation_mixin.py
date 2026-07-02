@@ -23,6 +23,7 @@ from .workers_core import (
     CalcJob,
 )
 from .workers_qt import CalcWorker, RootSolvingWorker
+from .result_csv_spec import result_csv_filename, result_csv_headers
 
 _DIRECT_STATISTICS_WORKFLOWS = {
     "bootstrap_confidence_intervals",
@@ -817,7 +818,7 @@ class WindowExtrapolationMixin:
                         figure_paths.append(img_path)
         self._set_result_text(text, final_result=True)
         if csv_rows:
-            self._set_csv_data(csv_rows, ["index", "value", "uncertainty", "latex"], suggestion="extrapolation_results.csv")
+            self._set_csv_data(csv_rows, result_csv_headers("extrapolation"), suggestion=result_csv_filename("extrapolation"))
         else:
             self._reset_csv_data()
         if render_plots and figure_paths:
