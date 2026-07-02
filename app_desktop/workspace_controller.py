@@ -756,6 +756,8 @@ def _restore_common_config(window: Any, common: Any, latex: Any) -> None:
         _set_checked_if(window, "dcolumn_checkbox", latex.get("use_dcolumn"))
         _set_checked_if(window, "caption_checkbox", latex.get("use_caption"))
         _set_text(getattr(window, "output_file_edit", None), str(latex.get("output_path") or ""))
+        _set_text(getattr(window, "caption_edit", None), str(latex.get("caption") or ""))
+        _set_combo_data(getattr(window, "latex_engine_combo", None), str(latex.get("engine") or "tectonic"))
 
 
 def _restore_extrapolation_config(window: Any, config: Any) -> None:

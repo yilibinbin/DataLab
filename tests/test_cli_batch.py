@@ -79,12 +79,19 @@ def test_run_calc_preserves_requested_high_precision_in_limit(tmp_path: Path):
             rows.append(f"{n},{mp.nstr(total, 60)}")
     data.write_text("\n".join(rows), encoding="utf-8")
 
-    mp.dps = 15  # simulate the ambient CLI precision before per-job guard
-    job = BatchJob(
-        name="hp-calc", operation="calc", data_path=data,
-        output_dir=tmp_path, model=None, precision=50,
-    )
-    result = _run_calc(job)
+    # mp.dps is process-global; set a low ambient precision to simulate the CLI
+    # before the per-job guard, then restore it so this mutation can't leak into
+    # later tests (the per-job precision_guard is exactly what we're asserting).
+    original_dps = mp.dps
+    try:
+        mp.dps = 15  # simulate the ambient CLI precision before per-job guard
+        job = BatchJob(
+            name="hp-calc", operation="calc", data_path=data,
+            output_dir=tmp_path, model=None, precision=50,
+        )
+        result = _run_calc(job)
+    finally:
+        mp.dps = original_dps
 
     limit = str(result["limit"])
     digits = len(limit.replace(".", "").replace("-", "").lstrip("0"))

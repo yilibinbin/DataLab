@@ -222,6 +222,10 @@ def test_workspace_round_trips_common_and_latex_precision_settings(qtbot) -> Non
     source.scientific_checkbox.setChecked(True)
     source.latex_input_precision_spin.setValue(40)
     source.latex_group_size_spin.setValue(5)
+    # caption text + TeX engine are also captured at save; they must round-trip
+    # too, or the F11 "captured but never restored" fix is incomplete.
+    source.caption_edit.setText("Table 1: extrapolated limits")
+    source.latex_engine_combo.setCurrentText("pdflatex")
 
     bundle = capture_workspace(source, title="precision settings")
 
@@ -235,6 +239,8 @@ def test_workspace_round_trips_common_and_latex_precision_settings(qtbot) -> Non
     assert target.scientific_checkbox.isChecked() is True
     assert target.latex_input_precision_spin.value() == 40
     assert target.latex_group_size_spin.value() == 5
+    assert target.caption_edit.text() == "Table 1: extrapolated limits"
+    assert target.latex_engine_combo.currentText() == "pdflatex"
 
 
 def test_workspace_preserves_raw_constants_text_view_draft(qtbot) -> None:
