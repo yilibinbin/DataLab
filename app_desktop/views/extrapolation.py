@@ -5,7 +5,6 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
-    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -14,7 +13,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -192,73 +190,15 @@ def build_extrapolation_mode_view(owner: Any) -> QGroupBox:
         ],
     )
     levin_layout.addRow(lbl_variant, owner.levin_variant_combo)
+    # order / weight / beta controls removed (audit F4): mpmath's mp.levin honors
+    # only the variant, so those inputs were silently ignored.
 
-    lbl_order = QLabel("变换阶数：")
-    owner._register_text(lbl_order, "变换阶数：", "Transform order:")
-    owner.levin_order_spin = QSpinBox()
-    owner.levin_order_spin.setRange(1, 10)
-    owner.levin_order_spin.setValue(2)
-    owner.levin_order_spin.setToolTip(
-        owner._tr(
-            "变换阶数（越高越精确但需要更多项，至少需要 2N+1 项数据）",
-            "Transform order (higher = more accurate but needs more terms, requires at least 2N+1 data points)",
-        )
-    )
-    levin_layout.addRow(lbl_order, owner.levin_order_spin)
-
-    lbl_weight = QLabel("权重函数：")
-    owner._register_text(lbl_weight, "权重函数：", "Weight function:")
-    owner.levin_weight_combo = QComboBox()
-    owner.levin_weight_combo.addItem("默认 (1)", "default")
-    owner.levin_weight_combo.addItem("1/(n+1)", "reciprocal")
-    owner.levin_weight_combo.addItem("1/(n+β)", "reciprocal_beta")
-    owner._register_combo(
-        owner.levin_weight_combo,
-        [
-            ("默认 (1)", "Default (1)", "default"),
-            ("1/(n+1)", "1/(n+1)", "reciprocal"),
-            ("1/(n+β)", "1/(n+β)", "reciprocal_beta"),
-        ],
-    )
-    owner.levin_weight_combo.currentIndexChanged.connect(owner._update_levin_weight_state)
-    levin_layout.addRow(lbl_weight, owner.levin_weight_combo)
-
-    lbl_beta = QLabel("β 参数：")
-    owner._register_text(lbl_beta, "β 参数：", "β parameter:")
-    owner.levin_beta_spin = QDoubleSpinBox()
-    owner.levin_beta_spin.setRange(0.01, 100.0)
-    owner.levin_beta_spin.setValue(1.0)
-    owner.levin_beta_spin.setSingleStep(0.1)
-    owner.levin_beta_spin.setDecimals(2)
-    owner.levin_beta_spin.setToolTip(
-        owner._tr(
-            "权重函数 ω(n) = 1/(n+β) 中的 β 参数",
-            "β parameter in weight function ω(n) = 1/(n+β)",
-        )
-    )
-    levin_layout.addRow(lbl_beta, owner.levin_beta_spin)
-    lbl_beta.setVisible(False)
-    owner.levin_beta_spin.setVisible(False)
-    owner.levin_beta_label = lbl_beta
-
+    # Richardson has no tunable knobs (mp.richardson takes only the sequence),
+    # so its page carries no fields — kept as a stack page for layout parity
+    # with the other method pages. The former "p" control was dead (audit F4).
     owner.richardson_box = QGroupBox("Richardson 序列加速参数")
     owner._register_title(owner.richardson_box, "Richardson 序列加速参数", "Richardson acceleration parameters")
-    richardson_layout = QFormLayout(owner.richardson_box)
-
-    lbl_richardson_p = QLabel("收敛幂指数 p：")
-    owner._register_text(lbl_richardson_p, "收敛幂指数 p：", "Convergence power p:")
-    owner.richardson_p_spin = QDoubleSpinBox()
-    owner.richardson_p_spin.setRange(0.1, 10.0)
-    owner.richardson_p_spin.setValue(2.0)
-    owner.richardson_p_spin.setSingleStep(0.1)
-    owner.richardson_p_spin.setDecimals(2)
-    owner.richardson_p_spin.setToolTip(
-        owner._tr(
-            "误差展开的幂指数（f(h) ≈ f∞ + c·h^p），常见值 p=2（二阶方法）",
-            "Power exponent in error expansion (f(h) ≈ f∞ + c·h^p), common value p=2 (second-order method)",
-        )
-    )
-    richardson_layout.addRow(lbl_richardson_p, owner.richardson_p_spin)
+    QFormLayout(owner.richardson_box)
 
     owner.extrap_method_stack.addWidget(owner.power_box)
     owner.extrap_method_stack.addWidget(owner.levin_box)
@@ -294,10 +234,6 @@ def build_extrapolation_mode_view(owner: Any) -> QGroupBox:
         lbl_p=lbl_p,
         lbl_seed=lbl_seed,
         lbl_variant=lbl_variant,
-        lbl_order=lbl_order,
-        lbl_weight=lbl_weight,
-        lbl_beta=lbl_beta,
-        lbl_richardson_p=lbl_richardson_p,
         lbl_uncert=lbl_uncert,
         combo_items=combo_items,
     )
@@ -313,10 +249,6 @@ def _bind_extrapolation_schema_fields(
     lbl_p: QLabel,
     lbl_seed: QLabel,
     lbl_variant: QLabel,
-    lbl_order: QLabel,
-    lbl_weight: QLabel,
-    lbl_beta: QLabel,
-    lbl_richardson_p: QLabel,
     lbl_uncert: QLabel,
     combo_items: list[tuple[str, str, str]],
 ) -> None:
@@ -429,51 +361,6 @@ def _bind_extrapolation_schema_fields(
             ChoiceSpec(value="v", label=LocalizedText("v (积分)", "v (integrals)")),
         ],
     )
-    levin_order_field = FormFieldSpec(
-        key="extrapolation.levin.order",
-        widget_kind="number",
-        label=LocalizedText("变换阶数：", "Transform order:"),
-        tooltip=LocalizedText(
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[1].tooltip_zh,
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[1].tooltip_en,
-        ),
-        required=True,
-    )
-    levin_weight_field = FormFieldSpec(
-        key="extrapolation.levin.weight",
-        widget_kind="select",
-        label=LocalizedText("权重函数：", "Weight function:"),
-        tooltip=LocalizedText(
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[2].tooltip_zh,
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[2].tooltip_en,
-        ),
-        required=True,
-        choices=[
-            ChoiceSpec(value="default", label=LocalizedText("默认 (1)", "Default (1)")),
-            ChoiceSpec(value="reciprocal", label=LocalizedText("1/(n+1)", "1/(n+1)")),
-            ChoiceSpec(value="reciprocal_beta", label=LocalizedText("1/(n+β)", "1/(n+β)")),
-        ],
-    )
-    levin_beta_field = FormFieldSpec(
-        key="extrapolation.levin.beta",
-        widget_kind="number",
-        label=LocalizedText("β 参数：", "β parameter:"),
-        tooltip=LocalizedText(
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[3].tooltip_zh,
-            EXTRAPOLATION_METHOD_SPECS["levin_u"].parameter_groups[0].parameters[3].tooltip_en,
-        ),
-        required=False,
-    )
-    richardson_p_field = FormFieldSpec(
-        key="extrapolation.richardson.p",
-        widget_kind="number",
-        label=LocalizedText("收敛幂指数 p：", "Convergence power p:"),
-        tooltip=LocalizedText(
-            EXTRAPOLATION_METHOD_SPECS["richardson"].parameter_groups[0].parameters[0].tooltip_zh,
-            EXTRAPOLATION_METHOD_SPECS["richardson"].parameter_groups[0].parameters[0].tooltip_en,
-        ),
-        required=True,
-    )
     uncertainty_field = FormFieldSpec(
         key="extrapolation.uncertainty.reference_column",
         widget_kind="select",
@@ -531,15 +418,6 @@ def _bind_extrapolation_schema_fields(
     bind_field(field=levin_variant_field, label=lbl_variant, widget=owner.levin_variant_combo, lang=lang)
     bind_choices(owner.levin_variant_combo, levin_variant_field.choices, lang=lang)
     register_schema_text_refresh(owner, levin_variant_field, widget=owner.levin_variant_combo)
-    bind_field(field=levin_order_field, label=lbl_order, widget=owner.levin_order_spin, lang=lang)
-    register_schema_text_refresh(owner, levin_order_field, widget=owner.levin_order_spin)
-    bind_field(field=levin_weight_field, label=lbl_weight, widget=owner.levin_weight_combo, lang=lang)
-    bind_choices(owner.levin_weight_combo, levin_weight_field.choices, lang=lang)
-    register_schema_text_refresh(owner, levin_weight_field, widget=owner.levin_weight_combo)
-    bind_field(field=levin_beta_field, label=lbl_beta, widget=owner.levin_beta_spin, lang=lang)
-    register_schema_text_refresh(owner, levin_beta_field, widget=owner.levin_beta_spin)
-    bind_field(field=richardson_p_field, label=lbl_richardson_p, widget=owner.richardson_p_spin, lang=lang)
-    register_schema_text_refresh(owner, richardson_p_field, widget=owner.richardson_p_spin)
     bind_field(
         field=uncertainty_field,
         label=lbl_uncert,

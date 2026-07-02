@@ -33,6 +33,23 @@ INSTALL_ROOT="$PROJECT_ROOT/resources/tinytex"
 # the install location, not the download endpoint.
 TINYTEX_INSTALLER_URL="${TINYTEX_INSTALLER_URL:-https://yihui.org/tinytex/install-bin-unix.sh}"
 
+# Refuse to download+execute over a plain-http (MITM-able) transport. The
+# installer script is run with `sh`, so a tampered download is remote code
+# execution during the build (audit F9).
+case "$TINYTEX_INSTALLER_URL" in
+  https://*) ;;
+  *)
+    echo "[tinytex] ERROR: TINYTEX_INSTALLER_URL must be https:// (got: $TINYTEX_INSTALLER_URL)." >&2
+    exit 2
+    ;;
+esac
+
+# Optional integrity pin. Upstream regenerates install-bin-unix.sh, so a
+# hard-coded hash would break routine maintenance; but a security-conscious or
+# CI build can export TINYTEX_INSTALLER_SHA256=<hex> to require the download to
+# match a known-good digest before it is executed (audit F9).
+TINYTEX_INSTALLER_SHA256="${TINYTEX_INSTALLER_SHA256:-}"
+
 if [[ -d "$INSTALL_ROOT/bin" ]]; then
   echo "[tinytex] Already installed at $INSTALL_ROOT/bin — skipping bootstrap."
   exit 0
@@ -49,6 +66,31 @@ trap 'rm -rf "$STAGING_PARENT"' EXIT
 INSTALLER_SCRIPT="$STAGING_PARENT/tinytex_install.sh"
 echo "[tinytex] Downloading installer script..."
 curl -fsSL "$TINYTEX_INSTALLER_URL" -o "$INSTALLER_SCRIPT"
+
+# Verify the download against the optional pin before executing it. `shasum`
+# ships on macOS; `sha256sum` on most Linux distros — use whichever is present.
+if [[ -n "$TINYTEX_INSTALLER_SHA256" ]]; then
+  if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL_SHA256="$(sha256sum "$INSTALLER_SCRIPT" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    ACTUAL_SHA256="$(shasum -a 256 "$INSTALLER_SCRIPT" | awk '{print $1}')"
+  else
+    echo "[tinytex] ERROR: TINYTEX_INSTALLER_SHA256 set but no sha256sum/shasum available." >&2
+    exit 2
+  fi
+  # Compare case-insensitively: shasum/sha256sum emit lowercase, but a pin may be
+  # pasted uppercase. `tr` keeps this compatible with macOS's Bash 3.2 (the ${x,,}
+  # lowercase expansion is Bash 4+).
+  actual_lc="$(printf '%s' "$ACTUAL_SHA256" | tr 'A-F' 'a-f')"
+  expected_lc="$(printf '%s' "$TINYTEX_INSTALLER_SHA256" | tr 'A-F' 'a-f')"
+  if [[ "$actual_lc" != "$expected_lc" ]]; then
+    echo "[tinytex] ERROR: installer SHA-256 mismatch." >&2
+    echo "[tinytex]   expected: $TINYTEX_INSTALLER_SHA256" >&2
+    echo "[tinytex]   actual:   $ACTUAL_SHA256" >&2
+    exit 2
+  fi
+  echo "[tinytex] Installer SHA-256 verified against pin."
+fi
 
 # Run the upstream installer with TINYTEX_DIR pointing at our staging
 # parent. The installer creates ``$STAGING_PARENT/TinyTeX`` (macOS) or

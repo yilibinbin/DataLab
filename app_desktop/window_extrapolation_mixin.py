@@ -33,14 +33,6 @@ _DIRECT_STATISTICS_WORKFLOWS = {
 }
 
 
-def _widget_value(owner, attr_name: str, default: object) -> object:
-    widget = getattr(owner, attr_name, None)
-    value_func = getattr(widget, "value", None)
-    if callable(value_func):
-        return value_func()
-    return default
-
-
 def _combo_current_data(owner, attr_name: str, default: str) -> str:
     combo = getattr(owner, attr_name, None)
     data_func = getattr(combo, "currentData", None)
@@ -112,15 +104,6 @@ def _root_units_for_rows(rows: object, units: object) -> dict[str, str]:
 def _label_with_unit(label: str, unit: str) -> str:
     unit_text = str(unit or "").strip()
     return f"{label} [{unit_text}]" if unit_text else label
-
-
-def _read_extrapolation_method_options_from_controls(owner) -> dict[str, object]:
-    return {
-        "richardson_p": float(_widget_value(owner, "richardson_p_spin", 2.0)),
-        "levin_order": int(_widget_value(owner, "levin_order_spin", 2)),
-        "levin_weight": _combo_current_data(owner, "levin_weight_combo", "default"),
-        "levin_beta": float(_widget_value(owner, "levin_beta_spin", 1.0)),
-    }
 
 
 class WindowExtrapolationMixin:
@@ -325,8 +308,6 @@ class WindowExtrapolationMixin:
         if hasattr(self, "levin_variant_combo"):
             levin_variant = self.levin_variant_combo.currentData() or "u"
 
-        method_option_values = _read_extrapolation_method_options_from_controls(self)
-
         options = ExtrapolationOptions(
             method=method_choice,
             power_law_config=power_config,
@@ -335,7 +316,6 @@ class WindowExtrapolationMixin:
             levin_variant=levin_variant,
             custom_formula=custom_formula,
             uncertainty_digits=uncertainty_digits,
-            **method_option_values,
         )
 
         capture_stream = io.StringIO() if verbose else None

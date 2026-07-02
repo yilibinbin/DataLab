@@ -1082,11 +1082,23 @@ def render_statistics_plot_from_spec(spec: StatisticsPlotSpec) -> bytes | None:
 
     fig = None
     try:
-        xs = list(range(1, len(spec.values) + 1))
-        ys = [_statistics_plot_float(v) for v in spec.values]
+        # Drop non-finite (NaN/Inf) points so they never reach matplotlib and
+        # blank the plot — the sibling statistics renderers (histogram/box/qq)
+        # already filter these; series_with_mean must too (audit F15).
+        sigmas_seq = list(spec.sigmas) if spec.sigmas else [None] * len(spec.values)
+        xs: list[int] = []
+        ys: list[float] = []
+        kept_sigmas: list[Any] = []
+        for index, value in enumerate(spec.values, start=1):
+            y = _statistics_finite_float(value)
+            if y is None:
+                continue
+            xs.append(index)
+            ys.append(y)
+            kept_sigmas.append(sigmas_seq[index - 1] if index - 1 < len(sigmas_seq) else None)
         yerr = None
-        if spec.sigmas and any(s is not None for s in spec.sigmas):
-            yerr = [_statistics_plot_float(abs(mp.mpf(s))) if s is not None else 0.0 for s in spec.sigmas]
+        if any(s is not None for s in kept_sigmas):
+            yerr = [_statistics_plot_float(abs(mp.mpf(s))) if s is not None else 0.0 for s in kept_sigmas]
 
         mean_f = _statistics_plot_float(spec.mean) if spec.mean is not None else None
         std_mean_f = abs(_statistics_plot_float(spec.std_mean)) if spec.std_mean is not None else None

@@ -11,6 +11,7 @@ import json
 import os
 import platform
 import re
+import ssl
 import tempfile
 import time
 import urllib.request
@@ -19,6 +20,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import SplitResult, urlsplit
+
+try:
+    import certifi
+except ModuleNotFoundError:  # pragma: no cover - source installs may rely on system CA
+    certifi = None  # type: ignore[assignment]
 
 from shared.update_checker import ReleaseInfo, is_newer_version, normalize_version_tag
 from shared.update_signing import (
@@ -166,7 +172,12 @@ def loads_manifest(raw: bytes) -> dict[str, Any]:
 
 
 def _urlopen(request: urllib.request.Request, timeout: float) -> Any:
-    return urllib.request.urlopen(request, timeout=timeout)  # noqa: S310
+    # Use certifi's CA bundle like update_checker does, so HTTPS verification
+    # works on frozen builds whose default OpenSSL context has no system CA store
+    # (otherwise the check path advertises an update the download path can never
+    # fetch — audit F8). Integrity is still SHA-256/size-pinned downstream.
+    context = ssl.create_default_context(cafile=certifi.where() if certifi is not None else None)
+    return urllib.request.urlopen(request, timeout=timeout, context=context)  # noqa: S310
 
 
 def select_update_payload(

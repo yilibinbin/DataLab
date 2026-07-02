@@ -103,16 +103,18 @@ def test_extrapolation_method_parameter_controls_have_schema_metadata(window: An
         "extrapolation.power_law.seed_guesses"
     )
 
-    assert window.richardson_p_spin.property("datalab_schema_key") == "extrapolation.richardson.p"
+    # richardson_p / levin_order / levin_weight / levin_beta were removed:
+    # mpmath's mp.richardson(seq) / mp.levin(variant) have no such knobs, so
+    # those controls were silently ignored (audit F4). Only levin_variant is
+    # honored by the backend and remains.
+    assert not hasattr(window, "richardson_p_spin")
+    assert not hasattr(window, "levin_order_spin")
+    assert not hasattr(window, "levin_weight_combo")
+    assert not hasattr(window, "levin_beta_spin")
 
     assert window.levin_variant_combo.property("datalab_schema_key") == "extrapolation.levin.variant"
     assert window.levin_variant_combo.property("datalab_schema_choices") is True
     assert _combo_data(window.levin_variant_combo) == ["u", "t", "v"]
-    assert window.levin_order_spin.property("datalab_schema_key") == "extrapolation.levin.order"
-    assert window.levin_weight_combo.property("datalab_schema_key") == "extrapolation.levin.weight"
-    assert window.levin_weight_combo.property("datalab_schema_choices") is True
-    assert _combo_data(window.levin_weight_combo) == ["default", "reciprocal", "reciprocal_beta"]
-    assert window.levin_beta_spin.property("datalab_schema_key") == "extrapolation.levin.beta"
 
 
 def test_extrapolation_uncertainty_selector_has_schema_metadata(window: Any) -> None:
@@ -130,7 +132,6 @@ def test_extrapolation_uncertainty_selector_has_schema_metadata(window: Any) -> 
 def test_extrapolation_schema_tooltips_and_choices_refresh_with_language(window: Any) -> None:
     window.method_combo.setCurrentIndex(window.method_combo.findData("levin_u"))
     window.levin_variant_combo.setCurrentIndex(window.levin_variant_combo.findData("t"))
-    window.levin_weight_combo.setCurrentIndex(window.levin_weight_combo.findData("reciprocal_beta"))
 
     window._apply_language("en")
 
@@ -138,7 +139,6 @@ def test_extrapolation_schema_tooltips_and_choices_refresh_with_language(window:
     assert window.method_combo.itemText(window.method_combo.findData("power_law")) == "Power-law (3-point)"
     assert window.levin_variant_combo.currentData() == "t"
     assert window.levin_variant_combo.itemText(window.levin_variant_combo.findData("u")) == "u (most common)"
-    assert window.levin_weight_combo.currentData() == "reciprocal_beta"
     assert "Choose the extrapolation algorithm" in window.method_combo.toolTip()
     assert "Use A/B/C" in window.custom_formula_edit.toolTip()
     assert window.custom_formula_preview_button.accessibleName() == "Preview formula"
@@ -173,42 +173,6 @@ def test_extrapolation_custom_function_hint_refreshes_with_language(window: Any)
 
     chinese_hints = function_hint_texts()
     assert any(text.startswith("支持") for text in chinese_hints)
-
-
-def test_desktop_extrapolation_method_options_are_read_from_controls() -> None:
-    from types import SimpleNamespace
-
-    from app_desktop.window_extrapolation_mixin import (
-        _read_extrapolation_method_options_from_controls,
-    )
-
-    class Spin:
-        def __init__(self, value: object) -> None:
-            self._value = value
-
-        def value(self) -> object:
-            return self._value
-
-    class Combo:
-        def __init__(self, data: object) -> None:
-            self._data = data
-
-        def currentData(self) -> object:
-            return self._data
-
-    owner = SimpleNamespace(
-        richardson_p_spin=Spin(3.5),
-        levin_order_spin=Spin(4),
-        levin_weight_combo=Combo("reciprocal_beta"),
-        levin_beta_spin=Spin(2.75),
-    )
-
-    assert _read_extrapolation_method_options_from_controls(owner) == {
-        "richardson_p": 3.5,
-        "levin_order": 4,
-        "levin_weight": "reciprocal_beta",
-        "levin_beta": 2.75,
-    }
 
 
 def test_run_calculation_preserves_extrapolation_method_options_in_job(
@@ -253,10 +217,7 @@ def test_run_calculation_preserves_extrapolation_method_options_in_job(
     window.method_combo.setCurrentIndex(window.method_combo.findData("levin_u"))
     window._data_stack.setCurrentIndex(1)
     window.manual_data_edit.setPlainText("A B C\n1 2 3\n2 3 4\n")
-    window.richardson_p_spin.setValue(3.5)
-    window.levin_order_spin.setValue(4)
-    window.levin_weight_combo.setCurrentIndex(window.levin_weight_combo.findData("reciprocal_beta"))
-    window.levin_beta_spin.setValue(2.75)
+    window.levin_variant_combo.setCurrentIndex(window.levin_variant_combo.findData("t"))
 
     window.run_calculation()
 
@@ -264,10 +225,10 @@ def test_run_calculation_preserves_extrapolation_method_options_in_job(
     assert captured["started"] is True
     assert isinstance(job, CalcJob)
     assert job.mode == "extrapolation"
-    assert job.options.richardson_p == pytest.approx(3.5)
-    assert job.options.levin_order == 4
-    assert job.options.levin_weight == "reciprocal_beta"
-    assert job.options.levin_beta == pytest.approx(2.75)
+    # levin_variant is the one Levin control the backend actually honors; the
+    # dead richardson_p / levin_order / levin_weight / levin_beta were removed
+    # (audit F4), so the live option is what must survive into the job.
+    assert job.options.levin_variant == "t"
 
 
 def test_extrapolation_panel_has_no_unbound_required_schema_widgets(window: Any) -> None:
