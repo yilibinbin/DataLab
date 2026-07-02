@@ -250,7 +250,14 @@ def _evaluate_ast(node: ast.AST, variables: dict[str, object], source: str) -> A
         right = _evaluate_ast(node.right, variables, source)
         bin_op_type = type(node.op)
         if bin_op_type in _BINARY_OPERATORS:
-            return _BINARY_OPERATORS[bin_op_type](left, right)
+            try:
+                return _BINARY_OPERATORS[bin_op_type](left, right)
+            except ZeroDivisionError as exc:
+                # '/' and '%' raise ZeroDivisionError on a zero divisor; the
+                # module's contract is ValueError-only, so re-raise as one.
+                raise ValueError(
+                    _dual_msg("表达式求值时除以零。", "Division by zero during evaluation.")
+                ) from exc
         raise ValueError(_dual_msg(f"不支持的二元操作: {bin_op_type}", f"Unsupported binary operator: {bin_op_type}"))
     if isinstance(node, ast.UnaryOp):
         operand = _evaluate_ast(node.operand, variables, source)

@@ -43,11 +43,38 @@ def precision_guard(
     clamp_min: int = 1,
     clamp_max: int | None = None,
 ) -> Iterator[int]:
-    """
-    Temporarily set `mp.dps` and restore it on exit.
+    """Temporarily set the process-global ``mp.dps`` and restore it on exit.
 
-    - If dps is None or invalid, keeps the current precision.
-    - Returns the precision that was active inside the context via `yield`.
+    mpmath's ``mp.dps`` is process-global state, so every numerical code path
+    must set precision through this guard rather than assigning ``mp.dps``
+    directly: the ``finally`` block always restores the previous value, so a
+    guarded region cannot leak its precision to concurrent or subsequent work
+    even if the body raises.
+
+    Args:
+        dps: Requested working precision in decimal digits. If ``None`` or not
+            coercible to an int (via ``_coerce_int``), the current precision is
+            kept unchanged and yielded as-is.
+        clamp_min: Lower bound applied to ``dps`` before it takes effect
+            (default ``1``). Callers that require a floor matching mpmath's
+            usable range pass ``MIN_MPMATH_DPS`` (10).
+        clamp_max: Optional upper bound applied to ``dps`` (default ``None``,
+            i.e. no ceiling). Callers guarding against pathological precision
+            pass ``MAX_MPMATH_DPS`` (1_000_000).
+
+    The module constants ``MIN_MPMATH_DPS`` (10) and ``MAX_MPMATH_DPS``
+    (1_000_000) define the conventional usable precision window; pass them as
+    ``clamp_min`` / ``clamp_max`` to enforce it.
+
+    Yields:
+        The precision (decimal digits) actually active inside the context —
+        either the clamped ``dps`` or the unchanged current precision.
+
+    Example:
+        >>> with precision_guard(50, clamp_min=MIN_MPMATH_DPS,
+        ...                      clamp_max=MAX_MPMATH_DPS) as dps:
+        ...     ...  # mp.dps == dps == 50 here
+        ...  # mp.dps restored to its prior value here
     """
     previous = mp.dps
     if dps is None:

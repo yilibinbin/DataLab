@@ -26,6 +26,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
+from shared.bilingual import _dual_msg
+
 __all__ = [
     "HAS_CORNER",
     "HAS_EMCEE",
@@ -143,21 +145,37 @@ def run_mcmc(
 
     n_params = len(list(initial_guess))
     if n_params == 0:
-        raise ValueError("initial_guess must be non-empty")
+        raise ValueError(
+            _dual_msg(
+                "initial_guess 不能为空",
+                "initial_guess must be non-empty",
+            )
+        )
     if len(list(param_names)) != n_params:
         raise ValueError(
-            f"param_names length {len(list(param_names))} does not match "
-            f"initial_guess length {n_params}"
+            _dual_msg(
+                f"param_names 长度 {len(list(param_names))} 与 "
+                f"initial_guess 长度 {n_params} 不匹配",
+                f"param_names length {len(list(param_names))} does not match "
+                f"initial_guess length {n_params}",
+            )
         )
     if n_walkers < max(4, 2 * n_params):
         raise ValueError(
-            f"n_walkers={n_walkers} below emcee's recommended "
-            f"max(4, 2*n_params)={max(4, 2 * n_params)} — raise to "
-            "improve mixing"
+            _dual_msg(
+                f"n_walkers={n_walkers} 低于 emcee 推荐的 "
+                f"max(4, 2*n_params)={max(4, 2 * n_params)}，请增大以改善混合",
+                f"n_walkers={n_walkers} below emcee's recommended "
+                f"max(4, 2*n_params)={max(4, 2 * n_params)} — raise to "
+                "improve mixing",
+            )
         )
     if n_burn_in >= n_steps:
         raise ValueError(
-            f"n_burn_in={n_burn_in} must be less than n_steps={n_steps}"
+            _dual_msg(
+                f"n_burn_in={n_burn_in} 必须小于 n_steps={n_steps}",
+                f"n_burn_in={n_burn_in} must be less than n_steps={n_steps}",
+            )
         )
 
     rng = _np.random.default_rng()

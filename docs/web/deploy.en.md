@@ -151,6 +151,13 @@ python -c "import secrets; print(secrets.token_hex(32))"
 | `DATALAB_PORT` | `8000` | Port |
 | `PORT` | `8000` | Fallback port (cloud platforms) |
 | `DATALAB_DEBUG` | `0` | Debug mode (`1` enables, production must be `0`) |
+| `DATALAB_TRUST_PROXY_HEADERS` | `0` | Trust `X-Forwarded-*` headers via werkzeug `ProxyFix` (`1`/`true`/`yes`/`on` enables). Set **only** when behind a trusted reverse proxy — otherwise clients can spoof their IP and bypass the SSE rate limiter |
+| `DATALAB_SSE_DISABLE_RATE_LIMIT` | unset | If set (any value), turns **off** the per-IP SSE rate limiter for the process. Development only — production deployments must not set this |
+| `DATALAB_LATEX_TIMEOUT` | `30` | Wall-clock timeout (seconds) for each LaTeX compilation subprocess |
+| `DATALAB_LATEX_MAX_CPU` | `60` | CPU-time limit (seconds) per LaTeX subprocess (POSIX `RLIMIT_CPU`) |
+| `DATALAB_LATEX_MAX_MEM` | `512` | Address-space limit (MB) per LaTeX subprocess (POSIX `RLIMIT_AS`) |
+| `DATALAB_LATEX_MAX_FILE` | `50` | Max output file size (MB) per LaTeX subprocess (POSIX `RLIMIT_FSIZE`) |
+| `DATALAB_LATEX_MAX_PROC` | `2048` | Max processes per user for the LaTeX subprocess (POSIX `RLIMIT_NPROC`); lower values can break XeLaTeX/LuaLaTeX on busy machines |
 
 ## Security Notes
 

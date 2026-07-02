@@ -253,7 +253,7 @@ def _solve_seed_variant_task(task: _SeedSolveTask) -> _SeedSolveResult:
 def _dependent_defs_are_picklable(state: ParameterState) -> bool:
     """Dependent/expression parameters carry a compiled callable that can't
     cross a process boundary. When present, the seed solve stays in-process."""
-    return not getattr(state, "dependent_defs", None)
+    return not state.dependent_defs
 
 
 def _compute_statistics(
@@ -322,7 +322,8 @@ def _compute_covariance(
         return [], {}, None
     n = len(targets)
     k = len(free_params)
-    jacobian = [[mp.mpf("0") for _ in range(k)] for _ in range(n)]
+    zero = mp.mpf("0")
+    jacobian = [[zero for _ in range(k)] for _ in range(n)]
     if weights:
         for w in weights:
             if w <= 0:
@@ -338,16 +339,9 @@ def _compute_covariance(
                 jacobian[idx][jdx] = derivative * sqrt_weights[idx]
             else:
                 jacobian[idx][jdx] = derivative
-    # build J^T J
-    jtj = [[mp.mpf("0") for _ in range(k)] for _ in range(k)]
-    for i in range(k):
-        for j in range(k):
-            s = mp.mpf("0")
-            for row in jacobian:
-                s += row[i] * row[j]
-            jtj[i][j] = s
-    # convert to mpmath matrix for inversion
-    mat = mp.matrix(jtj)
+    # build J^T J via mpmath matrix multiply (matches auto_models.py idiom)
+    jac_mat = mp.matrix(jacobian)
+    mat = jac_mat.T * jac_mat
     cov_warning = None
     try:
         inv = mat ** -1
@@ -391,13 +385,14 @@ def _propagate_dependent_errors(
     k = len(free_params)
     if not covariance or k == 0:
         return {name: mp.nan for name in dependent_defs}
+    zero = mp.mpf("0")
     jacobians: dict[str, list[mp.mpf]] = {}
     for idx, name in enumerate(free_params):
-        vector = [mp.mpf("0") for _ in range(k)]
+        vector = [zero for _ in range(k)]
         vector[idx] = mp.mpf("1")
         jacobians[name] = vector
     for name in parameter_state.fixed_values:
-        jacobians[name] = [mp.mpf("0") for _ in range(k)]
+        jacobians[name] = [zero for _ in range(k)]
     pending = dict(dependent_defs)
     guard = 0
     while pending and guard < 64:
@@ -406,7 +401,7 @@ def _propagate_dependent_errors(
             deps = definition.dependencies
             if any(dep not in jacobians for dep in deps):
                 continue
-            jac_vec = [mp.mpf("0") for _ in range(k)]
+            jac_vec = [zero for _ in range(k)]
             for dep in deps:
                 partial = definition.partials.get(dep)
                 if not partial:
@@ -432,7 +427,7 @@ def _propagate_dependent_errors(
         if dep_jac is None:
             errors[name] = mp.nan
             continue
-        variance = mp.mpf("0")
+        variance = zero
         invalid = False
         for i in range(k):
             for j in range(k):
@@ -543,6 +538,52 @@ def fit_custom_model(
     data_sigmas: list[mp.mpf | None] | None = None,
     model_factory: Callable[[Sequence[mp.mpf]], ModelSpecification] | None = None,
 ) -> FitResult:
+    """Fit a custom (possibly nonlinear/implicit) model to data at high precision.
+
+    Runs a high-precision Levenberg–Marquardt-style nonlinear solve over several
+    seed variants, picks the best-χ² solution, then estimates systematic
+    uncertainty by refitting under perturbed data and combines the statistical
+    and systematic components in quadrature.
+
+    Args:
+        model: The model specification (expression, variables, parameters,
+            constants) to fit. Ignored when ``model_factory`` is supplied.
+        parameter_state: Free/fixed/dependent parameter definitions, bounds, and
+            initial values; supplies the seed vector and composes solved free
+            values back into the full parameter set.
+        variable_data: Mapping of independent-variable name to its column of
+            ``mp.mpf`` values. Must be non-empty and every column must have the
+            same length (the point count).
+        target_data: The dependent-variable column. Its length must equal the
+            per-variable point count in ``variable_data``.
+        precision: Working precision in decimal digits for the numerical solve;
+            applied process-globally via ``precision_guard`` for the call.
+        weights: Optional per-point fit weights. If given, its length must match
+            the point count and every weight must be positive and finite. When
+            weights are supplied, separate systematic-error estimation is
+            skipped (to avoid double-counting) — see ``data_sigmas``.
+        data_sigmas: Optional per-point data uncertainties (``mp.mpf`` or None).
+            Used to drive the systematic-uncertainty refits when ``weights`` is
+            not supplied; ignored for the systematic estimate when weights are.
+        model_factory: Optional callable that rebuilds the model from a targets
+            sequence, enabling data-dependent (e.g. implicit) refits during
+            systematic estimation. When provided it is used in place of
+            ``model``; when None, the parallel seed-solve fast path may apply.
+
+    Returns:
+        A ``FitResult`` with solved parameters, goodness-of-fit statistics
+        (chi2, reduced chi2, AIC, BIC, R², RMSE), residuals, fitted curve,
+        covariance, the split ``param_errors_stat`` / ``param_errors_sys`` /
+        ``param_errors_total`` uncertainties (``param_errors`` mirrors total),
+        and a ``details`` dict of warnings/notes.
+
+    Raises:
+        ValueError: if ``variable_data`` is empty; if there are no data rows;
+            if independent variables differ in length; if the target length
+            does not match; if weights are supplied with a mismatched length or
+            contain a non-positive/NaN value; or if the nonlinear solve fails to
+            find any solution.
+    """
     if not variable_data:
         raise ValueError(
             _dual_msg(
@@ -647,7 +688,7 @@ def fit_custom_model(
                         if name not in stat_errors:
                             stat_errors[name] = mp.mpf("0")
                     details = {
-                        "expression": getattr(current_model, "expression", ""),
+                        "expression": current_model.expression,
                         "dof": int(dof),
                         "covariance_parameters": list(parameter_state.free_params),
                     }

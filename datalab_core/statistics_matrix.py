@@ -11,6 +11,7 @@ from shared.precision import precision_guard
 from shared.unit_annotations import first_unit_annotation_text
 
 from ._payload import normalize_json_payload
+from .statistics_helpers import _bool_option
 
 MATRIX_WORKFLOW_MODE = "covariance_correlation"
 MATRIX_RESULT_CACHE_KIND = "statistics_matrix"
@@ -648,20 +649,6 @@ def _choice(value: Any, choices: set[str], *, field_name: str, default: str | No
     if text not in choices:
         raise ValueError(_dual_msg(f"{field_name} 必须是以下之一：{', '.join(sorted(choices))}。", f"{field_name} must be one of: {', '.join(sorted(choices))}."))
     return text
-
-
-def _bool_option(value: Any, *, default: bool) -> bool:
-    if value is None or value == "":
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-    raise TypeError(_dual_msg("布尔选项必须是布尔值或布尔字符串。", "boolean option must be a boolean or boolean string."))
 
 
 def _format_mpf(value: mp.mpf, precision_digits: int) -> str:

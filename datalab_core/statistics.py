@@ -33,6 +33,7 @@ from .results import (
     analysis_rows_to_json,
 )
 from .session import check_cancelled
+from .statistics_helpers import _bool_option, _string_option
 from .statistics_bootstrap import (
     BOOTSTRAP_PAYLOAD_SCHEMA,
     BOOTSTRAP_WORKFLOW_MODE,
@@ -2056,27 +2057,11 @@ def _parse_mpf(value: Any, *, field_name: str) -> mp.mpf:
         raise ValueError(f"{field_name} is not a valid number: {value!r}.") from exc
 
 
-def _string_option(value: Any, *, default: str, field_name: str) -> str:
-    if value is None:
-        return default
-    if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a string.")
-    return value.strip() or default
-
-
 def _optional_numeric_string_option(value: Any, *, field_name: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
         raise ValueError(f"{field_name} must be a numeric string.")
-    return value
-
-
-def _bool_option(value: Any, *, default: bool) -> bool:
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise ValueError("boolean statistics options must be booleans.")
     return value
 
 

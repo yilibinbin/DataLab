@@ -167,10 +167,10 @@ def build_implicit_model_specification(
         constants=dict(definition.constants),
         evaluate_func=_evaluate,
         gradient_funcs=gradient_funcs,
+        implicit_definition=definition,
+        implicit_diagnostics=cache.diagnostics,
+        set_implicit_point_index=_set_point_index,
     )
-    setattr(spec, "implicit_definition", definition)
-    setattr(spec, "implicit_diagnostics", cache.diagnostics)
-    setattr(spec, "set_implicit_point_index", _set_point_index)
     return spec
 
 

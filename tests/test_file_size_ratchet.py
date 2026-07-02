@@ -54,7 +54,10 @@ _BASELINE: dict[str, int] = {
     "shared/pdf_preview.py": 831,
     "app_web/blueprints/collaborate.py": 830,
     "app_desktop/views/fitting.py": 821,
-    "fitting/hp_fitter.py": 819,
+    # Raised 819 -> 890: R3-soft added the fit_custom_model docstring, typed
+    # ModelSpecification-field access, and the J^T J matrix refactor. The growth
+    # is almost entirely documentation; consciously re-baselined.
+    "fitting/hp_fitter.py": 890,
     "fitting/plot_fitting.py": 817,
     "datalab_core/fitting.py": 803,
 }

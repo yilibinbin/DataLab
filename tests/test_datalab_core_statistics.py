@@ -2927,7 +2927,7 @@ def test_core_statistics_handler_reports_bad_stats_mode_type() -> None:
 
     assert result.status is ResultStatus.FAILED
     assert result.payload["error_code"] == "handler_exception"
-    assert result.payload["message"] == "stats_mode must be a string."
+    assert result.payload["message"] == "stats_mode 必须是字符串。 / stats_mode must be a string."
 
 
 def test_core_statistics_handler_uses_stable_default_precision() -> None:
