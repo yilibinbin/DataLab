@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -235,7 +236,13 @@ def test_statistics_matrix_latex_can_use_siunitx_columns() -> None:
     tex = generate_statistics_matrix_latex(payload, use_dcolumn=False, latex_group_size=0)
 
     assert "\\usepackage{dcolumn}" not in tex
-    assert "S[table-format=1.16]" in tex
+    # Column spec is now computed per-column from the actual cell magnitudes
+    # (audit F13). Assert the concrete specs, not just that some S column
+    # exists, so a regression in the per-column formatter is caught: this 3x2
+    # payload of small values yields one S[table-format=1.31] spec per numeric
+    # cell column (integer part width 1, fractional width from the precision).
+    specs = re.findall(r"S\[table-format=[^\]]*\]", tex)
+    assert specs == ["S[table-format=1.31]"] * 4
 
 
 def test_statistics_matrix_latex_handles_pairwise_payload_summary() -> None:

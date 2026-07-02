@@ -348,10 +348,18 @@ def _uncertainty_decimal_places(unc: mp.mpf, target_digits: int) -> tuple[int, s
     decimal_places = max(0, target_digits - 1 - order)
     scale = mp.power(10, decimal_places)
     unc_int = int(mp.nint(s_abs * scale))
-    # Handle rare rounding causing carry into extra digit
+    # Rounding can carry into an extra digit (e.g. 9.6 @ 1 sig fig -> nint(9.6)=10).
+    # The rounded value then has target_digits+1 digits; drop the least-significant
+    # one so it keeps exactly target_digits sig figs at one lower decimal place:
+    # unc_int becomes 10**(target_digits-1) (10, 100, ...) — NOT unc_int/10, which
+    # would understate the magnitude by 10x (audit F5).
     if unc_int >= 10**target_digits:
-        unc_int = int(mp.nint(s_abs * scale / 10))
-        decimal_places = max(0, decimal_places - 1)
+        # Rounding carried into an extra digit (9.6@1sf -> nint=10, 99.6@2sf ->
+        # nint=100). The correct integer is 10**target_digits at the SAME decimal
+        # place: its real value is int(unc_int) * 10**-decimal_places, i.e.
+        # 9.6->10.0, 0.96->1.0, 99.6->100.0. The old code used unc_int//10 and
+        # decremented decimal_places, understating the uncertainty 10x (audit F5).
+        unc_int = 10**target_digits
     return decimal_places, str(unc_int)
 
 
