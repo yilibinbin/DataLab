@@ -17,6 +17,7 @@ from ._payload import normalize_json_payload
 from .jobs import ComputeJobRequest, JobMode, JobOptions
 from .results import AnalysisRow, ResultStatus, analysis_rows_from_json
 from .session import check_cancelled
+from .statistics_helpers import _bool_option
 
 GROUPED_WORKFLOW_MODE = "grouped_statistics"
 GROUPED_RESULT_CACHE_KIND = "statistics_grouped"
@@ -751,14 +752,6 @@ def _text_option(value: Any, *, default: str, field_name: str) -> str:
     if not isinstance(value, str):
         raise ValueError(_dual_msg(f"{field_name} 必须是字符串。", f"{field_name} must be a string."))
     return value.strip() or default
-
-
-def _bool_option(value: Any, *, default: bool) -> bool:
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise TypeError(_dual_msg("分组统计的布尔选项必须是布尔值。", "grouped statistics boolean options must be booleans."))
-    return value
 
 
 def _diagnostic(

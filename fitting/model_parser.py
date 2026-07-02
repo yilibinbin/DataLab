@@ -15,10 +15,16 @@ single source of truth for:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Callable, Sequence
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Callable, Sequence, TypeAlias
 
 from mpmath import mp
+
+if TYPE_CHECKING:
+    from fitting.implicit_model import (
+        ImplicitModelDefinition,
+        ImplicitSolveDiagnostics,
+    )
 
 # The fit hot path evaluates the model expression via ``compile_expression``,
 # which parses/validates once and returns a fast evaluator (P1-1). To patch the
@@ -37,7 +43,7 @@ from shared.uncertainty import parse_numeric_value
 # variable-tuple and parameter-tuple of mp.mpf values and returns
 # the model's mp.mpf output. Used by every fit-execution path
 # (custom, polynomial, inverse, Padé, linear-named, auto).
-MpfCallable = Callable[
+MpfCallable: TypeAlias = Callable[
     [tuple[mp.mpf, ...], tuple[mp.mpf, ...]], mp.mpf
 ]
 
@@ -63,6 +69,11 @@ class ModelSpecification:
     constants: dict[str, str]
     evaluate_func: MpfCallable
     gradient_funcs: dict[str, MpfCallable]
+    implicit_definition: "ImplicitModelDefinition | None" = None
+    implicit_diagnostics: "ImplicitSolveDiagnostics | None" = None
+    set_implicit_point_index: Callable[[int | None], None] | None = field(
+        default=None
+    )
 
     def evaluate(self, variable_values: dict[str, mp.mpf], parameter_values: dict[str, mp.mpf]) -> mp.mpf:
         var_tuple = tuple(variable_values[name] for name in self.variables)

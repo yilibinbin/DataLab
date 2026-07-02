@@ -38,10 +38,6 @@ def latex_escape(text: str) -> str:
     return "".join(mapping.get(ch, ch) for ch in str(text))
 
 
-def _latex_escape_text(value: str) -> str:
-    return latex_escape(value)
-
-
 def build_fit_latex_preamble(*, use_dcolumn: bool, digits: int, latex_group_size: int) -> list[str]:
     group_size = max(1, int(latex_group_size))
     lines = [
@@ -262,9 +258,9 @@ def build_fit_latex_block(
     implicit_equation = str(fit_result.details.get("equation") or "").strip()
     implicit_output = str(fit_result.details.get("output_expression") or "").strip()
     if implicit_equation:
-        lines.append(f"Implicit equation: \\texttt{{{_latex_escape_text(implicit_equation)}}}\\\\")
+        lines.append(f"Implicit equation: \\texttt{{{latex_escape(implicit_equation)}}}\\\\")
     if implicit_output:
-        lines.append(f"Implicit output: \\texttt{{{_latex_escape_text(implicit_output)}}}\\\\")
+        lines.append(f"Implicit output: \\texttt{{{latex_escape(implicit_output)}}}\\\\")
 
     cleaned_expr = (expression or "").strip().replace("**", "^")
     cleaned_sub = cleaned_substituted
@@ -279,7 +275,7 @@ def build_fit_latex_block(
     solver_details: list[str] = []
     optimizer_backend = fit_result.details.get("optimizer_backend") or fit_result.details.get("optimizer")
     if optimizer_backend:
-        solver_details.append(f"Solver: \\texttt{{{_latex_escape_text(str(optimizer_backend))}}}")
+        solver_details.append(f"Solver: \\texttt{{{latex_escape(str(optimizer_backend))}}}")
     if "scipy_safety_passed" in fit_result.details:
         status = "passed" if bool(fit_result.details.get("scipy_safety_passed")) else "not used"
         solver_details.append(f"SciPy precision check: {status}")
@@ -328,7 +324,7 @@ def build_fit_latex_block(
     )
     for key, val, unit in table_rows:
         if include_unit_column:
-            lines.append(f"{_format_key(key)} & {_latex_escape_text(unit)} & {val} \\\\")
+            lines.append(f"{_format_key(key)} & {latex_escape(unit)} & {val} \\\\")
         else:
             lines.append(f"{_format_key(key)} & {val} \\\\")
     lines.extend(

@@ -74,6 +74,13 @@ class ParameterState:
         return tuple(self.initial_guess[name] for name in self.free_params)
 
     def compose(self, free_vector: tuple[mp.mpf, ...]) -> dict[str, mp.mpf]:
+        if len(free_vector) != len(self.free_params):
+            raise ValueError(
+                _dual_msg(
+                    f"自由参数向量长度不匹配：期望 {len(self.free_params)}，收到 {len(free_vector)}。",
+                    f"Free-parameter vector length mismatch: expected {len(self.free_params)}, got {len(free_vector)}.",
+                )
+            )
         params: dict[str, mp.mpf] = {}
         for name, value in zip(self.free_params, free_vector):
             lower, upper = self.bounds.get(name, (None, None))
@@ -339,4 +346,6 @@ def _parse_expr_safe(
             evaluate=True,
         )
     except Exception as exc:  # pragma: no cover - delegated to sympy internals
-        raise ValueError(f"无法解析表达式: {exc}") from exc
+        raise ValueError(
+            _dual_msg(f"无法解析表达式: {exc}", f"Unable to parse expression: {exc}")
+        ) from exc

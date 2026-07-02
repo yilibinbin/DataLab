@@ -1363,14 +1363,14 @@ class ExtrapolationWindow(
             widget = getattr(self, name, None)
             if widget is not None and hasattr(widget, "setVisible"):
                 widget.setVisible(is_bootstrap)
+        method = (
+            self.stats_time_series_method_combo.currentData()
+            if hasattr(self, "stats_time_series_method_combo")
+            else None
+        )
         for name in ("stats_sigma_column_edit", "stats_sigma_column_label"):
             widget = getattr(self, name, None)
             if widget is not None and hasattr(widget, "setVisible"):
-                method = (
-                    self.stats_time_series_method_combo.currentData()
-                    if hasattr(self, "stats_time_series_method_combo")
-                    else None
-                )
                 widget.setVisible(
                     (not is_bootstrap and not is_hypothesis and not is_time_series and not is_matrix)
                     or (is_time_series and method == "rolling_mean")
@@ -1384,11 +1384,12 @@ class ExtrapolationWindow(
             widget = getattr(self, name, None)
             if widget is not None and hasattr(widget, "setVisible"):
                 widget.setVisible(not is_hypothesis and not is_time_series)
-        trim_visible = (not is_bootstrap and mode == "descriptive") or (
-            is_bootstrap and bootstrap_target == "trimmed_mean"
+        trim_visible = (
+            ((not is_bootstrap and mode == "descriptive") or (is_bootstrap and bootstrap_target == "trimmed_mean"))
+            and not is_hypothesis
+            and not is_time_series
+            and not is_matrix
         )
-        trim_visible = trim_visible and not is_hypothesis and not is_time_series
-        trim_visible = trim_visible and not is_matrix
         if hasattr(self, "stats_trim_fraction_edit"):
             self.stats_trim_fraction_edit.setVisible(trim_visible)
         if hasattr(self, "stats_trim_fraction_label"):

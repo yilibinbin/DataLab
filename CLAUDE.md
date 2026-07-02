@@ -47,7 +47,13 @@ mkdocs serve
 
 Web env vars: `DATALAB_WEB_SECRET` (**required in production** — a missing secret
 is a hard failure; tests/dev set `DATALAB_DEBUG=1` to get a random key instead),
-`DATALAB_HOST`, `DATALAB_PORT`, `DATALAB_DEBUG`.
+`DATALAB_HOST`, `DATALAB_PORT`, `DATALAB_DEBUG`. Behind a trusted reverse proxy,
+set `DATALAB_TRUST_PROXY_HEADERS=1` (wraps the app in werkzeug `ProxyFix` so the
+per-IP SSE rate limiter sees the real client IP); `DATALAB_SSE_DISABLE_RATE_LIMIT`
+turns that limiter off (dev only). LaTeX sandbox limits (`app_web/latex_security.py`):
+`DATALAB_LATEX_TIMEOUT`, `DATALAB_LATEX_MAX_CPU`, `DATALAB_LATEX_MAX_MEM`,
+`DATALAB_LATEX_MAX_FILE`, `DATALAB_LATEX_MAX_PROC` — see `docs/web/deploy.en.md`
+for defaults and meanings.
 
 ## Architecture: layered, one core → two frontends
 

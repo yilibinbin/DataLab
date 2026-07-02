@@ -94,6 +94,36 @@ A TeX distribution providing `pdflatex` or `xelatex` is required for PDF export.
 > *frontend-glue bridge* (a LaTeX generator that consumes both core results and
 > `datalab_latex` renderers), not compute — its name predates the layering split.
 
+### `datalab_core/` service layer
+
+> This section postdates the original guide: the `datalab_core/` package is the
+> UI-neutral service/model boundary between the computation modules above and the
+> two frontends. See the root `CLAUDE.md` ("Architecture" §2) for the layering
+> rules — this is a concise map, not a duplicate.
+
+- **`service_factory.create_core_session_service(...)`** builds a
+  `session.SessionService` pre-populated with the migrated core handlers (one per
+  `JobMode`).
+- **`jobs.JobMode`** enumerates the five job kinds — `EXTRAPOLATION`,
+  `UNCERTAINTY`, `STATISTICS`, `FITTING`, `ROOT_SOLVING`. Callers submit a
+  `ComputeJobRequest` (with a `mode`) via `SessionService.submit(request)`, which
+  dispatches to the handler registered for that mode and returns a
+  `ResultEnvelope`.
+- **Handlers** are the `run_*` functions (`run_extrapolation`, `run_uncertainty`,
+  `run_statistics`, `run_fitting`, `run_root_solving`) wired in
+  `service_factory._CORE_HANDLER_REGISTRY`; each lives in its same-named module
+  (`datalab_core/extrapolation.py`, `fitting.py`, …) and depends only on the
+  computation modules, never on a frontend.
+- **Workspaces & recipes** — `workspace_v2.py` (schema `datalab.workspace.v2`,
+  persisted to `.datalab` files) and `recipes.py` (schema `datalab.recipe.v1`)
+  are the serialization/replay layer. History/compare, report bundles, the
+  uncertainty budget, and the extended statistics modules
+  (`statistics_{bootstrap,grouped,hypothesis,matrix,time_series}.py`) also live
+  here.
+- Both frontends call into this layer rather than the computation modules
+  directly. Cooperative cancellation flows through
+  `session.external_cancellation_scope` / `check_cancelled`.
+
 ### Cross-cutting conventions (follow these)
 
 - **Bilingual messages**: user-facing errors and labels use `_dual_msg(zh, en)` returning `"汉语 / English"`. The locale layer splits on `" / "` to extract the active language. Don't return single-language strings from new code paths.

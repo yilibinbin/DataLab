@@ -9,6 +9,7 @@ import mpmath as mp
 from ._payload import normalize_json_payload
 from .results import AnalysisRow, analysis_rows_from_json
 from .statistics_compute import type7_quantile
+from .statistics_helpers import _bool_option, _string_option
 from shared.bilingual import _dual_msg
 from shared.precision import precision_guard
 from shared.unit_annotations import first_unit_annotation_text, normalize_display_only_family_units
@@ -681,27 +682,6 @@ def _positive_int_option(value: Any, *, default: int, field_name: str) -> int:
     if parsed < 1:
         raise ValueError(_dual_msg(f"{field_name} 必须至少为 1。", f"{field_name} must be at least 1."))
     return parsed
-
-
-def _bool_option(value: Any, *, default: bool) -> bool:
-    if value in (None, ""):
-        return default
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "on"}:
-        return True
-    if text in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(_dual_msg(f"无效的布尔值：{value!r}。", f"Invalid boolean value: {value!r}."))
-
-
-def _string_option(value: Any, *, default: str, field_name: str) -> str:
-    if value is None:
-        return default
-    if not isinstance(value, str):
-        raise TypeError(_dual_msg(f"{field_name} 必须是文本。", f"{field_name} must be text."))
-    return value.strip() or default
 
 
 def _optional_text(value: Any) -> str | None:
