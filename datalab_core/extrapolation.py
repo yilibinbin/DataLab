@@ -195,10 +195,6 @@ def _options_from_payload(
         levin_variant=_optional_text(method_options.get("levin_variant")) or "u",
         custom_formula=_optional_text(method_options.get("custom_formula")),
         uncertainty_digits=uncertainty_digits,
-        richardson_p=_optional_numeric_text(method_options.get("richardson_p"), default="2.0"),
-        levin_order=_optional_int(method_options.get("levin_order"), default=2, field_name="levin_order"),
-        levin_weight=_optional_text(method_options.get("levin_weight")) or "default",
-        levin_beta=_optional_numeric_text(method_options.get("levin_beta"), default="1.0"),
     )
 
 
@@ -275,14 +271,6 @@ def _optional_string_tuple(value: Any, *, field_name: str) -> tuple[str, ...] | 
     else:
         raise ValueError(f"{field_name} must be a sequence of strings.")
     return tuple(items) if items else None
-
-
-def _optional_numeric_text(value: Any, *, default: str) -> str:
-    text = _optional_text(value)
-    if text is None:
-        return default
-    mp.mpf(text)
-    return text
 
 
 def _optional_int(value: Any, *, default: int, field_name: str) -> int:

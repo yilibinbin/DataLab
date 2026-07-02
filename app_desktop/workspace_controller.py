@@ -747,12 +747,6 @@ def _restore_extrapolation_config(window: Any, config: Any) -> None:
     levin = config.get("levin") or {}
     if isinstance(levin, dict):
         _set_combo_data(getattr(window, "levin_variant_combo", None), str(levin.get("variant") or "u"))
-        _set_value(getattr(window, "levin_order_spin", None), levin.get("order"))
-        _set_combo_data(getattr(window, "levin_weight_combo", None), str(levin.get("weight") or "default"))
-        _set_value(getattr(window, "levin_beta_spin", None), levin.get("beta"))
-    richardson = config.get("richardson") or {}
-    if isinstance(richardson, dict):
-        _set_value(getattr(window, "richardson_p_spin", None), richardson.get("p"))
     uncertainty_column = str(config.get("uncertainty_column") or "")
     if uncertainty_column:
         _set_combo_data(getattr(window, "uncertainty_combo", None), uncertainty_column)
@@ -1107,11 +1101,7 @@ def _capture_config(window: Any) -> dict[str, Any]:
             },
             "levin": {
                 "variant": _combo_data(getattr(window, "levin_variant_combo", None), "u"),
-                "order": _value(getattr(window, "levin_order_spin", None), 2),
-                "weight": _combo_data(getattr(window, "levin_weight_combo", None), "default"),
-                "beta": str(_value(getattr(window, "levin_beta_spin", None), 1.0)),
             },
-            "richardson": {"p": str(_value(getattr(window, "richardson_p_spin", None), 2.0))},
             "uncertainty_column": _combo_data(getattr(window, "uncertainty_combo", None), "A"),
         },
         "error": _capture_error_config(window),

@@ -3331,14 +3331,6 @@ def test_execute_calc_job_extrapolation_core_snapshot_failure_is_nonfatal(
     assert len(result.payload["results"]) == 1
 
 
-def test_extrapolation_method_options_accept_integer_levin_order() -> None:
-    options = ExtrapolationOptions(method="levin_u", levin_order=4)
-
-    payload = workers_core._extrapolation_method_options(options)
-
-    assert payload["levin_order"] == 4
-
-
 def test_extrapolation_method_options_preserve_power_law_payload() -> None:
     from extrapolation_methods import PowerLawConfig
 
@@ -3362,15 +3354,6 @@ def test_extrapolation_method_options_preserve_power_law_payload() -> None:
         "exponent_override": "3.5",
         "seed_guesses": ["0.5", "1.0", "2.0"],
     }
-
-
-@pytest.mark.parametrize("malformed", [4.9, True, "4"])
-def test_extrapolation_method_options_reject_malformed_levin_order(malformed: object) -> None:
-    options = ExtrapolationOptions(method="levin_u")
-    options.levin_order = malformed  # type: ignore[assignment]
-
-    with pytest.raises(TypeError, match="levin_order"):
-        workers_core._extrapolation_method_options(options)
 
 
 def test_execute_calc_job_error_core_snapshot_failure_is_nonfatal(

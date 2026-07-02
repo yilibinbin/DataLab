@@ -31,7 +31,6 @@ from .common import (
     _format_rows,
     _generate_csv_from_rows,
     _is_checked,
-    _parse_float,
     _parse_int,
 )
 from .plots import _render_extrapolation_plot
@@ -144,17 +143,9 @@ def _method_options_payload(
     reference_column: str | None,
     levin_variant: str,
     custom_formula: str | None,
-    richardson_p: float,
-    levin_order: int,
-    levin_weight: str,
-    levin_beta: float,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "levin_variant": levin_variant,
-        "richardson_p": str(richardson_p),
-        "levin_order": levin_order,
-        "levin_weight": levin_weight,
-        "levin_beta": str(levin_beta),
     }
     if reference_column:
         payload["uncertainty_column"] = reference_column
@@ -188,16 +179,6 @@ def _run_extrapolation(data_text: str, form, lang: str = "zh") -> ExtrapolationR
     latex_engine = (form.get("latex_engine") or "xelatex").strip() or "xelatex"
     # Dynamic (ui_specs) fields may use shorter names; keep legacy names as fallback.
     levin_variant = (form.get("variant") or form.get("levin_variant") or "u").strip() or "u"
-    richardson_p = _parse_float(form.get("p"))
-    if richardson_p is None:
-        richardson_p = 2.0
-    levin_order = _parse_int(form.get("order"))
-    if levin_order is None:
-        levin_order = 2
-    levin_weight = (form.get("weight") or "default").strip() or "default"
-    levin_beta = _parse_float(form.get("beta"))
-    if levin_beta is None:
-        levin_beta = 1.0
     custom_formula = (form.get("custom_formula") or "").strip() or None
 
     accelerators = {"richardson", "shanks", "levin_u", "wynn_epsilon"}
@@ -214,10 +195,6 @@ def _run_extrapolation(data_text: str, form, lang: str = "zh") -> ExtrapolationR
         levin_variant=levin_variant,
         custom_formula=custom_formula,
         uncertainty_digits=result_digits,
-        richardson_p=richardson_p,
-        levin_order=levin_order,
-        levin_weight=levin_weight,
-        levin_beta=levin_beta,
     )
     with _precision_guard(mp_precision) as applied_precision:
         headers, parsed_rows = parse_extrapolation_string(
@@ -230,10 +207,6 @@ def _run_extrapolation(data_text: str, form, lang: str = "zh") -> ExtrapolationR
             reference_column=reference_column,
             levin_variant=levin_variant,
             custom_formula=custom_formula,
-            richardson_p=richardson_p,
-            levin_order=levin_order,
-            levin_weight=levin_weight,
-            levin_beta=levin_beta,
         )
         request = build_extrapolation_request(
             headers=headers,

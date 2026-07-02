@@ -34,7 +34,6 @@ from datalab_core.uncertainty import (
     normalize_uncertainty_propagation_config,
     uncertainty_payload_to_results,
 )
-from shared.integer_validation import strict_int
 from shared.extrapolation_engine import parse_extrapolation_string
 from shared.fitting_engine import (
     DirectFitInput,
@@ -604,17 +603,10 @@ def _safe_extrapolation_core_request(
 
 def _extrapolation_method_options(options: ExtrapolationOptions) -> dict[str, object]:
     payload: dict[str, object] = {}
-    for attr in ("uncertainty_column", "levin_variant", "custom_formula", "levin_weight"):
+    for attr in ("uncertainty_column", "levin_variant", "custom_formula"):
         value = getattr(options, attr, None)
         if value is not None and str(value).strip():
             payload[attr] = str(value)
-    for attr in ("richardson_p", "levin_beta"):
-        value = getattr(options, attr, None)
-        if value is not None:
-            payload[attr] = str(value)
-    levin_order = getattr(options, "levin_order", None)
-    if levin_order is not None:
-        payload["levin_order"] = strict_int(levin_order, field_name="levin_order")
     power_config = getattr(options, "power_law_config", None)
     if power_config is not None:
         power_payload: dict[str, object] = {}

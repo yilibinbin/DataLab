@@ -42,11 +42,11 @@ def test_api_ui_specs_smoke():
         ["v (integrals)", "v"],
     ]
 
-    beta = payload["param_specs"]["levin_u"][3]
-    assert beta["name"] == "beta"
-    assert beta["optional"] is True
-    assert beta["number_type"] == "float"
-    assert beta["min"] == 0.01
+    # order / weight / beta removed (audit F4): mpmath's mp.levin honors only the
+    # variant, so it is the sole levin_u parameter the web spec exposes.
+    assert [spec["name"] for spec in payload["param_specs"]["levin_u"]] == ["variant"]
+    # richardson has no tunable knobs (mp.richardson takes only the sequence).
+    assert payload["param_specs"]["richardson"] == []
 
 
 def test_api_function_help_smoke_bilingual():

@@ -796,7 +796,6 @@ class ExtrapolationWindow(
             "mode_combo",
             "method_combo",
             "levin_variant_combo",
-            "levin_weight_combo",
             "error_method_combo",
             "error_units_mode_combo",
             "stats_workflow_combo",
@@ -848,9 +847,6 @@ class ExtrapolationWindow(
             "display_digits_spin",
             "latex_input_precision_spin",
             "latex_group_size_spin",
-            "levin_order_spin",
-            "levin_beta_spin",
-            "richardson_p_spin",
             "error_order_spin",
             "error_mc_samples_spin",
             "inverse_min_spin",
@@ -2340,16 +2336,6 @@ class ExtrapolationWindow(
             self.mpmath_precision_spin.setEnabled(True)
         if hasattr(self, "refresh_workbench_formula_panel"):
             self.refresh_workbench_formula_panel()
-
-    def _update_levin_weight_state(self):
-        """Show/hide Levin beta parameter based on weight function selection."""
-        if not hasattr(self, "levin_weight_combo") or not hasattr(self, "levin_beta_spin"):
-            return
-        weight_type = self.levin_weight_combo.currentData()
-        show_beta = weight_type == "reciprocal_beta"
-        if hasattr(self, "levin_beta_label"):
-            self.levin_beta_label.setVisible(show_beta)
-        self.levin_beta_spin.setVisible(show_beta)
 
     def _set_corner_example_hint(self, example: str) -> None:
         """Show the per-mode example as a tooltip on the table's

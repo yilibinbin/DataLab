@@ -282,26 +282,14 @@ POWER_LAW_PARAMS = form_section(
     visible_when=VisibilityRule.equals("method", "power_law"),
 )
 
-# Richardson Method Parameters
+# Richardson Method Parameters — mpmath's mp.richardson(seq) takes no tunable
+# knobs, so (like shanks/wynn) this section carries no fields. The former "p"
+# control was silently ignored by the backend (audit F4).
 RICHARDSON_PARAMS = form_section(
     key="richardson_params",
     title_zh="Richardson 序列加速参数",
     title_en="Richardson acceleration parameters",
-    fields=[
-        number_field(
-            key="p",
-            label_zh="收敛幂指数 p：",
-            label_en="Convergence power p:",
-            default_value=2.0,
-            number_type="float",
-            min_value=0.1,
-            max_value=10.0,
-            step=0.1,
-            decimals=2,
-            tooltip_zh="误差展开的幂指数（f(h) ≈ f∞ + c·h^p），常见值 p=2（二阶方法）",
-            tooltip_en="Power exponent in error expansion (f(h) ≈ f∞ + c·h^p), common value p=2 (second-order method)",
-        ),
-    ],
+    fields=[],
     visible_when=VisibilityRule.equals("method", "richardson"),
 )
 
@@ -324,47 +312,8 @@ LEVIN_U_PARAMS = form_section(
             tooltip_zh="变换类型（u最常用，t适用于级数，v用于积分）",
             tooltip_en="Transform type (u most common, t for series, v for integrals)",
         ),
-        number_field(
-            key="order",
-            label_zh="变换阶数：",
-            label_en="Transform order:",
-            default_value=2,
-            number_type="int",
-            min_value=1,
-            max_value=10,
-            step=1,
-            decimals=0,
-            tooltip_zh="变换阶数（越高越精确但需要更多项，至少需要 2N+1 项数据）",
-            tooltip_en="Transform order (higher = more accurate but needs more terms, requires at least 2N+1 data points)",
-        ),
-        select_field(
-            key="weight",
-            label_zh="权重函数：",
-            label_en="Weight function:",
-            default_value="default",
-            choices=[
-                _choice("default", "默认 (1)", "Default (1)"),
-                _choice("reciprocal", "1/(n+1)", "1/(n+1)"),
-                _choice("reciprocal_beta", "1/(n+β)", "1/(n+β)"),
-            ],
-            tooltip_zh="权重函数类型（默认为1，可选倒数权重）",
-            tooltip_en="Weight function type (default is 1, optional reciprocal weights)",
-        ),
-        number_field(
-            key="beta",
-            label_zh="β 参数：",
-            label_en="β parameter:",
-            default_value=1.0,
-            number_type="float",
-            min_value=0.01,
-            max_value=100.0,
-            step=0.1,
-            decimals=2,
-            tooltip_zh="权重函数 ω(n) = 1/(n+β) 中的 β 参数",
-            tooltip_en="β parameter in weight function ω(n) = 1/(n+β)",
-            required=False,
-            visible_when=VisibilityRule.equals("levin_u.weight", "reciprocal_beta"),
-        ),
+        # order / weight / beta were removed: mpmath's mp.levin(variant) honors
+        # only the variant, so those controls were silently ignored (audit F4).
     ],
     visible_when=VisibilityRule.equals("method", "levin_u"),
 )

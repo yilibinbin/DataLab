@@ -81,7 +81,9 @@ def test_method_specs_are_backed_by_form_sections_and_fields() -> None:
 
     assert isinstance(levin_group, FormSectionSpec)
     assert all(isinstance(field, FormFieldSpec) for field in levin_group.fields)
-    assert [field.key for field in levin_group.fields] == ["variant", "order", "weight", "beta"]
+    # order / weight / beta removed (audit F4): mpmath's mp.levin honors only
+    # the variant, so only that control remains.
+    assert [field.key for field in levin_group.fields] == ["variant"]
 
 
 def test_legacy_widget_classes_do_not_drive_public_runtime_metadata() -> None:

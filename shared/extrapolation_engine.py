@@ -22,7 +22,6 @@ from shared.formula_defaults import DEFAULT_THREE_POINT_FORMULA
 from shared.precision import precision_guard
 
 _MpInput: TypeAlias = "mp.mpf | int | float | str"
-_NumericOption: TypeAlias = "mp.mpf | int | float | str"
 
 
 @dataclass
@@ -47,10 +46,6 @@ class ExtrapolationOptions:
     custom_formula: str | None = None
     warnings: list[str] = field(default_factory=list)
     uncertainty_digits: int | None = None
-    richardson_p: _NumericOption = 2.0
-    levin_order: int = 2
-    levin_weight: str = "default"
-    levin_beta: _NumericOption = 1.0
 
 
 def compute_extrapolation(A: float, B: float, C: float) -> tuple[float, float]:

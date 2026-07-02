@@ -538,3 +538,48 @@ def test_update_lock_does_not_remove_fresh_lock_that_replaces_stale_lock(
 
     assert replaced is True
     assert lock_path.read_text(encoding="utf-8") == "fresh"
+
+
+def test_urlopen_uses_certifi_ca_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The installer download path must verify HTTPS with certifi's CA bundle.
+
+    Regression for audit F8: update_checker._urlopen already builds a
+    certifi-backed SSL context, but update_payload._urlopen used a bare
+    urllib.request.urlopen with no context. On frozen builds whose default
+    OpenSSL context lacks a system CA store, the check path could advertise an
+    update the download path could never fetch.
+    """
+    from shared import update_payload
+
+    seen: dict[str, object] = {}
+    fake_context = object()
+
+    class FakeCertifi:
+        @staticmethod
+        def where() -> str:
+            return "/tmp/cacert.pem"
+
+    def fake_create_default_context(*, cafile: str | None = None) -> object:
+        seen["cafile"] = cafile
+        return fake_context
+
+    def fake_urlopen(request: Any, timeout: float, context: object) -> FakeResponse:
+        seen["url"] = request.full_url
+        seen["timeout"] = timeout
+        seen["context"] = context
+        return FakeResponse(b"")
+
+    monkeypatch.setattr(update_payload, "certifi", FakeCertifi)
+    monkeypatch.setattr(update_payload.ssl, "create_default_context", fake_create_default_context)
+    monkeypatch.setattr(update_payload.urllib.request, "urlopen", fake_urlopen)
+
+    request = update_payload.urllib.request.Request("https://example.invalid")
+    with update_payload._urlopen(request, 4) as response:
+        response.read()
+
+    assert seen == {
+        "cafile": "/tmp/cacert.pem",
+        "url": "https://example.invalid",
+        "timeout": 4,
+        "context": fake_context,
+    }
