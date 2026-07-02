@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -56,6 +57,8 @@ from .common import (
 from shared.fitting_uncertainty import fit_uncertainty_policy
 from shared.uncertainty import parse_uncertainty_format
 from datalab_latex.latex_tables_fitting import build_fitting_comparison_latex_block
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -968,6 +971,9 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
             )
             return _encode_b64(plot_bytes)
         except Exception:
+            # Graceful fallback (plot omitted) but surface the cause to server
+            # logs instead of silently returning None (audit R3 D6).
+            _logger.exception("Fitting overview plot rendering failed; omitting plot")
             return None
 
     with _precision_guard(mp_precision):

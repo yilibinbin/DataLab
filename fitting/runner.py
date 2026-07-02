@@ -210,8 +210,16 @@ class FitRunner:
                     result.details["implicit_strategy"] = "observed_linear"
                     result.details["optimizer_backend"] = "mpmath_qr"
                     return result
-                except ValueError:
-                    pass
+                except ValueError as exc:
+                    # Record why the observed-linear fast path was abandoned so
+                    # the fallback to the general solver is traceable instead of
+                    # silently swallowed (audit R3 D7). observed_linear_skipped is
+                    # appended to fallback_history below.
+                    observed_linear_skipped = {
+                        "from": "observed_linear",
+                        "to": "general_output_space",
+                        "reason": f"observed_linear_failed: {exc}",
+                    }
 
         target_implicit_candidates: list[tuple[mp.mpf, ...]] | None = None
         output_inversion_reason: str | None = None
