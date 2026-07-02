@@ -4,11 +4,28 @@
 > plan only.** Each stage is a separate, independently-mergeable PR gated by the
 > project review workflow (cluster tests + 3-model + CodeRabbit + full-suite).
 >
-> **Revised after external adversarial review (Codex / gpt-5.5).** Per-stage
-> verdicts and the specific hazards it found are folded in below. Net finding:
-> the shim/MRO approach is viable, but "behavior-identical pure move" is only
-> credible with stronger side-effect/MRO/import characterization first — the
-> original staging was ROI-first, this revision is safety-first.
+> **Revised after two-model external adversarial review (Codex / gpt-5.5 +
+> Antigravity / Gemini), each finding re-verified against the code.** Gemini's
+> verdict was **REJECT** (not safe to execute as originally written); it agreed
+> with every Codex finding and added the Qt-MRO-severance, precedence-reversal,
+> and Stage-3 worker-placement hazards below. Net: the shim/MRO approach is
+> viable, but "behavior-identical pure move" is only credible with the expanded
+> Stage-0 characterization first — original staging was ROI-first, this revision
+> is safety-first.
+>
+> ### Critical MRO hazards (Gemini, verified) — must be encoded in Stage 0
+> - **Qt base severs the MRO chain.** `ExtrapolationWindow(QMainWindow, …Mixins)`
+>   has `QMainWindow` **leftmost** (window.py:467). PySide6 C++ wrappers do NOT
+>   cooperatively call `super()`, so any Qt lifecycle override (`closeEvent`,
+>   `resizeEvent`, `__init__`) in a split mixin is **silently ignored**. → The
+>   plan MUST forbid split mixins from overriding Qt event handlers (or audit for
+>   dormant ones being ignored today).
+> - **Splitting reverses definition precedence.** In the monolith a method at the
+>   *bottom* shadows a duplicate at the *top*. Split sequentially into A(top) /
+>   B / C(bottom) and composed `class Shim(A, B, C)`, left-to-right MRO makes
+>   **A shadow C** — the opposite of the original. → Stage 0 must **strictly
+>   prohibit duplicate method names across sibling mixins** (a test that fails on
+>   any cross-sibling name collision).
 
 ## Current state (measured)
 
@@ -101,9 +118,15 @@ only then consider separating the dispatch — treating it as its own multi-PR
 track, not a low-medium extrapolation task. F10's mode-switch/result-clear timing
 must move verbatim. **Park until Stage 1 + 3 are done and characterized.**
 
-### Stage 3 — Split `window_latex_pdf_mixin.py` (969 → ~2 files)
+### Stage 3 — Split `window_latex_pdf_mixin.py` (969 → ~2 files) — **GO (cleanest)**
 - Separate compile-worker orchestration from PDF-preview/zoom UI.
-- **Risk: low.** Self-contained; good test coverage in `test_update_*` /
+- **(review, Gemini) Also extract the two workers.** `_TectonicInstallWorker`
+  (`window_latex_pdf_mixin.py:55`) and `_LatexCompileWorker` (`:135`) are `QThread`
+  subclasses defined *inside* this mixin, whereas all other workers
+  (`CalcWorker`, `FitWorker`, `RootSolvingWorker`, …) live in `workers_qt.py`.
+  Amend Stage 3 to move these two to `workers_qt.py` for architectural
+  consistency (do it as part of, or just before, the split).
+- **Risk: low.** Self-contained; good coverage in `test_update_*` /
   `test_latex_compile_*`.
 
 ### Stage 4 — Typed window facade `Protocol` — **NO-GO for Batch 10 (review)**
