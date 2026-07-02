@@ -2176,6 +2176,12 @@ class ExtrapolationWindow(
 
     def _on_mode_change(self):
         mode = self.mode_combo.currentData()
+        # Note: the previous mode's result is deliberately NOT cleared here.
+        # A successful run in the new mode replaces it (so stale wrong-mode
+        # output is never shown/exported once you actually compute — audit F10),
+        # while a failed or validation-errored run preserves the last good
+        # result (release-gate contract #70). Clearing at switch time would
+        # defeat that preserve-on-failure contract.
         self._sync_manual_table_columns_for_mode(mode)
         mode_indices = {
             "extrapolation": 0,

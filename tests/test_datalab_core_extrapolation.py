@@ -4,6 +4,50 @@ import mpmath as mp
 import pytest
 
 
+def test_dropped_extrapolation_row_emits_warning_and_clamps_segments() -> None:
+    """A row that fails to extrapolate is dropped, but it must NOT vanish
+    silently: a warning is emitted and the payload's segments are clamped to the
+    surviving row count so they never reference a discarded row (audit F3)."""
+    from datalab_core.extrapolation import build_extrapolation_request, run_extrapolation
+    from datalab_core.results import ResultStatus
+
+    request = build_extrapolation_request(
+        headers=("E1", "E2", "E3"),
+        rows=(("1.0", "0.5", "0.25"), ("2.0", "1.0", "1.0")),
+        method="power_law",
+        method_options={"power_law_config": {"x_values": ["2", "3", "4"]}},
+        segments=[(0, 1), (1, 2)],
+    )
+    envelope = run_extrapolation(request)
+
+    assert envelope.status is ResultStatus.SUCCEEDED
+    # The degenerate row (E2 == E3) is dropped -> at least one warning surfaced.
+    assert envelope.warnings, "dropping a row must emit a warning, not vanish silently"
+    assert any(" / " in w for w in envelope.warnings)  # bilingual
+    # Segments must be self-consistent: no segment index exceeds the row count.
+    row_count = len(envelope.payload["data_rows"])
+    for start, end in envelope.payload["segments"]:
+        assert 0 <= start <= end <= row_count, (start, end, row_count)
+
+
+def test_clamp_segments_skips_malformed_entries_without_crashing() -> None:
+    """_clamp_segments must treat malformed segment entries (mapping-shaped,
+    non-sequence, too-short, non-integer) as invalid and skip them rather than
+    raising — a dict entry's seg[0] is a KeyError, not IndexError (audit F3)."""
+    from datalab_core.extrapolation import _clamp_segments
+
+    segments = [
+        {"start": 0, "end": 3},   # mapping-shaped -> seg[0] raises KeyError
+        None,                      # non-sequence -> TypeError
+        (0,),                      # too short -> IndexError
+        ("x", 2),                  # non-integer -> ValueError
+        (1, 3),                    # the only valid pair
+    ]
+    assert _clamp_segments(segments, row_count=5) == [[1, 3]]
+    # If nothing valid remains, fall back to a single full segment.
+    assert _clamp_segments([{"start": 0}, None], row_count=5) == [[0, 5]]
+
+
 def test_core_extrapolation_request_builder_creates_string_payload() -> None:
     from datalab_core.extrapolation import build_extrapolation_request
     from datalab_core.jobs import JobMode

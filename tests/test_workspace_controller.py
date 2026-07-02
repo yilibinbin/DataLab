@@ -243,6 +243,27 @@ def test_workspace_round_trips_common_and_latex_precision_settings(qtbot) -> Non
     assert target.latex_engine_combo.currentText() == "pdflatex"
 
 
+def test_workspace_round_trips_fitting_log_axes(qtbot) -> None:
+    """log-x / log-y plot axis selection is captured on save but was never
+    restored, so a reloaded workspace re-ran fits with linear axes (audit F12)."""
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.log_x_checkbox.setChecked(True)
+    source.log_y_checkbox.setChecked(True)
+
+    bundle = capture_workspace(source, title="log axes")
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.log_x_checkbox.isChecked() is True
+    assert target.log_y_checkbox.isChecked() is True
+
+
 def test_workspace_preserves_raw_constants_text_view_draft(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace

@@ -125,6 +125,12 @@ def _set_text(obj: Any, value: str) -> None:
         obj.setText(value)
 
 
+def _set_checked_if(window: Any, attr: str, value: Any) -> None:
+    widget = getattr(window, attr, None)
+    if widget is not None and value is not None and hasattr(widget, "setChecked"):
+        widget.setChecked(bool(value))
+
+
 def _set_value(obj: Any, value: Any) -> None:
     if obj is None or value is None or not hasattr(obj, "setValue"):
         return
@@ -1959,6 +1965,12 @@ def _restore_workspace_contents(window: Any, manifest: dict[str, Any], attachmen
             else _parameter_rows_have_constraints(parameter_rows)
         )
         window.custom_constraints_checkbox.setChecked(custom_constraints_enabled)
+    # log_axes (log-x / log-y plot axis selection) is captured on save but was
+    # never restored, so a reloaded workspace re-ran fits with linear axes (F12).
+    log_axes = fitting.get("log_axes")
+    if isinstance(log_axes, dict):
+        _set_checked_if(window, "log_x_checkbox", log_axes.get("x"))
+        _set_checked_if(window, "log_y_checkbox", log_axes.get("y"))
     _restore_param_rows(window, parameter_rows, fitting.get("parameter_orphans"))
     restore_legacy_constants = not has_unified_constants
     restore_custom_constants = (

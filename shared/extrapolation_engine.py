@@ -236,24 +236,26 @@ def process_extrapolation_rows(
         data_rows: list[tuple[mp.mpf, ...]] = []
         extrapolated_results: list[ExtrapolationResult] = []
 
+        def _warn_too_few_values(row_number: int) -> None:
+            # Single source for the dual-language "too few values" warning so the
+            # column-count and <3-values guards below stay in sync.
+            _append_option_warning(
+                opts,
+                _dual_msg(
+                    f"第 {row_number} 行数值不足，已跳过。",
+                    f"Row {row_number} has too few values for the selected method; skipped.",
+                ),
+                verbose,
+            )
+
         for row_number, row in enumerate(rows, 1):
             row_tuple = tuple(_mp(value) for value in row[:column_count])
             if len(row_tuple) < column_count:
-                if verbose:
-                    print(
-                        "Warning: Line {0} does not have enough values for the selected method".format(
-                            row_number
-                        )
-                    )
+                _warn_too_few_values(row_number)
                 continue
             method_values = row_tuple[:3] if method in THREE_POINT_METHODS else row_tuple
             if len(method_values) < 3:
-                if verbose:
-                    print(
-                        "Warning: Line {0} does not have enough values for the selected method".format(
-                            row_number
-                        )
-                    )
+                _warn_too_few_values(row_number)
                 continue
 
             try:
@@ -271,8 +273,14 @@ def process_extrapolation_rows(
                     verbose=verbose,
                 )
             except (PowerLawComputationError, SequenceAccelerationError) as exc:
-                if verbose:
-                    print("Warning: Cannot extrapolate line {0}: {1}".format(row_number, exc))
+                _append_option_warning(
+                    opts,
+                    _dual_msg(
+                        f"第 {row_number} 行无法外推，已跳过：{exc}",
+                        f"Row {row_number} could not be extrapolated and was skipped: {exc}",
+                    ),
+                    verbose,
+                )
                 continue
 
             data_rows.append(row_tuple)

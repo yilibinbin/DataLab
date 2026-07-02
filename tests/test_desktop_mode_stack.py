@@ -33,6 +33,28 @@ def _set_combo_data(combo: Any, value: str) -> None:
     QApplication.processEvents()
 
 
+def test_mode_switch_preserves_result_until_a_successful_run_replaces_it(window: Any) -> None:
+    """A mode switch must NOT wipe the previous result: a successful run in the
+    new mode replaces it (so stale wrong-mode output is never shown/exported once
+    you actually compute — audit F10), while a failed/validation-errored run
+    keeps the last good result (release-gate contract #70). Clearing at switch
+    time would defeat that preserve-on-failure contract."""
+    window._set_csv_data([{"x": "1", "y": "2"}], ["x", "y"])
+    window.result_edit.setPlainText("prior-mode result")
+    assert window._csv_rows
+
+    # Switching mode alone preserves the prior result (nothing has recomputed).
+    _set_combo_data(window.mode_combo, "statistics")
+    assert window._csv_rows == [{"x": "1", "y": "2"}]
+    assert window.result_edit.toPlainText() == "prior-mode result"
+
+    # A successful run in the new mode replaces the result with fresh output.
+    window._set_csv_data([{"stat": "mean", "value": "3"}], ["stat", "value"])
+    window._set_result_text("statistics result", final_result=True)
+    assert window._csv_rows == [{"stat": "mean", "value": "3"}]
+    assert "statistics result" in window.result_edit.toPlainText()
+
+
 def _measure_mode_stack_width(window: Any) -> int:
     QApplication.processEvents()
     return int(window.mode_stack.sizeHint().width())
