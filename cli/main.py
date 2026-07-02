@@ -158,29 +158,42 @@ def _run_calc(job: BatchJob) -> dict[str, object]:
     method hard-defaults to ``wynn_epsilon``; future iterations can
     expose ``method`` via the YAML schema.
     """
+    from mpmath import mp
+
     from extrapolation_methods.accelerators import (
         SequenceAcceleratorConfig,
         apply_sequence_accelerator,
     )
+    from shared.precision import precision_guard
 
     xs, ys = _read_xy_csv(job.data_path)
     if len(ys) < 3:
         raise ValueError(
             f"Job {job.name!r}: calc needs at least 3 points, got {len(ys)}"
         )
-    config = SequenceAcceleratorConfig(precision=job.precision)
-    result = apply_sequence_accelerator("wynn_epsilon", ys, config)
+
+    def _serialize_mpf(value: object) -> object:
+        # str(mpf) emits only ambient-mp.dps digits, silently truncating a
+        # high-precision result; nstr at the requested precision preserves it.
+        return mp.nstr(value, job.precision) if hasattr(value, "_mpf_") else value
+
+    # Wrap compute AND serialization in the precision guard so the accelerator
+    # runs at, and the limit/metadata are rendered at, the requested precision
+    # regardless of the ambient mp.dps the CLI process happens to be at.
+    with precision_guard(job.precision):
+        config = SequenceAcceleratorConfig(precision=job.precision)
+        result = apply_sequence_accelerator("wynn_epsilon", ys, config)
+        limit_text = _serialize_mpf(result.value)
+        metadata = {k: _serialize_mpf(v) for k, v in (result.metadata or {}).items()}
+
     return {
         "job_name": job.name,
         "operation": "calc",
         "method": "wynn_epsilon",
         "data_path": str(job.data_path),
         "precision": job.precision,
-        "limit": str(result.value),
-        "metadata": {
-            k: (str(v) if hasattr(v, "_mpf_") else v)
-            for k, v in (result.metadata or {}).items()
-        },
+        "limit": limit_text,
+        "metadata": metadata,
     }
 
 

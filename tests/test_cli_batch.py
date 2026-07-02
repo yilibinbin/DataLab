@@ -57,6 +57,40 @@ jobs:
     return path
 
 
+def test_run_calc_preserves_requested_high_precision_in_limit(tmp_path: Path):
+    """CLI batch `calc` must serialize the extrapolated limit at the requested
+    precision, not truncate it to the ambient mp.dps via bare str(mpf) outside a
+    precision_guard (audit finding F6)."""
+    from mpmath import mp
+
+    from cli.batch_config import BatchJob
+    from cli.main import _run_calc
+
+    # A geometric series 1 + 1/2 + 1/4 + ... whose Wynn-eps limit is exactly 2,
+    # but we assert the SIGNIFICANT-DIGIT COUNT of the serialized limit, which is
+    # what truncation to dps=15 would cap. Use a slowly-varying convergent whose
+    # accelerated value carries many digits: partial sums of sum 6/k^2 -> pi^2.
+    data = tmp_path / "seq.csv"
+    rows = ["n,y"]
+    total = mp.mpf(0)
+    with mp.workdps(80):
+        for n in range(1, 40):
+            total += mp.mpf(6) / mp.mpf(n) ** 2
+            rows.append(f"{n},{mp.nstr(total, 60)}")
+    data.write_text("\n".join(rows), encoding="utf-8")
+
+    mp.dps = 15  # simulate the ambient CLI precision before per-job guard
+    job = BatchJob(
+        name="hp-calc", operation="calc", data_path=data,
+        output_dir=tmp_path, model=None, precision=50,
+    )
+    result = _run_calc(job)
+
+    limit = str(result["limit"])
+    digits = len(limit.replace(".", "").replace("-", "").lstrip("0"))
+    assert digits > 20, f"limit truncated to ambient dps: {limit!r} ({digits} digits)"
+
+
 def test_load_batch_config_round_trips(_batch_config: Path):
     """Parse a batch YAML into a BatchConfig dataclass."""
     from cli.batch_config import load_batch_config

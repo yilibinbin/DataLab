@@ -84,6 +84,25 @@ def _evaluate_prediction(evaluator: Any, params: Mapping[str, mp.mpf], observati
     raise TypeError("MCMC evaluator does not accept supported argument shapes")
 
 
+def _gaussian_log_probability(residuals_sq: float, rmse: float, *, weighted: bool) -> float:
+    """Gaussian log-likelihood (up to an additive constant) for MCMC.
+
+    ``residuals_sq`` is Σ wᵢ·rᵢ². When the fit is WEIGHTED the weights are already
+    1/σᵢ² (see ``likelihood_weights_from_series``), so ``residuals_sq`` is the
+    correct χ² = Σ rᵢ²/σᵢ² and the log-likelihood is simply ``-0.5·residuals_sq``.
+    Dividing again by rmse² (the old code path) double-scaled the likelihood,
+    acting as a constant "temperature" that rescaled every posterior variance and
+    made the reported credible intervals wrong whenever σ/weights were supplied.
+
+    When UNWEIGHTED (weights all 1, data noise unknown), rmse² is the plug-in
+    variance estimate, so the Gaussian exponent is ``-0.5·Σrᵢ²/rmse²`` — keep the
+    division there.
+    """
+    if weighted:
+        return -0.5 * residuals_sq
+    return -0.5 * residuals_sq / (rmse**2)
+
+
 def _estimate_rmse(targets: Sequence[Any], fit_result: Any) -> float:
     """Estimate a strictly positive RMSE for MCMC proposal scaling."""
     residuals = fit_result.details.get("residuals") if fit_result.details else None
@@ -141,6 +160,8 @@ def refine_fit_with_mcmc(
     initial_guess = [float(fit_result.params[name]) for name in param_names]  # float-bridge: emcee walker seeds
     rmse = _estimate_rmse(targets, fit_result)
 
+    weighted = likelihood_weights is not None
+
     def _log_probability(theta: Sequence[object]) -> float:
         if not param_names or rmse <= 0:
             return float("-inf")  # float-bridge: emcee log-prob sentinel
@@ -153,11 +174,11 @@ def refine_fit_with_mcmc(
                 if not math.isfinite(pred):
                     return float("-inf")  # float-bridge: emcee log-prob sentinel
                 residual = float(target) - pred  # float-bridge: emcee log-prob
-                weight = float(likelihood_weights[index]) if likelihood_weights is not None else 1.0  # float-bridge: emcee log-prob
+                weight = float(likelihood_weights[index]) if weighted else 1.0  # float-bridge: emcee log-prob
                 residuals_sq += weight * (residual**2)
                 if not math.isfinite(residuals_sq):
                     return float("-inf")  # float-bridge: emcee log-prob sentinel
-            return -0.5 * residuals_sq / (rmse**2)
+            return _gaussian_log_probability(residuals_sq, rmse, weighted=weighted)
         except (TypeError, ValueError, ArithmeticError, OverflowError, KeyError):
             return float("-inf")  # float-bridge: emcee log-prob sentinel
 

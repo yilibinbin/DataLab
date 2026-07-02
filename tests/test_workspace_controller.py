@@ -206,6 +206,37 @@ def test_workspace_controller_captures_manual_state(qtbot) -> None:
     assert bundle.attachments["attachments/plots/plot-001.png"] == PNG_1X1
 
 
+def test_workspace_round_trips_common_and_latex_precision_settings(qtbot) -> None:
+    """The common (mpmath_precision, uncertainty/display digits, scientific) and
+    latex (input digits, group size) settings are saved but were never restored,
+    silently resetting compute-affecting precision to defaults on reload
+    (audit finding F11)."""
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import capture_workspace, restore_workspace
+
+    source = ExtrapolationWindow()
+    qtbot.addWidget(source)
+    source.mpmath_precision_spin.setValue(50)
+    source.uncertainty_digits_spin.setValue(3)
+    source.display_digits_spin.setValue(25)
+    source.scientific_checkbox.setChecked(True)
+    source.latex_input_precision_spin.setValue(40)
+    source.latex_group_size_spin.setValue(5)
+
+    bundle = capture_workspace(source, title="precision settings")
+
+    target = ExtrapolationWindow()
+    qtbot.addWidget(target)
+    restore_workspace(target, bundle.manifest, bundle.attachments)
+
+    assert target.mpmath_precision_spin.value() == 50
+    assert target.uncertainty_digits_spin.value() == 3
+    assert target.display_digits_spin.value() == 25
+    assert target.scientific_checkbox.isChecked() is True
+    assert target.latex_input_precision_spin.value() == 40
+    assert target.latex_group_size_spin.value() == 5
+
+
 def test_workspace_preserves_raw_constants_text_view_draft(qtbot) -> None:
     from app_desktop.window import ExtrapolationWindow
     from app_desktop.workspace_controller import capture_workspace, restore_workspace

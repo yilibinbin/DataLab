@@ -293,6 +293,21 @@ def _compute_statistics(
     )
 
 
+def _error_from_variance(variance: mp.mpf) -> mp.mpf:
+    """Parameter standard error = sqrt(variance), degrading to NaN for a
+    non-finite or NEGATIVE variance. A negative covariance diagonal (finite-
+    precision indefiniteness of the inverse) would otherwise make mp.sqrt return
+    a complex mpc that later crashes combine_error_components with
+    'cannot create mpf from mpc' — degrade to NaN so the fit surfaces a
+    covariance warning instead of a hard failure (audit finding F1)."""
+    try:
+        if mp.isnan(variance) or mp.isinf(variance) or variance < 0:
+            return mp.nan
+        return mp.sqrt(variance)
+    except (TypeError, ValueError):
+        return mp.nan
+
+
 def _compute_covariance(
     model: ModelSpecification,
     params: dict[str, mp.mpf],
@@ -343,12 +358,17 @@ def _compute_covariance(
     noise = chi2 / dof if dof > 0 else mp.nan
     covariance = [[inv[i, j] * noise for j in range(k)] for i in range(k)]
     errors = {
-        name: mp.sqrt(covariance[idx][idx])
-        if not mp.isnan(covariance[idx][idx])
-        else mp.nan
+        name: _error_from_variance(covariance[idx][idx])
         for idx, name in enumerate(free_params)
     }
-    if any(mp.isnan(val) or mp.isinf(val) for row in covariance for val in row):
+    # Flag ill-conditioning: non-finite cells OR a negative variance on the
+    # diagonal. A negative diagonal (finite-precision indefiniteness of the
+    # inverse) is neither NaN nor Inf, so it would otherwise pass silently and
+    # yield a complex sqrt that crashes downstream error combination.
+    has_negative_variance = any(covariance[i][i] < 0 for i in range(k))
+    if has_negative_variance or any(
+        mp.isnan(val) or mp.isinf(val) for row in covariance for val in row
+    ):
         cov_warning = "协方差矩阵病态或奇异，参数不确定度可能不可靠。 / Covariance matrix is ill-conditioned or singular; parameter uncertainties may be unreliable."
     return covariance, errors, cov_warning
 
