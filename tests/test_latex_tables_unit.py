@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from mpmath import mp
@@ -130,3 +131,43 @@ def test_generate_error_propagation_table_preserves_math_header_with_unit(tmp_pa
 
     content = out.read_text(encoding="utf-8")
     assert "\\multicolumn{1}{c}{$V_{in}$~[\\texttt{V}]}" in content
+
+
+def test_generate_latex_table_escapes_caption_and_headers(tmp_path: Path):
+    """User-supplied caption and column headers must be LaTeX-escaped before
+    embedding, like the error-propagation table does (audit R3 D1/D2). Special
+    chars (& _ $ # % ~ ^) otherwise break compilation or inject commands."""
+    headers = ["A&B", "C_D", "E$F"]
+    data_rows = [(mp.mpf("1.1"), mp.mpf("2.2"), mp.mpf("3.3"))]
+    results = [(mp.mpf("4.4"), mp.mpf("0.1"))]
+
+    out = tmp_path / "inject.tex"
+    generate_latex_table(
+        headers,
+        data_rows,
+        results,
+        out,
+        caption="Run #5 (50% & rising) ~cost_estimate",
+        precision=20,
+        result_uncertainty_digits=2,
+    )
+    content = out.read_text(encoding="utf-8")
+
+    caption_line = next(line for line in content.splitlines() if "\\caption{" in line)
+    # Specials must appear only in escaped form; a bare (unescaped) special would
+    # break the compile / inject. Assert escaped sequences present + no unescaped
+    # special survives.
+    assert "\\#5" in caption_line
+    assert "50\\%" in caption_line
+    assert "\\& rising" in caption_line
+    assert "\\textasciitilde" in caption_line
+    assert "cost\\_estimate" in caption_line
+    caption_body = caption_line.split("\\caption{", 1)[1]
+    assert not re.search(r"(?<!\\)[#%&$_]", caption_body), f"unescaped special in caption: {caption_body}"
+
+    header_row = next(line for line in content.splitlines() if "\\multicolumn{1}{c}{" in line and "$n$" in line)
+    for raw in ("A&B", "C_D", "E$F"):
+        assert raw not in header_row, f"unescaped header survived: {raw}"
+    assert "A\\&B" in header_row
+    assert "C\\_D" in header_row
+    assert "E\\$F" in header_row

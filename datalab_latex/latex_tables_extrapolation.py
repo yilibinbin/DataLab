@@ -5,6 +5,7 @@ from typing import TypeAlias
 
 from shared.bilingual import _dual_msg, _split_dual
 from shared.formula_defaults import DEFAULT_THREE_POINT_FORMULA
+from shared.latex_escaping import latex_escape as _escape_latex_text
 from shared.extrapolation_engine import (
     ExtrapolationOptions,
     ExtrapolationResult,
@@ -305,6 +306,10 @@ def _append_extrapolation_table_block(
     latex_content.append("\\begin{table}[!ht]")
     base_caption = caption if caption else "Extrapolation results table"
     caption_text = f"{base_caption} (Part {block_index})" if total_blocks > 1 else base_caption
+    # Escape user-supplied caption text before embedding in \caption{} so LaTeX
+    # specials (& _ $ # % ~ ^ ...) can't break the compile or inject commands —
+    # mirrors the error-propagation table (audit R3 D1).
+    caption_text = _escape_latex_text(caption_text)
     label = "tab:extrapolation" if block_index == 1 else f"tab:extrapolation-{block_index}"
     latex_content.append(f"\\caption{{{caption_text}}}\\label{{{label}}}")
     latex_content.append("\\begin{threeparttable}")
@@ -407,7 +412,10 @@ def generate_latex_table(
     )
 
     header_cells = [
-        "\\multicolumn{{1}}{{c}}{{{0}}}".format(headers[idx] if idx < len(headers) else f"列{idx + 1}")
+        # Escape user-supplied column headers before embedding (audit R3 D2).
+        "\\multicolumn{{1}}{{c}}{{{0}}}".format(
+            _escape_latex_text(headers[idx] if idx < len(headers) else f"列{idx + 1}")
+        )
         for idx in range(column_count)
     ]
     header_row = "$n$ & " + " & ".join(header_cells) + " & \\multicolumn{1}{c}{Extrap.} \\\\\\hline"

@@ -9,12 +9,15 @@ help content lives in ``shared/help_specs.json``.
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from shared.formula_defaults import DEFAULT_THREE_POINT_FORMULA
+
+_logger = logging.getLogger(__name__)
 
 
 _FALLBACK_FUNCTION_HELP: dict[str, str] = {
@@ -67,14 +70,22 @@ def _substitute_placeholders(value: object) -> object:
 
 @lru_cache(maxsize=1)
 def _load_help_specs() -> dict[str, Any]:
-    for path in _candidate_help_specs_paths():
+    candidates = _candidate_help_specs_paths()
+    for path in candidates:
         try:
             with path.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
             if isinstance(data, dict):
                 return data
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as exc:
+            _logger.warning("Could not load help specs from %s: %s", path, exc)
             continue
+    # Empty help is a degraded state (no help content anywhere) — surface it
+    # instead of silently returning {} (audit R3 D8).
+    _logger.warning(
+        "help_specs.json not loaded from any candidate path (%s); returning empty help",
+        [str(p) for p in candidates],
+    )
     return {}
 
 

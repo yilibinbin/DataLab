@@ -54,3 +54,19 @@ def test_weighted_zero_sigma_anchor_conflict_rejected():
         with pytest.raises(ValueError) as excinfo:
             compute_statistics(values, sigmas, "weighted", use_sample=True, use_weighted_variance=True)
         assert "σ=0" in str(excinfo.value)
+
+
+def test_weighted_effective_n_computed_for_tiny_but_positive_w2():
+    """Very large sigmas give tiny (but strictly positive) weights, so W2 is a
+    tiny positive number. effective_n = W^2/W2 must still be computed — the guard
+    must not treat almosteq(W2, 0) as "cannot compute" (audit R3 D4). For equal
+    weights, W^2/W2 == n regardless of the weight magnitude."""
+    with mp.workdps(80):
+        values = [mp.mpf("10"), mp.mpf("12"), mp.mpf("11")]
+        sigmas = [mp.mpf("1e30"), mp.mpf("1e30"), mp.mpf("1e30")]  # weights ~1e-60, W2 ~1e-120 > 0
+
+        result = compute_statistics(values, sigmas, "weighted", use_sample=True, use_weighted_variance=True)
+
+        assert result["effective_n"] is not None, "effective_n dropped for tiny positive W2"
+        assert mp.almosteq(result["effective_n"], mp.mpf("3"), rel_eps=mp.mpf("1e-30"), abs_eps=mp.mpf("1e-30"))
+        assert "effective_n" not in result.get("warning_codes", [])

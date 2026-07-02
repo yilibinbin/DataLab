@@ -1907,8 +1907,53 @@ def test_web_sse_fit_stream_uses_core_request_builder_and_handler(monkeypatch):
     assert [event_name for event_name, _payload in events] == ["started", "progress", "result"]
     result = events[-1][1]
     assert result["model"] == "polynomial"
-    assert result["params"]["b0"] == pytest.approx(1.0)
-    assert result["params"]["b1"] == pytest.approx(2.0)
+    # params/errors are now high-precision decimal STRINGS (mp.nstr), not floats,
+    # so precision beyond ~17 digits survives the SSE response (audit R3 D3).
+    assert isinstance(result["params"]["b0"], str)
+    assert isinstance(result["params"]["b1"], str)
+    assert float(result["params"]["b0"]) == pytest.approx(1.0)
+    assert float(result["params"]["b1"]) == pytest.approx(2.0)
+
+
+def test_sse_fit_result_preserves_high_precision_params_as_strings(monkeypatch) -> None:
+    """audit R3 D3: the SSE result must serialize mp.mpf params with mp.nstr at
+    the requested precision (strings), not float() — otherwise a high-precision
+    parameter is truncated to ~17 digits in the JSON response. Drive
+    _single_fit_events with a fake fit whose parameter carries >17 sig digits and
+    assert the emitted value is a string that preserves them."""
+    from types import SimpleNamespace
+
+    from mpmath import mp
+    from datalab_core.results import ResultStatus
+
+    import app_web.blueprints.sse as sse
+
+    hi_str = "1.2345678901234567890123456789012345"  # 35 sig digits, unrepresentable as float
+
+    with mp.workdps(80):
+        fit_result = SimpleNamespace(
+            params={"b0": mp.mpf(hi_str)},
+            param_errors_stat={"b0": mp.mpf("0." + "0" * 30 + "17")},
+        )
+
+    class FakeService:
+        def submit(self, request, **_kwargs):
+            return SimpleNamespace(status=ResultStatus.SUCCEEDED, payload={"fit_result": {"tag": "hp"}})
+
+    # _core_fitting_runtime pulls these from module globals; set all four seams.
+    monkeypatch.setattr(sse, "build_fitting_request", lambda **kwargs: SimpleNamespace(), raising=False)
+    monkeypatch.setattr(sse, "fitting_payload_to_fit_result", lambda _payload: fit_result, raising=False)
+    monkeypatch.setattr(sse, "ResultStatus", ResultStatus, raising=False)
+    monkeypatch.setattr(sse, "create_core_session_service", lambda: FakeService(), raising=False)
+
+    events = list(sse._single_fit_events(["0", "1", "2", "3"], ["1", "3", "5", "7"], "polynomial", 80))
+    result = next(payload for name, payload in events if name == "result")
+
+    b0 = result["params"]["b0"]
+    assert isinstance(b0, str), "params must be strings, not float"
+    # The full high-precision string must survive (float() would truncate at ~17).
+    assert b0.startswith("1.23456789012345678901234567890"), b0
+    assert b0 != str(float(hi_str))
 
 
 def test_run_fit_parses_high_precision_input_inside_precision_guard() -> None:

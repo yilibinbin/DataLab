@@ -377,7 +377,11 @@ def compute_statistics(
                 )
             )
             warning_codes.append("effective_n")
-        elif not mp.almosteq(W2, mp.mpf("0")):
+        else:
+            # W2 is already known > 0 and finite here (the guard above rejects
+            # W2 <= 0 / NaN). The former almosteq(W2, 0) check wrongly skipped
+            # effective_n for tiny-but-valid W2, e.g. very large sigmas (audit
+            # R3 D4). W^2/W2 is well-defined for any positive W2.
             effective_n = (W * W) / W2
     else:
         raise ValueError(_dual_msg("未知的统计模式。", "Unknown statistics mode."))
