@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import linecache
 from typing import Any
 
 import mpmath as mp
@@ -452,6 +453,11 @@ def test_normalized_compute_state_is_immutable() -> None:
 
 
 def test_production_paths_delegate_to_shared_normalizer() -> None:
+    # inspect.getsource reads through linecache; drop any stale entry a prior
+    # test left (e.g. via importlib.reload of a dependency) so getsource re-reads
+    # the current source instead of returning the wrong function body
+    # (order-dependent flake seen in full-suite runs).
+    linecache.clearcache()
     assert "normalize_parameter_rows" in inspect.getsource(parameter_table.ParameterTable._normalized_state)
     assert "normalize_constants_state" in inspect.getsource(constants_editor.ConstantsEditor.constants_dict)
     assert "normalize_fitting_input" in inspect.getsource(

@@ -11,6 +11,21 @@ per-mode desktop UI tests.
 from __future__ import annotations
 
 import inspect
+import linecache
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _fresh_linecache():
+    """inspect.getsource reads through linecache; a prior test that shifted a
+    module's on-disk lines vs its cached copy (e.g. via importlib.reload of a
+    dependency) can leave a stale entry, making getsource return the wrong
+    function body. Clear the cache so every getsource here re-reads from disk —
+    immunizes this file against cross-test linecache pollution (order-dependent
+    flake seen in full-suite runs)."""
+    linecache.clearcache()
+    yield
 
 
 def test_execute_calc_job_dispatches_to_per_mode_handlers():
