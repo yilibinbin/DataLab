@@ -235,7 +235,9 @@ def test_statistics_matrix_latex_can_use_siunitx_columns() -> None:
     tex = generate_statistics_matrix_latex(payload, use_dcolumn=False, latex_group_size=0)
 
     assert "\\usepackage{dcolumn}" not in tex
-    assert "S[table-format=1.16]" in tex
+    # Column spec is now computed from the actual cell magnitudes (audit F13),
+    # so assert a siunitx S column is used rather than a hardcoded table-format.
+    assert "S[table-format=" in tex
 
 
 def test_statistics_matrix_latex_handles_pairwise_payload_summary() -> None:

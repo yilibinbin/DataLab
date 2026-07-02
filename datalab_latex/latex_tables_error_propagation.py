@@ -287,7 +287,10 @@ def generate_error_propagation_table(
                 "\\begin{table}[!ht]",
                 "\t\\centering",
                 "\t\\caption{{{0}}}\\label{{tab:error_propagation_{1}}}".format(
-                    caption
+                    # Escape the user-supplied caption so LaTeX specials
+                    # (_ % & # $) don't break compilation (audit F14); the
+                    # fallback is already-formatted LaTeX, so leave it verbatim.
+                    _escape_latex_text(caption)
                     if caption
                     else "Error propagation results using formula: $" + format_latex_formula(formula_str) + "$",
                     block_index,

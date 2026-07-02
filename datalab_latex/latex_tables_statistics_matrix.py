@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from .latex_formatting import _siunitx_column_spec, calculate_dcolumn_format_for_column
 from .latex_tables_common import (
     _build_standalone_preamble,
     _estimate_page_geometry,
@@ -68,8 +69,26 @@ def _matrix_table_block(
     use_dcolumn: bool,
     unit: str = "",
 ) -> list[str]:
-    numeric_spec = "d{12}" if use_dcolumn else "S[table-format=1.16]"
-    column_spec = " ".join(["l", *(numeric_spec for _ in columns)])
+    # Compute each numeric column's spec from its actual cell magnitudes rather
+    # than hardcoding d{12} / S[table-format=1.16]; a large/small/exponent value
+    # otherwise overflows the fixed format and mis-renders or fails to compile
+    # (audit F13). Cells for display column j are values[i][j] across rows i.
+    values = block["values"]
+
+    def _column_cells(col_index: int) -> list[str]:
+        return [
+            "" if (col_index >= len(row) or row[col_index] is None) else str(row[col_index])
+            for row in values
+        ]
+
+    per_column_specs: list[str] = []
+    for col_index in range(len(columns)):
+        cells = _column_cells(col_index)
+        if use_dcolumn:
+            per_column_specs.append(calculate_dcolumn_format_for_column(cells, "statistics_matrix"))
+        else:
+            per_column_specs.append(_siunitx_column_spec(cells))
+    column_spec = " ".join(["l", *per_column_specs])
     lines = [
         f"\\subsection*{{{latex_escape(kind.capitalize())}}}",
         f"\\noindent Unit: \\texttt{{{latex_escape(unit)}}}" if unit else "",
@@ -83,7 +102,6 @@ def _matrix_table_block(
         "\\midrule",
     ]
     lines = [line for line in lines if line]
-    values = block["values"]
     for row_column, row in zip(columns, values):
         cells = [_numeric_cell(cell) for cell in row]
         lines.append(" & ".join([latex_escape(row_column)] + cells) + r" \\")
