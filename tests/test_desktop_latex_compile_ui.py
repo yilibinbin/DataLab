@@ -62,7 +62,9 @@ def window(qtbot: Any) -> Any:
 def test_compile_latex_to_pdf_returns_after_starting_background_worker(
     window: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import app_desktop.window_latex_pdf_mixin as latex_mixin
+    # Batch-10 Stage 3: compile_latex_to_pdf now lives in the compile mixin, so
+    # its module namespace is where _LatexCompileWorker is resolved/patched.
+    import app_desktop.window_latex_compile_mixin as latex_mixin
 
     fake_engine = tmp_path / "xelatex"
     fake_engine.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -112,7 +114,9 @@ def test_compile_latex_to_pdf_returns_after_starting_background_worker(
 def test_compile_latex_falls_back_when_default_tectonic_missing(
     window: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import app_desktop.window_latex_pdf_mixin as latex_mixin
+    # Batch-10 Stage 3: compile_latex_to_pdf now lives in the compile mixin, so
+    # its module namespace is where _LatexCompileWorker is resolved/patched.
+    import app_desktop.window_latex_compile_mixin as latex_mixin
 
     fake_xelatex = tmp_path / "xelatex"
     fake_xelatex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -177,7 +181,9 @@ def test_compile_latex_does_not_silently_fallback_for_missing_explicit_engine(
     requested_engine: str,
     available_fallback: str,
 ) -> None:
-    import app_desktop.window_latex_pdf_mixin as latex_mixin
+    # Batch-10 Stage 3: compile_latex_to_pdf now lives in the compile mixin, so
+    # its module namespace is where _LatexCompileWorker is resolved/patched.
+    import app_desktop.window_latex_compile_mixin as latex_mixin
 
     fake_fallback = tmp_path / available_fallback
     fake_fallback.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -223,7 +229,9 @@ def test_compile_latex_explicit_engine_worker_has_no_retry_fallback(
     requested_engine: str,
     available_fallback: str,
 ) -> None:
-    import app_desktop.window_latex_pdf_mixin as latex_mixin
+    # Batch-10 Stage 3: compile_latex_to_pdf now lives in the compile mixin, so
+    # its module namespace is where _LatexCompileWorker is resolved/patched.
+    import app_desktop.window_latex_compile_mixin as latex_mixin
 
     fake_engine = tmp_path / requested_engine
     fake_engine.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -261,7 +269,9 @@ def test_compile_latex_explicit_engine_worker_has_no_retry_fallback(
 def test_latex_compile_worker_participates_in_window_stop_lifecycle(
     window: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import app_desktop.window_latex_pdf_mixin as latex_mixin
+    # Batch-10 Stage 3: compile_latex_to_pdf now lives in the compile mixin, so
+    # its module namespace is where _LatexCompileWorker is resolved/patched.
+    import app_desktop.window_latex_compile_mixin as latex_mixin
 
     fake_engine = tmp_path / "xelatex"
     fake_engine.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
