@@ -63,13 +63,17 @@ def _component_schemas() -> dict[str, Any]:
             "type": "object",
             "properties": {
                 "model": {"type": "string"},
+                # High-precision fit parameters/errors are emitted as decimal
+                # STRINGS (via mp.nstr at the requested precision), not JSON
+                # numbers, to preserve precision beyond float's ~17 digits
+                # (audit R3 D3). Keep this in sync with the SSE result emitter.
                 "params": {
                     "type": "object",
-                    "additionalProperties": {"type": "number"},
+                    "additionalProperties": {"type": "string"},
                 },
                 "param_errors_stat": {
                     "type": "object",
-                    "additionalProperties": {"type": "number"},
+                    "additionalProperties": {"type": "string"},
                 },
                 "aic": {"type": "number"},
                 "bic": {"type": "number"},

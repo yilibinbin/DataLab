@@ -458,9 +458,17 @@ def _single_fit_events(
         })
         return
 
-    params = {k: float(v) for k, v in (fit_result.params or {}).items()}
+    # Serialize mp.mpf parameters/errors as strings at the requested precision,
+    # not float() — an early float cast rounds to ~17 digits and destroys the
+    # high-precision result computed at precision=80+ (audit R3 D3). Mirrors the
+    # desktop worker, which serializes with mp.nstr. NB: format the existing mpf
+    # directly; wrapping it in mp.mpf(...) at the ambient (low) mp.dps would
+    # re-quantize it back down to float precision.
+    import mpmath as mp
+
+    params = {k: mp.nstr(v, precision) for k, v in (fit_result.params or {}).items()}
     errors = {
-        k: float(v) for k, v in (fit_result.param_errors_stat or {}).items()
+        k: mp.nstr(v, precision) for k, v in (fit_result.param_errors_stat or {}).items()
     }
     yield ("result", {
         "model": model_id,
