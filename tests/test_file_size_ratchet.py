@@ -44,12 +44,17 @@ _BASELINE: dict[str, int] = {
     "datalab_core/report_bundle.py": 1079,
     "root_solving/solver.py": 1076,
     "root_solving/plotting.py": 970,
-    "app_desktop/window_latex_pdf_mixin.py": 969,
     "fitting/implicit_model.py": 957,
     "datalab_core/statistics_time_series.py": 950,
     "app_desktop/views/statistics.py": 932,
     "datalab_core/statistics_matrix.py": 932,
     "statistics_utils.py": 860,
+    # Batch-10 Stage 3: the two LaTeX QThread workers (_TectonicInstallWorker,
+    # _LatexCompileWorker) + helpers were consolidated here from
+    # window_latex_pdf_mixin.py so every worker lives in one place (reviewer-
+    # requested consistency). That growth pushed workers_qt.py just past the
+    # 800-line soft limit; consciously baselined.
+    "app_desktop/workers_qt.py": 807,
     "datalab_latex/latex_formatting.py": 838,
     "shared/pdf_preview.py": 831,
     "app_web/blueprints/collaborate.py": 830,

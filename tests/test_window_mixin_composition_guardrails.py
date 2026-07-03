@@ -44,6 +44,8 @@ _EXPECTED_MRO = [
     "QPaintDevice",
     "Object",
     "WindowLatexPdfMixin",
+    "WindowLatexCompileMixin",
+    "WindowPdfPreviewMixin",
     "WindowI18nMixin",
     "WindowImagesMixin",
     "WindowStatisticsMixin",
