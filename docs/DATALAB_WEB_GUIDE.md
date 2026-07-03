@@ -313,12 +313,15 @@ export DATALAB_DEBUG=1
 pip install gunicorn
 
 # 2. 启动 Gunicorn（推荐：用仓库自带的 gunicorn.conf.py，worker 数按核心自动计算）
-gunicorn -c gunicorn.conf.py app_web.server:app
+gunicorn -c gunicorn.conf.py 'app_web.server:create_app()'
 
 # 说明：mpmath 的精度（mp.dps）是进程全局的，每个 worker 同一时刻只处理一个拟合。
 # 因此靠“多 worker 进程”而非线程来支撑并发——这样一个用户的长拟合不会阻塞其他人。
 # gunicorn.conf.py 默认按 2×核心数+1 计算并**至少 2 个 worker**；可用 WEB_CONCURRENCY 覆盖。
-# 若需手动指定：gunicorn -w 9 -b 127.0.0.1:8000 app_web.server:app（4 核示例）
+# 若需手动指定：gunicorn -w 9 -b 127.0.0.1:8000 'app_web.server:create_app()'（4 核示例）
+# 注意：SSE 限流器与协作会话注册表按 worker 各自保存在内存中——DoS 限流额度约为
+#       RATE_MAX_REQUESTS×worker 数（严格全局限流请在 nginx limit_req 层做）；多 worker
+#       协作需要粘性会话加共享存储（Redis，见 pyproject.toml 的 collab extra）。
 
 # 3. 配置 Nginx 反向代理
 # /etc/nginx/sites-available/datalab
@@ -356,7 +359,7 @@ Environment="DATALAB_HOST=127.0.0.1"
 Environment="DATALAB_PORT=8000"
 # 位于上面的 Nginx 反向代理之后：信任 X-Forwarded-For，使限流按真实客户端 IP 生效。
 Environment="DATALAB_TRUST_PROXY_HEADERS=1"
-ExecStart=/usr/bin/gunicorn -c gunicorn.conf.py app_web.server:app
+ExecStart=/usr/bin/gunicorn -c gunicorn.conf.py 'app_web.server:create_app()'
 Restart=always
 
 [Install]
@@ -502,7 +505,7 @@ Gunicorn worker 数量建议：
 - 示例：4 核 CPU → 9 workers
 
 ```bash
-gunicorn -w 9 -b 127.0.0.1:8000 app_web.server:app
+gunicorn -w 9 -b 127.0.0.1:8000 'app_web.server:create_app()'
 ```
 
 #### 8.2 缓存策略

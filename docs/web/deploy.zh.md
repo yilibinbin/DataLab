@@ -54,8 +54,8 @@ export DATALAB_DEBUG=1
 # 1. 安装 Gunicorn
 pip install gunicorn
 
-# 2. 启动 Gunicorn（4 个 worker）
-gunicorn -w 4 -b 127.0.0.1:8000 app_web.server:app
+# 2. 启动 Gunicorn（4 个 worker，应用工厂形式）
+gunicorn -w 4 -b 127.0.0.1:8000 'app_web.server:create_app()'
 
 # 3. 配置 Nginx 反向代理
 # /etc/nginx/sites-available/datalab
@@ -76,6 +76,17 @@ server {
 sudo systemctl restart nginx
 ```
 
+> **多 worker 的权衡（设置 `-w` 前必读）。** 请用多个 worker **进程**而非线程：mpmath 的
+> 精度是进程全局的，并由每进程锁（`app_web/blueprints/sse.py` 的 `_MP_SERIAL_LOCK`）串行化，
+> 因此每个 worker 同一时刻只跑一个拟合，跨用户并发只能靠多个 worker 进程实现。但有两处状态
+> 按 worker 各自保存在内存中：
+> - **SSE 限流器**（`sse.py` 的 `_RATE_HISTORY`）：DoS 限流是**按 worker** 各自计数的，因此
+>   实际额度约为 `RATE_MAX_REQUESTS × worker 数`。请据此调小该值，或在反向代理层做严格的
+>   全局限流（nginx `limit_req`）。
+> - **协作会话注册表**（`app_web/blueprints/collaborate.py`）：某个 worker 签发的 join-token
+>   对其他 worker 不可见，因此多 worker 协作需要**粘性会话（sticky sessions）**，真正的横向
+>   扩展还需要**共享存储（Redis）**——`pyproject.toml` 中的 `collab` extra 已注明需要 Redis。
+
 ### 推荐方式 2：systemd 服务
 
 创建 `/etc/systemd/system/datalab-web.service`：
@@ -92,7 +103,7 @@ WorkingDirectory=/path/to/data_extrapolation_source
 Environment="DATALAB_WEB_SECRET=your-secret-key-here"
 Environment="DATALAB_HOST=127.0.0.1"
 Environment="DATALAB_PORT=8000"
-ExecStart=/usr/bin/gunicorn -w 4 -b 127.0.0.1:8000 app_web.server:app
+ExecStart=/usr/bin/gunicorn -w 4 -b 127.0.0.1:8000 'app_web.server:create_app()'
 Restart=always
 
 [Install]
@@ -111,7 +122,7 @@ sudo systemctl start datalab-web
 
 ```powershell
 pip install waitress
-waitress-serve --listen=192.168.85.1:8000 --threads=8 app_web.server:app
+waitress-serve --listen=192.168.85.1:8000 --threads=8 --call app_web.server:create_app
 ```
 
 如需多进程 worker（CPU 密集型更合适），建议使用 **WSL2/Docker** 在 Linux 环境内运行 Gunicorn。
@@ -218,9 +229,16 @@ Gunicorn worker 数量建议（CPU 密集型）：
 - 公式：`2 × CPU核心数 + 1`
 - 示例：4 核 CPU → 9 workers
 
+用多个 worker **进程**而非线程：mpmath 精度是进程全局的，由每进程锁
+（`_MP_SERIAL_LOCK`）串行化，每个 worker 同一时刻只跑一个拟合，跨用户并发只能靠多进程。
+
 ```bash
-gunicorn -w 9 -b 127.0.0.1:8000 app_web.server:app
+gunicorn -w 9 -b 127.0.0.1:8000 'app_web.server:create_app()'
 ```
+
+> **注意**：SSE 限流器与协作会话注册表按 worker 各自保存在内存中。因此 DoS 限流额度约为
+> `RATE_MAX_REQUESTS × worker 数`（严格全局限流请在 nginx `limit_req` 层做）；且多 worker
+> 协作需要粘性会话加共享存储（Redis）——`pyproject.toml` 的 `collab` extra 已注明需要 Redis。
 
 ### 资源限制
 使用 systemd 限制资源占用：

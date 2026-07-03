@@ -55,8 +55,8 @@ export DATALAB_DEBUG=1
 # 1. Install gunicorn
 pip install gunicorn
 
-# 2. Start gunicorn (4 workers)
-gunicorn -w 4 -b 127.0.0.1:8000 app_web.server:app
+# 2. Start gunicorn (4 workers, app-factory form)
+gunicorn -w 4 -b 127.0.0.1:8000 'app_web.server:create_app()'
 
 # 3. Configure nginx reverse proxy
 # /etc/nginx/sites-available/datalab
@@ -77,6 +77,21 @@ server {
 sudo systemctl restart nginx
 ```
 
+> **Multi-worker trade-offs (read before sizing `-w`).** Use multiple worker
+> *processes*, not threads: mpmath's precision is process-global and serialized by
+> a per-process lock (`app_web/blueprints/sse.py` `_MP_SERIAL_LOCK`), so each
+> worker runs one fit at a time and concurrency across users comes only from
+> having several workers. But two pieces of state are held per worker, in memory:
+> - **SSE rate-limiter** (`_RATE_HISTORY` in `sse.py`): the DoS limit is enforced
+>   *per worker*, so the effective budget is roughly `RATE_MAX_REQUESTS × workers`.
+>   Size it accordingly, or enforce a strict global cap at the reverse proxy
+>   (nginx `limit_req`).
+> - **Collaboration session registry** (`app_web/blueprints/collaborate.py`): a
+>   join-token minted on one worker is invisible to the others, so multi-worker
+>   collaboration needs **sticky sessions**, and true horizontal scale needs a
+>   **shared store (Redis)** — the `collab` extra in `pyproject.toml` already notes
+>   Redis for this.
+
 ### Option 2: systemd Service
 
 Create `/etc/systemd/system/datalab-web.service`:
@@ -93,7 +108,7 @@ WorkingDirectory=/path/to/data_extrapolation_source
 Environment="DATALAB_WEB_SECRET=your-secret-key-here"
 Environment="DATALAB_HOST=127.0.0.1"
 Environment="DATALAB_PORT=8000"
-ExecStart=/usr/bin/gunicorn -w 4 -b 127.0.0.1:8000 app_web.server:app
+ExecStart=/usr/bin/gunicorn -w 4 -b 127.0.0.1:8000 'app_web.server:create_app()'
 Restart=always
 
 [Install]
@@ -112,7 +127,7 @@ Gunicorn does not support Windows. Use Waitress instead:
 
 ```powershell
 pip install waitress
-waitress-serve --listen=192.168.85.1:8000 --threads=8 app_web.server:app
+waitress-serve --listen=192.168.85.1:8000 --threads=8 --call app_web.server:create_app
 ```
 
 If you need multi-process workers on Windows, consider running the service in **WSL2/Docker** and using Gunicorn there.
