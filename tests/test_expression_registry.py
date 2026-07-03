@@ -4,12 +4,11 @@ import subprocess
 import sys
 
 
-def test_expression_registry_and_names_import_stay_lightweight() -> None:
+def test_expression_registry_import_stays_lightweight() -> None:
     script = r"""
 import sys
 
 import shared.expression_registry
-import shared.expression_names
 
 forbidden_prefixes = (
     "PySide6",
@@ -44,7 +43,6 @@ def test_expression_registry_names_match_all_consumers() -> None:
     from datalab_latex.expression_engine import list_allowed_functions as latex_allowed
     from fitting import model_parser
     from fitting import symbolic_export
-    from shared import expression_names
     from shared.expression_engine import list_allowed_functions as shared_allowed
     from shared.expression_registry import (
         allowed_constant_names,
@@ -63,7 +61,6 @@ def test_expression_registry_names_match_all_consumers() -> None:
     assert set(shared_allowed()["constants"]) == set(constants)
     assert set(latex_allowed()["constants"]) == set(constants)
     assert shared_allowed() == latex_allowed()
-    assert expression_names.reserved_expression_names() == expected_reserved
     assert model_parser.reserved_expression_names() == expected_reserved
     assert set(symbolic_export.SYMPY_FUNCTION_MAP) == set(functions)
     assert set(symbolic_export.MATHEMATICA_FUNCTION_MAP) == set(functions)
