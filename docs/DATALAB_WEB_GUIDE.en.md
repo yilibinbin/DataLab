@@ -314,13 +314,18 @@ pip install gunicorn
 
 # 2. Start Gunicorn (recommended: use the bundled gunicorn.conf.py, which sizes
 #    workers from the CPU count automatically)
-gunicorn -c gunicorn.conf.py app_web.server:app
+gunicorn -c gunicorn.conf.py 'app_web.server:create_app()'
 
 # Why multiple workers: mpmath's precision (mp.dps) is process-global, so each
 # worker handles one fit at a time. Concurrency comes from multiple worker
 # PROCESSES (not threads), so one user's long fit can't block everyone else.
 # gunicorn.conf.py defaults to 2*cores+1 with a FLOOR of 2 workers; override
 # with WEB_CONCURRENCY. Manual form: gunicorn -w 9 ... (a 4-core example).
+# Note: the SSE rate-limiter and collab session registry are per-worker
+#       in-memory state — the DoS budget is roughly RATE_MAX_REQUESTS × workers
+#       (for a strict global limit, enforce it at the nginx limit_req layer),
+#       and multi-worker collaboration needs sticky sessions plus a shared store
+#       (Redis — see the collab extra in pyproject.toml).
 
 # 3. Configure Nginx reverse proxy
 # /etc/nginx/sites-available/datalab
@@ -359,7 +364,7 @@ Environment="DATALAB_PORT=8000"
 # Behind the Nginx reverse proxy above: trust X-Forwarded-For so per-IP rate
 # limiting uses the real client IP, not the proxy's.
 Environment="DATALAB_TRUST_PROXY_HEADERS=1"
-ExecStart=/usr/bin/gunicorn -c gunicorn.conf.py app_web.server:app
+ExecStart=/usr/bin/gunicorn -c gunicorn.conf.py 'app_web.server:create_app()'
 Restart=always
 
 [Install]
@@ -505,7 +510,7 @@ Recommended Gunicorn worker count:
 - Example: 4-core CPU → 9 workers
 
 ```bash
-gunicorn -w 9 -b 127.0.0.1:8000 app_web.server:app
+gunicorn -w 9 -b 127.0.0.1:8000 'app_web.server:create_app()'
 ```
 
 #### 8.2 Caching
