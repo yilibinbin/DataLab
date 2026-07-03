@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from shared.bilingual import _dual_msg
-from shared.expression_names import is_reserved_expression_name
+from shared.expression_registry import is_reserved_expression_name
 from shared.uncertainty import parse_numeric_value, parse_uncertainty_format
 
 

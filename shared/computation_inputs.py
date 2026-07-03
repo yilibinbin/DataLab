@@ -9,7 +9,7 @@ from typing import Literal, TypeVar, cast
 from mpmath import mp
 
 from shared.bilingual import _dual_msg
-from shared.expression_names import is_reserved_expression_name
+from shared.expression_registry import is_reserved_expression_name
 from shared.input_normalization import ConstantsState
 from shared.symbolic_math import normalize_symbolic_expression
 from shared.uncertainty import UncertainValue, parse_numeric_value, parse_uncertainty_format
