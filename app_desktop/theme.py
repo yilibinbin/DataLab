@@ -462,29 +462,35 @@ QLabel#workbench_result_overview_title {{
     color: {title_fg};
     font-weight: 600;
 }}
-QLabel#workbench_result_status_badge {{
+QLabel#workbench_result_status_badge,
+QLabel#result_status_strip_status {{
     border-radius: 8px;
     font-size: 11px;
     font-weight: 600;
     padding: 2px 7px;
 }}
-QLabel#workbench_result_status_badge[datalab_result_status="waiting"] {{
+QLabel#workbench_result_status_badge[datalab_result_status="waiting"],
+QLabel#result_status_strip_status[datalab_result_status="waiting"] {{
     background: {waiting_bg};
     color: {waiting_fg};
 }}
-QLabel#workbench_result_status_badge[datalab_result_status="running"] {{
+QLabel#workbench_result_status_badge[datalab_result_status="running"],
+QLabel#result_status_strip_status[datalab_result_status="running"] {{
     background: {running_bg};
     color: {running_fg};
 }}
-QLabel#workbench_result_status_badge[datalab_result_status="ready"] {{
+QLabel#workbench_result_status_badge[datalab_result_status="ready"],
+QLabel#result_status_strip_status[datalab_result_status="ready"] {{
     background: {ready_bg};
     color: {ready_fg};
 }}
-QLabel#workbench_result_status_badge[datalab_result_status="failed"] {{
+QLabel#workbench_result_status_badge[datalab_result_status="failed"],
+QLabel#result_status_strip_status[datalab_result_status="failed"] {{
     background: {failed_bg};
     color: {failed_fg};
 }}
-QLabel#workbench_result_status_badge[datalab_result_status="complete"] {{
+QLabel#workbench_result_status_badge[datalab_result_status="complete"],
+QLabel#result_status_strip_status[datalab_result_status="complete"] {{
     background: {complete_bg};
     color: {complete_fg};
 }}

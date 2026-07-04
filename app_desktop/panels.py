@@ -202,6 +202,7 @@ def build_menu(self):
     menubar = self.menuBar()
 
     file_menu = menubar.addMenu("文件")
+    file_menu.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
     self._register_text(file_menu, "文件", "File", "setTitle")
 
     new_workspace_action = QAction("新建工作区", self)
@@ -242,11 +243,20 @@ def build_menu(self):
     file_menu.addAction(save_workspace_as_action)
     self._register_text(save_workspace_as_action, "工作区另存为…", "Save Workspace As…", "setText")
 
+    # 计算 / LaTeX icon option menus — placed AFTER 文件, before 示例. Actions are
+    # created here (build_menu runs before build_ui) but widget wiring is deferred
+    # to menu_options.wire_option_menus at the end of build_ui.
+    from app_desktop.menu_options import build_option_menus
+
+    build_option_menus(self, menubar)
+
     examples_menu = menubar.addMenu("示例")
+    examples_menu.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
     self._register_text(examples_menu, "示例", "Examples", "setTitle")
     examples_menu.addAction(open_example_workspace_action)
 
     lang_menu = menubar.addMenu("语言")
+    lang_menu.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation))
     self._register_text(lang_menu, "语言", "Language", "setTitle")
     action_lang_auto = QAction("自动", self)
     action_lang_auto.triggered.connect(lambda: self._on_language_change(0))
@@ -262,6 +272,7 @@ def build_menu(self):
     self._register_text(action_lang_en, "English", "English", "setText")
 
     theme_menu = menubar.addMenu("主题")
+    theme_menu.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DesktopIcon))
     self._register_text(theme_menu, "主题", "Theme", "setTitle")
     theme_group = QActionGroup(self)
     theme_group.setExclusive(True)
@@ -276,6 +287,7 @@ def build_menu(self):
         self._register_text(action, zh, en, "setText")
 
     help_menu = menubar.addMenu("帮助")
+    help_menu.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxQuestion))
     self._register_text(help_menu, "帮助", "Help", "setTitle")
 
     project_action = QAction("项目主页", self)
@@ -353,9 +365,22 @@ def build_ui(self):
     reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
     populate_variable_workspace_panel(self)
     self._build_right_panel(self.workbench_result_layout)
+    # Part C/D: always-visible result status strip (footer of the result rail) +
+    # click-to-open overview popover. Both read the shared result-state source and
+    # create NEW widgets — they never move the existing overview/footer widgets.
+    from app_desktop.result_status_strip import build_result_status_strip
+    from app_desktop.result_overview_popover import install_overview_popover_trigger
+
+    self.workbench_result_layout.addWidget(build_result_status_strip(self))
+    install_overview_popover_trigger(self)
     self._bind_workbench_state_roles()
     self._bind_workbench_spec_schema_keys()
     _connect_workbench_formula_editors(self)
+    # Lazy-wire the 计算 / LaTeX option menus now that config widgets exist
+    # (build_menu ran before build_ui, so the sync/nav must connect here).
+    from app_desktop.menu_options import wire_option_menus
+
+    wire_option_menus(self)
     # 初始化手动输入占位示例
     self._update_manual_placeholder(self.mode_combo.currentData())
     # 根据当前模式刷新可见性

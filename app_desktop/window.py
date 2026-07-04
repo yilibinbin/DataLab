@@ -2844,6 +2844,10 @@ class ExtrapolationWindow(
 
         if hasattr(self, "workbench_result_overview"):
             refresh_result_overview(self)
+        if hasattr(self, "_result_status_strip_status"):
+            from app_desktop.result_status_strip import refresh_result_status_strip
+
+            refresh_result_status_strip(self)
         history_panel = getattr(self, "workbench_history_panel", None)
         if history_panel is not None:
             history_panel.refresh()
