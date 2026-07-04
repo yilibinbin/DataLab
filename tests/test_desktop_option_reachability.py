@@ -279,6 +279,13 @@ def _reach_visible_via_selector_sweep(
                 sel.setChecked(False)
         app.processEvents()
 
+    def _user_operable(selector: Any) -> bool:
+        # Only a selector the user can actually see AND operate is a real gate. A
+        # hidden/disabled selector (e.g. one inside a collapsed options panel) must
+        # not be toggled to "reveal" a control — that would mark it reachable via a
+        # gate the user cannot use (a masking risk).
+        return selector.isVisibleTo(window) and selector.isEnabled()
+
     _reset()
     _record()  # baseline (mode default) visibility
 
@@ -286,6 +293,8 @@ def _reach_visible_via_selector_sweep(
     for sel in selectors:
         for option in _selector_options(sel):
             _reset()
+            if not _user_operable(sel):
+                continue
             _apply_selector_option(*option)
             app.processEvents()
             _record()
@@ -295,7 +304,12 @@ def _reach_visible_via_selector_sweep(
         for opt_a in _selector_options(sel_a):
             for opt_b in _selector_options(sel_b):
                 _reset()
+                if not _user_operable(sel_a):
+                    continue
                 _apply_selector_option(*opt_a)
+                app.processEvents()
+                if not _user_operable(sel_b):
+                    continue
                 _apply_selector_option(*opt_b)
                 app.processEvents()
                 _record()
