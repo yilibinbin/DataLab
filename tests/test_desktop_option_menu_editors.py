@@ -100,13 +100,27 @@ def test_precision_sync_has_no_infinite_recursion(window: Any) -> None:
 
 
 def test_precision_mirror_drives_real_downstream_slot(window: Any) -> None:
-    """Editing the mirror must re-run the real spin's own slots (not just set the
-    value silently) — the real control is the single source of truth AND keeps
-    its downstream behaviour. We assert the real spin actually changed and any
-    bound schema state followed (value round-trips through the real widget)."""
-    mirror = _editor(window, "uncertainty_digits_spin")
-    mirror.setValue(7)
-    assert window.uncertainty_digits_spin.value() == 7
+    """Editing the mirror must RE-RUN the real spin's downstream slots, not set the
+    value silently. If the mirror->real path blocked the real's signals (a silent
+    set), downstream schema/UI slots would never run. We assert the real control's
+    valueChanged actually FIRED (a spy) — not merely that the value equals 7, which
+    a silent set would also satisfy."""
+    real = window.uncertainty_digits_spin
+    fired: list[int] = []
+    real.valueChanged.connect(fired.append)
+    try:
+        mirror = _editor(window, "uncertainty_digits_spin")
+        mirror.setValue(7)
+        assert real.value() == 7
+        # The load-bearing assertion: the real spin's signal actually emitted, so
+        # every downstream connection (schema binding, UI refresh) ran. A silent
+        # real.setValue() under blockSignals would leave `fired` empty and FAIL here.
+        assert fired == [7], (
+            "mirror edit did not re-run the real spin's valueChanged "
+            f"(downstream slots would be skipped); observed {fired!r}"
+        )
+    finally:
+        real.valueChanged.disconnect(fired.append)
 
 
 # --- Combo mirror two-way sync ---------------------------------------------
