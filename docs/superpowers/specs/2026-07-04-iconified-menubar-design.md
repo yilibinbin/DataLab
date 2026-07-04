@@ -97,3 +97,33 @@ ones. It must NOT claim the result-only engine picker is reachable from a config
 ## Gate per increment
 TDD (RED reachability + behavior test first) → ruff/mypy → Codex + Gemini adversarial →
 full desktop suite → CodeRabbit → user test → user-confirmed merge → graphify update.
+
+---
+
+## AMENDMENT (2026-07-04, user-confirmed): in-menu editors, not navigation
+
+User tested the navigation-style menu and wants the OPTIONS to be ADJUSTABLE IN THE MENU
+(a small inline editor / popup), not a shortcut that jumps to the config rail.
+
+**Mechanism (safe — no reparenting):** each 计算/LaTeX value item becomes a `QWidgetAction`
+hosting a NEW mirror widget (a fresh QSpinBox/QComboBox/QCheckBox matching the real
+control's range/items), two-way synced to the real in-rail control via signals with
+recursion guards (blockSignals). The real control STAYS in the config rail — the menu
+shows an editable copy. This preserves the single-parent invariant (the reachability
+test still passes — no widget is reparented) AND gives real in-menu adjustment.
+
+- Compute controls (verified): mpmath_precision_spin (QSpinBox 10..1000000), uncertainty_digits_spin
+  (1..12), parallel_max_workers_spin (0..1024), parallel_reserve_cores_spin (0..1024) →
+  mirror QSpinBox; parallel_mode_combo (自动/串行优先/线程优先/进程优先), parallel_nested_policy_combo
+  (嵌套时串行/允许嵌套) → mirror QComboBox.
+- LaTeX: generate_latex_checkbox/dcolumn_checkbox/caption_checkbox → mirror checkable (already
+  done as checkable QAction); output_file_edit (QLineEdit) → mirror QLineEdit or a "browse…" that
+  drives the real one; latex_input_precision_spin/latex_group_size_spin → mirror QSpinBox.
+- Sync: mirror.valueChanged/currentIndexChanged/textChanged → real.set*, and real's signal →
+  mirror, both blockSignals-guarded to prevent loops. The real control is the source of truth.
+- Gated LaTeX editors: setting them still reveals the gate (check generate_latex_checkbox) as today.
+- The menu must not close on every keystroke — a QWidgetAction keeps the menu open while editing.
+
+The reachability test is UNAFFECTED (real controls not moved). Add tests: the mirror editor
+in the menu changes the real control's value and vice versa (two-way), no recursion, menu stays
+open while editing.

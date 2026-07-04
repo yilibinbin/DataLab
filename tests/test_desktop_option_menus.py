@@ -3,12 +3,17 @@
 The menus are ADDITIONAL entry points to config controls that already live in the
 rail. They must:
   * exist in the menu bar, placed after 文件;
-  * carry the right nav actions for each config-time control;
+  * carry an IN-MENU editor (a mirror widget in a QWidgetAction) for each
+    config-time VALUE control (spin/combo/line-edit), two-way synced to the SAME
+    in-rail control — never a second copy of the real control;
   * NOT include latex_engine_combo (a result-only control);
   * for checkboxes, expose a checkable QAction kept in two-way sync with the SAME
     in-rail checkbox (no recursion, no duplicate widget);
-  * for every control, triggering the nav action reveals the control's gate and
-    focuses it in place (parent unchanged).
+  * for gated value editors, reveal the control's gate on edit (parent unchanged).
+
+The mirror <-> real value-editor sync is covered in depth by
+test_desktop_option_menu_editors.py; here we assert the menu STRUCTURE (which
+controls are present, ordering, icons, bilingual titles) plus the checkbox mirrors.
 """
 
 from __future__ import annotations
@@ -64,8 +69,9 @@ def test_all_existing_menus_have_icons(window: Any) -> None:
         assert not menu.icon().isNull(), f"menu {menu.title()!r} has no icon"
 
 
-def test_compute_menu_has_precision_and_parallel_actions(window: Any) -> None:
-    nav = window._option_menu_nav_actions
+def test_compute_menu_has_precision_and_parallel_editors(window: Any) -> None:
+    editors = window._option_menu_editors
+    actions = window._option_menu_editor_actions
     for key in (
         "mpmath_precision_spin",
         "uncertainty_digits_spin",
@@ -74,7 +80,10 @@ def test_compute_menu_has_precision_and_parallel_actions(window: Any) -> None:
         "parallel_reserve_cores_spin",
         "parallel_nested_policy_combo",
     ):
-        assert key in nav, f"计算 menu missing nav action for {key}"
+        assert key in editors, f"计算 menu missing in-menu editor for {key}"
+        assert key in actions, f"计算 menu missing QWidgetAction for {key}"
+        # The mirror is a fresh widget, not the reparented real control.
+        assert editors[key] is not getattr(window, key)
 
 
 def test_compute_menu_has_separator_between_groups(window: Any) -> None:
@@ -84,9 +93,9 @@ def test_compute_menu_has_separator_between_groups(window: Any) -> None:
 
 
 def test_latex_menu_has_expected_actions_and_omits_engine(window: Any) -> None:
-    # LaTeX controls are exposed either as plain nav actions (non-checkboxes) or
-    # as checkable mirror actions (checkboxes). Both count as "in the LaTeX menu".
-    all_keys = set(window._option_menu_nav_actions) | set(window._option_menu_check_actions)
+    # LaTeX controls are exposed either as value editors (non-checkboxes) or as
+    # checkable mirror actions (checkboxes). Both count as "in the LaTeX menu".
+    all_keys = set(window._option_menu_editors) | set(window._option_menu_check_actions)
     for key in (
         "generate_latex_checkbox",
         "output_file_edit",
@@ -95,13 +104,14 @@ def test_latex_menu_has_expected_actions_and_omits_engine(window: Any) -> None:
         "caption_checkbox",
     ):
         assert key in all_keys, f"LaTeX menu missing action for {key}"
-    # Checkboxes are mirror actions; non-checkboxes are nav actions.
-    assert "output_file_edit" in window._option_menu_nav_actions
-    assert "latex_group_size_spin" in window._option_menu_nav_actions
+    # Value controls are in-menu editors; checkboxes are checkable mirror actions.
+    assert "output_file_edit" in window._option_menu_editors
+    assert "latex_group_size_spin" in window._option_menu_editors
     for cb in ("generate_latex_checkbox", "dcolumn_checkbox", "caption_checkbox"):
         assert cb in window._option_menu_check_actions
     # latex_engine_combo is a result-only control — must NOT be in any option menu.
     assert "latex_engine_combo" not in all_keys
+    assert "latex_engine_combo" not in window._option_menu_editor_actions
     latex_titles = [a.text() for a in window._latex_menu.actions()]
     assert not any("引擎" in t or "engine" in t.lower() for t in latex_titles)
 
@@ -136,32 +146,35 @@ def test_generate_latex_check_action_syncs_and_reveals_group(window: Any) -> Non
     assert window.output_file_edit.isVisibleTo(window) is True
 
 
-def test_triggering_precision_nav_action_focuses_control_in_place(window: Any) -> None:
+def test_editing_precision_mirror_changes_real_spin_in_place(window: Any) -> None:
+    """Editing the in-menu mirror changes the REAL spin without reparenting it."""
     widget = window.mpmath_precision_spin
     parent_before = widget.parent()
-    window._option_menu_nav_actions["mpmath_precision_spin"].trigger()
-    assert widget.isVisibleTo(window) is True
+    mirror = window._option_menu_editors["mpmath_precision_spin"]
+    mirror.setValue(32)
+    assert widget.value() == 32
+    # The real control is not moved by the in-menu edit (single-parent invariant).
     assert widget.parent() is parent_before
-    assert widget.hasFocus() is True
 
 
-def test_triggering_latex_nav_action_reveals_gate_then_focuses(window: Any) -> None:
+def test_editing_latex_mirror_reveals_gate_in_place(window: Any) -> None:
     # generate_latex_checkbox starts unchecked, so output_file_edit is hidden.
     assert window.output_file_edit.isVisibleTo(window) is False
     widget = window.output_file_edit
     parent_before = widget.parent()
-    window._option_menu_nav_actions["output_file_edit"].trigger()
-    # The nav action checks the gate checkbox first, then focuses the control.
+    mirror = window._option_menu_editors["output_file_edit"]
+    mirror.setText("/tmp/from_menu.tex")
+    # Editing the gated mirror checks the gate checkbox first, then applies.
     assert window.generate_latex_checkbox.isChecked() is True
     assert widget.isVisibleTo(window) is True
+    assert widget.text() == "/tmp/from_menu.tex"
     assert widget.parent() is parent_before
-    assert widget.hasFocus() is True
 
 
 def test_latex_menu_includes_input_precision_spin(window: Any) -> None:
     """latex_input_precision_spin (输入列位数) is a config-time, schema-bound LaTeX
-    control and must be reachable from the LaTeX menu as a gated nav action."""
-    assert "latex_input_precision_spin" in window._option_menu_nav_actions
+    control and must be reachable from the LaTeX menu as a gated in-menu editor."""
+    assert "latex_input_precision_spin" in window._option_menu_editors
     assert window._option_menu_gates.get("latex_input_precision_spin") == "latex"
 
 
