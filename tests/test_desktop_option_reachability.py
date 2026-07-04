@@ -18,8 +18,10 @@ WHY THIS FILE IS PROGRAMMATIC
 An earlier version hand-listed ~20 named globals. External review found that a
 hand-written list *always* masks controls: it silently omitted per-mode
 schema-bound inputs (``extrapolation.power_law.p``, ``uncertainty.reference_column``,
-the whole ``statistics.*`` sub-forms, …). There are 89 interactive input controls
+the whole ``statistics.*`` sub-forms, …). There are 90 interactive input controls
 carrying a ``datalab_schema_key`` property — far more than any hand list survives.
+(A later review also caught the dual risk: masking-by-TYPE-omission. The type
+filter is now a principled base-class set, not a hand tuple — see ``_INPUT_TYPES``.)
 
 So the guarantee here is enumeration, not a list: ``_enumerate_input_controls``
 walks the live widget tree and collects EVERY interactive input widget that carries
@@ -45,12 +47,12 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QApplication,
     QCheckBox,
     QComboBox,
     QLineEdit,
     QPlainTextEdit,
-    QSpinBox,
 )
 
 # Stack-page index for the free-form text editor inside the input-mode stack
@@ -60,12 +62,29 @@ _DATA_STACK_TEXT_PAGE = 1
 # The Qt property every schema-bound control carries (see ui_schema_binder).
 _SCHEMA_KEY_PROPERTY = "datalab_schema_key"
 
-# Interactive INPUT widget types. bind_field() also stamps the schema key on the
-# QLabel and the "?" QPushButton for a field, but those are not user-input options,
-# so we restrict the sweep to widgets the user actually enters/selects values in.
-# QPushButton actionable controls (preview / refresh) are covered by
-# test_desktop_option_menus.py and the per-view behaviour tests, not here.
-_INPUT_TYPES = (QLineEdit, QSpinBox, QComboBox, QCheckBox, QPlainTextEdit)
+# Interactive INPUT widget types — the widgets a user enters or selects a VALUE
+# in. This filter is PRINCIPLED, not an arbitrary tuple: it is every editable-value
+# widget kind, so a control cannot be masked by omitting its concrete class.
+#   * QAbstractSpinBox — the base of QSpinBox AND QDoubleSpinBox (an earlier tuple
+#     listed only QSpinBox and silently dropped pdf.zoom_percent, a live
+#     QDoubleSpinBox; using the base class makes that impossible).
+#   * QComboBox / QCheckBox / QLineEdit / QPlainTextEdit — the remaining value
+#     inputs. NumberedTextEdit subclasses QPlainTextEdit, so it is already covered.
+#
+# Deliberately EXCLUDED, with reasons (these are NOT editable-value options):
+#   * QLabel and the "?" help QPushButton — bind_field() also stamps the schema key
+#     on a field's label and help button; neither takes user input.
+#   * QTextBrowser (results.numeric.markdown) — a READ-ONLY result display, not an
+#     option the user sets.
+#   * QPushButton (28 of them: export csv/image, zoom in/out/reset, latex
+#     open/save/reload/compile/view_pdf, formula-preview buttons, …) — these carry
+#     a schema key for COMMAND dispatch, not for holding an editable value. The
+#     redesign's reachability criterion is about OPTION inputs; actionable command
+#     buttons are a different kind of control and are covered by their own tests
+#     (test_desktop_option_menus.py + the per-view behaviour tests). Excluding them
+#     here is a principled rule ("command buttons are not option inputs"), not a
+#     forgotten type.
+_INPUT_TYPES = (QAbstractSpinBox, QComboBox, QCheckBox, QLineEdit, QPlainTextEdit)
 
 # --- Prefix classification -------------------------------------------------
 #
@@ -90,10 +109,12 @@ _PER_MODE_PREFIXES: dict[str, set[str]] = {
 # checkboxes revealed — handled by _reveal_output_gates).
 _MODE_INDEPENDENT_PREFIXES: frozenset[str] = frozenset({"options", "parallel", "output"})
 
-# Result-only: live inside ``self.tabs`` (hidden until a result exists) or the
-# LaTeX result subtab. NOT reachable pre-result; asserted hidden then revealed by
-# driving a non-empty result and the right result subtab.
-_RESULT_ONLY_PREFIXES: frozenset[str] = frozenset({"results", "latex"})
+# Result-only: live inside ``self.tabs`` (hidden until a result exists) — the
+# result subtabs, the LaTeX subtab, and the PDF subtab. NOT reachable pre-result;
+# asserted hidden then revealed by driving a non-empty result and the right subtab.
+# ``pdf`` (pdf.zoom_percent, a QDoubleSpinBox in the PDF preview toolbar) belongs
+# here: the PDF preview lives in a result subtab, hidden until a result exists.
+_RESULT_ONLY_PREFIXES: frozenset[str] = frozenset({"results", "latex", "pdf"})
 
 # Narrow, justified allowlist of schema keys the sweep does NOT require reachable.
 # Keep this SMALL — each entry must name a real, documented reason. It exists to
@@ -268,6 +289,10 @@ def _reveal_result_only_control(window: Any, app: Any, key: str) -> None:
         window.result_tabs.setCurrentIndex(indices["image"])
     elif key in {"results.image.zoom_percent", "results.image.page"}:
         window.result_tabs.setCurrentIndex(indices["image"])
+    elif key == "pdf.zoom_percent":
+        # PDF-zoom spinbox lives in the PDF preview toolbar on the PDF subtab,
+        # hidden until a result populates self.tabs.
+        window.result_tabs.setCurrentIndex(indices["pdf"])
     else:  # pragma: no cover - defensive; test_every_input_prefix... guards this
         raise AssertionError(f"unhandled result-only key {key!r}")
     app.processEvents()
