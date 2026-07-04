@@ -144,7 +144,13 @@ def _refresh_popover_contents(owner: Any, popover: QWidget) -> None:
     values["value"].setText(_value_summary(owner, state, status))
     values["uncertainty"].setText(_uncertainty_summary(owner, state))
     values["elapsed"].setText(_elapsed_label(owner))
-    values["points"].setText(str(rows) if rows else _points_fallback(owner, state, columns))
+    # A tabular result always shows its actual row count (including 0). The column-count
+    # fallback is only for non-tabular states — otherwise an empty 0-row/N-col table
+    # would misreport N points.
+    if state.kind == "tabular":
+        values["points"].setText(str(rows))
+    else:
+        values["points"].setText(_points_fallback(owner, state, columns))
 
 
 def _value_summary(owner: Any, state: Any, status: str) -> str:

@@ -42,6 +42,19 @@ def _drive_non_empty_result(window: Any) -> None:
     )
 
 
+def test_points_shows_zero_for_empty_tabular_result(window: Any) -> None:
+    """An empty tabular result (0 rows, N headers) must show 0 points — NOT the column
+    count. The falsy-``rows`` fallback used the column count, so a 0-row/3-col table
+    displayed '3' points (CodeRabbit finding)."""
+    from app_desktop.result_overview_popover import open_result_overview_popover
+
+    window._set_csv_data([], headers=["x", "y", "z"], suggestion="r.csv")
+    popover = open_result_overview_popover(window)
+    assert popover._datalab_value_labels["points"].text() == "0", (
+        "empty tabular result must show 0 points, not the column count"
+    )
+
+
 def test_overview_card_is_clickable_and_opens_popover(window: Any) -> None:
     from app_desktop.result_overview_popover import open_result_overview_popover
 
