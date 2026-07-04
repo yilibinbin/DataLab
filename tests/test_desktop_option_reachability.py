@@ -18,10 +18,13 @@ WHY THIS FILE IS PROGRAMMATIC
 An earlier version hand-listed ~20 named globals. External review found that a
 hand-written list *always* masks controls: it silently omitted per-mode
 schema-bound inputs (``extrapolation.power_law.p``, ``uncertainty.reference_column``,
-the whole ``statistics.*`` sub-forms, …). There are 90 interactive input controls
+the whole ``statistics.*`` sub-forms, …). There are 101 interactive input controls
 carrying a ``datalab_schema_key`` property — far more than any hand list survives.
-(A later review also caught the dual risk: masking-by-TYPE-omission. The type
-filter is now a principled base-class set, not a hand tuple — see ``_INPUT_TYPES``.)
+(Later reviews also caught the dual risk: masking-by-TYPE-omission — a control
+dropped because its widget *class* is not in the filter. The type filter is now
+capability-based: Qt value inputs via base classes PLUS the app's own custom
+editors, with a closed, documented exclusion set — see ``_INPUT_TYPES`` and
+``test_no_editable_schema_type_is_excluded``.)
 
 So the guarantee here is enumeration, not a list: ``_enumerate_input_controls``
 walks the live widget tree and collects EVERY interactive input widget that carries
@@ -55,6 +58,13 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
 )
 
+# The app's own editable data-input widgets (custom classes, not Qt built-ins).
+# They carry a datalab_schema_key like any bound field and take user input, so they
+# belong in the sweep — a Qt-builtin-only filter silently drops all of them.
+from app_desktop.constants_editor import ConstantsEditor
+from app_desktop.detected_rows_table import DetectedRowsTable
+from app_desktop.parameter_table import ParameterTable
+
 # Stack-page index for the free-form text editor inside the input-mode stack
 # (table on page 0, text on page 1 — mirrors panels._STACK_PAGE_TEXT).
 _DATA_STACK_TEXT_PAGE = 1
@@ -63,28 +73,59 @@ _DATA_STACK_TEXT_PAGE = 1
 _SCHEMA_KEY_PROPERTY = "datalab_schema_key"
 
 # Interactive INPUT widget types — the widgets a user enters or selects a VALUE
-# in. This filter is PRINCIPLED, not an arbitrary tuple: it is every editable-value
-# widget kind, so a control cannot be masked by omitting its concrete class.
+# in. This filter is capability-based (editable-value widgets), NOT an arbitrary
+# shortlist, so a control cannot be masked by omitting its concrete class. Two
+# groups make it exhaustive:
+#
+# (1) Qt value inputs, via base classes where a base exists:
 #   * QAbstractSpinBox — the base of QSpinBox AND QDoubleSpinBox (an earlier tuple
 #     listed only QSpinBox and silently dropped pdf.zoom_percent, a live
 #     QDoubleSpinBox; using the base class makes that impossible).
 #   * QComboBox / QCheckBox / QLineEdit / QPlainTextEdit — the remaining value
 #     inputs. NumberedTextEdit subclasses QPlainTextEdit, so it is already covered.
 #
-# Deliberately EXCLUDED, with reasons (these are NOT editable-value options):
-#   * QLabel and the "?" help QPushButton — bind_field() also stamps the schema key
-#     on a field's label and help button; neither takes user input.
-#   * QTextBrowser (results.numeric.markdown) — a READ-ONLY result display, not an
-#     option the user sets.
-#   * QPushButton (28 of them: export csv/image, zoom in/out/reset, latex
-#     open/save/reload/compile/view_pdf, formula-preview buttons, …) — these carry
-#     a schema key for COMMAND dispatch, not for holding an editable value. The
+# (2) The app's OWN custom editable-editor widgets (subclass QWidget directly, so
+#     no Qt base class catches them — they must be named):
+#   * ConstantsEditor — the units inputs/constants/parameters editors (e.g.
+#     error.units.inputs, fitting.units.parameters); gated by each mode's units
+#     mode, editable once units are enabled.
+#   * ParameterTable — fitting custom/implicit parameter tables
+#     (fitting.custom.parameters, fitting.implicit.parameters).
+#   * DetectedRowsTable — the root-solving unknowns table (root.unknowns).
+#
+# Deliberately EXCLUDED, with reasons (these are NOT editable-value options). After
+# adding groups (1) and (2), the schema-keyed types that remain excluded are:
+#   * QLabel (75) and the "?" help QPushButton — bind_field() also stamps the schema
+#     key on a field's label and help button; neither takes user input.
+#   * QTextBrowser (results.numeric.markdown, 1) — a READ-ONLY result display.
+#   * QPushButton (28: export csv/image, zoom in/out/reset, latex
+#     open/save/reload/compile/view_pdf, formula-preview buttons, …) — carry a
+#     schema key for COMMAND dispatch, not for holding an editable value. The
 #     redesign's reachability criterion is about OPTION inputs; actionable command
-#     buttons are a different kind of control and are covered by their own tests
-#     (test_desktop_option_menus.py + the per-view behaviour tests). Excluding them
-#     here is a principled rule ("command buttons are not option inputs"), not a
-#     forgotten type.
-_INPUT_TYPES = (QAbstractSpinBox, QComboBox, QCheckBox, QLineEdit, QPlainTextEdit)
+#     buttons are covered by their own tests (test_desktop_option_menus.py + the
+#     per-view behaviour tests). Excluding them is a principled rule ("command
+#     buttons are not option inputs"), not a forgotten type.
+#   * QScrollArea (results.image.preview, 1) and QTabWidget (main.result_tabs,
+#     results.tabs, 2) — layout CONTAINERS carrying a schema key for structure, not
+#     values the user edits.
+# test_no_editable_schema_type_is_excluded asserts this exclusion list stays
+# closed, so a newly-introduced editable widget type fails instead of slipping past.
+_INPUT_TYPES = (
+    QAbstractSpinBox,
+    QComboBox,
+    QCheckBox,
+    QLineEdit,
+    QPlainTextEdit,
+    ConstantsEditor,
+    ParameterTable,
+    DetectedRowsTable,
+)
+
+# Schema-keyed widget types that are intentionally NOT input options (see the block
+# above). This is the closed exclusion set the exhaustiveness guard checks against.
+_NON_INPUT_SCHEMA_TYPES: frozenset[str] = frozenset(
+    {"QLabel", "QPushButton", "QTextBrowser", "QScrollArea", "QTabWidget"}
+)
 
 # --- Prefix classification -------------------------------------------------
 #
@@ -320,6 +361,31 @@ def test_every_input_prefix_is_classified(window: Any) -> None:
         f"input prefixes not covered by any reachability regime: "
         f"{sorted(unclassified)} — classify them (per-mode / mode-independent / "
         f"result-only) so the sweep cannot silently skip them"
+    )
+
+
+def test_no_editable_schema_type_is_excluded(window: Any) -> None:
+    """Anti-masking guard at the TYPE level: every schema-keyed widget is either an
+    enumerated input or a DOCUMENTED non-input type.
+
+    This closes the masking-by-type hole (the class of bug that dropped
+    pdf.zoom_percent and the custom editors): a newly-introduced editable widget
+    type that carries a schema key but is not in ``_INPUT_TYPES`` shows up here as
+    an unclassified type and FAILS, instead of silently escaping the sweep. To fix
+    such a failure you either add the type to ``_INPUT_TYPES`` (if it is an input)
+    or to ``_NON_INPUT_SCHEMA_TYPES`` with a reason — never leave it unaccounted.
+    """
+    unclassified: dict[str, str] = {}
+    for obj in [window, *window.findChildren(QObject)]:
+        key = obj.property(_SCHEMA_KEY_PROPERTY)
+        if not key or isinstance(obj, _INPUT_TYPES):
+            continue
+        if type(obj).__name__ not in _NON_INPUT_SCHEMA_TYPES:
+            unclassified[type(obj).__name__] = str(key)
+    assert not unclassified, (
+        f"schema-keyed widget types neither enumerated as inputs nor listed as "
+        f"documented non-inputs: {unclassified} — add each to _INPUT_TYPES (if it "
+        f"takes user input) or to _NON_INPUT_SCHEMA_TYPES (with a reason)"
     )
 
 
