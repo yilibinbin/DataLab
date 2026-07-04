@@ -30,7 +30,10 @@ class _OverviewCardClickFilter(QObject):
         self._owner = owner
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if event.type() == QEvent.Type.MouseButtonRelease:
+        if (
+            event.type() == QEvent.Type.MouseButtonRelease
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
             open_result_overview_popover(self._owner)
         return False
 

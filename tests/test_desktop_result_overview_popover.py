@@ -18,7 +18,7 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QApplication, QWidget
 
 
@@ -105,3 +105,61 @@ def _all_text(widget: QWidget) -> str:
     for label in widget.findChildren(QLabel):
         parts.append(label.text())
     return " ".join(parts)
+
+
+def _release_event(button: Qt.MouseButton) -> Any:
+    """A MouseButtonRelease QMouseEvent for the given button at the card origin.
+
+    Uses the non-deprecated constructor that takes an explicit ``QPointingDevice``
+    (the position-only overloads are deprecated in Qt 6).
+    """
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent, QPointingDevice
+
+    pos = QPointF(1.0, 1.0)
+    return QMouseEvent(
+        QEvent.Type.MouseButtonRelease,
+        pos,
+        pos,
+        button,
+        button,
+        Qt.KeyboardModifier.NoModifier,
+        QPointingDevice.primaryPointingDevice(),
+    )
+
+
+def test_only_left_click_release_opens_popover(window: Any, monkeypatch: Any) -> None:
+    """The card's click filter must open the popover on a LEFT release only.
+
+    A right/middle release passing through the same filter must be ignored —
+    otherwise a right-click (context intent) would spuriously pop the overview.
+    We spy on ``open_result_overview_popover`` (the filter's callee) rather than
+    checking value/visibility, so the test fails if the button guard is dropped
+    and the filter fires on every button.
+    """
+    import app_desktop.result_overview_popover as mod
+
+    mod.install_overview_popover_trigger(window)
+    card = window.workbench_result_overview_panel
+    filt = window._result_overview_popover_filter
+
+    calls: list[int] = []
+    monkeypatch.setattr(
+        mod, "open_result_overview_popover", lambda owner: calls.append(1)
+    )
+
+    # Right release: filter sees it but must NOT open the popover.
+    filt.eventFilter(card, _release_event(Qt.MouseButton.RightButton))
+    assert calls == [], "right-click release must not open the overview popover"
+
+    # Middle release: also ignored.
+    filt.eventFilter(card, _release_event(Qt.MouseButton.MiddleButton))
+    assert calls == [], "middle-click release must not open the overview popover"
+
+    # Left release: opens exactly once.
+    filt.eventFilter(card, _release_event(Qt.MouseButton.LeftButton))
+    assert calls == [1], "left-click release must open the overview popover once"
+
+    # A non-mouse event through the same filter is a no-op too.
+    filt.eventFilter(card, QEvent(QEvent.Type.Enter))
+    assert calls == [1]
