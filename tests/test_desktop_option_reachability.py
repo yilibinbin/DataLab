@@ -157,6 +157,16 @@ _MODE_INDEPENDENT_PREFIXES: frozenset[str] = frozenset({"options", "parallel", "
 # here: the PDF preview lives in a result subtab, hidden until a result exists.
 _RESULT_ONLY_PREFIXES: frozenset[str] = frozenset({"results", "latex", "pdf"})
 
+# Schema keys that only EXIST as a runtime-relabelled state of an already-enumerated
+# widget (not a separate widget). The shared input_constants_editor is relabelled to
+# fitting.implicit.constants when fit_model_combo == self_consistent (window.py). The
+# widget is the same object (and reachable), so it can't be enumerated under this key
+# up front — instead the per-mode sweep must OBSERVE this key becoming reachable. Any
+# such dynamic key must be listed here so the sweep asserts it was actually reached.
+_DYNAMIC_KEYS_BY_MODE: dict[str, tuple[str, ...]] = {
+    "fitting": ("fitting.implicit.constants",),
+}
+
 # Narrow, justified allowlist of schema keys the sweep does NOT require reachable.
 # Keep this SMALL — each entry must name a real, documented reason. It exists to
 # exclude non-input widgets that slip past the type filter, NOT to paper over
@@ -246,8 +256,18 @@ def _reach_visible_via_selector_sweep(
 
     def _record() -> None:
         for widget, key in controls:
-            if widget.isVisibleTo(window):
-                reached.add(key)
+            if not widget.isVisibleTo(window):
+                continue
+            reached.add(key)
+            # Some widgets (e.g. the shared input_constants_editor) are RELABELLED
+            # at runtime — their datalab_schema_key mutates as a selector changes
+            # (fitting.custom.constants -> fitting.implicit.constants when
+            # fit_model_combo == self_consistent). Record the LIVE key too, so a
+            # dynamic key state that only exists mid-sweep is covered, not just the
+            # key captured at enumeration time.
+            live_key = widget.property(_SCHEMA_KEY_PROPERTY)
+            if live_key:
+                reached.add(str(live_key))
 
     def _reset() -> None:
         # Reset every selector to its first/unchecked state so pair trials start
@@ -443,6 +463,16 @@ def test_per_mode_input_controls_all_reachable(window: Any, mode: str) -> None:
     assert not unreachable, (
         f"mode {mode!r}: input controls never reachable via any gate: {unreachable}"
     )
+    # Dynamic-key coverage: some widgets are relabelled at runtime and take a
+    # different schema key in a gated state (the shared input_constants_editor
+    # becomes fitting.implicit.constants under fit_model_combo=self_consistent).
+    # Assert each expected dynamic key for this mode was actually reached during
+    # the sweep, so a future regression that hides that state fails here.
+    for dyn_key in _DYNAMIC_KEYS_BY_MODE.get(mode, ()):  # type: ignore[attr-defined]
+        assert dyn_key in reached, (
+            f"mode {mode!r}: dynamic-key state {dyn_key!r} never became reachable "
+            f"during the selector sweep"
+        )
     # Reparent guard: the sweep's gate toggling must not have moved anything.
     reparented = [k for w, k in controls if w.parent() is not parents[id(w)]]
     assert not reparented, f"mode {mode!r}: controls reparented during sweep: {reparented}"
