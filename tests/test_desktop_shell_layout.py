@@ -48,6 +48,8 @@ def test_shell_exposes_workbench_bar_controls(qtbot: Any) -> None:
         "open_examples_button",
         "workbench_run_button",
         "workbench_stop_button",
+        "workbench_compute_options_button",
+        "workbench_latex_options_button",
         "docs_button",
         "check_updates_button",
         "workspace_status_label",
@@ -111,7 +113,9 @@ def test_left_configuration_sections_are_visual_cards(qtbot: Any) -> None:
     assert window.run_button.property("datalab_run_state") == "run"
     assert 'QPushButton[datalab_primary_run_button="true"]' in window.run_section.styleSheet()
     assert window.mode_combo.geometry().top() >= 24
-    assert window.mpmath_precision_spin.geometry().top() >= 24
+    # NOTE: mpmath_precision_spin moved OUT of the left rail into the 计算 toolbar panel
+    # (collapsed by default), so it no longer has a laid-out rail-card position — that
+    # assertion was removed with the options-panel migration.
 
 
 def test_legacy_run_button_click_reaches_current_run_calculation(

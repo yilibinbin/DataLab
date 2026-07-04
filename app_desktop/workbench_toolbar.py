@@ -191,6 +191,33 @@ def build_workbench_toolbar(owner: object) -> QWidget:
     layout.addWidget(dynamic_owner.workbench_run_button)
     layout.addWidget(dynamic_owner.workbench_stop_button)
 
+    # 计算 / LaTeX inline-options toggle buttons. They open normal (non-popup) panels
+    # dropped under the toolbar — see app_desktop.workbench_options_panel. Only the
+    # checkable buttons live here; panels.py builds + fills the panels once the real
+    # option controls exist (lazy/after-build), then binds each button to its panel.
+    dynamic_owner.workbench_compute_options_button = make_toolbar_button(
+        owner,
+        "计算",
+        "Compute",
+        "workbench_compute_options_button",
+        QStyle.StandardPixmap.SP_ComputerIcon,
+        tooltip_zh="精度与并行/资源选项。",
+        tooltip_en="Precision and parallel/resource options.",
+    )
+    dynamic_owner.workbench_compute_options_button.setCheckable(True)
+    dynamic_owner.workbench_latex_options_button = make_toolbar_button(
+        owner,
+        "LaTeX",
+        "LaTeX",
+        "workbench_latex_options_button",
+        QStyle.StandardPixmap.SP_FileDialogDetailedView,
+        tooltip_zh="LaTeX 输出选项。",
+        tooltip_en="LaTeX output options.",
+    )
+    dynamic_owner.workbench_latex_options_button.setCheckable(True)
+    layout.addWidget(dynamic_owner.workbench_compute_options_button)
+    layout.addWidget(dynamic_owner.workbench_latex_options_button)
+
     layout.addStretch(1)
 
     dynamic_owner.job_status_label = QLabel()

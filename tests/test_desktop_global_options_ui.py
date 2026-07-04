@@ -128,4 +128,8 @@ def test_global_schema_tooltips_and_choices_refresh_with_language(window: Any) -
 
 
 def test_global_options_have_no_unbound_required_schema_widgets(window: Any) -> None:
-    assert find_unbound_required_widgets(window.options_box) == []
+    # The global option controls moved out of ``options_box`` into the two inline
+    # toolbar panels (计算 / LaTeX). Audit the panels — auditing the now-empty
+    # ``options_box`` would vacuously pass and guard nothing.
+    assert find_unbound_required_widgets(window.compute_options_panel) == []
+    assert find_unbound_required_widgets(window.latex_options_panel) == []

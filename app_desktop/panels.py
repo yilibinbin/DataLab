@@ -243,13 +243,6 @@ def build_menu(self):
     file_menu.addAction(save_workspace_as_action)
     self._register_text(save_workspace_as_action, "工作区另存为…", "Save Workspace As…", "setText")
 
-    # 计算 / LaTeX icon option menus — placed AFTER 文件, before 示例. Actions are
-    # created here (build_menu runs before build_ui) but widget wiring is deferred
-    # to menu_options.wire_option_menus at the end of build_ui.
-    from app_desktop.menu_options import build_option_menus
-
-    build_option_menus(self, menubar)
-
     examples_menu = menubar.addMenu("示例")
     examples_menu.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
     self._register_text(examples_menu, "示例", "Examples", "setTitle")
@@ -376,11 +369,6 @@ def build_ui(self):
     self._bind_workbench_state_roles()
     self._bind_workbench_spec_schema_keys()
     _connect_workbench_formula_editors(self)
-    # Lazy-wire the 计算 / LaTeX option menus now that config widgets exist
-    # (build_menu ran before build_ui, so the sync/nav must connect here).
-    from app_desktop.menu_options import wire_option_menus
-
-    wire_option_menus(self)
     # 初始化手动输入占位示例
     self._update_manual_placeholder(self.mode_combo.currentData())
     # 根据当前模式刷新可见性
@@ -1144,7 +1132,62 @@ def build_left_panel(self):
     # (window_latex_pdf_mixin.compile_latex_to_pdf) keep working
     # unchanged — they reference ``self.latex_engine_combo``.
 
-    self.output_setup_section_layout.addWidget(options_box)
+    # Low-frequency options move OUT of the left rail INTO two inline toggle panels
+    # dropped under the toolbar (see app_desktop.workbench_options_panel; dual-model
+    # VERDICT: INLINE). The REAL controls are reparented — never recreated — so their
+    # schema keys, signal wirings, and parallel-prefs persistence (all set up above)
+    # survive intact. options_box is NOT added to the rail; it becomes a detached,
+    # empty QGroupBox (its children move into the panels) but ``self.options_box`` is
+    # kept so the legacy-attribute shell-layout test still finds it.
+    from app_desktop.workbench_options_panel import (
+        add_separator,
+        bind_options_toggle,
+        build_options_panel,
+    )
+
+    compute_panel = build_options_panel("compute")
+    self.compute_options_panel = compute_panel
+    latex_panel = build_options_panel("latex")
+    self.latex_options_panel = latex_panel
+
+    # Re-home the already-built groups. A layout/widget can have only one parent layout,
+    # and these were added to options_layout at creation — so detach each from
+    # options_layout first (removeItem for sub-layouts, removeWidget for widgets), then
+    # re-add to the panel. This reparents the SAME instances (schema keys preserved).
+    options_layout.removeItem(precision_layout)
+    options_layout.removeItem(parallel_layout)
+    options_layout.removeWidget(self.generate_latex_checkbox)
+    options_layout.removeWidget(self.latex_options_widget)
+    options_layout.removeWidget(self.generate_plots_checkbox)
+    options_layout.removeWidget(self.verbose_checkbox)
+
+    compute_layout = compute_panel.layout()
+    compute_layout.addLayout(precision_layout)
+    compute_layout.addLayout(parallel_layout)
+    add_separator(compute_layout)
+    compute_layout.addWidget(self.generate_plots_checkbox)
+    compute_layout.addWidget(self.verbose_checkbox)
+
+    latex_panel_layout = latex_panel.layout()
+    latex_panel_layout.addWidget(self.generate_latex_checkbox)
+    latex_panel_layout.addWidget(self.latex_options_widget)
+
+    # Wire each toolbar button to its panel (buttons built in build_workbench_toolbar).
+    bind_options_toggle(self.workbench_compute_options_button, compute_panel)
+    bind_options_toggle(self.workbench_latex_options_button, latex_panel)
+
+    # The panels sit in a dedicated row inserted between the toolbar and the splitter
+    # (root_layout index 1). They expand horizontally; each is hidden until its button
+    # is toggled, so the row is zero-height at rest and the result area keeps the space.
+    options_panels_row = QWidget()
+    options_panels_row.setObjectName("options_panels_row")
+    _panels_row_layout = QVBoxLayout(options_panels_row)
+    _panels_row_layout.setContentsMargins(0, 0, 0, 0)
+    _panels_row_layout.setSpacing(0)
+    _panels_row_layout.addWidget(compute_panel)
+    _panels_row_layout.addWidget(latex_panel)
+    self.options_panels_row = options_panels_row
+    self.workbench_root.layout().insertWidget(1, options_panels_row)
 
     self.run_button = QPushButton("开始执行")
     self.run_button.setObjectName("run_button")

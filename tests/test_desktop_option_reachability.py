@@ -310,13 +310,30 @@ def _switch_mode(window: Any, app: Any, mode_value: str) -> None:
     app.processEvents()
 
 
+def _open_option_panels(window: Any, app: Any) -> None:
+    """Open the inline 计算 / LaTeX toolbar option panels.
+
+    The low-frequency options moved out of the left rail into two toggle panels that
+    are collapsed by default. Opening a panel is a genuine, visible user gate (click
+    the checkable toolbar button) — so the reachability sweep must perform it before
+    the panel-hosted controls can be ``isVisibleTo(window)``.
+    """
+    for attr in ("workbench_compute_options_button", "workbench_latex_options_button"):
+        button = getattr(window, attr, None)
+        if button is not None:
+            button.setChecked(True)
+    app.processEvents()
+
+
 def _reveal_output_gates(window: Any, app: Any) -> None:
     """Reveal the LaTeX-output group and its doubly-gated caption input.
 
     ``output.latex.*`` is hidden until generate_latex_checkbox is checked, and
     ``output.latex.caption`` needs caption_checkbox too. Both gate checkboxes are
-    themselves schema-bound controls in the ``output`` group.
+    themselves schema-bound controls in the ``output`` group, now hosted in the LaTeX
+    toolbar panel — so open the option panels first.
     """
+    _open_option_panels(window, app)
     window.generate_latex_checkbox.setChecked(True)
     window.caption_checkbox.setChecked(True)
     app.processEvents()
@@ -634,10 +651,13 @@ def test_data_file_edit_reachable_via_use_file_checkbox(window: Any) -> None:
 
 
 def test_caption_edit_reachable_via_latex_then_caption_checkbox(window: Any) -> None:
-    """caption_edit is doubly-gated: generate_latex_checkbox AND caption_checkbox."""
+    """caption_edit is triply-gated: open the LaTeX panel, then generate_latex_checkbox
+    AND caption_checkbox (both hosted inside that panel)."""
     assert hasattr(window, "caption_edit")
+    app = QApplication.instance()
 
     def gate() -> None:
+        _open_option_panels(window, app)
         window.generate_latex_checkbox.setChecked(True)
         window.caption_checkbox.setChecked(True)
 
