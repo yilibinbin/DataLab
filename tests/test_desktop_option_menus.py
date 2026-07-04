@@ -158,6 +158,30 @@ def test_triggering_latex_nav_action_reveals_gate_then_focuses(window: Any) -> N
     assert widget.hasFocus() is True
 
 
+def test_latex_menu_includes_input_precision_spin(window: Any) -> None:
+    """latex_input_precision_spin (输入列位数) is a config-time, schema-bound LaTeX
+    control and must be reachable from the LaTeX menu as a gated nav action."""
+    assert "latex_input_precision_spin" in window._option_menu_nav_actions
+    assert window._option_menu_gates.get("latex_input_precision_spin") == "latex"
+
+
+def test_gated_checkbox_action_reveals_gate_when_triggered(window: Any) -> None:
+    """A gated checkable menu action (dcolumn/caption, gate='latex') must not
+    operate a control the user cannot see: triggering it from the default state
+    (generate_latex unchecked) must reveal the LaTeX group so the real checkbox
+    becomes visible, not just silently flip a hidden checkbox."""
+    assert window.generate_latex_checkbox.isChecked() is False
+    action = window._option_menu_check_actions["dcolumn_checkbox"]
+    checkbox = window.dcolumn_checkbox
+    assert checkbox.isVisibleTo(window) is False
+
+    action.setChecked(True)
+
+    assert window.generate_latex_checkbox.isChecked() is True
+    assert checkbox.isChecked() is True
+    assert checkbox.isVisibleTo(window) is True
+
+
 def test_menu_titles_are_bilingual(window: Any) -> None:
     window._apply_language("en")
     titles = _menu_titles(window)

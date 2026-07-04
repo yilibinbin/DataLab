@@ -25,9 +25,13 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QMenu, QStyle, QWidget
 
 # Nav actions: menu action key -> (target widget attr, zh, en, gate kind).
-# ``gate`` is one of: "none", "latex" (check generate_latex_checkbox first),
-# "result_numeric" (populate a result + switch to numeric subtab). The engine
-# picker is deliberately absent — it is a result-only control.
+# ``gate`` is one of: "none" or "latex" (check generate_latex_checkbox first).
+# Result-OUTPUT controls are deliberately absent from these config menus because
+# they only exist once a run populates ``self.tabs``: ``latex_engine_combo`` (LaTeX
+# result subtab) and ``display_digits_spin`` / ``scientific_checkbox`` (numeric
+# result subtab) all stay in the result tabs, not the menu — a menu entry would
+# have to fabricate a result to reveal them. Their reachability is covered by the
+# result-tab tests in test_desktop_option_reachability.py instead.
 _COMPUTE_NAV = (
     ("mpmath_precision_spin", "精度位数", "Precision digits", "none"),
     ("uncertainty_digits_spin", "不确定度位数", "Uncertainty digits", "none"),
@@ -43,6 +47,7 @@ _COMPUTE_NAV = (
 _LATEX_NAV = (
     ("generate_latex_checkbox", "生成 LaTeX 文件", "Generate LaTeX", "none", True),
     ("output_file_edit", "输出路径", "Output path", "latex", False),
+    ("latex_input_precision_spin", "输入列位数", "Input digits", "latex", False),
     ("dcolumn_checkbox", "使用 dcolumn 排版", "Use dcolumn", "latex", True),
     ("latex_group_size_spin", "分组位数", "Group size", "latex", False),
     ("caption_checkbox", "使用标题", "Use caption", "latex", True),
@@ -121,20 +126,28 @@ def wire_option_menus(owner: Any) -> None:
         checkbox = getattr(owner, attr, None)
         if checkbox is None:
             continue
-        _bind_check_action(action, checkbox)
+        _bind_check_action(action, checkbox, owner, gates.get(attr, "none"))
 
 
-def _bind_check_action(action: QAction, checkbox: Any) -> None:
+def _bind_check_action(action: QAction, checkbox: Any, owner: Any, gate: str) -> None:
     """Two-way sync between a checkable QAction and the SAME checkbox.
 
     ``blockSignals`` on the receiver prevents the echo from re-emitting and
     recursing. Initial state is seeded from the checkbox (single source of truth).
+
+    A gated checkbox (e.g. ``dcolumn_checkbox`` / ``caption_checkbox`` with
+    gate="latex") is hidden until its gate is revealed. Triggering the menu action
+    must not silently flip a control the user cannot see, so on *check* we reveal
+    the gate first (``generate_latex_checkbox``) — the same action both reveals the
+    group and ticks the box.
     """
     action.blockSignals(True)
     action.setChecked(checkbox.isChecked())
     action.blockSignals(False)
 
     def on_action(checked: bool) -> None:
+        if checked and gate != "none":
+            _reveal_gate(owner, gate)
         if checkbox.isChecked() == checked:
             return
         checkbox.blockSignals(True)
