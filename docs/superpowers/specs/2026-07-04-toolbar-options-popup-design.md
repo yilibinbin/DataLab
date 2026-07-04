@@ -19,8 +19,30 @@ live Cocoa probe by Codex:
 - A **`QFrame(Qt.Popup | Qt.FramelessWindowHint)`** hosting the same combo **stayed open**
   when the combo dropdown opened — Qt's popup stack handles the nested popup correctly.
 
-So the fix is not "move the menu to the toolbar" — it is **replace the QMenu host with a
-QFrame popup and move the REAL controls into it**.
+So the fix is not "move the menu to the toolbar" — it is **replace the QMenu host and move
+the REAL controls into a toolbar-triggered container**.
+
+## ⚠ AMENDMENT (2026-07-04, dual-model VERDICT: INLINE) — supersedes "QFrame popup" below
+
+A second adversarial round (Codex + Gemini, both with live offscreen probes) reversed the
+earlier "QFrame(Qt.Popup)" choice once two recon facts were on the table:
+- **Cocoa-grab bug is real & untestable.** A `QComboBox` inside **any** `Qt.Popup`
+  top-level (QFrame(Qt.Popup) included) can be dismissed by the native macOS grab when its
+  own dropdown (also a Qt.Popup) opens. Offscreen QPA no-ops the grab, so this **always
+  passes CI and only fails in production on Mac** — an unacceptable unautomatable failure
+  mode for the app's primary test platform.
+- **Reachability friction.** A `Qt.Popup` is a separate top-level window; the reachability
+  test's `isVisibleTo(window)` + stable-parent invariants don't map cleanly onto it.
+
+**Decision: INLINE.** Each toolbar button toggles a **normal `QWidget` child panel** (NOT
+`Qt.Popup`), laid out just under the toolbar, shown/hidden via `setVisible`. Because it is
+an ordinary layout child: no Cocoa grab (combos open safely), `isVisibleTo(window)` is
+meaningful, parent is stable from build time, and the reachability sweep needs only a
+trivial "click button → panel visible" gate. Codex's probe confirmed an inline child frame
+is `isWindow()==False`, `window() is main_window`, `isVisibleTo(window)==True` when shown.
+Trade-off accepted: while open the panel occupies vertical space under the toolbar (it is a
+drop-down *panel*, not a floating overlay); when closed the rail is gone and the result
+area is maximized. Read every "QFrame(Qt.Popup)"/"popup" below as **inline toggle panel**.
 
 ## Goal
 
@@ -41,19 +63,30 @@ abandoned sidebar violated).
 
 ## Architecture (units, each independently testable)
 
-### 1. `app_desktop/workbench_options_popup.py` (NEW, <200 lines)
-A reusable popup host, no DataLab-specific knowledge:
-- `build_options_popup_button(owner, object_name, text_zh, text_en, icon, tooltip_*) ->
-  (QToolButton, QFrame)`:
-  - A `QToolButton` (matching `make_toolbar_button` style: `ToolButtonTextUnderIcon`,
-    20×20 icon, `autoRaise`, bilingual via `_register_text`).
-  - A `QFrame(parent=owner)` with window flags `Qt.WindowType.Popup |
-    Qt.WindowType.FramelessWindowHint`, object name `<object_name>_popup`, holding a
-    `QVBoxLayout` the caller fills.
-  - Toggle: button `clicked` → if frame visible, hide; else position the frame just below
-    the button (`button.mapToGlobal(QPoint(0, button.height()))`, clamped to the screen)
-    and `show()`. `Qt.Popup` auto-closes on outside click — no manual event filter.
-- `add_form_row(frame_layout, label_widget, field_widget)` / `add_separator(frame_layout)`
+### 1. `app_desktop/workbench_options_panel.py` (NEW, <200 lines) — INLINE, not popup
+A reusable **inline toggle panel** host, no DataLab-specific knowledge:
+- `build_options_panel(owner, object_name, text_zh, text_en, icon, tooltip_*) ->
+  (QToolButton, QWidget)`:
+  - A `QToolButton` on the toolbar (matching `make_toolbar_button` style:
+    `ToolButtonTextUnderIcon`, 20×20 icon, `autoRaise`, bilingual via `_register_text`),
+    made `checkable` so its checked state mirrors panel visibility.
+  - A **normal `QWidget` child** (NOT `Qt.Popup`), object name `<object_name>_panel`,
+    holding a `QVBoxLayout` the caller fills. It lives in the window's layout **directly
+    under the toolbar**: a dedicated `options_panels_row` (a `QWidget` with an `QHBoxLayout`
+    or `QVBoxLayout` holding the two panels) inserted into the shell VBox `root_layout`
+    (`panels.py:342`) at **index 1** — i.e. `root_layout.insertWidget(1, options_panels_row)`,
+    between the toolbar (`workbench_bar`, added at :347) and the 3-pane splitter
+    (`_main_splitter`, added at :349). `setVisible(False)` initially; the row itself may be
+    zero-height when both panels are hidden.
+  - Toggle: button `toggled(checked)` → `panel.setVisible(checked)`. Because the panel is
+    a layout child, showing it drops the row down and (when closed) reclaims the space —
+    no floating window, no `Qt.Popup`, so **no macOS combo-grab bug**.
+  - Only ONE panel open at a time is NOT required (both may be open); but toggling one does
+    not force-close the other unless we choose to (decide during impl — default: independent).
+  - Auto-close-on-outside-click is **not** provided (a Qt.Popup freebie we forgo); the
+    button is a toggle. Acceptable for low-freq options. (Optional later: an event filter
+    to collapse on click-outside — YAGNI for now.)
+- `add_form_row(panel_layout, label_widget, field_widget)` / `add_separator(panel_layout)`
   helpers so the caller lays controls out with the existing labels.
 - **No control creation here** — it only hosts widgets handed in by `panels.py`.
 
@@ -104,33 +137,46 @@ A reusable popup host, no DataLab-specific knowledge:
 - **KEEP** `app_desktop/result_overview_popover.py` + `result_status_strip.py` and their
   tests — unaffected, already fixed (left-click guard landed).
 
-### 5. `tests/test_desktop_option_reachability.py` (REWRITE the popup portion)
-- Every schema-bound low-freq control must be reachable by **opening its toolbar popup**:
-  `owner.compute_options_button.click()` (or `popup.show()`), then assert
-  `control.isVisibleTo(popup)` is True AND `control.parent()` is the popup's container
-  (single-parent invariant, no reparent-elsewhere).
-- LaTeX gated controls (`latex_input_precision_spin` etc.): reachable after ticking
-  `generate_latex_checkbox` **inside** the LaTeX popup.
-- Assert `options_box` is **no longer in the left rail** (e.g.
-  `getattr(owner, "options_box", None)` is None, or not a child of
-  `output_setup_section_layout`).
+### 5. `tests/test_desktop_option_reachability.py` (teach the sweep a panel-open gate)
+- The sweep's `_record()` skips `not isVisibleTo(window)` (`:259`). With INLINE panels
+  hidden by default, add an **open-panel gate**: before the sweep (or as a gate the sweep
+  tries), toggle each options button checked so `panel.setVisible(True)`, exactly like the
+  existing combo/checkbox gates. Then every moved control is `isVisibleTo(window)` (INLINE
+  panel is a layout child → meaningful) with parent == its panel container (stable from
+  build; **no reparent-on-open**, satisfying the four parent-invariant asserts at
+  ~:435/:478/:506/:538).
+- LaTeX gated controls (`latex_input_precision_spin` etc.): reachable after opening the
+  LaTeX panel AND ticking `generate_latex_checkbox` inside it.
+- Assert `options_box` no longer sits in the left rail (not a descendant of
+  `output_setup_section` / the config rail).
+- Repoint the two other consumers (see §2 note): `test_desktop_global_options_ui.py:131`
+  container arg, `test_desktop_shell_layout.py:34` widget-name entry.
 - Keep the existing per-mode + result-only sweeps for controls that did NOT move.
 
-## The load-bearing risk test (write FIRST, RED)
+## The load-bearing risk test (write FIRST, RED) — INLINE makes it real offscreen
 
-Per both models, the single biggest risk is **macOS combo-popup focus/close inside the
-QFrame popup**. First failing test:
+Dual-model VERDICT: INLINE precisely because the combo-in-`Qt.Popup` dismissal is
+untestable offscreen. With an INLINE (non-Popup) panel there is **no Cocoa grab**, so the
+combo test is meaningful in CI. First failing tests:
 
 ```
-test_combo_dropdown_does_not_close_the_options_popup:
-  open the 计算 popup; programmatically open parallel_mode_combo's view
-  (combo.showPopup()); assert the 计算 popup frame is STILL visible
-  (popup.isVisible() is True) and the combo view is visible.
+test_options_panel_hidden_until_button_toggled:
+  panel is not visible initially; after button.setChecked(True) → panel.isVisible() True,
+  and every moved control isVisibleTo(window) True with parent == panel container.
+
+test_combo_in_inline_panel_opens_without_closing_panel:
+  open the 计算 panel; parallel_mode_combo.showPopup(); assert the panel is STILL visible
+  (panel.isVisible() True) and combo.parent() is unchanged (combo NOT reparented). Because
+  the panel is a normal layout child (not Qt.Popup), this assertion is meaningful offscreen
+  — it fails if code regresses to a Qt.Popup container.
+
+test_options_box_left_the_left_rail:
+  options_box is not a descendant of the config rail / output_setup_section.
 ```
 
-If this fails, the whole approach is wrong — so it gates everything. (Offscreen Qt may not
-fully reproduce Cocoa grab behavior; if the offscreen result is inconclusive, the spec
-requires a real on-screen manual check before merge, per Codex's caveat.)
+These gate everything. A light **manual on-screen macOS check** is still listed (open each
+panel, open a combo, confirm nothing collapses) — but it is now a confirmation, not the
+sole guard, since INLINE removes the untestable failure mode.
 
 ## Non-goals (YAGNI)
 - No result-area fold/maximize toggle beyond the natural growth from a narrower rail.
