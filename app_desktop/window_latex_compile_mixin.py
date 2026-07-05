@@ -242,6 +242,16 @@ class WindowLatexCompileMixin:
                 )
                 return
             self.last_pdf_path = pdf_path
+            # One-shot completion callback: the LaTeX preview dialog registers this before
+            # triggering a compile so it can render the freshly-compiled PDF in ITS OWN
+            # scroll when the async worker finishes (compile is a QThread — last_pdf_path is
+            # only valid HERE, not synchronously after compile_latex_to_pdf() returns). When
+            # set, the dialog owns the display, so skip the main-window preview + popup.
+            callback = getattr(self, "_pdf_ready_callback", None)
+            if callable(callback):
+                self._pdf_ready_callback = None
+                callback(pdf_path)
+                return
             if self._render_pdf_preview(pdf_path, force_reload=True):
                 QMessageBox.information(
                     self,

@@ -114,3 +114,73 @@ def test_result_buttons_open_dialog_on_right_tab(window: Any) -> None:
     tabs = dialog.findChild(QTabWidget)
     assert "PDF" in tabs.tabText(tabs.currentIndex())
     dialog.close()
+
+
+def test_render_pdf_registers_completion_callback_not_sync_read(window: Any, monkeypatch: Any) -> None:
+    """render_pdf must NOT read last_pdf_path synchronously after the async compile — it
+    must register a one-shot _pdf_ready_callback that the compile-completion path fires.
+    (Regression for the Module-1b race: compile is a QThread; last_pdf_path is only valid
+    in _on_latex_compile_completed, not right after compile_latex_to_pdf() returns.)"""
+    window.latex_edit.setPlainText(_TEX)
+    dialog = _open_latex_dialog(window, initial_tab="tex")
+
+    compiled: list[int] = []
+
+    class _PendingWorker:
+        def isRunning(self) -> bool:  # noqa: N802 - Qt naming
+            return False
+
+        def request_cancel(self) -> None:
+            pass
+
+        def request_kill(self) -> None:
+            pass
+
+    # Simulate an async compile: it starts a "worker" and does NOT set last_pdf_path yet.
+    def fake_compile() -> None:
+        compiled.append(1)
+        window._latex_compile_worker = _PendingWorker()
+
+    monkeypatch.setattr(window, "compile_latex_to_pdf", fake_compile)
+    window.last_pdf_path = None
+
+    try:
+        dialog.render_pdf()
+        # It triggered compile and registered our renderer as the completion callback —
+        # it must NOT have tried to render synchronously (no last_pdf_path yet).
+        assert compiled == [1]
+        assert window._pdf_ready_callback == dialog._on_pdf_ready
+    finally:
+        window._latex_compile_worker = None
+        window._pdf_ready_callback = None
+        dialog.close()
+
+
+def test_on_pdf_ready_rasterizes_into_dialog_scroll(window: Any, monkeypatch: Any, tmp_path: Any) -> None:
+    """When the compile completes, _on_pdf_ready rasterizes the PDF into the dialog's OWN
+    scroll via the pure convert_pdf_to_images helper."""
+    from PySide6.QtWidgets import QLabel
+
+    import shared.pdf_preview_raster as raster
+
+    # Open on the TeX tab so we do NOT trigger a real compile; then drive _on_pdf_ready
+    # directly (that is the compile-completion path under test).
+    dialog = _open_latex_dialog(window, initial_tab="tex")
+    pdf_path = tmp_path / "out.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake")
+
+    class _FakeImg:
+        width, height = 4, 4
+
+        def convert(self, _mode: str) -> "_FakeImg":
+            return self
+
+        def tobytes(self, *_a: Any, **_k: Any) -> bytes:
+            return b"\x00" * (4 * 4 * 4)
+
+    monkeypatch.setattr(raster, "convert_pdf_to_images", lambda *a, **k: [_FakeImg(), _FakeImg()])
+    dialog._on_pdf_ready(pdf_path)
+    # Two pages laid into the dialog's own container as QLabels.
+    labels = dialog._pdf_container.findChildren(QLabel)
+    assert len(labels) >= 2
+    dialog.close()

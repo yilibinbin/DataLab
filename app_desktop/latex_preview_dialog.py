@@ -124,25 +124,49 @@ class LatexPreviewDialog(QDialog):
         self._pdf_tab_index = self._tabs.addTab(tab, "PDF")
 
     def render_pdf(self) -> None:
-        """Compile the current tex via tectonic and rasterize it into this dialog's scroll.
+        """Compile the current tex via tectonic (ASYNC) and rasterize the result into this
+        dialog's scroll when the compile finishes.
 
-        Uses the pure ``convert_pdf_to_images`` helper with the dialog's OWN dpi — no
-        coupling to the main window's PDF state.
+        ``compile_latex_to_pdf`` runs a background QThread; ``last_pdf_path`` is only valid
+        in the compile-completion callback, NOT synchronously after the call returns. So we
+        register a one-shot ``_pdf_ready_callback`` on the owner and let it fire
+        :meth:`_on_pdf_ready` when the PDF exists. If a PDF was already compiled and no
+        recompile is triggered, render it directly.
         """
-        from shared.pdf_preview_raster import convert_pdf_to_images
-
-        # Reuse the window's tectonic-only compile; it sets ``last_pdf_path``.
         compile_fn = getattr(self._owner, "compile_latex_to_pdf", None)
         if callable(compile_fn):
+            self._pdf_status.setText(self._tr("编译 PDF 中…", "Compiling PDF…"))
+            # Fire our renderer when the async compile completes.
+            self._owner._pdf_ready_callback = self._on_pdf_ready
             compile_fn()
-        pdf_path = getattr(self._owner, "last_pdf_path", None)
-        if not pdf_path or not Path(pdf_path).exists():
+            # If compile did NOT start a worker (e.g. nothing to compile), fall back to any
+            # already-compiled PDF so the dialog is not left stuck on "compiling".
+            if getattr(self._owner, "_latex_compile_worker", None) is None:
+                self._owner._pdf_ready_callback = None
+                existing = getattr(self._owner, "last_pdf_path", None)
+                if existing and Path(existing).exists():
+                    self._on_pdf_ready(Path(existing))
+                else:
+                    self._pdf_status.setText(
+                        self._tr("尚无已编译的 PDF。", "No compiled PDF yet.")
+                    )
+            return
+        existing = getattr(self._owner, "last_pdf_path", None)
+        if existing and Path(existing).exists():
+            self._on_pdf_ready(Path(existing))
+
+    def _on_pdf_ready(self, pdf_path: Any) -> None:
+        """Rasterize a freshly-compiled PDF into the dialog's own scroll (dialog-owned dpi)."""
+        from shared.pdf_preview_raster import convert_pdf_to_images
+
+        path = Path(pdf_path)
+        if not path.exists():
             self._pdf_status.setText(
                 self._tr("尚无已编译的 PDF。", "No compiled PDF yet.")
             )
             return
         try:
-            images = convert_pdf_to_images(Path(pdf_path), dpi=_PREVIEW_DPI)
+            images = convert_pdf_to_images(path, dpi=_PREVIEW_DPI)
         except Exception as exc:  # noqa: BLE001
             self._pdf_status.setText(
                 self._tr(f"PDF 预览失败: {exc}", f"PDF preview failed: {exc}")
