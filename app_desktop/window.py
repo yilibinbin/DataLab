@@ -2908,6 +2908,41 @@ class ExtrapolationWindow(
             self._last_latex_inputs = store
         store[kind] = latex_inputs
 
+    def generate_latex_for_current_result(self) -> str | None:
+        """Rebuild the LaTeX tex for the CURRENT result ON DEMAND, routing to the per-mode
+        builder. Returns the tex path, or None if there is no rebuildable result stashed.
+
+        Dispatch prefers the current result kind (``_last_result_kind``); if that has no
+        stash it falls back to whichever mode's data IS stashed. The per-mode builders each
+        read their own ``_last_latex_inputs`` entry + live format widgets.
+        """
+        # stash-key -> builder method name
+        builders = {
+            "root_solving": "generate_root_latex_on_demand",
+            "extrapolation": "generate_extrapolation_latex_on_demand",
+            "error": "generate_error_latex_on_demand",
+            "statistics": "generate_statistics_latex_on_demand",
+            "fit_single": "generate_fitting_latex_on_demand",
+        }
+        store = getattr(self, "_last_latex_inputs", {}) or {}
+        # Map the current result kind to its stash key (result kinds and stash keys mostly
+        # match; fit_single is the exception).
+        current = getattr(self, "_last_result_kind", None)
+        order = []
+        if current in builders:
+            order.append(current)
+        elif current in ("fit_single", "fit_batches", "fitting_comparison") and "fit_single" in builders:
+            order.append("fit_single")
+        for key in builders:
+            if key not in order:
+                order.append(key)
+        for key in order:
+            if key in store:
+                method = getattr(self, builders[key], None)
+                if callable(method):
+                    return method()
+        return None
+
     def _remember_last_result(self, kind: str, payload: dict[str, object]):
         """Cache the most recent result payload so we can reformat without recomputation."""
         self._last_result_kind = kind
