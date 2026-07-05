@@ -363,8 +363,9 @@ def build_ui(self):
     self.workbench_workspace_layout.addWidget(self.workbench_variable_panel)
     reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
     populate_variable_workspace_panel(self)
-    # Footer sections at the BOTTOM of the merged pane.
-    self.workbench_workspace_layout.addWidget(self.output_setup_section)
+    # Footer at the BOTTOM of the merged pane. ``output_setup_section`` is no longer added
+    # to the layout — it became an empty dead-space widget after the options moved to the
+    # toolbar dialogs; the attribute is kept for compatibility but never shown.
     self.workbench_workspace_layout.addWidget(self.run_section)
     self._build_right_panel(self.workbench_result_layout)
     # Part C/D: always-visible result status strip (footer of the result rail) +
@@ -694,8 +695,6 @@ def _config_card_sections(self) -> tuple[QWidget, ...]:
     sections: list[QWidget] = []
     for attr in (
         "input_section",
-        "mode_section",
-        "output_setup_section",
         "run_section",
     ):
         section = getattr(self, attr, None)

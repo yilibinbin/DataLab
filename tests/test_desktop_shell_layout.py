@@ -68,17 +68,19 @@ def test_shell_sections_are_visible_in_expected_order(qtbot: Any) -> None:
 
     # Two-pane layout: the left config sections merged into the workspace pane. The
     # merged pane stacks (top→bottom): input_section, then the per-mode config
-    # (formula/variable/mode_stack), then output_setup_section + run_section.
+    # (formula/variable/mode_stack), then run_section (the empty output_setup_section is
+    # no longer added).
     layout_names = [
         window.left_layout.itemAt(index).widget().objectName()
         for index in range(window.left_layout.count())
         if window.left_layout.itemAt(index).widget() is not None
     ]
-    # input is first; output_setup + run are the last two (footer); mode_stack sits
-    # between them. The mode selector card is gone (moved to the toolbar).
+    # input is first; run is the footer; mode_stack sits between. The mode selector card
+    # and the empty output_setup_section are gone.
     assert layout_names[0] == "input_section"
-    assert layout_names[-2:] == ["output_setup_section", "run_section"]
+    assert layout_names[-1] == "run_section"
     assert "mode_section" not in layout_names
+    assert "output_setup_section" not in layout_names
     assert "workbench_formula_panel" in layout_names
     input_idx = layout_names.index("input_section")
     stack_idx = layout_names.index("mode_stack")
@@ -96,10 +98,10 @@ def test_left_configuration_sections_are_visual_cards(qtbot: Any) -> None:
     window.show()
     QApplication.processEvents()
 
-    # mode_section moved to the toolbar; the remaining left-rail sections stay cards.
+    # mode_section moved to the toolbar + output_setup_section removed; the remaining
+    # left-rail sections stay cards.
     for section in (
         window.input_section,
-        window.output_setup_section,
         window.run_section,
     ):
         assert section.property("datalab_config_card") is True
