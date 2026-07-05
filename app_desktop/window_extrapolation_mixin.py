@@ -191,9 +191,9 @@ class WindowExtrapolationMixin:
             return
         data_path, manual_content = input_bundle.data_path, input_bundle.data_text
         if mode == "root_solving":
-            generate_latex = self.generate_latex_checkbox.isChecked()
-            # The tex is written to a per-run temp path (no user output-path field); the
-            # user saves to a chosen location later via the TeX window.
+            # On-demand LaTeX: the run does not write tex (it stashes the rebuild data);
+            # the user generates tex on demand via 生成 TeX.
+            generate_latex = False
             output_path = self.latex_output_path_for_run(generate_latex)
             self._run_root_solving_mode(
                 data_path=data_path,
@@ -231,7 +231,10 @@ class WindowExtrapolationMixin:
             )
             return
 
-        generate_latex = self.generate_latex_checkbox.isChecked()
+        # On-demand LaTeX: the run no longer writes tex — it only computes and stashes the
+        # tex-rebuild data (ungated). The user generates tex on demand via 生成 TeX. So we
+        # never gate the run on a checkbox.
+        generate_latex = False
         generate_plots = self.generate_plots_checkbox.isChecked() if hasattr(self, "generate_plots_checkbox") else True
         try:
             caption = self._caption_value(require=generate_latex)

@@ -2923,6 +2923,7 @@ class ExtrapolationWindow(
             "error": "generate_error_latex_on_demand",
             "statistics": "generate_statistics_latex_on_demand",
             "fit_single": "generate_fitting_latex_on_demand",
+            "fitting_comparison": "generate_fitting_comparison_latex_on_demand",
         }
         store = getattr(self, "_last_latex_inputs", {}) or {}
         # Map the current result kind to its stash key (result kinds and stash keys mostly

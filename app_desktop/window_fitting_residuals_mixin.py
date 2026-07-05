@@ -539,6 +539,53 @@ class WindowFittingResidualsMixin:
         self._load_latex_into_editor(tex_path)
         return str(tex_path)
 
+    def generate_fitting_comparison_latex_on_demand(self) -> str | None:
+        """Rebuild the fitting-comparison LaTeX tex ON DEMAND from the stashed payload +
+        LIVE dcolumn/digits (group_size/caption from the run) — no recompute."""
+        store = getattr(self, "_last_latex_inputs", {}) or {}
+        latex_inputs = store.get("fitting_comparison")
+        if not isinstance(latex_inputs, dict):
+            return None
+        payload = latex_inputs.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        use_dcolumn = (
+            self.dcolumn_checkbox.isChecked()
+            if hasattr(self, "dcolumn_checkbox")
+            else bool(latex_inputs.get("use_dcolumn"))
+        )
+        digits = (
+            self.latex_input_precision_spin.value()
+            if hasattr(self, "latex_input_precision_spin")
+            else int(latex_inputs.get("latex_digits") or 16)
+        )
+        group_size = int(latex_inputs.get("latex_group_size") or 3)
+        try:
+            comparison_rows = build_comparison_table_rows_from_payload(payload)
+        except ValueError:
+            return None
+        lines = self._fit_latex_preamble(use_dcolumn, digits, group_size)
+        lines.extend(
+            build_fitting_comparison_latex_block(
+                comparison_rows,
+                use_dcolumn=use_dcolumn,
+                caption_text=latex_inputs.get("caption")
+                or self._tr("选定拟合比较", "Selected fit comparison"),
+            )
+        )
+        lines.append("\\end{document}")
+        output_path = self.latex_output_path_for_run(True)
+        from pathlib import Path
+
+        tex_path = Path(output_path).expanduser()
+        try:
+            tex_path.write_text("\n".join(lines), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            self._append_log(self._tr(f"拟合比较 LaTeX 写入失败: {exc}", f"Fit comparison LaTeX write failed: {exc}"))
+            return None
+        self._load_latex_into_editor(tex_path)
+        return str(tex_path)
+
     def _on_fit_finished(self, payload: FitResultPayload):
         try:
             job = payload.job
@@ -666,6 +713,18 @@ class WindowFittingResidualsMixin:
                 self._write_fitting_comparison_latex(payload.payload, job)
             self.tabs.setCurrentIndex(self.result_tab_index)
             self._remember_last_result("fitting_comparison", dict(payload.payload))
+            # Stash tex-rebuild DATA (payload + the run's format opts) so 生成 TeX rebuilds
+            # the comparison table on demand without recompute.
+            self.remember_latex_inputs(
+                "fitting_comparison",
+                {
+                    "payload": dict(payload.payload),
+                    "latex_digits": int(getattr(job, "latex_digits", 16) or 16),
+                    "latex_group_size": int(getattr(job, "latex_group_size", 3) or 3),
+                    "use_dcolumn": bool(getattr(job, "use_dcolumn", True)),
+                    "caption": getattr(job, "caption", None),
+                },
+            )
             QMessageBox.information(
                 self,
                 self._tr("完成", "Done"),
