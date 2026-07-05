@@ -816,10 +816,22 @@ def _legacy_language_issues(window: Any, lang: str) -> list[dict[str, Any]]:
         issues.append(_issue("schema_binding", scenario, "root_box", "root box has unbound required schema widgets"))
     # Global options moved out of ``options_box`` into the two inline toolbar panels
     # (计算 / LaTeX). Audit the panels — the now-empty ``options_box`` would pass
-    # vacuously and mask an unbound required widget.
+    # vacuously and mask an unbound required widget. A MISSING panel attribute must
+    # also fail loudly: if a refactor drops a panel entirely, the audit would otherwise
+    # pass vacuously and hide that the options are unreachable.
     for panel_attr in ("compute_options_panel", "latex_options_panel"):
-        panel = getattr(window, panel_attr, None)
-        if panel is not None and _find_unbound_required_widgets(panel):
+        if not hasattr(window, panel_attr) or getattr(window, panel_attr) is None:
+            issues.append(
+                _issue(
+                    "schema_binding",
+                    scenario,
+                    panel_attr,
+                    f"{panel_attr} is missing from the window (options panel absent)",
+                )
+            )
+            continue
+        panel = getattr(window, panel_attr)
+        if _find_unbound_required_widgets(panel):
             issues.append(
                 _issue(
                     "schema_binding",
