@@ -1787,6 +1787,9 @@ def restore_history_entry_result(window: Any, entry: HistoryEntry) -> None:
         window._last_result_semantic_snapshot_kind = kind
         window._last_result_kind = None
         window._last_result_payloads = {}
+        # Cleared alongside the display payload; 4·2 cross-restore will repopulate this from
+        # the semantic snapshot so on-demand 生成 TeX works after a workspace restore.
+        window._last_latex_inputs = {}
         if hasattr(window, "_set_csv_data"):
             window._set_csv_data(semantic_csv_rows, semantic_csv_headers, final_result=False)
         if hasattr(window, "log_edit"):
@@ -2052,6 +2055,7 @@ def _restore_workspace_contents(window: Any, manifest: dict[str, Any], attachmen
         window._last_result_semantic_snapshot_kind = None
     window._last_result_kind = None
     window._last_result_payloads = {}
+    window._last_latex_inputs = {}
     _restore_ui_state(window, workspace.get("ui") or {})
     window._workspace_snapshot_only = bool(snapshot.get("present"))
     window._workspace_history_store = history_store

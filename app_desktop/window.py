@@ -922,6 +922,7 @@ class ExtrapolationWindow(
                 self.result_plot_label.setText(self._tr("尚无图片", "No image yet"))
             self._last_result_kind = None
             self._last_result_payloads = {}
+            self._last_latex_inputs = {}
         finally:
             self._workspace_restoring = False
         self._update_workspace_window_title()
@@ -2786,6 +2787,7 @@ class ExtrapolationWindow(
             self._last_result_rendered_text = ""
             self._last_result_kind = None
             self._last_result_payloads = {}
+            self._last_latex_inputs = {}
             self._last_result_semantic_snapshot = None
             self._last_result_semantic_snapshot_kind = None
             self.result_plot_bytes = None
@@ -2890,6 +2892,21 @@ class ExtrapolationWindow(
             )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, self._tr("导出失败", "Export failed"), str(exc))
+
+    def remember_latex_inputs(self, kind: str, latex_inputs: dict[str, object]) -> None:
+        """Stash the RESULT-DATA needed to rebuild LaTeX tex on demand for ``kind``.
+
+        Kept in a SEPARATE store from ``_last_result_payloads`` on purpose: the latter is
+        splatted into the per-mode display formatter by ``_refresh_display_format``
+        (``formatter(**payload)``), which rejects unexpected keys — so tex-rebuild data must
+        never live there. This store is never splatted; the on-demand tex builder reads
+        result-data from here and format options live from widgets.
+        """
+        store = getattr(self, "_last_latex_inputs", None)
+        if not isinstance(store, dict):
+            store = {}
+            self._last_latex_inputs = store
+        store[kind] = latex_inputs
 
     def _remember_last_result(self, kind: str, payload: dict[str, object]):
         """Cache the most recent result payload so we can reformat without recomputation."""

@@ -315,6 +315,7 @@ class HistoryPanel(QWidget):
         previous_export_enabled = export_is_enabled() if callable(export_is_enabled) else None
         self._owner._last_result_kind = result_kind
         self._owner._last_result_payloads = {}
+        self._owner._last_latex_inputs = {}
         self._owner._last_result_semantic_snapshot = None
         self._owner._last_result_semantic_snapshot_kind = None
         set_result_text = getattr(self._owner, "_set_result_text", None)

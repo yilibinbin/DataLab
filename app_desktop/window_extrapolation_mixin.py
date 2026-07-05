@@ -674,6 +674,12 @@ class WindowExtrapolationMixin:
             self._reset_csv_data()
         self._write_root_latex_if_requested(payload)
         self._remember_last_result("root_solving", dict(payload))
+        # Stash the tex-rebuild DATA (raw_rows + units) so 生成 TeX can rebuild on demand
+        # without recomputing. Format options are read live from widgets at generate time.
+        self.remember_latex_inputs(
+            "root_solving",
+            {"raw_rows": payload.get("raw_rows"), "units": payload.get("units")},
+        )
         QMessageBox.information(
             self,
             self._tr("完成", "Done"),
@@ -708,6 +714,46 @@ class WindowExtrapolationMixin:
             self._load_latex_into_editor(tex_path)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, self._tr("写入失败", "Write Failed"), str(exc))
+
+    def generate_root_latex_on_demand(self) -> str | None:
+        """Rebuild the root-solving LaTeX tex ON DEMAND from the stashed result-data +
+        LIVE format-option widgets — no recompute, no run-time intent flags.
+
+        Reads ``raw_rows``/``units`` from ``self._last_latex_inputs['root_solving']`` and the
+        format options (caption/digits/uncertainty/group_size/dcolumn/language) from the
+        current widget values, then writes tex to a per-run temp path and returns it (or
+        ``None`` if there is no stashed root result to rebuild from).
+        """
+        store = getattr(self, "_last_latex_inputs", {}) or {}
+        latex_inputs = store.get("root_solving")
+        if not isinstance(latex_inputs, dict):
+            return None
+        raw_rows = latex_inputs.get("raw_rows")
+        if not isinstance(raw_rows, list):
+            return None
+        from .root_latex_writer import write_root_latex
+
+        output_path = self.latex_output_path_for_run(True)
+        caption = self._caption_value() if hasattr(self, "_caption_value") else ""
+        tex_path = write_root_latex(
+            output_path=output_path,
+            rows=raw_rows,
+            caption=caption,
+            digits=self.latex_input_precision_spin.value()
+            if hasattr(self, "latex_input_precision_spin")
+            else 16,
+            uncertainty_digits=self._uncertainty_digits_value(),
+            group_size=self.latex_group_size_spin.value()
+            if hasattr(self, "latex_group_size_spin")
+            else 3,
+            include_dcolumn=self.dcolumn_checkbox.isChecked()
+            if hasattr(self, "dcolumn_checkbox")
+            else False,
+            language="en" if self._is_en() else "zh",
+            root_units=_root_units_for_rows(raw_rows, latex_inputs.get("units")),
+        )
+        self._load_latex_into_editor(tex_path)
+        return str(tex_path)
 
     def _on_root_solving_failed(self, message: str):
         self._mark_workbench_result_failed()
