@@ -102,46 +102,28 @@ class WindowLatexCompileMixin:
         target = self._persist_latex_editor(silent=True)
         if not target:
             return
-        requested_engine = self.latex_engine_combo.currentText()
-        engine = requested_engine
-        used_default_engine_fallback = False
-        is_default_tectonic = requested_engine.strip().lower() == "tectonic"
-        if is_default_tectonic:
-            engine_exec = self._resolve_latex_engine_no_prompt(engine)
-        else:
-            engine_exec = self._ensure_latex_engine(engine)
-        if not engine_exec and is_default_tectonic:
-            for fallback_engine in self._latex_compile_fallback_candidates(requested_engine):
-                fallback_exec = self._resolve_latex_engine_no_prompt(fallback_engine)
-                fallback_path = _safe_resolve_path(fallback_exec) if fallback_exec else None
-                if fallback_path is not None and fallback_path.exists():
-                    engine = fallback_engine
-                    engine_exec = str(fallback_path)
-                    used_default_engine_fallback = True
-                    self._append_log(
-                        self._tr(
-                            f"请求的 LaTeX 引擎 {requested_engine} 不可用，改用 {engine}: {fallback_path}",
-                            f"Requested LaTeX engine {requested_engine} is unavailable; using {engine}: {fallback_path}",
-                        )
-                    )
-                    break
-        if not engine_exec and is_default_tectonic:
-            engine_exec = self._ensure_latex_engine(engine)
+        # Tectonic-only: PDF compilation always uses the bundled/auto-installed
+        # Tectonic engine — no engine selector, no pdflatex/xelatex fallback, no
+        # dependency on a locally installed TeX distribution.
+        engine = "tectonic"
+        engine_exec = self._ensure_latex_engine(engine)
         if not engine_exec:
-            msg_zh = f"未找到 {requested_engine}，请安装或指定路径。"
-            msg_en = f"{requested_engine} not found. Please install it or specify the path."
             QMessageBox.critical(
                 self,
-                self._tr("缺少 LaTeX 引擎", "Missing LaTeX Engine"),
-                self._tr(msg_zh, msg_en),
+                self._tr("缺少 Tectonic 引擎", "Missing Tectonic Engine"),
+                self._tr(
+                    "无法准备 Tectonic 引擎（下载或安装失败）。请检查网络连接后重试。",
+                    "Could not prepare the Tectonic engine (download or install failed). "
+                    "Check your network connection and try again.",
+                ),
             )
             return
         engine_path = _safe_resolve_path(engine_exec)
         if not engine_path.exists():
             QMessageBox.critical(
                 self,
-                self._tr("缺少 LaTeX 引擎", "Missing LaTeX Engine"),
-                self._tr("指定的 LaTeX 引擎不可用。", "Specified LaTeX engine is not available."),
+                self._tr("缺少 Tectonic 引擎", "Missing Tectonic Engine"),
+                self._tr("Tectonic 引擎不可用。", "The Tectonic engine is not available."),
             )
             return
         self._append_log(
@@ -152,21 +134,6 @@ class WindowLatexCompileMixin:
         )
         pdf_dir = target.parent
         pdf_path = pdf_dir / (target.stem + ".pdf")
-        fallback: str | None = None
-        fallback_path: Path | None = None
-        if used_default_engine_fallback:
-            fallback = "xelatex" if engine.lower() == "pdflatex" else "pdflatex"
-            alt_exec = self._resolve_latex_engine_no_prompt(fallback)
-            fallback_path = _safe_resolve_path(alt_exec) if alt_exec else None
-            if fallback_path is not None and not fallback_path.exists():
-                fallback_path = None
-            if fallback_path is not None:
-                self._append_log(
-                    self._tr(
-                        f"LaTeX 备用引擎: {fallback} ({fallback_path})",
-                        f"LaTeX fallback engine: {fallback} ({fallback_path})",
-                    )
-                )
 
         progress = QProgressDialog(
             self._tr("正在编译 LaTeX…", "Compiling LaTeX…"),
@@ -186,8 +153,8 @@ class WindowLatexCompileMixin:
             engine_name=engine,
             engine_path=engine_path,
             pdf_path=pdf_path,
-            fallback_name=fallback if fallback_path is not None else None,
-            fallback_path=fallback_path,
+            fallback_name=None,
+            fallback_path=None,
             parent=self,
         )
         self._latex_compile_worker = worker
@@ -199,11 +166,6 @@ class WindowLatexCompileMixin:
         worker.finished.connect(worker.deleteLater)
         progress.show()
         worker.start()
-
-    def _latex_compile_fallback_candidates(self, requested_engine: str) -> tuple[str, ...]:
-        requested = (requested_engine or "").strip().lower()
-        candidates = ("xelatex", "pdflatex", "tectonic")
-        return tuple(candidate for candidate in candidates if candidate != requested)
 
     def _on_latex_compile_completed(self, outcome: _LatexCompileOutcome) -> None:
         progress = getattr(self, "_latex_compile_progress", None)
@@ -419,18 +381,6 @@ class WindowLatexCompileMixin:
         QMessageBox.warning(self, self._tr("提示", "Notice"), self._tr(msg_zh, msg_en))
         self._prompt_engine_selection()
         return self._latex_engine_paths.get(engine)
-
-    def _resolve_latex_engine_no_prompt(self, engine: str) -> str | None:
-        """Resolve an optional fallback engine without showing dialogs."""
-        _ensure_default_path_augmented()
-        cached = self._latex_engine_paths.get(engine)
-        if cached and Path(cached).exists():
-            return cached
-        choice = resolve_engine(engine, bundle_root=find_app_root())
-        if choice is None:
-            return None
-        self._latex_engine_paths[engine] = choice.path
-        return choice.path
 
     def _offer_tectonic_install(self) -> "EngineChoice | None":
         """Ask the user before downloading Tectonic.
