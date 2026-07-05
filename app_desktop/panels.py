@@ -1253,6 +1253,27 @@ def build_right_panel(self, layout: QVBoxLayout):
     result_layout = QVBoxLayout(result_widget)
     result_layout.setContentsMargins(0, 0, 0, 0)
     result_layout.setSpacing(8)
+    # On-demand LaTeX buttons: 生成 TeX rebuilds the tex from the current result and opens
+    # the LaTeX preview window on the TeX tab; 预览 PDF also compiles + shows the PDF tab.
+    latex_button_row = QHBoxLayout()
+    latex_button_row.setContentsMargins(0, 0, 0, 0)
+    self.result_generate_tex_button = QPushButton("生成 TeX")
+    self.result_generate_tex_button.setObjectName("result_generate_tex_button")
+    self._register_text(self.result_generate_tex_button, "生成 TeX", "Generate TeX")
+    self.result_generate_tex_button.clicked.connect(
+        lambda _c=False: self.open_latex_preview("tex")
+    )
+    self.result_preview_pdf_button = QPushButton("预览 PDF")
+    self.result_preview_pdf_button.setObjectName("result_preview_pdf_button")
+    self._register_text(self.result_preview_pdf_button, "预览 PDF", "Preview PDF")
+    self.result_preview_pdf_button.clicked.connect(
+        lambda _c=False: self.open_latex_preview("pdf")
+    )
+    latex_button_row.addWidget(self.result_generate_tex_button)
+    latex_button_row.addWidget(self.result_preview_pdf_button)
+    latex_button_row.addStretch(1)
+    result_layout.addLayout(latex_button_row)
+
     self.result_tabs = QTabWidget()
     self.result_tabs.setObjectName("result_detail_tabs")
     self.result_tabs.setDocumentMode(True)

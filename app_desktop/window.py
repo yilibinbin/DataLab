@@ -2943,6 +2943,25 @@ class ExtrapolationWindow(
                     return method()
         return None
 
+    def open_latex_preview(self, initial_tab: str = "tex") -> None:
+        """Rebuild the current result's LaTeX tex on demand, then open the preview window on
+        the requested tab. If there is no rebuildable result, inform the user instead of
+        opening an empty window."""
+        tex_path = self.generate_latex_for_current_result()
+        if tex_path is None:
+            QMessageBox.information(
+                self,
+                self._tr("暂无结果", "No result"),
+                self._tr(
+                    "请先运行一次计算，然后再生成 LaTeX。",
+                    "Run a calculation first, then generate LaTeX.",
+                ),
+            )
+            return
+        from app_desktop.latex_preview_dialog import open_latex_preview_dialog
+
+        open_latex_preview_dialog(self, initial_tab=initial_tab)
+
     def _remember_last_result(self, kind: str, payload: dict[str, object]):
         """Cache the most recent result payload so we can reformat without recomputation."""
         self._last_result_kind = kind

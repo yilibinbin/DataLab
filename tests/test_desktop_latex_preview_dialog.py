@@ -95,9 +95,17 @@ def test_save_button_writes_tex_to_chosen_path(window: Any, monkeypatch: Any, tm
     dialog.close()
 
 
-def test_result_buttons_open_dialog_on_right_tab(window: Any) -> None:
-    """The 生成 TeX / 预览 PDF result-panel buttons open the dialog on the matching tab."""
+def test_result_buttons_open_dialog_on_right_tab(window: Any, monkeypatch: Any) -> None:
+    """The 生成 TeX / 预览 PDF result-panel buttons rebuild tex on demand and open the
+    dialog on the matching tab. We stub the rebuild (tested elsewhere) + the async compile
+    (tested elsewhere) to isolate the button→dialog wiring."""
     window.latex_edit.setPlainText(_TEX)
+    # A rebuildable result exists → the dispatcher returns a path (so the dialog opens).
+    monkeypatch.setattr(window, "generate_latex_for_current_result", lambda: "/tmp/x.tex")
+    # Do not trigger a real compile when the PDF tab opens.
+    monkeypatch.setattr(window, "compile_latex_to_pdf", lambda: None)
+    monkeypatch.setattr(window, "_latex_compile_worker", None, raising=False)
+
     tex_btn = window.result_generate_tex_button
     pdf_btn = window.result_preview_pdf_button
 
@@ -114,6 +122,19 @@ def test_result_buttons_open_dialog_on_right_tab(window: Any) -> None:
     tabs = dialog.findChild(QTabWidget)
     assert "PDF" in tabs.tabText(tabs.currentIndex())
     dialog.close()
+
+
+def test_result_buttons_inform_when_no_result(window: Any, monkeypatch: Any) -> None:
+    """With nothing to rebuild, clicking 生成 TeX informs the user and opens no dialog."""
+    import app_desktop.window as win_mod
+
+    window._last_latex_inputs = {}
+    info: list[int] = []
+    monkeypatch.setattr(win_mod.QMessageBox, "information", lambda *a, **k: info.append(1))
+    window.result_generate_tex_button.click()
+    QApplication.processEvents()
+    assert info == [1]
+    assert getattr(window, "_latex_preview_dialog", None) is None
 
 
 def test_render_pdf_registers_completion_callback_not_sync_read(window: Any, monkeypatch: Any) -> None:
