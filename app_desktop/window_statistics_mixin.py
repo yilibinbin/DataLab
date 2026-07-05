@@ -285,6 +285,62 @@ class WindowStatisticsMixin:
             message = f"{prefix}{warning}" if prefix else warning
             self._append_log(message)
 
+    def generate_statistics_latex_on_demand(self) -> str | None:
+        """Rebuild the statistics LaTeX tex ON DEMAND from the stashed result-data
+        (rows/sigma_rows/display_batches) + LIVE format widgets — no recompute. Mirrors the
+        run-time single-batch vs batches split."""
+        store = getattr(self, "_last_latex_inputs", {}) or {}
+        latex_inputs = store.get("statistics")
+        if not isinstance(latex_inputs, dict):
+            return None
+        display_batches = latex_inputs.get("display_batches")
+        rows = latex_inputs.get("rows")
+        sigma_rows = latex_inputs.get("sigma_rows")
+        if not isinstance(display_batches, list) or not display_batches:
+            return None
+        output_path = self.latex_output_path_for_run(True)
+        digits = (
+            self.latex_input_precision_spin.value()
+            if hasattr(self, "latex_input_precision_spin")
+            else 16
+        )
+        group_size = (
+            self.latex_group_size_spin.value()
+            if hasattr(self, "latex_group_size_spin")
+            else 3
+        )
+        use_dcolumn = (
+            self.dcolumn_checkbox.isChecked() if hasattr(self, "dcolumn_checkbox") else False
+        )
+        if len(display_batches) == 1:
+            entry = display_batches[0]
+            generate_statistics_latex(
+                str(entry["value_col"]),
+                rows,
+                sigma_rows,
+                entry["result"],
+                digits,
+                output_path,
+                use_dcolumn,
+                uncertainty_digits=self._uncertainty_digits_value(),
+                caption=self._caption_value(),
+                latex_group_size=group_size,
+                units=entry.get("units") if isinstance(entry.get("units"), Mapping) else None,
+            )
+        else:
+            generate_statistics_latex_batches(
+                str(latex_inputs.get("value_col_joined") or ""),
+                display_batches,
+                digits,
+                output_path,
+                use_dcolumn,
+                caption=self._caption_value(),
+                uncertainty_digits=self._uncertainty_digits_value(),
+                latex_group_size=group_size,
+            )
+        self._load_latex_into_editor(output_path)
+        return str(output_path)
+
     def _run_statistics_mode(self, generate_latex: bool, output_path: str):
         precision = self._read_precision()
         with _mp_precision_guard(precision):
@@ -427,6 +483,18 @@ class WindowStatisticsMixin:
             self._display_statistics_batches(display_batches, ", ".join(value_columns), render_plots=render_plots)
 
         self._append_log(self._tr("统计平均计算完成。", "Statistics completed."))
+        # Stash tex-rebuild DATA (rows/sigma_rows/display_batches) so 生成 TeX rebuilds on
+        # demand from live format widgets — the plain-stats display payload never carries
+        # rows/sigma_rows, so they must be retained here.
+        self.remember_latex_inputs(
+            "statistics",
+            {
+                "rows": rows,
+                "sigma_rows": sigma_rows,
+                "display_batches": display_batches,
+                "value_col_joined": ", ".join(group.value_col for group in column_groups),
+            },
+        )
         if generate_latex and output_path:
             digits = self.latex_input_precision_spin.value() if hasattr(self, "latex_input_precision_spin") else 16
             if len(display_batches) == 1:
