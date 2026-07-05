@@ -41,9 +41,55 @@ Recon result — feasibility per mode:
 caption field) at generation time — matching the root_solving precedent. The gaps are all
 compute-derived fields the window path drops; each is a small "retain N more keys" fix.
 
+## ⚠ CRITICAL corrections from Codex design review (all confirmed against code)
+
+1. **Do NOT add LaTeX-only data to the remembered display payload — use a SEPARATE stash.**
+   `_refresh_display_format` splats the remembered payload into the display formatter:
+   `_format_extrapolation_display(**payload)` (`window.py:2918`) and
+   `_format_statistics_display(**payload)` (`:2938`). Those formatters accept ONLY
+   `{headers,data_rows,results,ref_col}` (`window_extrapolation_mixin.py:854`) /
+   `{result,value_col,n,units}` (`window_statistics_mixin.py:1569`). Adding `table_segments`
+   / `rows` to the splatted dict → `TypeError`, crashing the display refresh. **Store the
+   LaTeX-rebuild data in a separate `self._last_latex_inputs[mode]` dict**, never in the
+   display payload.
+2. **`render_pdf()` async race — BUG in the already-committed Module-1b code.**
+   `compile_latex_to_pdf` runs a `_LatexCompileWorker` QThread; `last_pdf_path` is set only
+   in the completion callback (`_on_latex_compile_completed`), NOT synchronously. But
+   `latex_preview_dialog.render_pdf()` (`:126-139`) reads `last_pdf_path` IMMEDIATELY after
+   calling compile → reads a stale/None path. **Fix: render in the compile-completion
+   callback** (hook the dialog's PDF render to the worker's `completed` signal), not
+   synchronously. This must be fixed as part of this work.
+3. **root_solving is a post-worker rebuild, not a stash-reader.**
+   `_write_root_latex_if_requested` (`window_extrapolation_mixin.py:684`) rebuilds from the
+   PASSED payload and depends on run-time `generate_latex`/`output_path`. The retained data
+   IS sufficient (the same payload is stashed at `:675`), but the on-demand builder must
+   READ from the stash, not depend on run-time args — adapt, don't copy verbatim.
+4. **error_propagation `used_columns` is LOCAL-ONLY** (not in the worker rich payload — the
+   recon overstated this). It must be added to what's retained.
+5. **Workspace restore clears `_last_*` stashes** (`workspace_controller.py:1784-1795,
+   2037-2054`). A restored result snapshot cannot rebuild tex unless we persist the LaTeX
+   inputs (or the tex source) into the workspace. **Decision needed** (see Open Question).
+6. **`generate_latex_checkbox` removal blast radius:** run gate
+   (`window_extrapolation_mixin.py:193-203, 234-243`), init/visibility (`window.py:568-570,
+   1278-1281`), construction/dialog reparent (`panels.py:1065-1069, 1167-1194`), schema
+   `output.latex.enabled` (`panels.py:1927-1933, 2002-2011`), dirty tracking
+   (`window.py:822-845`), workspace capture/restore (`workspace_controller.py:745-766,
+   1111-1129`), scanner (`scan_desktop_gui_schema.py:822`).
+
+## Open question (Codex #5 — needs a decision before implementation)
+When a `.datalab` workspace with a result snapshot is RESTORED, `_last_*` stashes are
+cleared, so on-demand 生成 TeX has no data to rebuild from. Options:
+(a) **persist the LaTeX-rebuild inputs (or the generated tex source string) into the
+workspace** so restored results can still 生成 TeX — more work + a workspace schema addition;
+(b) **restored results can't 生成 TeX until re-run** — simpler, but 生成 TeX is disabled/greyed
+on a freshly-restored result. Recommend (b) for a first cut (disable the button when no live
+`_last_latex_inputs` for the current mode), with (a) as a follow-up.
+
 ## Architecture
 
 ### A. Retain compute data per mode (`window_*_mixin.py` + `workers_core.py`)
+**Store in a SEPARATE `self._last_latex_inputs[mode]` dict (NOT the display payload — see
+correction 1).** Per mode, capture the tex-builder inputs at result-display time:
 For each mode, ensure `self._last_result_payloads[mode]` (or the equivalent stash) retains
 EVERY compute-derived input the tex builder needs (per the recon gaps above). Concretely:
 - extrapolation: add `table_segments` to the remembered dict (`:807`) + thread through
@@ -65,6 +111,20 @@ root writers), writing to a temp `.tex` and returning the source string. This mi
 message) if there is no current result.
 
 ### C. Drop the compute-time tex gate (`workers_core.py`, run trigger)
+
+**Lead-verified consumers of the run-time tex write (what breaks if the run stops writing
+tex):**
+- `_load_latex_into_editor(latex_path)` (`window_extrapolation_mixin.py:580`, fitting
+  `:170/217/257`) — populates the result LaTeX editor after a run. In the new model the
+  on-demand 生成 TeX populates the editor instead, so this run-time load is simply removed
+  (or the on-demand builder feeds the editor). NOT a blocker.
+- The CSV `"latex"` column (`result_csv_spec.py:23`, extrapolation) is a per-ROW latex
+  SNIPPET (via `format_uncertainty_display_latex`), NOT the full tex table — it is built in
+  the display/CSV path independent of the run-time full-tex write. So dropping the full-tex
+  write does NOT affect the CSV latex column. VERIFIED non-issue.
+- `result.latex_path` becomes unused by the desktop run path; the on-demand builder writes
+  its own temp path. Confirm no other consumer reads `result.latex_path` post-drop.
+
 - Remove `generate_latex_checkbox` from the UI (Module 3 put it in the LaTeX options
   dialog — that dialog + button are removed, unit E).
 - The compute worker NO LONGER writes tex during the run: the `if job.generate_latex:`
