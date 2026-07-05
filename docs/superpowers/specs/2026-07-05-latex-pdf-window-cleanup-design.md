@@ -66,10 +66,15 @@ A `QDialog` (resizable, non-modal, own lifecycle; pattern from `formula_preview.
   coupled to main-window state — `self.pdf_zoom`/`self._pdf_base_dpi` (`:116`),
   `self.pdf_container_layout`/`self.pdf_scroll` (`:186,:198,:220`), `self.last_pdf_path`
   (`:222`), and result-tab auto-select (`:229`). Passing a target scroll is NOT enough.
-  **Refactor to a PURE helper:** extract `pdf_to_images(pdf_path, dpi) -> list[QImage]`
-  (no `self` state) into `shared/pdf_preview*.py` or the mixin; the dialog owns its zoom/dpi
-  and lays the images into its own scroll. The main-window `_render_pdf_preview` (if still
-  needed) also calls the pure helper. NO result-tab auto-select from the dialog path.
+  **Refactor to a PURE helper:** `shared/pdf_preview_raster.py:234` ALREADY has
+  `convert_pdf_to_images(...)` (pdftoppm/gs rasterizer) — reuse it; the "pure helper" is
+  largely wiring, not net-new. The dialog owns its zoom/dpi and lays the images into its own
+  scroll. The main-window `_render_pdf_preview` (if still needed) also calls the same helper.
+  NO result-tab auto-select from the dialog path.
+  **Note on "tectonic-only":** it applies to the tex→PDF COMPILE step (tectonic). The
+  PDF→images RASTERIZE step for on-screen preview still uses `convert_pdf_to_images`
+  (pdftoppm/ghostscript) as today — that is a preview rasterizer, unrelated to the TeX
+  engine, and is out of scope for the tectonic-only change.
 - Opened by two result-panel buttons (Module 4). Passing `initial_tab` selects TeX or PDF.
 - **tex SOURCE (Codex #2, confirmed):** `results.latex.source` is only a schema KEY on
   `latex_edit` (`panels.py:1494`) — NOT a `CalcResult` payload (`CalcResult` carries only
@@ -228,9 +233,13 @@ to function — "materialize only on Save" is explicitly rejected (it breaks tex
 5. **Bottom run + empty area gone; toolbar 运行 still triggers a run for all 5 modes.**
 
 ## Non-goals (YAGNI)
-- No change to the compute math, the 5 modes' logic, or the web frontend's LaTeX (web has
-  its own latex route; this is desktop-only unless a shared helper changes — keep shared
-  `latex_engine.py` behavior compatible).
+- No change to the compute math or the 5 modes' logic.
+- **Web frontend is UNAFFECTED (verified):** `app_web` has its OWN compile path
+  (`app_web/latex_security.py:compile_latex_safe` + `app_web/security.py:validate_latex_engine`,
+  its own pdflatex/xelatex whitelist) and does NOT import `shared/latex_engine.py`'s desktop
+  fallback. So removing the DESKTOP fallback does not touch the web route. Keep
+  `shared/latex_engine.py`'s public API compatible regardless (it exports
+  `tectonic_compile_argv`/`ensure_tectonic_installed` which the desktop uses).
 - No new PDF features (annotations, print) beyond the current render + zoom.
 - History content/behavior unchanged beyond the collapse.
 
