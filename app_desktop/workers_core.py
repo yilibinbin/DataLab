@@ -1202,6 +1202,9 @@ def _execute_calc_job(
             "results": results,
             "table_segments": table_segments,
             "constants": constants_used,
+            # ``used_columns`` (used_headers) was local-only; retain it so the on-demand
+            # LaTeX rebuild can reproduce the run-time tex without recomputing.
+            "used_columns": used_headers,
             "formula": job.formula or "",
             "precision_used": applied_precision,
             "propagation": normalize_uncertainty_propagation_config(

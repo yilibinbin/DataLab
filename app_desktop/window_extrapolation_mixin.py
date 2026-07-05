@@ -544,6 +544,21 @@ class WindowExtrapolationMixin:
                     propagation=result.payload.get("propagation"),
                     units=result.payload.get("units"),
                 )
+                # Stash tex-rebuild DATA (table_segments/constants/used_columns are dropped
+                # or local-only in the display path) so 生成 TeX rebuilds on demand.
+                self.remember_latex_inputs(
+                    "error",
+                    {
+                        "headers": headers,
+                        "parsed_data": parsed,
+                        "results": results,
+                        "constants": result.payload.get("constants") or {},
+                        "used_columns": result.payload.get("used_columns"),
+                        "table_segments": result.payload.get("table_segments"),
+                        "formula": formula,
+                        "units": result.payload.get("units"),
+                    },
+                )
                 breakdown = result.payload.get("contribution_breakdown")
                 plot_bytes = result.payload.get("contribution_plot")
                 row_plots = result.payload.get("row_contribution_plots")
@@ -802,6 +817,57 @@ class WindowExtrapolationMixin:
             latex_group_size=self.latex_group_size_spin.value()
             if hasattr(self, "latex_group_size_spin")
             else 3,
+        )
+        self._load_latex_into_editor(output_path)
+        return str(output_path)
+
+    def generate_error_latex_on_demand(self) -> str | None:
+        """Rebuild the error-propagation LaTeX tex ON DEMAND from the stashed result-data
+        (headers/parsed_data/results/constants/used_columns/table_segments/formula/units) +
+        LIVE format widgets — no recompute."""
+        store = getattr(self, "_last_latex_inputs", {}) or {}
+        latex_inputs = store.get("error")
+        if not isinstance(latex_inputs, dict):
+            return None
+        headers = latex_inputs.get("headers")
+        parsed_data = latex_inputs.get("parsed_data")
+        results = latex_inputs.get("results")
+        if headers is None or parsed_data is None or results is None:
+            return None
+        from datalab_latex.latex_tables_error_propagation import (
+            generate_error_propagation_table,
+        )
+
+        from .workers_core import _input_units_for_headers, _result_unit_from_units
+
+        units_payload = latex_inputs.get("units")
+        output_path = self.latex_output_path_for_run(True)
+        caption = self._caption_value() if hasattr(self, "_caption_value") else None
+        generate_error_propagation_table(
+            headers,
+            parsed_data,
+            results,
+            latex_inputs.get("constants") or {},
+            str(latex_inputs.get("formula") or ""),
+            output_path,
+            caption=caption,
+            verbose=self.verbose_checkbox.isChecked()
+            if hasattr(self, "verbose_checkbox")
+            else False,
+            use_dcolumn=self.dcolumn_checkbox.isChecked()
+            if hasattr(self, "dcolumn_checkbox")
+            else False,
+            table_segments=latex_inputs.get("table_segments"),
+            precision=self.latex_input_precision_spin.value()
+            if hasattr(self, "latex_input_precision_spin")
+            else None,
+            result_uncertainty_digits=self._uncertainty_digits_value(),
+            used_columns=latex_inputs.get("used_columns"),
+            latex_group_size=self.latex_group_size_spin.value()
+            if hasattr(self, "latex_group_size_spin")
+            else 3,
+            input_units=_input_units_for_headers(headers, units_payload),
+            result_unit=_result_unit_from_units(units_payload),
         )
         self._load_latex_into_editor(output_path)
         return str(output_path)
