@@ -48,6 +48,8 @@ from shared.latex_engine import (
     resolve_engine,
 )
 
+import tempfile
+
 from .resources import _ensure_default_path_augmented
 from .workers_core import _safe_read_text, _safe_resolve_path
 from .workers_qt import (
@@ -60,6 +62,30 @@ from .workers_qt import (
 
 class WindowLatexCompileMixin:
     # ----------------------------------------------------------- LaTeX ops --
+    def latex_output_path_for_run(self, generate_latex: bool) -> str:
+        """Return the path the run should write the generated tex to.
+
+        The LaTeX output PATH is no longer a user-facing option — the user chooses a save
+        location only via the TeX window's Save button. So when ``generate_latex`` is on
+        we materialize the tex into a per-run TEMP ``.tex`` file (retained so the editor /
+        PDF preview can read it back); when off, no tex is written (empty path). This
+        decouples "generate + preview" from "save to a user path".
+        """
+        if not generate_latex:
+            return ""
+        tmp = tempfile.NamedTemporaryFile(
+            prefix="datalab_", suffix=".tex", delete=False
+        )
+        tmp.close()
+        path = tmp.name
+        # Track for cleanup on window close (best-effort).
+        paths = getattr(self, "_run_latex_temp_paths", None)
+        if paths is None:
+            paths = []
+            self._run_latex_temp_paths = paths
+        paths.append(path)
+        return path
+
     def open_latex_file(self):
         filename, _ = QFileDialog.getOpenFileName(
             self,

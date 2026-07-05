@@ -192,17 +192,9 @@ class WindowExtrapolationMixin:
         data_path, manual_content = input_bundle.data_path, input_bundle.data_text
         if mode == "root_solving":
             generate_latex = self.generate_latex_checkbox.isChecked()
-            output_path = ""
-            if generate_latex:
-                output_path_text = self.output_file_edit.text().strip()
-                if not output_path_text:
-                    QMessageBox.critical(
-                        self,
-                        self._tr("错误", "Error"),
-                        self._tr("请在「选项」中设置 LaTeX 输出路径。", "Please set LaTeX output path in Options."),
-                    )
-                    return
-                output_path = str(_safe_resolve_path(output_path_text))
+            # The tex is written to a per-run temp path (no user output-path field); the
+            # user saves to a chosen location later via the TeX window.
+            output_path = self.latex_output_path_for_run(generate_latex)
             self._run_root_solving_mode(
                 data_path=data_path,
                 manual_content=manual_content,
@@ -246,28 +238,9 @@ class WindowExtrapolationMixin:
         except ValueError as exc:
             QMessageBox.critical(self, self._tr("错误", "Error"), self._localize_text(str(exc)))
             return
-        output_path_text = self.output_file_edit.text().strip()
-        if generate_latex:
-            if not output_path_text:
-                QMessageBox.critical(
-                    self,
-                    self._tr("错误", "Error"),
-                    self._tr("请在「选项」中设置 LaTeX 输出路径。", "Please set LaTeX output path in Options."),
-                )
-                return
-            output_candidate = _safe_resolve_path(output_path_text)
-            if not output_candidate.parent.exists():
-                msg_zh = f"输出目录不存在: {output_candidate.parent}"
-                msg_en = f"Output directory does not exist: {output_candidate.parent}"
-                QMessageBox.critical(
-                    self,
-                    self._tr("错误", "Error"),
-                    self._tr(msg_zh, msg_en),
-                )
-                return
-            output_path = str(output_candidate)
-        else:
-            output_path = ""
+        # The tex is written to a per-run temp path (no user output-path field); the user
+        # saves to a chosen location later via the TeX window.
+        output_path = self.latex_output_path_for_run(generate_latex)
 
         use_dcolumn = self.dcolumn_checkbox.isChecked()
         verbose = self.verbose_checkbox.isChecked()

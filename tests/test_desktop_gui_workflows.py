@@ -110,8 +110,6 @@ def test_error_propagation_click_workflow_zh(window: Any, qtbot: Any, tmp_path: 
     _select_combo_data(window.error_method_combo, "taylor")
     window.generate_plots_checkbox.setChecked(False)
     window.generate_latex_checkbox.setChecked(True)
-    output_path = tmp_path / "error.tex"
-    window.output_file_edit.setText(str(output_path))
 
     _click_run_and_wait(qtbot, window)
 
@@ -169,9 +167,7 @@ def test_fitting_click_workflow_selected_comparison(window: Any, qtbot: Any, tmp
         "]"
     )
     window.generate_plots_checkbox.setChecked(False)
-    tex_path = tmp_path / "comparison.tex"
     window.generate_latex_checkbox.setChecked(True)
-    window.output_file_edit.setText(str(tex_path))
 
     _click_run_and_wait(qtbot, window, timeout=15000)
 
@@ -182,7 +178,9 @@ def test_fitting_click_workflow_selected_comparison(window: Any, qtbot: Any, tmp
     assert window._csv_headers == list(COMPARISON_TABLE_HEADERS)
     assert [row["candidate_id"] for row in window._csv_rows] == ["linear", "quadratic"]
     assert window._csv_suggest_name == "fitting_comparison_results.csv"
-    latex_source = tex_path.read_text(encoding="utf-8")
+    # The tex is written to a per-run temp path and loaded into the editor — read the
+    # generated source from the editor (no user output-path field anymore).
+    latex_source = window.latex_edit.toPlainText()
     assert "\\begin{table}" in latex_source
     assert "$\\chi^2$" in latex_source
     assert "Linear" in latex_source
