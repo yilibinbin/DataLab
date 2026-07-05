@@ -65,26 +65,26 @@ def test_shell_sections_are_visible_in_expected_order(qtbot: Any) -> None:
 
     assert not hasattr(window, "parameters_section")
     assert not hasattr(window, "parameters_section_layout")
-    # The mode selector sits at the top of the left panel (pick the analysis
-    # mode first, then enter data), above the input section.
+    # The compute-mode selector now lives on the workbench toolbar (not a left-rail
+    # card), so the left panel starts at the input section.
     assert [
-        window.mode_section.objectName(),
         window.input_section.objectName(),
         window.output_setup_section.objectName(),
         window.run_section.objectName(),
-    ] == ["mode_section", "input_section", "output_setup_section", "run_section"]
+    ] == ["input_section", "output_setup_section", "run_section"]
 
     layout_names = [
         window.left_layout.itemAt(index).widget().objectName()
         for index in range(window.left_layout.count())
         if window.left_layout.itemAt(index).widget() is not None
     ]
-    assert layout_names[:4] == [
-        "mode_section",
+    assert layout_names[:3] == [
         "input_section",
         "output_setup_section",
         "run_section",
     ]
+    # mode_section is no longer added to the left rail.
+    assert "mode_section" not in layout_names
     assert window.mode_stack.parentWidget() is window.workbench_workspace_content
     assert window.custom_params_table is not None
     assert window.custom_constants_editor is not None
@@ -96,9 +96,9 @@ def test_left_configuration_sections_are_visual_cards(qtbot: Any) -> None:
     window.show()
     QApplication.processEvents()
 
+    # mode_section moved to the toolbar; the remaining left-rail sections stay cards.
     for section in (
         window.input_section,
-        window.mode_section,
         window.output_setup_section,
         window.run_section,
     ):
@@ -112,7 +112,11 @@ def test_left_configuration_sections_are_visual_cards(qtbot: Any) -> None:
     assert window.run_button.property("datalab_primary_run_button") is True
     assert window.run_button.property("datalab_run_state") == "run"
     assert 'QPushButton[datalab_primary_run_button="true"]' in window.run_section.styleSheet()
-    assert window.mode_combo.geometry().top() >= 24
+    # The mode selector now lives on the workbench toolbar (dedicated coverage in
+    # test_desktop_mode_selector_on_toolbar.py), not as a left-rail card.
+    from PySide6.QtWidgets import QComboBox
+
+    assert window.mode_combo in window.workbench_bar.findChildren(QComboBox)
     # NOTE: mpmath_precision_spin moved OUT of the left rail into the 计算 toolbar panel
     # (collapsed by default), so it no longer has a laid-out rail-card position — that
     # assertion was removed with the options-panel migration.

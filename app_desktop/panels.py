@@ -735,7 +735,10 @@ def build_left_panel(self):
 
     refresh_workbench_config_cards(self)
 
-    self.left_layout.addWidget(self.mode_section)
+    # ``mode_section`` is no longer a left-rail card — the compute-mode selector
+    # (``mode_combo``) is placed on the workbench toolbar (see below). The
+    # ``mode_section``/``mode_box`` widgets are kept as detached compatibility
+    # attributes but are NOT added to the config rail.
     self.left_layout.addWidget(self.input_section)
     self.left_layout.addWidget(self.output_setup_section)
     self.left_layout.addWidget(self.run_section)
@@ -762,8 +765,15 @@ def build_left_panel(self):
         "setToolTip",
     )
     self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
-    mode_layout.addWidget(self.mode_combo)
-    self.mode_section_layout.addWidget(self.mode_box)
+    # The mode selector now lives on the workbench toolbar, not in the left-rail
+    # ``mode_box`` card. Insert the SAME ``mode_combo`` widget into the toolbar's
+    # reserved slot (``_toolbar_mode_slot``, created in build_workbench_toolbar).
+    # ``mode_box``/``mode_section`` are kept as detached compatibility attributes.
+    mode_slot = getattr(self, "_toolbar_mode_slot", None)
+    if mode_slot is not None:
+        mode_slot.addWidget(self.mode_combo)
+    else:  # pragma: no cover - toolbar always builds first in build_ui
+        mode_layout.addWidget(self.mode_combo)
 
     # Data file
     self.file_box = QGroupBox("")

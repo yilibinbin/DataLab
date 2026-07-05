@@ -115,6 +115,23 @@ def build_workbench_toolbar(owner: object) -> QWidget:
     layout.addWidget(identity_label)
     layout.addSpacing(6)
 
+    # Compute-mode selector slot (left of the workspace buttons). The real
+    # ``mode_combo`` is created later in ``panels.build_ui`` (after this toolbar),
+    # so we reserve a labelled slot here and let ``panels.py`` insert the combo into
+    # ``_toolbar_mode_slot`` once it exists (lazy/after-build, like the option panels).
+    mode_label = QLabel("模式：")
+    mode_label.setObjectName("workbench_mode_label")
+    register = getattr(owner, "_register_text", None)
+    if callable(register):
+        register(mode_label, "模式：", "Mode:")
+    layout.addWidget(mode_label)
+    mode_slot = QHBoxLayout()
+    mode_slot.setContentsMargins(0, 0, 0, 0)
+    mode_slot.setSpacing(0)
+    dynamic_owner._toolbar_mode_slot = mode_slot
+    layout.addLayout(mode_slot)
+    layout.addSpacing(8)
+
     dynamic_owner.new_workspace_button = make_toolbar_button(
         owner,
         "新建",

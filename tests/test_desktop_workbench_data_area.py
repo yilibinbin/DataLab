@@ -202,7 +202,7 @@ def test_active_input_bundle_parses_sectioned_file_without_regressing_plain_file
     assert window._active_data_source() == (None, "x y\n1 2")
 
 
-def test_left_rail_sections_are_ordered_mode_first(qtbot: Any) -> None:
+def test_left_rail_sections_are_ordered_input_first(qtbot: Any) -> None:
     window = _window(qtbot)
 
     section_names = [
@@ -211,12 +211,14 @@ def test_left_rail_sections_are_ordered_mode_first(qtbot: Any) -> None:
         if (item := window.left_layout.itemAt(index)).widget() is not None
     ]
 
-    assert section_names[:4] == [
-        "mode_section",
+    # The compute-mode selector moved to the toolbar, so the left rail now starts
+    # with the input section.
+    assert section_names[:3] == [
         "input_section",
         "output_setup_section",
         "run_section",
     ]
+    assert "mode_section" not in section_names
 
 
 def test_empty_manual_table_uses_one_editable_draft_row(qtbot: Any) -> None:
@@ -326,7 +328,8 @@ def test_table_height_excludes_hidden_horizontal_header(qtbot: Any) -> None:
 
 def test_configuration_sections_stay_in_left_rail(qtbot: Any) -> None:
     window = _window(qtbot)
-    assert window.mode_section.parentWidget() is window.workbench_config_content
+    # mode_section moved to the toolbar (no longer parented to the config rail).
+    assert window.mode_section.parentWidget() is not window.workbench_config_content
     assert window.input_section.parentWidget() is window.workbench_config_content
     assert window.output_setup_section.parentWidget() is window.workbench_config_content
     assert window.run_section.parentWidget() is window.workbench_config_content
