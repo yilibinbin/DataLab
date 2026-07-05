@@ -480,6 +480,65 @@ class WindowFittingResidualsMixin:
             self._fit_batch_context = None
         return True
 
+    def generate_fitting_latex_on_demand(self) -> str | None:
+        """Rebuild the single-fit LaTeX tex ON DEMAND from the stashed result-data + the
+        RUN's target_column/variable_pairs/group_size/uncertainty_digits (NOT edited
+        widgets) + LIVE dcolumn/digits — reproducing the run-time tex without recompute."""
+        store = getattr(self, "_last_latex_inputs", {}) or {}
+        latex_inputs = store.get("fit_single")
+        if not isinstance(latex_inputs, dict):
+            return None
+        fit_result = latex_inputs.get("fit_result")
+        if fit_result is None:
+            return None
+        headers = latex_inputs.get("headers") or []
+        rows = latex_inputs.get("rows") or []
+        sigma_rows = latex_inputs.get("sigma_rows") or []
+        # Format options: dcolumn + digits are read LIVE (options); group_size +
+        # uncertainty_digits come from the RUN (stash) so the table layout matches.
+        use_dcolumn = (
+            self.dcolumn_checkbox.isChecked()
+            if hasattr(self, "dcolumn_checkbox")
+            else bool(latex_inputs.get("use_dcolumn"))
+        )
+        digits = (
+            self.latex_input_precision_spin.value()
+            if hasattr(self, "latex_input_precision_spin")
+            else int(latex_inputs.get("latex_digits") or 16)
+        )
+        group_size = int(latex_inputs.get("latex_group_size") or 3)
+        output_path = self.latex_output_path_for_run(True)
+        lines = self._fit_latex_preamble(use_dcolumn, digits, group_size)
+        lines.extend(
+            self._fit_latex_block(
+                headers,
+                rows,
+                sigma_rows,
+                fit_result,
+                str(latex_inputs.get("expression") or ""),
+                str(latex_inputs.get("substituted") or ""),
+                None,  # image_path — no image embedded
+                use_dcolumn,
+                digits,
+                latex_group_size=group_size,
+                units=latex_inputs.get("units"),
+                target_column=latex_inputs.get("target_column"),
+                variable_pairs=latex_inputs.get("variable_pairs"),
+                default_uncertainty_digits=latex_inputs.get("uncertainty_digits"),
+            )
+        )
+        lines.append("\\end{document}")
+        from pathlib import Path
+
+        tex_path = Path(output_path).expanduser()
+        try:
+            tex_path.write_text("\n".join(lines), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            self._append_log(self._tr(f"拟合 LaTeX 写入失败: {exc}", f"Fit LaTeX write failed: {exc}"))
+            return None
+        self._load_latex_into_editor(tex_path)
+        return str(tex_path)
+
     def _on_fit_finished(self, payload: FitResultPayload):
         try:
             job = payload.job
@@ -538,6 +597,28 @@ class WindowFittingResidualsMixin:
             self._remember_last_result(
                 "fit_single",
                 {"fit_result": fit_result, "expression": expression, "substituted": substituted, "job": job, "units": units},
+            )
+            # Stash tex-rebuild DATA from the RUN (not edited widgets): target_column +
+            # ORDERED variable_pairs + group_size + uncertainty_digits come from the job so
+            # 生成 TeX reproduces the run-time tex even after widget edits.
+            self.remember_latex_inputs(
+                "fit_single",
+                {
+                    "headers": job.headers,
+                    "rows": job.data_rows,
+                    "sigma_rows": job.sigma_rows,
+                    "fit_result": fit_result,
+                    "expression": expression or "",
+                    "substituted": substituted or "",
+                    "units": units,
+                    "target_column": job.target_column,
+                    "variable_pairs": list(job.variable_map.items()),
+                    "latex_group_size": job.latex_group_size,
+                    "uncertainty_digits": job.uncertainty_digits,
+                    "latex_digits": job.latex_digits,
+                    "use_dcolumn": job.use_dcolumn,
+                    "caption": job.caption,
+                },
             )
             QMessageBox.information(self, self._tr("完成", "Done"), self._tr("拟合完成。", "Fit completed."))
         except Exception as exc:  # noqa: BLE001

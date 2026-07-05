@@ -524,13 +524,26 @@ class WindowFittingFormattersMixin:
         latex_group_size: int = 3,
         batch_index: int | None = None,
         units: Mapping[str, Any] | None = None,
+        target_column: str | None = None,
+        variable_pairs: list[tuple[str, str]] | None = None,
+        default_uncertainty_digits: int | None = None,
     ) -> list[str]:
-        default_unc_digits = self._uncertainty_digits_value()
-        target_column = self.fit_target_edit.text().strip()
-        try:
-            variable_pairs = self._ordered_variable_pairs(headers)
-        except Exception:
-            variable_pairs = []
+        # target_column / variable_pairs / default_uncertainty_digits default to the LIVE
+        # widget values (run-time path), but the on-demand rebuild passes the RUN's values
+        # (from job.target_column / job.variable_map / job.uncertainty_digits) so the tex is
+        # reproduced faithfully regardless of subsequent widget edits.
+        default_unc_digits = (
+            default_uncertainty_digits
+            if default_uncertainty_digits is not None
+            else self._uncertainty_digits_value()
+        )
+        if target_column is None:
+            target_column = self.fit_target_edit.text().strip()
+        if variable_pairs is None:
+            try:
+                variable_pairs = self._ordered_variable_pairs(headers)
+            except Exception:
+                variable_pairs = []
         caption_base = self._caption_value() if hasattr(self, "_caption_value") else None
 
         if expression and fit_result.params:

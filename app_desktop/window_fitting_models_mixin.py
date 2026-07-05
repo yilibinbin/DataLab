@@ -460,6 +460,10 @@ class WindowFittingModelsMixin:
             verbose=verbose,
             render_plots=render_plots,
             latex_digits=self.latex_input_precision_spin.value(),
+            latex_group_size=self.latex_group_size_spin.value()
+            if hasattr(self, "latex_group_size_spin")
+            else 3,
+            uncertainty_digits=self._uncertainty_digits_value(),
             weighted=self.fit_weighted_checkbox.isChecked(),
             label=label,
             is_multidim=is_multidim,

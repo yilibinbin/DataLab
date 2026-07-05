@@ -1511,6 +1511,10 @@ class FitJob:
     verbose: bool = False
     render_plots: bool = True
     latex_digits: int = 16
+    # Retained so on-demand LaTeX rebuild reproduces the run-time tex (comparison job
+    # already carries these; single-fit lacked them and re-read live widgets).
+    latex_group_size: int = 3
+    uncertainty_digits: int = 1
     weighted: bool = False
     label: str = ""
     is_multidim: bool = False
