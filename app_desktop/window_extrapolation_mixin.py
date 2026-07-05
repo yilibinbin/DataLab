@@ -515,6 +515,17 @@ class WindowExtrapolationMixin:
                     plot_bytes_list=plot_bytes,
                     render_plots=render_plots,
                 )
+                # Stash tex-rebuild DATA (incl. table_segments, which the display path drops)
+                # so 生成 TeX can rebuild on demand from live format widgets, no recompute.
+                self.remember_latex_inputs(
+                    "extrapolation",
+                    {
+                        "headers": headers,
+                        "data_rows": data_rows,
+                        "results": results,
+                        "table_segments": result.payload.get("table_segments"),
+                    },
+                )
             elif result.mode == "error":
                 headers = result.payload.get("headers", [])
                 parsed = result.payload.get("parsed_data", [])
@@ -754,6 +765,46 @@ class WindowExtrapolationMixin:
         )
         self._load_latex_into_editor(tex_path)
         return str(tex_path)
+
+    def generate_extrapolation_latex_on_demand(self) -> str | None:
+        """Rebuild the extrapolation LaTeX tex ON DEMAND from the stashed result-data
+        (headers/data_rows/results/table_segments) + LIVE format widgets — no recompute."""
+        store = getattr(self, "_last_latex_inputs", {}) or {}
+        latex_inputs = store.get("extrapolation")
+        if not isinstance(latex_inputs, dict):
+            return None
+        headers = latex_inputs.get("headers")
+        data_rows = latex_inputs.get("data_rows")
+        results = latex_inputs.get("results")
+        if headers is None or data_rows is None or results is None:
+            return None
+        from datalab_latex.latex_tables_extrapolation import generate_latex_table
+
+        output_path = self.latex_output_path_for_run(True)
+        caption = self._caption_value() if hasattr(self, "_caption_value") else None
+        generate_latex_table(
+            headers,
+            data_rows,
+            results,
+            output_path,
+            caption=caption,
+            precision=self.latex_input_precision_spin.value()
+            if hasattr(self, "latex_input_precision_spin")
+            else None,
+            verbose=self.verbose_checkbox.isChecked()
+            if hasattr(self, "verbose_checkbox")
+            else False,
+            use_dcolumn=self.dcolumn_checkbox.isChecked()
+            if hasattr(self, "dcolumn_checkbox")
+            else False,
+            table_segments=latex_inputs.get("table_segments"),
+            result_uncertainty_digits=self._uncertainty_digits_value(),
+            latex_group_size=self.latex_group_size_spin.value()
+            if hasattr(self, "latex_group_size_spin")
+            else 3,
+        )
+        self._load_latex_into_editor(output_path)
+        return str(output_path)
 
     def _on_root_solving_failed(self, message: str):
         self._mark_workbench_result_failed()
