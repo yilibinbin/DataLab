@@ -189,8 +189,14 @@ Deleting these is bigger than the naive list; each site must be handled:
 - **`latex_engine_combo`:** used by compile (`window_latex_compile_mixin.py:105,:361`),
   workspace capture/restore (`workspace_controller.py:766,:1128`), and schema binding
   (`panels.py:2067`). → Remove the combo; workspace capture/restore must tolerate its
-  absence (drop the field from the captured schema, migrate old workspaces gracefully);
-  drop the schema-binding field.
+  absence, drop the schema-binding field. **Workspace migration (lead-verified, no schema
+  bump needed):** restore at `:766` already uses `getattr(window, "latex_engine_combo",
+  None)` (null-safe); capture at `:1128` stops writing `"engine"`. The workspace schema is
+  `datalab.workspace.v2` (`datalab_core/workspace_v2.py:10`); dropping an OPTIONAL `engine`
+  field is backward-compatible (old `.datalab` files with `"engine":"pdflatex"` load fine —
+  the engine value is simply ignored, tectonic is always used). So NO schema_version bump.
+  Add a test: an old workspace with `latex.engine=pdflatex` restores without error and
+  compiles via tectonic.
 - **TeX/PDF result tabs:** in `_RESULT_VIEW_ORDER` (`panels.py:128`), result indices
   (`:1624`), reachability (`test_desktop_option_reachability.py:373,:384`), and scanner
   scenarios (`tools/scan_desktop_gui_schema.py:71`). → Remove from `_RESULT_VIEW_ORDER`,
