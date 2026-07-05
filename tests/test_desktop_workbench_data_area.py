@@ -41,7 +41,8 @@ def _window(qtbot: Any) -> Any:
 def test_actual_data_editor_lives_in_left_input_area(qtbot: Any) -> None:
     window = _window(qtbot)
 
-    assert window.input_section.parentWidget() is window.workbench_config_content
+    # Two-pane layout: the input section lives in the merged workspace pane.
+    assert window.input_section.parentWidget() is window.workbench_workspace_content
     assert window.manual_box.parentWidget() is window.input_section
     assert window.input_section_layout.indexOf(window.manual_box) >= 0
     assert window.manual_table.parentWidget() is window._data_stack
@@ -211,13 +212,11 @@ def test_left_rail_sections_are_ordered_input_first(qtbot: Any) -> None:
         if (item := window.left_layout.itemAt(index)).widget() is not None
     ]
 
-    # The compute-mode selector moved to the toolbar, so the left rail now starts
-    # with the input section.
-    assert section_names[:3] == [
-        "input_section",
-        "output_setup_section",
-        "run_section",
-    ]
+    # Two-pane layout: the merged pane starts with 输入 (input_section) and ends with
+    # the output/run footer; the per-mode config panels sit in between. The mode
+    # selector moved to the toolbar.
+    assert section_names[0] == "input_section"
+    assert section_names[-2:] == ["output_setup_section", "run_section"]
     assert "mode_section" not in section_names
 
 
@@ -326,10 +325,13 @@ def test_table_height_excludes_hidden_horizontal_header(qtbot: Any) -> None:
     assert table.maximumHeight() == _expected_table_height_for_rows(table, 1)
 
 
-def test_configuration_sections_stay_in_left_rail(qtbot: Any) -> None:
+def test_configuration_sections_live_in_the_merged_pane(qtbot: Any) -> None:
     window = _window(qtbot)
-    # mode_section moved to the toolbar (no longer parented to the config rail).
+    merged = window.workbench_workspace_content
+    # Two-pane layout: the config sections merged into the workspace pane.
+    # mode_section moved to the toolbar (parented to neither pane's content).
+    assert window.mode_section.parentWidget() is not merged
     assert window.mode_section.parentWidget() is not window.workbench_config_content
-    assert window.input_section.parentWidget() is window.workbench_config_content
-    assert window.output_setup_section.parentWidget() is window.workbench_config_content
-    assert window.run_section.parentWidget() is window.workbench_config_content
+    assert window.input_section.parentWidget() is merged
+    assert window.output_setup_section.parentWidget() is merged
+    assert window.run_section.parentWidget() is merged

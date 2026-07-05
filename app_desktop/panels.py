@@ -91,7 +91,7 @@ from app_desktop.workbench_variable_panel import (
     populate_variable_workspace_panel,
     refresh_variable_workspace_panel,
 )
-from app_desktop.workbench_visual_contract import CONFIG_RAIL_MIN_WIDTH
+from app_desktop.workbench_visual_contract import WORKSPACE_CANVAS_MIN_WIDTH
 from app_desktop.ui_schema_binder import bind_choices, bind_field
 from app_desktop.ui_schema_runtime import (
     bind_schema_command_button,
@@ -345,10 +345,16 @@ def build_ui(self):
     root_layout.addWidget(self.workbench_status_strip)
     layout.addWidget(self.workbench_root)
 
-    self.left_layout = self.workbench_config_layout
-    self.left_container = self.workbench_config_content
-    self._left_scroll = self.workbench_config_rail
+    # Two-pane layout: the left config sections merge into the workspace pane, so the
+    # "left" aliases point at the MERGED (workspace) pane — the new left-pane source of
+    # truth for sizing/scroll. ``workbench_config_*`` survive only as detached
+    # compatibility attributes (never a splitter pane).
+    self.left_layout = self.workbench_workspace_layout
+    self.left_container = self.workbench_workspace_content
+    self._left_scroll = self.workbench_workspace_canvas
 
+    # Order in the merged pane (top→bottom): input_section (added by _build_left_panel),
+    # then the per-mode config (formula/variable/mode_stack), then output_setup + run.
     self._build_left_panel()
     self.workbench_formula_panel = build_formula_workspace_panel(self)
     self.workbench_workspace_layout.addWidget(self.workbench_formula_panel)
@@ -357,6 +363,9 @@ def build_ui(self):
     self.workbench_workspace_layout.addWidget(self.workbench_variable_panel)
     reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
     populate_variable_workspace_panel(self)
+    # Footer sections at the BOTTOM of the merged pane.
+    self.workbench_workspace_layout.addWidget(self.output_setup_section)
+    self.workbench_workspace_layout.addWidget(self.run_section)
     self._build_right_panel(self.workbench_result_layout)
     # Part C/D: always-visible result status strip (footer of the result rail) +
     # click-to-open overview popover. Both read the shared result-state source and
@@ -594,48 +603,46 @@ def _clamp_workbench_splitter_sizes(sizes: list[int], minimums: list[int], total
 
 
 def _refresh_main_splitter_left_min_width(self) -> None:
-    config_content = getattr(self, "workbench_config_content", None)
-    config_scroll = getattr(self, "workbench_config_rail", None)
-    if config_content is not None and config_scroll is not None:
-        _activate_widget_layouts(config_content)
-        _refresh_visible_table_min_widths(config_content)
-        workspace_content = getattr(self, "workbench_workspace_content", None)
-        if workspace_content is not None:
-            _activate_widget_layouts(workspace_content)
-            _refresh_visible_table_min_widths(workspace_content)
-        _activate_widget_layouts(config_content)
+    # Two-pane layout: the merged (workspace) pane IS the left pane. Its minimum width
+    # is derived from the merged content, NOT the detached config rail. Pane 0 = merged
+    # workspace, pane 1 = result.
+    merged_content = getattr(self, "workbench_workspace_content", None)
+    merged_scroll = getattr(self, "workbench_workspace_canvas", None)
+    if merged_content is not None and merged_scroll is not None:
+        _activate_widget_layouts(merged_content)
+        _refresh_visible_table_min_widths(merged_content)
 
+        # The merged pane holds BOTH input and config, so its floor is the workspace
+        # canvas minimum (wider than the old config-rail minimum).
         content_min_width = max(
-            CONFIG_RAIL_MIN_WIDTH,
-            config_content.minimumSizeHint().width(),
+            WORKSPACE_CANVAS_MIN_WIDTH,
+            merged_content.minimumSizeHint().width(),
         )
-        config_content.setMinimumWidth(content_min_width)
-        left_min_width = content_min_width + scroll_viewport_overhead(config_scroll)
+        merged_content.setMinimumWidth(content_min_width)
+        left_min_width = content_min_width + scroll_viewport_overhead(merged_scroll)
         self._main_splitter_left_min_width = left_min_width
-        config_scroll.setMinimumWidth(left_min_width)
+        merged_scroll.setMinimumWidth(left_min_width)
 
         splitter = getattr(self, "_main_splitter", None)
-        workspace_scroll = getattr(self, "workbench_workspace_canvas", None)
         result_rail = getattr(self, "workbench_result_rail", None)
-        if splitter is None or splitter.count() < 3 or workspace_scroll is None or result_rail is None:
+        if splitter is None or splitter.count() < 2 or result_rail is None:
             return
 
-        center_min_width = max(1, workspace_scroll.minimumWidth())
         right_min_width = max(1, result_rail.minimumWidth())
         sizes = splitter.sizes()
-        if not sizes or len(sizes) < 3:
-            splitter.setSizes([left_min_width, center_min_width, right_min_width])
+        if not sizes or len(sizes) < 2:
+            splitter.setSizes([left_min_width, right_min_width])
             return
-        pane_sizes = sizes[:3]
-        minimums = [left_min_width, center_min_width, right_min_width]
+        pane_sizes = sizes[:2]
+        minimums = [left_min_width, right_min_width]
         if all(size >= minimum for size, minimum in zip(pane_sizes, minimums, strict=True)):
             return
 
         handle_total = splitter.handleWidth() * max(0, splitter.count() - 1)
-        total = sum(pane_sizes) or max(0, splitter.width() - handle_total - sum(sizes[3:]))
+        total = sum(pane_sizes) or max(0, splitter.width() - handle_total - sum(sizes[2:]))
         clamped = _clamp_workbench_splitter_sizes(pane_sizes, minimums, total)
         if clamped != pane_sizes:
-            splitter.setSizes(clamped + sizes[3:])
+            splitter.setSizes(clamped + sizes[2:])
         return
 
 
@@ -735,13 +742,15 @@ def build_left_panel(self):
 
     refresh_workbench_config_cards(self)
 
-    # ``mode_section`` is no longer a left-rail card — the compute-mode selector
-    # (``mode_combo``) is placed on the workbench toolbar (see below). The
-    # ``mode_section``/``mode_box`` widgets are kept as detached compatibility
-    # attributes but are NOT added to the config rail.
+    # Two-pane layout: the left config sections live in the MERGED workspace pane
+    # (``left_layout`` is aliased to the workspace layout in build_ui). Only the input
+    # section is added here, at the TOP; the per-mode config (formula/mode_stack) is
+    # added by build_ui right after, and ``output_setup_section`` + ``run_section`` are
+    # appended at the BOTTOM by build_ui (see _append_left_footer_sections). This yields
+    # the confirmed order: 输入 (top) → 配置 → 输出设置 → 运行.
+    # ``mode_section``/``mode_box`` are kept as detached compatibility attributes but are
+    # NOT added to any pane (the mode selector is on the toolbar).
     self.left_layout.addWidget(self.input_section)
-    self.left_layout.addWidget(self.output_setup_section)
-    self.left_layout.addWidget(self.run_section)
 
     # Mode selection
     self.mode_box = QGroupBox("计算模式")

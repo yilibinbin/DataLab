@@ -197,9 +197,13 @@ def test_main_splitter_left_minimum_refreshes_after_mode_visibility(window: Any)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
     QApplication.processEvents()
 
+    # Two-pane layout: the merged (left) pane floors at the workspace-canvas minimum
+    # (it now holds both input and config), not the old config-rail minimum.
+    from app_desktop.workbench_visual_contract import WORKSPACE_CANVAS_MIN_WIDTH
+
     left_scroll = window._left_scroll
     expected = max(
-        320,
+        WORKSPACE_CANVAS_MIN_WIDTH,
         window.left_container.minimumSizeHint().width(),
     ) + left_scroll.frameWidth() * 2 + left_scroll.verticalScrollBar().sizeHint().width()
     assert window._main_splitter_left_min_width == expected

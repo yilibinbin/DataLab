@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
 )
 
 from app_desktop.theme import (
-    CONFIG_RAIL_WIDTH,
     RESULT_RAIL_WIDTH,
     STATUS_STRIP_HEIGHT,
     WORKSPACE_GUTTER,
@@ -127,25 +126,27 @@ def build_workbench_main_splitter(owner: object) -> QSplitter:
     owner.workbench_result_rail = result_frame
     owner.workbench_result_layout = result_layout
 
-    splitter.addWidget(config_scroll)
+    # Two-pane layout: the config rail merged into the workspace canvas, so the
+    # splitter holds only [merged workspace pane | result pane]. ``config_scroll``
+    # is created (compatibility attribute) but is NOT a splitter pane — the input +
+    # config sections are re-anchored into ``workspace_scroll`` in ``panels.build_ui``.
     splitter.addWidget(workspace_scroll)
     splitter.addWidget(result_frame)
     for index in range(splitter.count()):
         splitter.setCollapsible(index, False)
-    splitter.setStretchFactor(0, 0)
-    splitter.setStretchFactor(1, 1)
-    splitter.setStretchFactor(2, 0)
+    splitter.setStretchFactor(0, 1)
+    splitter.setStretchFactor(1, 0)
 
     owner_width = int(getattr(owner, "width", lambda: 0)() or 0)
     available = max(
         owner_width,
-        CONFIG_RAIL_WIDTH + WORKSPACE_CANVAS_MIN_WIDTH + RESULT_RAIL_WIDTH,
+        WORKSPACE_CANVAS_MIN_WIDTH + RESULT_RAIL_WIDTH,
     )
     workspace_width = max(
         WORKSPACE_CANVAS_MIN_WIDTH,
-        available - CONFIG_RAIL_WIDTH - RESULT_RAIL_WIDTH,
+        available - RESULT_RAIL_WIDTH,
     )
-    splitter.setSizes([CONFIG_RAIL_WIDTH, workspace_width, RESULT_RAIL_WIDTH])
+    splitter.setSizes([workspace_width, RESULT_RAIL_WIDTH])
     return splitter
 
 

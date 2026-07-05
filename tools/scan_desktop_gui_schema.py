@@ -510,21 +510,23 @@ def _horizontal_scrollbar_issues(window: Any, scenarios: list[ScreenScenario]) -
         _apply_screen_scenario(window, scenario)
         QApplication.processEvents()
         _force_smallest_left_splitter(window)
-        scroll = window.findChild(QScrollArea, "workbench_config_rail")
+        # Two-pane layout: the left pane IS the merged workspace canvas (the config rail
+        # merged into it). Scan that pane for horizontal overflow. ``_left_scroll`` is the
+        # canonical alias for the current left pane; fall back to the object name.
+        scroll = getattr(window, "_left_scroll", None)
         kind = "workbench_config_horizontal_scrollbar"
-        widget = "workbench_config_rail"
+        widget = "_left_scroll"
         if scroll is None:
-            scroll = getattr(window, "_left_scroll", None)
-            kind = "horizontal_scrollbar"
-            widget = "_left_scroll"
+            scroll = window.findChild(QScrollArea, "workbench_workspace_canvas")
+            widget = "workbench_workspace_canvas"
         if scroll is None:
             issues.append(
                 _issue(
                     "missing_scroll_widget",
                     scenario,
-                    "workbench_config_rail",
-                    "neither workbench_config_rail nor _left_scroll found on window",
-                    attempted_widgets=["workbench_config_rail", "_left_scroll"],
+                    "workbench_workspace_canvas",
+                    "neither _left_scroll nor workbench_workspace_canvas found on window",
+                    attempted_widgets=["_left_scroll", "workbench_workspace_canvas"],
                 )
             )
             continue

@@ -65,26 +65,26 @@ def test_shell_sections_are_visible_in_expected_order(qtbot: Any) -> None:
 
     assert not hasattr(window, "parameters_section")
     assert not hasattr(window, "parameters_section_layout")
-    # The compute-mode selector now lives on the workbench toolbar (not a left-rail
-    # card), so the left panel starts at the input section.
-    assert [
-        window.input_section.objectName(),
-        window.output_setup_section.objectName(),
-        window.run_section.objectName(),
-    ] == ["input_section", "output_setup_section", "run_section"]
 
+    # Two-pane layout: the left config sections merged into the workspace pane. The
+    # merged pane stacks (top→bottom): input_section, then the per-mode config
+    # (formula/variable/mode_stack), then output_setup_section + run_section.
     layout_names = [
         window.left_layout.itemAt(index).widget().objectName()
         for index in range(window.left_layout.count())
         if window.left_layout.itemAt(index).widget() is not None
     ]
-    assert layout_names[:3] == [
-        "input_section",
-        "output_setup_section",
-        "run_section",
-    ]
-    # mode_section is no longer added to the left rail.
+    # input is first; output_setup + run are the last two (footer); mode_stack sits
+    # between them. The mode selector card is gone (moved to the toolbar).
+    assert layout_names[0] == "input_section"
+    assert layout_names[-2:] == ["output_setup_section", "run_section"]
     assert "mode_section" not in layout_names
+    assert "workbench_formula_panel" in layout_names
+    input_idx = layout_names.index("input_section")
+    stack_idx = layout_names.index("mode_stack")
+    run_idx = layout_names.index("run_section")
+    assert input_idx < stack_idx < run_idx, "order must be 输入 → 配置 → 运行"
+
     assert window.mode_stack.parentWidget() is window.workbench_workspace_content
     assert window.custom_params_table is not None
     assert window.custom_constants_editor is not None
