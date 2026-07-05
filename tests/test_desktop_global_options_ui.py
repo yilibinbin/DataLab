@@ -65,10 +65,11 @@ def test_global_precision_and_parallel_controls_have_schema_metadata(window: Any
 
 def test_global_latex_plot_and_log_controls_have_schema_metadata(window: Any) -> None:
     assert window.generate_latex_checkbox.property("datalab_schema_key") == "output.latex.enabled"
-    assert window.output_file_edit.property("datalab_schema_key") == "output.latex.path"
-    assert window.output_file_edit.toolTip()
-    assert window.output_browse_button.property("datalab_schema_key") == "output.latex.path"
-    assert window.output_browse_button.accessibleName() == "选择 LaTeX 输出路径"
+    # The LaTeX output-PATH field + browse button are no longer part of the options UI
+    # (the path is chosen at save-time in the TeX window). They remain as detached widgets
+    # but carry NO schema binding, so they are not enumerated as reachable config inputs.
+    assert window.output_file_edit.property("datalab_schema_key") is None
+    assert window.output_browse_button.property("datalab_schema_key") is None
 
     assert window.latex_input_precision_spin.property("datalab_schema_key") == "output.latex.input_digits"
     assert window.dcolumn_checkbox.property("datalab_schema_key") == "output.latex.dcolumn"
@@ -113,7 +114,6 @@ def test_global_schema_tooltips_and_choices_refresh_with_language(window: Any) -
     assert window.parallel_nested_policy_combo.currentData() == NestedParallelPolicy.ALLOW.value
     assert "Numerical precision" in window.mpmath_precision_spin.toolTip()
     assert "0 means automatic" in window.parallel_max_workers_spin.toolTip()
-    assert window.output_browse_button.accessibleName() == "Choose LaTeX output path"
     assert window.latex_compile_button.accessibleName() == "Compile PDF"
     assert window.pdf_zoom_reset_button.accessibleName() == "Reset PDF zoom"
 
@@ -124,12 +124,10 @@ def test_global_schema_tooltips_and_choices_refresh_with_language(window: Any) -
         "进程优先"
     )
     assert "数值计算精度" in window.mpmath_precision_spin.toolTip()
-    assert window.output_browse_button.accessibleName() == "选择 LaTeX 输出路径"
 
 
 def test_global_options_have_no_unbound_required_schema_widgets(window: Any) -> None:
-    # The global option controls moved out of ``options_box`` into the two inline
-    # toolbar panels (计算 / LaTeX). Audit the panels — auditing the now-empty
-    # ``options_box`` would vacuously pass and guard nothing.
-    assert find_unbound_required_widgets(window.compute_options_panel) == []
-    assert find_unbound_required_widgets(window.latex_options_panel) == []
+    # The global option controls live in the two toolbar option DIALOGS (计算 / LaTeX).
+    # Audit each dialog — auditing the now-empty ``options_box`` would vacuously pass.
+    assert find_unbound_required_widgets(window.compute_options_dialog) == []
+    assert find_unbound_required_widgets(window.latex_options_dialog) == []

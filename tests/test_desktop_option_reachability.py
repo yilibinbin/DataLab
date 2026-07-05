@@ -325,17 +325,17 @@ def _switch_mode(window: Any, app: Any, mode_value: str) -> None:
 
 
 def _open_option_panels(window: Any, app: Any) -> None:
-    """Open the inline 计算 / LaTeX toolbar option panels.
+    """Open the 计算 / LaTeX toolbar option DIALOGS.
 
-    The low-frequency options moved out of the left rail into two toggle panels that
-    are collapsed by default. Opening a panel is a genuine, visible user gate (click
-    the checkable toolbar button) — so the reachability sweep must perform it before
-    the panel-hosted controls can be ``isVisibleTo(window)``.
+    The low-frequency options live in two resizable QDialog windows opened from the
+    toolbar buttons. A QDialog child is ``isVisibleTo(window)`` only while the dialog is
+    shown, so the reachability sweep must open both dialogs (a genuine, visible user
+    gate — click the toolbar button) before the dialog-hosted controls are reachable.
     """
-    for attr in ("workbench_compute_options_button", "workbench_latex_options_button"):
-        button = getattr(window, attr, None)
-        if button is not None:
-            button.setChecked(True)
+    for attr in ("compute_options_dialog", "latex_options_dialog"):
+        dialog = getattr(window, attr, None)
+        if dialog is not None:
+            dialog.open_dialog()
     app.processEvents()
 
 

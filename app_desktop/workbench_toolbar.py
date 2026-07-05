@@ -208,10 +208,10 @@ def build_workbench_toolbar(owner: object) -> QWidget:
     layout.addWidget(dynamic_owner.workbench_run_button)
     layout.addWidget(dynamic_owner.workbench_stop_button)
 
-    # 计算 / LaTeX inline-options toggle buttons. They open normal (non-popup) panels
-    # dropped under the toolbar — see app_desktop.workbench_options_panel. Only the
-    # checkable buttons live here; panels.py builds + fills the panels once the real
-    # option controls exist (lazy/after-build), then binds each button to its panel.
+    # 计算 / LaTeX options buttons. They open resizable, non-modal QDialog windows —
+    # see app_desktop.options_dialogs. Only the buttons live here; panels.py builds the
+    # dialogs (reparenting the real option controls) once those controls exist
+    # (lazy/after-build), then binds each button to open its dialog.
     dynamic_owner.workbench_compute_options_button = make_toolbar_button(
         owner,
         "计算",

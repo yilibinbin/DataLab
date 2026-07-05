@@ -1070,17 +1070,15 @@ def build_left_panel(self):
 
     self.latex_options_widget = QWidget()
     latex_layout = QFormLayout(self.latex_options_widget)
+    # The LaTeX output PATH field is no longer shown in the options — the path is chosen
+    # at save-time via the TeX window's Save dialog (Module 1). ``output_file_edit`` is
+    # kept as a DETACHED widget on ``self`` so the save/persist code paths that reference
+    # ``self.output_file_edit`` keep working; it is simply not placed in the options UI.
     self.output_file_edit = QLineEdit()
     out_btn = QPushButton("选择…")
     out_btn.clicked.connect(self.browse_output_file)
     self._register_text(out_btn, "选择…", "Browse…")
     self.output_browse_button = out_btn
-    output_row = QHBoxLayout()
-    output_row.addWidget(self.output_file_edit)
-    output_row.addWidget(out_btn)
-    lbl_output = QLabel("LaTeX 输出路径：")
-    self._register_text(lbl_output, "LaTeX 输出路径：", "LaTeX output path:")
-    latex_layout.addRow(lbl_output, output_row)
     self.latex_input_precision_spin = QSpinBox()
     self.latex_input_precision_spin.setRange(6, 200)
     self.latex_input_precision_spin.setValue(20)
@@ -1139,7 +1137,6 @@ def build_left_panel(self):
         lbl_nested_policy=lbl_nested_policy,
         parallel_mode_items=parallel_mode_items,
         nested_policy_items=nested_policy_items,
-        lbl_output=lbl_output,
         prec_label=prec_label,
         group_size_label=group_size_label,
     )
@@ -1151,28 +1148,20 @@ def build_left_panel(self):
     # (window_latex_pdf_mixin.compile_latex_to_pdf) keep working
     # unchanged — they reference ``self.latex_engine_combo``.
 
-    # Low-frequency options move OUT of the left rail INTO two inline toggle panels
-    # dropped under the toolbar (see app_desktop.workbench_options_panel; dual-model
-    # VERDICT: INLINE). The REAL controls are reparented — never recreated — so their
-    # schema keys, signal wirings, and parallel-prefs persistence (all set up above)
-    # survive intact. options_box is NOT added to the rail; it becomes a detached,
-    # empty QGroupBox (its children move into the panels) but ``self.options_box`` is
-    # kept so the legacy-attribute shell-layout test still finds it.
-    from app_desktop.workbench_options_panel import (
+    # Low-frequency options live in two resizable, non-modal QDialog windows (计算 /
+    # LaTeX), opened from the toolbar buttons (see app_desktop.options_dialogs; user
+    # chose "真独立窗口"). The REAL controls are reparented — never recreated — into each
+    # dialog's content widget, so their schema keys, signal wirings, and parallel-prefs
+    # persistence (all set up above) survive intact. The run pipeline keeps reading
+    # ``self.<widget>`` unchanged; the controls just live in the dialog now.
+    from app_desktop.options_dialogs import (
         add_separator,
-        bind_options_toggle,
-        build_options_panel,
+        bind_options_button,
+        build_options_dialog,
     )
 
-    compute_panel = build_options_panel("compute")
-    self.compute_options_panel = compute_panel
-    latex_panel = build_options_panel("latex")
-    self.latex_options_panel = latex_panel
-
-    # Re-home the already-built groups. A layout/widget can have only one parent layout,
-    # and these were added to options_layout at creation — so detach each from
-    # options_layout first (removeItem for sub-layouts, removeWidget for widgets), then
-    # re-add to the panel. This reparents the SAME instances (schema keys preserved).
+    # Detach the already-built groups from options_layout (a layout/widget has one parent
+    # layout), then re-add to each dialog's content — reparenting the SAME instances.
     options_layout.removeItem(precision_layout)
     options_layout.removeItem(parallel_layout)
     options_layout.removeWidget(self.generate_latex_checkbox)
@@ -1180,33 +1169,29 @@ def build_left_panel(self):
     options_layout.removeWidget(self.generate_plots_checkbox)
     options_layout.removeWidget(self.verbose_checkbox)
 
-    compute_layout = compute_panel.layout()
+    compute_content = QWidget()
+    compute_content.setObjectName("compute_options_content")
+    compute_layout = QVBoxLayout(compute_content)
     compute_layout.addLayout(precision_layout)
     compute_layout.addLayout(parallel_layout)
     add_separator(compute_layout)
     compute_layout.addWidget(self.generate_plots_checkbox)
     compute_layout.addWidget(self.verbose_checkbox)
 
-    latex_panel_layout = latex_panel.layout()
-    latex_panel_layout.addWidget(self.generate_latex_checkbox)
-    latex_panel_layout.addWidget(self.latex_options_widget)
+    latex_content = QWidget()
+    latex_content.setObjectName("latex_options_content")
+    latex_content_layout = QVBoxLayout(latex_content)
+    latex_content_layout.addWidget(self.generate_latex_checkbox)
+    latex_content_layout.addWidget(self.latex_options_widget)
 
-    # Wire each toolbar button to its panel (buttons built in build_workbench_toolbar).
-    bind_options_toggle(self.workbench_compute_options_button, compute_panel)
-    bind_options_toggle(self.workbench_latex_options_button, latex_panel)
-
-    # The panels sit in a dedicated row inserted between the toolbar and the splitter
-    # (root_layout index 1). They expand horizontally; each is hidden until its button
-    # is toggled, so the row is zero-height at rest and the result area keeps the space.
-    options_panels_row = QWidget()
-    options_panels_row.setObjectName("options_panels_row")
-    _panels_row_layout = QVBoxLayout(options_panels_row)
-    _panels_row_layout.setContentsMargins(0, 0, 0, 0)
-    _panels_row_layout.setSpacing(0)
-    _panels_row_layout.addWidget(compute_panel)
-    _panels_row_layout.addWidget(latex_panel)
-    self.options_panels_row = options_panels_row
-    self.workbench_root.layout().insertWidget(1, options_panels_row)
+    self.compute_options_dialog = build_options_dialog(
+        self, "compute_options_dialog", "计算选项", "Compute options", compute_content
+    )
+    self.latex_options_dialog = build_options_dialog(
+        self, "latex_options_dialog", "LaTeX 选项", "LaTeX options", latex_content
+    )
+    bind_options_button(self.workbench_compute_options_button, self.compute_options_dialog)
+    bind_options_button(self.workbench_latex_options_button, self.latex_options_dialog)
 
     self.run_button = QPushButton("开始执行")
     self.run_button.setObjectName("run_button")
@@ -1867,7 +1852,6 @@ def _bind_global_options_schema_fields(
     lbl_nested_policy: QLabel,
     parallel_mode_items: list[tuple[str, str, str]],
     nested_policy_items: list[tuple[str, str, str]],
-    lbl_output: QLabel,
     prec_label: QLabel,
     group_size_label: QLabel,
 ) -> None:
@@ -1947,21 +1931,6 @@ def _bind_global_options_schema_fields(
         tooltip=LocalizedText("启用后将计算结果写入 LaTeX 文件。", "When enabled, write calculation results to a LaTeX file."),
         required=False,
     )
-    output_path_field = FormFieldSpec(
-        key="output.latex.path",
-        widget_kind="file",
-        label=LocalizedText("LaTeX 输出路径：", "LaTeX output path:"),
-        placeholder=LocalizedText("选择 .tex 输出文件", "Choose a .tex output file"),
-        tooltip=LocalizedText("LaTeX 结果文件的保存路径。", "Save path for the LaTeX result file."),
-        required=False,
-    )
-    output_browse_field = FormFieldSpec(
-        key="output.latex.path",
-        widget_kind="button",
-        label=LocalizedText("选择 LaTeX 输出路径", "Choose LaTeX output path"),
-        tooltip=LocalizedText("选择 LaTeX 输出文件路径。", "Choose the LaTeX output file path."),
-        required=False,
-    )
     input_digits_field = FormFieldSpec(
         key="output.latex.input_digits",
         widget_kind="number",
@@ -2020,7 +1989,6 @@ def _bind_global_options_schema_fields(
         (max_workers_field, lbl_parallel_workers, self.parallel_max_workers_spin),
         (reserve_cores_field, lbl_parallel_reserve, self.parallel_reserve_cores_spin),
         (nested_policy_field, lbl_nested_policy, self.parallel_nested_policy_combo),
-        (output_path_field, lbl_output, self.output_file_edit),
         (input_digits_field, prec_label, self.latex_input_precision_spin),
         (group_size_field, group_size_label, self.latex_group_size_spin),
     ]
@@ -2042,13 +2010,11 @@ def _bind_global_options_schema_fields(
         bind_field(field=field, widget=widget, lang=lang)
         register_schema_text_refresh(self, field, widget=widget)
 
-    bind_schema_command_button(
-        self,
-        self.output_browse_button,
-        field=output_browse_field,
-        accessible_name=LocalizedText("选择 LaTeX 输出路径", "Choose LaTeX output path"),
-        lang=lang,
-    )
+    # The LaTeX output-PATH field + its browse button are no longer part of the options
+    # UI (the save path is chosen at save-time in the TeX window). ``output_file_edit`` /
+    # ``output_browse_button`` remain as detached widgets on ``self`` for the save/persist
+    # code paths, but carry NO schema binding (so they are not enumerated as reachable
+    # config inputs).
 
 
 def _bind_result_latex_pdf_schema_fields(

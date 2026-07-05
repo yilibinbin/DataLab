@@ -122,13 +122,12 @@ def test_gui_schema_scan_reports_missing_help_as_issue(window: Any) -> None:
 
 
 def test_gui_schema_scan_reports_unbound_required_widget_in_options_panel(window: Any) -> None:
-    """The global options moved from ``options_box`` into the 计算/LaTeX toolbar panels.
-    The schema-binding scan MUST audit those panels — auditing the now-empty
+    """The global options moved from ``options_box`` into the 计算/LaTeX toolbar DIALOGS.
+    The schema-binding scan MUST audit those dialogs — auditing the now-empty
     ``options_box`` would pass vacuously and mask a required-but-unbound widget.
 
-    Simulate a binding regression: strip the schema key off a required panel widget
-    (keeping it required) and assert the scan flags ``compute_options_panel``. This
-    fails against a scanner still pointed at the empty ``options_box`` (Codex finding)."""
+    Simulate a binding regression: strip the schema key off a required dialog widget
+    (keeping it required) and assert the scan flags ``compute_options_dialog``."""
     from app_desktop.ui_schema_binder import SCHEMA_KEY_PROPERTY, SCHEMA_REQUIRED_PROPERTY
 
     spin = window.mpmath_precision_spin
@@ -139,9 +138,9 @@ def test_gui_schema_scan_reports_unbound_required_widget_in_options_panel(window
     report = scan_window(window, refresh_language=False)
 
     assert any(
-        issue["kind"] == "schema_binding" and issue["widget"] == "compute_options_panel"
+        issue["kind"] == "schema_binding" and issue["widget"] == "compute_options_dialog"
         for issue in report["structured_issues"]
-    ), "scan did not flag the unbound required widget in the compute options panel"
+    ), "scan did not flag the unbound required widget in the compute options dialog"
 
 
 def test_state_ownership_scan_reports_wrong_model_path_binding(window: Any) -> None:

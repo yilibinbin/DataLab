@@ -819,7 +819,7 @@ def _legacy_language_issues(window: Any, lang: str) -> list[dict[str, Any]]:
     # vacuously and mask an unbound required widget. A MISSING panel attribute must
     # also fail loudly: if a refactor drops a panel entirely, the audit would otherwise
     # pass vacuously and hide that the options are unreachable.
-    for panel_attr in ("compute_options_panel", "latex_options_panel"):
+    for panel_attr in ("compute_options_dialog", "latex_options_dialog"):
         if not hasattr(window, panel_attr) or getattr(window, panel_attr) is None:
             issues.append(
                 _issue(
