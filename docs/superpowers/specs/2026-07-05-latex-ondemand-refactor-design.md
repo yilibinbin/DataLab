@@ -76,14 +76,37 @@ compute-derived fields the window path drops; each is a small "retain N more key
    (`window.py:822-845`), workspace capture/restore (`workspace_controller.py:745-766,
    1111-1129`), scanner (`scan_desktop_gui_schema.py:822`).
 
-## Open question (Codex #5 — needs a decision before implementation)
-When a `.datalab` workspace with a result snapshot is RESTORED, `_last_*` stashes are
-cleared, so on-demand 生成 TeX has no data to rebuild from. Options:
-(a) **persist the LaTeX-rebuild inputs (or the generated tex source string) into the
-workspace** so restored results can still 生成 TeX — more work + a workspace schema addition;
-(b) **restored results can't 生成 TeX until re-run** — simpler, but 生成 TeX is disabled/greyed
-on a freshly-restored result. Recommend (b) for a first cut (disable the button when no live
-`_last_latex_inputs` for the current mode), with (a) as a follow-up.
+## RESOLVED (user decision, 2026-07-05): persist a full result snapshot; rebuild tex from it
+The user wants the tex to be **rebuildable from the input data + computed result** at any
+time — live OR after restoring a `.datalab` — so that adjusting LaTeX options regenerates
+WITHOUT recompute, and `.datalab` stores NO tex config (click 生成 → tex).
+
+**Foundation already exists (verified):** the workspace ALREADY captures a per-mode
+`result_snapshot` — `_capture_semantic_result_snapshot` (`workspace_controller.py:1481`)
+reads `_last_result_payloads` and builds per-mode snapshots via
+`build_statistics_result_snapshot` / `build_root_result_snapshot` /
+`build_fitting_comparison_result_snapshot` / `build_uncertainty_result_snapshot`
+(in `datalab_core/`), persisted as `result_snapshot` in the `.datalab` and restored on load.
+
+**So the design becomes:** the on-demand tex builder reads from this **result snapshot**
+(the single source that works both live and post-restore), NOT a transient `_last_*` stash.
+Concretely:
+1. **Extend the snapshot builders** to carry EVERY tex-rebuild input the recon/Codex found
+   missing (extrapolation: `table_segments`; error: `table_segments`+`constants`+
+   `used_columns`; statistics-plain: `rows`+`sigma_rows`; fitting-single:
+   `latex_group_size`+`uncertainty_digits`+`variable_pairs` order + `target_column`).
+2. **Add an extrapolation snapshot** — there is currently NO
+   `build_extrapolation_result_snapshot` (only statistics/fitting/root/uncertainty exist);
+   add one so extrapolation results also persist + rebuild.
+3. **On-demand `generate_latex_for_current_result()`** reads the current-mode snapshot +
+   live LaTeX-option widgets (dcolumn/group_size/caption/input_digits — these are OPTIONS,
+   deliberately re-read live so changing them regenerates) → calls the per-mode tex builder.
+4. This satisfies "restored results can 生成 TeX" for free (the snapshot is in the `.datalab`)
+   and "no tex config in the workspace" (only the semantic result snapshot is stored, which
+   already exists for other reasons — history/compare).
+
+This is a bigger change than the transient-stash version but matches the existing snapshot
+architecture, so it reuses proven machinery rather than inventing a parallel store.
 
 ## Architecture
 
