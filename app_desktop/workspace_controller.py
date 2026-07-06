@@ -764,7 +764,10 @@ def _restore_common_config(window: Any, common: Any, latex: Any) -> None:
         _set_checked_if(window, "caption_checkbox", latex.get("use_caption"))
         _set_text(getattr(window, "output_file_edit", None), str(latex.get("output_path") or ""))
         _set_text(getattr(window, "caption_edit", None), str(latex.get("caption") or ""))
-        _set_combo_data(getattr(window, "latex_engine_combo", None), str(latex.get("engine") or "tectonic"))
+        # engine is now an engine MODE (auto/bundled/local). An old workspace that stored a
+        # binary name (pdflatex/xelatex/tectonic) simply won't match a mode item and the
+        # combo stays at its default (auto) — safe graceful degradation.
+        _set_combo_data(getattr(window, "latex_engine_combo", None), str(latex.get("engine") or "auto"))
 
 
 def _restore_extrapolation_config(window: Any, config: Any) -> None:
@@ -1126,7 +1129,7 @@ def _capture_config(window: Any) -> dict[str, Any]:
             "group_size": _value(getattr(window, "latex_group_size_spin", None), 3),
             "use_caption": _checked(getattr(window, "caption_checkbox", None)),
             "caption": _text(getattr(window, "caption_edit", None)),
-            "engine": _combo_data(getattr(window, "latex_engine_combo", None), "tectonic"),
+            "engine": _combo_data(getattr(window, "latex_engine_combo", None), "auto"),
         },
         "extrapolation": {
             "method": _combo_data(getattr(window, "method_combo", None), "richardson"),

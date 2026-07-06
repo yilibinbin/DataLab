@@ -700,14 +700,15 @@ RESULT_LATEX_ENGINE_FIELD = select_field(
     key="latex.engine",
     label_zh="LaTeX 引擎：",
     label_en="LaTeX engine:",
-    default_value="tectonic",
+    default_value="auto",
     choices=(
-        _choice("pdflatex", "pdflatex", "pdflatex"),
-        _choice("xelatex", "xelatex", "xelatex"),
-        _choice("tectonic", "tectonic", "tectonic"),
+        # Engine MODE, not a specific binary — the app resolves the actual engine per mode.
+        _choice("auto", "自动", "Auto"),
+        _choice("bundled", "内置 Tectonic", "Bundled Tectonic"),
+        _choice("local", "本地 TeX", "Local TeX"),
     ),
-    tooltip_zh="选择用于编译 PDF 的 LaTeX 引擎。",
-    tooltip_en="Choose the LaTeX engine used to compile PDF output.",
+    tooltip_zh="自动优先本地 TeX（支持任意分组宽度），否则使用内置 Tectonic。",
+    tooltip_en="Auto prefers a local TeX (supports any group width), else the bundled Tectonic.",
     required=False,
 )
 RESULT_LATEX_ENGINE_PATH_FIELD = button_field(

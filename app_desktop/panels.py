@@ -1544,18 +1544,20 @@ def build_right_panel(self, layout: QVBoxLayout):
     latex_controls_row.addSpacing(16)
     latex_controls_row.addWidget(lbl_engine)
     self.latex_engine_combo = QComboBox()
-    # ``tectonic`` is offered alongside the traditional engines because
-    # it auto-downloads (~30 MB single binary) and resolves missing
-    # LaTeX packages over the net, so users without a local TeX Live
-    # install can still produce PDFs out of the box. See
-    # ``shared.latex_engine`` for the resolution + install pipeline.
-    self.latex_engine_combo.addItems(["pdflatex", "xelatex", "tectonic"])
-    # Tectonic is the default: it auto-installs (~30 MB single binary)
-    # if missing and resolves LaTeX packages over the net per-document,
-    # so users without a local TeX Live install still get a working
-    # PDF on first run. ``pdflatex`` / ``xelatex`` remain available
-    # for power users with a tuned local TeX install.
-    self.latex_engine_combo.setCurrentText("tectonic")
+    # Items (自动 / 内置 Tectonic / 本地 TeX) + data (auto/bundled/local) come from the
+    # latex.engine schema field's choices (single source of truth in shared/ui_specs.py —
+    # drives both desktop + web). The value is an engine MODE, not a binary; the compile
+    # mixin resolves the actual engine per mode. _mark_schema_choices retranslates the
+    # labels on language switch.
+    _latex_engine_field = _result_control_field("result.latex", "latex.engine")
+    _latex_engine_items = [
+        (_c.label.zh, _c.label.en, _c.value) for _c in _latex_engine_field.choices
+    ]
+    for _zh, _en, _data in _latex_engine_items:
+        self.latex_engine_combo.addItem(_zh, _data)
+    # Register for language-switch retranslation (rebuilds items in the active language,
+    # preserving the current selection by data) — same mechanism as the parallel combos.
+    self._register_combo(self.latex_engine_combo, _latex_engine_items)
     latex_controls_row.addWidget(self.latex_engine_combo)
     engine_btn = QPushButton("选择引擎路径…")
     engine_btn.clicked.connect(self._prompt_engine_selection)

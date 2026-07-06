@@ -388,7 +388,11 @@ class WindowLatexCompileMixin:
 
     # -------------------------------------------------------- Engine resolve --
     def _prompt_engine_selection(self):
-        engine = self.latex_engine_combo.currentText()
+        # Manual override: point at a specific LaTeX engine binary. The combo now holds an
+        # engine MODE (auto/bundled/local), so resolve the concrete engine the current mode
+        # would use and cache the picked path against that engine name.
+        choice = self._resolve_compile_engine()
+        engine = Path(choice.path).stem if choice is not None and choice.path else "tectonic"
         selected, _ = QFileDialog.getOpenFileName(
             self,
             self._tr(f"选择 {engine} 可执行文件", f"Select {engine} Executable"),
