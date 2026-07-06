@@ -13,6 +13,7 @@ dialog on the right tab.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -190,6 +191,55 @@ def test_render_pdf_registers_completion_callback_not_sync_read(window: Any, mon
         window._latex_compile_worker = None
         window._pdf_ready_callback = None
         dialog.close()
+
+
+def test_render_pdf_never_shows_a_stale_pdf(window: Any, monkeypatch: Any) -> None:
+    """After 生成 TeX regenerates fresh tex, an earlier last_pdf_path is STALE. render_pdf
+    must NOT fall back to rendering it — that showed the old tex's PDF (user-reported bug).
+    When no fresh compile starts, it reports status instead of rendering the stale page."""
+    dialog = _open_latex_dialog(window, initial_tab="tex")
+    # A PDF from a PREVIOUS compile is on record.
+    window.last_pdf_path = Path("/tmp/datalab_STALE.pdf")
+    rendered: list[Any] = []
+    monkeypatch.setattr(dialog, "_on_pdf_ready", lambda p: rendered.append(p))
+    # Compile early-returns without starting a worker (engine missing / user declined).
+    monkeypatch.setattr(window, "compile_latex_to_pdf", lambda: None)
+    window._latex_compile_worker = None
+
+    dialog.render_pdf()
+    QApplication.processEvents()
+
+    assert rendered == [], "must not render the stale last_pdf_path"
+    assert dialog._pdf_status.text() != dialog._tr("编译 PDF 中…", "Compiling PDF…"), (
+        "status must not be stuck on 'compiling'"
+    )
+    dialog.close()
+
+
+def test_render_pdf_clears_a_dead_worker_handle(window: Any, monkeypatch: Any) -> None:
+    """A prior compile that left a dead _latex_compile_worker handle must NOT block a fresh
+    compile forever (compile_latex_to_pdf early-returns on a live worker). render_pdf clears
+    a non-running handle first (regression for the permanently-stuck '正在编译中')."""
+    dialog = _open_latex_dialog(window, initial_tab="tex")
+
+    class _DeadWorker:
+        def isRunning(self) -> bool:  # noqa: N802 - Qt naming
+            return False
+
+    window._latex_compile_worker = _DeadWorker()
+    cleared_before_call: list[bool] = []
+    monkeypatch.setattr(
+        window,
+        "compile_latex_to_pdf",
+        lambda: cleared_before_call.append(window._latex_compile_worker is None),
+    )
+
+    dialog.render_pdf()
+    QApplication.processEvents()
+
+    assert cleared_before_call == [True], "dead worker handle must be cleared before compile"
+    window._pdf_ready_callback = None
+    dialog.close()
 
 
 def test_on_pdf_ready_rasterizes_into_dialog_scroll(window: Any, monkeypatch: Any, tmp_path: Any) -> None:

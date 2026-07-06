@@ -42,6 +42,20 @@ __all__ = ["LatexPreviewDialog", "open_latex_preview_dialog"]
 _PREVIEW_DPI = 150
 
 
+def _worker_is_running(worker: Any) -> bool:
+    """True if a compile worker (QThread) is genuinely still running.
+
+    A worker handle left set after a crash/early-exit reports ``isRunning() == False``; we
+    treat that as clearable so a fresh compile is not blocked forever."""
+    is_running = getattr(worker, "isRunning", None)
+    if callable(is_running):
+        try:
+            return bool(is_running())
+        except Exception:  # noqa: BLE001 — a dead C++ object counts as not running
+            return False
+    return False
+
+
 class LatexPreviewDialog(QDialog):
     """Resizable, non-modal TeX/PDF preview window (see module docstring)."""
 
@@ -124,36 +138,47 @@ class LatexPreviewDialog(QDialog):
         self._pdf_tab_index = self._tabs.addTab(tab, "PDF")
 
     def render_pdf(self) -> None:
-        """Compile the current tex via tectonic (ASYNC) and rasterize the result into this
+        """Compile the CURRENT tex via tectonic (ASYNC) and rasterize the result into this
         dialog's scroll when the compile finishes.
 
         ``compile_latex_to_pdf`` runs a background QThread; ``last_pdf_path`` is only valid
         in the compile-completion callback, NOT synchronously after the call returns. So we
         register a one-shot ``_pdf_ready_callback`` on the owner and let it fire
-        :meth:`_on_pdf_ready` when the PDF exists. If a PDF was already compiled and no
-        recompile is triggered, render it directly.
+        :meth:`_on_pdf_ready` when the PDF exists.
+
+        There is deliberately NO "fall back to the previous ``last_pdf_path``" path: the tex
+        was just regenerated on demand, so any earlier PDF is STALE — showing it would render
+        the old tex's PDF (the exact bug this method must not have). When a fresh compile can
+        NOT be started or completed, the status reports that instead of showing a stale page.
         """
         compile_fn = getattr(self._owner, "compile_latex_to_pdf", None)
-        if callable(compile_fn):
-            self._pdf_status.setText(self._tr("编译 PDF 中…", "Compiling PDF…"))
-            # Fire our renderer when the async compile completes.
-            self._owner._pdf_ready_callback = self._on_pdf_ready
-            compile_fn()
-            # If compile did NOT start a worker (e.g. nothing to compile), fall back to any
-            # already-compiled PDF so the dialog is not left stuck on "compiling".
-            if getattr(self._owner, "_latex_compile_worker", None) is None:
-                self._owner._pdf_ready_callback = None
-                existing = getattr(self._owner, "last_pdf_path", None)
-                if existing and Path(existing).exists():
-                    self._on_pdf_ready(Path(existing))
-                else:
-                    self._pdf_status.setText(
-                        self._tr("尚无已编译的 PDF。", "No compiled PDF yet.")
-                    )
+        if not callable(compile_fn):
+            self._pdf_status.setText(
+                self._tr("无法编译 PDF（缺少编译入口）。", "Cannot compile PDF (no compiler).")
+            )
             return
-        existing = getattr(self._owner, "last_pdf_path", None)
-        if existing and Path(existing).exists():
-            self._on_pdf_ready(Path(existing))
+
+        # A prior compile that never cleared its worker would otherwise block this one
+        # forever (compile_latex_to_pdf early-returns on a live worker), leaving the dialog
+        # stuck on "compiling". If no worker is genuinely running, clear the stale handle.
+        worker = getattr(self._owner, "_latex_compile_worker", None)
+        if worker is not None and not _worker_is_running(worker):
+            self._owner._latex_compile_worker = None
+
+        self._pdf_status.setText(self._tr("编译 PDF 中…", "Compiling PDF…"))
+        # Fire our renderer when the async compile completes.
+        self._owner._pdf_ready_callback = self._on_pdf_ready
+        compile_fn()
+        # If compile did NOT start a worker (engine missing / user declined / nothing to
+        # persist), the callback will never fire — clear it and report, but do NOT render a
+        # stale PDF.
+        if getattr(self._owner, "_latex_compile_worker", None) is None:
+            self._owner._pdf_ready_callback = None
+            if self._pdf_status.text() == self._tr("编译 PDF 中…", "Compiling PDF…"):
+                self._pdf_status.setText(
+                    self._tr("PDF 编译未开始（引擎不可用或已取消）。",
+                             "PDF compile did not start (engine unavailable or canceled).")
+                )
 
     def _on_pdf_ready(self, pdf_path: Any) -> None:
         """Rasterize a freshly-compiled PDF into the dialog's own scroll (dialog-owned dpi)."""
