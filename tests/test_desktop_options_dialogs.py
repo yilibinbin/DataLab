@@ -85,14 +85,18 @@ def test_options_dialogs_are_qdialogs_not_inline_panels(window: Any) -> None:
     assert getattr(window, "options_panels_row", None) is None
 
 
-def test_toolbar_buttons_open_the_dialogs(window: Any) -> None:
-    for which in ("compute", "latex"):
-        dialog = _dialog(window, which)
-        button = _button(window, which)
-        assert dialog.isVisible() is False, f"{which} dialog starts closed"
+def test_option_buttons_open_the_dialogs(window: Any) -> None:
+    # 计算 opens from its toolbar button; LaTeX moved to a result-panel entry
+    # (result_latex_options_button) — the toolbar no longer carries a LaTeX button.
+    cases = [
+        (_dialog(window, "compute"), _button(window, "compute")),
+        (_dialog(window, "latex"), window.result_latex_options_button),
+    ]
+    for dialog, button in cases:
+        assert dialog.isVisible() is False, "dialog starts closed"
         button.click()
         QApplication.processEvents()
-        assert dialog.isVisible() is True, f"clicking the button must open the {which} dialog"
+        assert dialog.isVisible() is True, "clicking the button must open the dialog"
         dialog.close()
 
 

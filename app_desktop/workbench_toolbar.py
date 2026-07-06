@@ -208,10 +208,11 @@ def build_workbench_toolbar(owner: object) -> QWidget:
     layout.addWidget(dynamic_owner.workbench_run_button)
     layout.addWidget(dynamic_owner.workbench_stop_button)
 
-    # 计算 / LaTeX options buttons. They open resizable, non-modal QDialog windows —
-    # see app_desktop.options_dialogs. Only the buttons live here; panels.py builds the
-    # dialogs (reparenting the real option controls) once those controls exist
-    # (lazy/after-build), then binds each button to open its dialog.
+    # 计算 options button. Opens a resizable, non-modal QDialog window — see
+    # app_desktop.options_dialogs. Only the button lives here; panels.py builds the dialog
+    # (reparenting the real option controls) once those controls exist (lazy/after-build),
+    # then binds the button to open its dialog. LaTeX options moved to a result-panel entry
+    # (result_latex_options_button) — user: 工具栏不需要 latex, 单独的 LaTeX 选项入口.
     dynamic_owner.workbench_compute_options_button = make_toolbar_button(
         owner,
         "计算",
@@ -222,18 +223,7 @@ def build_workbench_toolbar(owner: object) -> QWidget:
         tooltip_en="Precision and parallel/resource options.",
     )
     dynamic_owner.workbench_compute_options_button.setCheckable(True)
-    dynamic_owner.workbench_latex_options_button = make_toolbar_button(
-        owner,
-        "LaTeX",
-        "LaTeX",
-        "workbench_latex_options_button",
-        QStyle.StandardPixmap.SP_FileDialogDetailedView,
-        tooltip_zh="LaTeX 输出选项。",
-        tooltip_en="LaTeX output options.",
-    )
-    dynamic_owner.workbench_latex_options_button.setCheckable(True)
     layout.addWidget(dynamic_owner.workbench_compute_options_button)
-    layout.addWidget(dynamic_owner.workbench_latex_options_button)
 
     layout.addStretch(1)
 

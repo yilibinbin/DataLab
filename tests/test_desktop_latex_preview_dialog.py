@@ -124,6 +124,21 @@ def test_result_buttons_open_dialog_on_right_tab(window: Any, monkeypatch: Any) 
     dialog.close()
 
 
+def test_latex_options_button_lives_in_result_panel_not_toolbar(window: Any) -> None:
+    """The LaTeX options entry moved OUT of the toolbar INTO the result panel: a
+    result-side 「LaTeX 选项」 button opens the existing latex_options_dialog, and the
+    toolbar no longer carries a LaTeX button (user: 工具栏不需要 latex, 单独的 LaTeX 选项入口)."""
+    assert not hasattr(window, "workbench_latex_options_button")
+    btn = window.result_latex_options_button
+    assert btn.objectName() == "result_latex_options_button"
+
+    assert not window.latex_options_dialog.isVisible()
+    btn.click()
+    QApplication.processEvents()
+    assert window.latex_options_dialog.isVisible()
+    window.latex_options_dialog.close()
+
+
 def test_result_buttons_inform_when_no_result(window: Any, monkeypatch: Any) -> None:
     """With nothing to rebuild, clicking 生成 TeX informs the user and opens no dialog."""
     import app_desktop.window as win_mod

@@ -1190,7 +1190,8 @@ def build_left_panel(self):
         self, "latex_options_dialog", "LaTeX 选项", "LaTeX options", latex_content
     )
     bind_options_button(self.workbench_compute_options_button, self.compute_options_dialog)
-    bind_options_button(self.workbench_latex_options_button, self.latex_options_dialog)
+    # latex_options_dialog is opened from the result-panel 「LaTeX 选项」 button
+    # (result_latex_options_button), bound in build_right_panel after that button exists.
 
     self.run_button = QPushButton("开始执行")
     self.run_button.setObjectName("run_button")
@@ -1268,8 +1269,18 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.result_preview_pdf_button.clicked.connect(
         lambda _c=False: self.open_latex_preview("pdf")
     )
+    # LaTeX 选项 opens the (existing) latex_options_dialog — the entry moved here from the
+    # toolbar (user: 工具栏不需要 latex). The dialog is built later in build_left_panel;
+    # the button→dialog binding happens there once the dialog exists.
+    self.result_latex_options_button = QPushButton("LaTeX 选项")
+    self.result_latex_options_button.setObjectName("result_latex_options_button")
+    self._register_text(self.result_latex_options_button, "LaTeX 选项", "LaTeX options")
+    from app_desktop.options_dialogs import bind_options_button
+
+    bind_options_button(self.result_latex_options_button, self.latex_options_dialog)
     latex_button_row.addWidget(self.result_generate_tex_button)
     latex_button_row.addWidget(self.result_preview_pdf_button)
+    latex_button_row.addWidget(self.result_latex_options_button)
     latex_button_row.addStretch(1)
     result_layout.addLayout(latex_button_row)
 

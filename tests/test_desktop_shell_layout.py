@@ -49,7 +49,6 @@ def test_shell_exposes_workbench_bar_controls(qtbot: Any) -> None:
         "workbench_run_button",
         "workbench_stop_button",
         "workbench_compute_options_button",
-        "workbench_latex_options_button",
         "docs_button",
         "check_updates_button",
         "workspace_status_label",
