@@ -75,6 +75,11 @@ class LatexPreviewDialog(QDialog):
         self._build_tex_tab()
         self._build_pdf_tab()
 
+        # Switching TO the PDF tab compiles + renders on demand — users expect the PDF tab
+        # to show the PDF, not only the 预览 PDF button. Without this, manually clicking the
+        # PDF tab left the status frozen and no compile ever ran.
+        self._tabs.currentChanged.connect(self._on_tab_changed)
+
     # -- TeX tab ------------------------------------------------------------
     def _build_tex_tab(self) -> None:
         from app_desktop.latex_highlighter import LatexHighlighter
@@ -131,7 +136,10 @@ class LatexPreviewDialog(QDialog):
         self._pdf_container_layout = QVBoxLayout(self._pdf_container)
         self._pdf_container_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._pdf_scroll.setWidget(self._pdf_container)
-        self._pdf_status = QLabel(self._tr("编译 PDF 中…", "Compiling PDF…"))
+        # Neutral initial text — NOT "编译 PDF 中…". The compiling text is set only when a
+        # compile actually starts (render_pdf); a default of "compiling" made a not-yet-
+        # compiled PDF tab look permanently stuck (user-reported bug).
+        self._pdf_status = QLabel(self._tr("尚未编译 PDF", "No PDF compiled yet"))
         self._pdf_status.setObjectName("latex_preview_pdf_status")
         v.addWidget(self._pdf_status)
         v.addWidget(self._pdf_scroll, 1)
@@ -234,13 +242,34 @@ class LatexPreviewDialog(QDialog):
             source = editor.toPlainText()
         self._tex_view.setPlainText(source)
         if initial_tab == "pdf":
-            self._tabs.setCurrentIndex(self._pdf_tab_index)
-            self.render_pdf()
+            # Setting the index fires currentChanged → _on_tab_changed → render_pdf when the
+            # tab actually changes. If we're already on the PDF tab, the signal won't fire,
+            # so render explicitly. _render_pdf_once guards against a double compile.
+            if self._tabs.currentIndex() == self._pdf_tab_index:
+                self._render_pdf_once()
+            else:
+                self._tabs.setCurrentIndex(self._pdf_tab_index)
         else:
             self._tabs.setCurrentIndex(self._tex_tab_index)
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def _on_tab_changed(self, index: int) -> None:
+        """When the user switches TO the PDF tab, compile + render on demand."""
+        if index == self._pdf_tab_index:
+            self._render_pdf_once()
+
+    def _render_pdf_once(self) -> None:
+        """Call render_pdf, guarded against re-entrancy so a tab switch that also triggers
+        an explicit render (show_tab) does not compile twice."""
+        if getattr(self, "_rendering_pdf", False):
+            return
+        self._rendering_pdf = True
+        try:
+            self.render_pdf()
+        finally:
+            self._rendering_pdf = False
 
     def _tr(self, zh: str, en: str) -> str:
         tr = getattr(self._owner, "_tr", None)

@@ -153,6 +153,38 @@ def test_result_buttons_inform_when_no_result(window: Any, monkeypatch: Any) -> 
     assert getattr(window, "_latex_preview_dialog", None) is None
 
 
+def test_pdf_status_does_not_lie_compiling_before_any_compile(window: Any) -> None:
+    """The PDF tab's status label must NOT read '编译 PDF 中…' before a compile has been
+    triggered — that made a NOT-YET-compiled tab look permanently stuck compiling
+    (user-reported '一直显示正在编译中'). It should start in a neutral 'no PDF yet' state."""
+    window.latex_edit.setPlainText(_TEX)
+    dialog = _open_latex_dialog(window, initial_tab="tex")  # open on TeX tab, no compile
+    try:
+        status = dialog._pdf_status.text()
+        assert "编译 PDF 中" not in status and "Compiling" not in status, (
+            f"PDF status falsely claims compiling before any compile: {status!r}"
+        )
+    finally:
+        dialog.close()
+
+
+def test_switching_to_pdf_tab_triggers_compile(window: Any, monkeypatch: Any) -> None:
+    """Clicking the PDF tab inside the dialog must trigger a compile (users expect the PDF
+    tab to show the PDF). Previously only the 预览 PDF button compiled, so manually
+    switching to the PDF tab left the default '编译 PDF 中…' label frozen forever."""
+    window.latex_edit.setPlainText(_TEX)
+    dialog = _open_latex_dialog(window, initial_tab="tex")  # start on TeX tab
+    calls: list[int] = []
+    monkeypatch.setattr(dialog, "render_pdf", lambda: calls.append(1))
+    try:
+        # Switch to the PDF tab as a user would (not via the 预览 PDF button).
+        dialog._tabs.setCurrentIndex(dialog._pdf_tab_index)
+        QApplication.processEvents()
+        assert calls, "switching to the PDF tab must trigger render_pdf (a compile)"
+    finally:
+        dialog.close()
+
+
 def test_render_pdf_registers_completion_callback_not_sync_read(window: Any, monkeypatch: Any) -> None:
     """render_pdf must NOT read last_pdf_path synchronously after the async compile — it
     must register a one-shot _pdf_ready_callback that the compile-completion path fires.
