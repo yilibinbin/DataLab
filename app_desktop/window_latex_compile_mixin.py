@@ -153,19 +153,26 @@ class WindowLatexCompileMixin:
         target = self._persist_latex_editor(silent=True)
         if not target:
             return
-        # Tectonic-only: PDF compilation always uses the bundled/auto-installed
-        # Tectonic engine — no engine selector, no pdflatex/xelatex fallback, no
-        # dependency on a locally installed TeX distribution.
-        engine = "tectonic"
-        engine_exec = self._ensure_latex_engine(engine)
+        # Engine per the user's mode (auto/bundled/local). Auto prefers a capable local TeX
+        # (native S-column variable-width grouping) and falls back to the bundled/auto-
+        # installed Tectonic. If nothing resolves and the mode allows Tectonic, offer the
+        # one-shot Tectonic install as the guaranteed fallback.
+        choice = self._resolve_compile_engine()
+        if choice is not None and choice.path and Path(choice.path).exists():
+            engine = Path(choice.path).stem
+            engine_exec = choice.path
+        else:
+            engine = "tectonic"
+            engine_exec = self._ensure_latex_engine(engine)
         if not engine_exec:
             QMessageBox.critical(
                 self,
-                self._tr("缺少 Tectonic 引擎", "Missing Tectonic Engine"),
+                self._tr("缺少 LaTeX 引擎", "Missing LaTeX Engine"),
                 self._tr(
-                    "无法准备 Tectonic 引擎（下载或安装失败）。请检查网络连接后重试。",
-                    "Could not prepare the Tectonic engine (download or install failed). "
-                    "Check your network connection and try again.",
+                    "未找到可用的 LaTeX 引擎。请安装本地 TeX，或切换到内置 Tectonic"
+                    "（自动下载约 30 MB）。",
+                    "No usable LaTeX engine found. Install a local TeX, or switch to the "
+                    "bundled Tectonic (auto-downloads ~30 MB).",
                 ),
             )
             return
@@ -173,8 +180,8 @@ class WindowLatexCompileMixin:
         if not engine_path.exists():
             QMessageBox.critical(
                 self,
-                self._tr("缺少 Tectonic 引擎", "Missing Tectonic Engine"),
-                self._tr("Tectonic 引擎不可用。", "The Tectonic engine is not available."),
+                self._tr("缺少 LaTeX 引擎", "Missing LaTeX Engine"),
+                self._tr("LaTeX 引擎不可用。", "The LaTeX engine is not available."),
             )
             return
         self._append_log(

@@ -66,22 +66,22 @@ def test_compile_latex_to_pdf_returns_after_starting_background_worker(
     # its module namespace is where _LatexCompileWorker is resolved/patched.
     import app_desktop.window_latex_compile_mixin as latex_mixin
 
+    from shared.latex_engine import EngineChoice
+
     fake_engine = tmp_path / "xelatex"
     fake_engine.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fake_engine.chmod(0o755)
     tex_path = tmp_path / "report.tex"
     window.current_latex_path = tex_path
     window.latex_edit.setPlainText(r"\documentclass{article}\begin{document}x\end{document}")
-    # Tectonic-only: the engine is always "tectonic", regardless of any prior UI state.
-    selected_engine = "tectonic"
-    ensure_calls: list[str] = []
-
-    def fake_ensure(engine: str) -> str:
-        ensure_calls.append(engine)
-        assert engine == selected_engine
-        return str(fake_engine)
-
-    monkeypatch.setattr(window, "_ensure_latex_engine", fake_ensure)
+    # Engine-adaptive: compile resolves the engine per the current mode. Here the resolver
+    # returns a local xelatex, so the compile uses it directly (no tectonic fallback, no
+    # _ensure_latex_engine call). engine_name is the resolved binary's stem.
+    selected_engine = "xelatex"
+    monkeypatch.setattr(
+        window, "_resolve_compile_engine",
+        lambda: EngineChoice(path=str(fake_engine), source="system"),
+    )
     _DummyLatexCompileWorker.instances.clear()
     monkeypatch.setattr(latex_mixin, "_LatexCompileWorker", _DummyLatexCompileWorker)
 
@@ -98,7 +98,6 @@ def test_compile_latex_to_pdf_returns_after_starting_background_worker(
         assert window._latex_compile_worker is worker
         assert window.latex_compile_button.isEnabled() is False
         assert worker.completed.callbacks == [window._on_latex_compile_completed]
-        assert ensure_calls == [selected_engine]
         log_text = window.log_edit.toPlainText()
         assert selected_engine in log_text
         assert str(fake_engine) in log_text
@@ -111,48 +110,39 @@ def test_compile_latex_to_pdf_returns_after_starting_background_worker(
             window._latex_compile_progress = None
 
 
-def test_compile_latex_always_uses_tectonic_no_local_tex_fallback(
+def test_compile_latex_uses_resolved_engine_over_tectonic_fallback(
     window: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Tectonic-only: even with local pdflatex/xelatex present, compile uses tectonic
-    and NEVER falls back to a local engine. The worker gets no fallback engine."""
+    """Engine-adaptive: when _resolve_compile_engine returns an engine (e.g. a capable local
+    TeX in auto mode), compile uses it directly and does NOT fall back to tectonic /
+    _ensure_latex_engine."""
     import app_desktop.window_latex_compile_mixin as latex_mixin
+    from shared.latex_engine import EngineChoice
 
-    # Local engines are present — they must be ignored.
-    for name in ("xelatex", "pdflatex"):
-        exe = tmp_path / name
-        exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        exe.chmod(0o755)
-    fake_tectonic = tmp_path / "tectonic"
-    fake_tectonic.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    fake_tectonic.chmod(0o755)
+    fake_xelatex = tmp_path / "xelatex"
+    fake_xelatex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_xelatex.chmod(0o755)
     window.current_latex_path = tmp_path / "report.tex"
     window.latex_edit.setPlainText(r"\documentclass{article}\begin{document}x\end{document}")
 
     ensure_calls: list[str] = []
-
-    def fake_ensure(engine: str) -> str:
-        ensure_calls.append(engine)
-        return str(fake_tectonic)
-
-    monkeypatch.setattr(window, "_ensure_latex_engine", fake_ensure)
+    monkeypatch.setattr(window, "_ensure_latex_engine", lambda e: ensure_calls.append(e))
+    monkeypatch.setattr(
+        window, "_resolve_compile_engine",
+        lambda: EngineChoice(path=str(fake_xelatex), source="system"),
+    )
     _DummyLatexCompileWorker.instances.clear()
     monkeypatch.setattr(latex_mixin, "_LatexCompileWorker", _DummyLatexCompileWorker)
 
     window.compile_latex_to_pdf()
     worker = _DummyLatexCompileWorker.instances[0]
     try:
-        # Only tectonic was ever requested — the local engines were not consulted.
-        assert ensure_calls == ["tectonic"]
-        assert worker.kwargs["engine_name"] == "tectonic"
-        assert worker.kwargs["engine_path"] == fake_tectonic
-        # No fallback engine wired into the worker (tectonic-only).
-        assert worker.kwargs["fallback_name"] is None
-        assert worker.kwargs["fallback_path"] is None
+        assert worker.kwargs["engine_name"] == "xelatex"
+        assert worker.kwargs["engine_path"] == fake_xelatex
+        # Resolver returned an engine → the tectonic-install fallback was never consulted.
+        assert ensure_calls == []
         log_text = window.log_edit.toPlainText()
-        assert "tectonic" in log_text
-        assert str(tmp_path / "xelatex") not in log_text
-        assert str(tmp_path / "pdflatex") not in log_text
+        assert "xelatex" in log_text
     finally:
         worker.started = False
         window._latex_compile_worker = None
@@ -162,17 +152,18 @@ def test_compile_latex_always_uses_tectonic_no_local_tex_fallback(
             window._latex_compile_progress = None
 
 
-def test_compile_latex_reports_error_when_tectonic_unavailable(
+def test_compile_latex_reports_error_when_no_engine_available(
     window: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """When tectonic cannot be prepared (download/install failed), compile reports an
-    error and starts NO worker — there is no local-TeX escape hatch."""
+    """When neither a resolved engine nor the tectonic fallback is available, compile reports
+    an error and starts NO worker."""
     import app_desktop.window_latex_compile_mixin as latex_mixin
 
     window.current_latex_path = tmp_path / "report.tex"
     window.latex_edit.setPlainText(r"\documentclass{article}\begin{document}x\end{document}")
 
     critical_calls: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(window, "_resolve_compile_engine", lambda: None)
     monkeypatch.setattr(window, "_ensure_latex_engine", lambda _engine: None)
     monkeypatch.setattr(
         latex_mixin.QMessageBox, "critical", lambda *args: critical_calls.append(args)
@@ -185,7 +176,7 @@ def test_compile_latex_reports_error_when_tectonic_unavailable(
     assert _DummyLatexCompileWorker.instances == []
     assert getattr(window, "_latex_compile_worker", None) is None
     assert window.latex_compile_button.isEnabled() is True
-    assert critical_calls, "a missing tectonic engine must surface a critical error"
+    assert critical_calls, "no usable engine must surface a critical error"
 
 
 def test_latex_compile_worker_participates_in_window_stop_lifecycle(
