@@ -826,6 +826,9 @@ class WindowExtrapolationMixin:
             latex_group_size=self.latex_group_size_spin.value()
             if hasattr(self, "latex_group_size_spin")
             else 3,
+            native_group_width=self._engine_supports_group_width()
+            if hasattr(self, "_engine_supports_group_width")
+            else True,
         )
         self._load_latex_into_editor(output_path)
         return str(output_path)
