@@ -88,7 +88,9 @@ def _statistics_input_units_for_labels(
     return unit_annotations_for_labels(units, "inputs", labels, fallback_prefix="column")
 
 
-def _statistics_latex_preamble(*, use_dcolumn: bool, group_size: int) -> list[str]:
+def _statistics_latex_preamble(
+    *, use_dcolumn: bool, group_size: int, native_group_width: bool = True
+) -> list[str]:
     from datalab_latex.sisetup_block import build_sisetup_block
 
     lines = [
@@ -116,10 +118,15 @@ def _statistics_latex_preamble(*, use_dcolumn: bool, group_size: int) -> list[st
         lines.append("\\usepackage{dcolumn}")
         lines.append("\\newcolumntype{d}[1]{D{.}{.}{#1}}")
     lines.append("\\usepackage{siunitx}")
+    # native_group_width True → the engine honours digit-group-size → emit it (S-column
+    # native variable-width grouping). False → don't emit (bundled Tectonic rejects it); the
+    # cells are pre-grouped app-side instead. group_size 0 / dcolumn → no override anyway.
+    emit_dgs = True if (native_group_width and not use_dcolumn and group_size > 0) else False
     lines.append(
         build_sisetup_block(
             group_size=group_size,
             include_dcolumn=use_dcolumn,
+            emit_digit_group_size=emit_dgs,
         ).rstrip("\n")
     )
     return lines
@@ -174,10 +181,25 @@ def generate_statistics_latex(
     caption: str | None = None,
     latex_group_size: int = 3,
     units: Mapping[str, Any] | None = None,
+    native_group_width: bool = True,
 ):
     from data_extrapolation_latex_latest import calculate_dcolumn_format_for_column, siunitx_column_spec
+    from datalab_latex.latex_formatting import group_digits_both_sides
 
     group_size = max(0, int(latex_group_size))
+    # App-side grouping: when the compile engine's siunitx CANNOT vary the digit-group width
+    # (native_group_width False → bundled Tectonic siunitx 3.0.49) AND grouping is on in
+    # siunitx (non-dcolumn) mode, pre-group each cell here (any width) and print it as a
+    # plain \text{} cell in an r column, instead of a raw number in an S column that siunitx
+    # would re-group at a fixed 3. When native_group_width is True (capable local TeX) the
+    # S column + \sisetup{digit-group-size} does the grouping natively.
+    app_group = (not native_group_width) and (not use_dcolumn) and group_size > 0
+
+    def _maybe_group(cell: str) -> str:
+        if app_group and "\\multicolumn" not in cell and "\\text" not in cell:
+            return "\\text{" + group_digits_both_sides(cell, group_size) + "}"
+        return cell
+
     num_cols = len(data_rows[0]) if data_rows else 0
     formatted_columns: list[list[str]] = [[] for _ in range(num_cols)]
     for row_idx, row in enumerate(data_rows):
@@ -195,13 +217,16 @@ def generate_statistics_latex(
                 is_input=True,
                 group_size=group_size,
             )
-            formatted_columns[col_idx].append(cell)
+            formatted_columns[col_idx].append(_maybe_group(cell))
 
     if use_dcolumn:
         num_specs = [
             calculate_dcolumn_format_for_column(formatted_columns[i], f"stats_data_col_{i}")
             for i in range(num_cols)
         ]
+    elif app_group:
+        # Plain right-aligned column: cell text is already grouped + wrapped in \text{}.
+        num_specs = ["r"] * num_cols
     else:
         num_specs = [siunitx_column_spec(formatted_columns[i]) for i in range(num_cols)]
     data_col_spec = "l" + ("" if not num_specs else " " + " ".join(num_specs))
@@ -209,7 +234,7 @@ def generate_statistics_latex(
     input_units = _statistics_input_units_for_labels(units, data_column_labels)
 
     def _format_summary_value(value, sigma, is_input: bool) -> str:
-        return _format_table_value(
+        cell = _format_table_value(
             value,
             sigma,
             digits,
@@ -218,6 +243,7 @@ def generate_statistics_latex(
             is_input=is_input,
             group_size=group_size,
         )[0]
+        return _maybe_group(cell)
 
     summary_rows = build_statistics_latex_summary_rows(
         result,
@@ -226,7 +252,9 @@ def generate_statistics_latex(
     )
     summary_units = statistics_latex_summary_units_for_rows(units, summary_rows)
 
-    lines = _statistics_latex_preamble(use_dcolumn=use_dcolumn, group_size=group_size)
+    lines = _statistics_latex_preamble(
+        use_dcolumn=use_dcolumn, group_size=group_size, native_group_width=native_group_width
+    )
 
     title = f"Statistical Summary ({result.get('method_label', '')})"
     table_caption = caption if caption else f"Statistical summary for {value_col}"
@@ -303,10 +331,20 @@ def generate_statistics_latex_batches(
     uncertainty_digits: int | None = None,
     latex_group_size: int = 3,
     units: Mapping[str, Any] | None = None,
+    native_group_width: bool = True,
 ):
     from data_extrapolation_latex_latest import calculate_dcolumn_format_for_column, siunitx_column_spec
+    from datalab_latex.latex_formatting import group_digits_both_sides
 
     group_size = max(0, int(latex_group_size))
+    # See generate_statistics_latex: app-side pre-grouping when the engine can't vary width.
+    app_group = (not native_group_width) and (not use_dcolumn) and group_size > 0
+
+    def _maybe_group(cell: str) -> str:
+        if app_group and "\\multicolumn" not in cell and "\\text" not in cell:
+            return "\\text{" + group_digits_both_sides(cell, group_size) + "}"
+        return cell
+
     def _build_block(
         batch_idx: int,
         rows,
@@ -333,13 +371,15 @@ def generate_statistics_latex_batches(
                     is_input=True,
                     group_size=group_size,
                 )
-                formatted_columns[col_idx].append(cell)
+                formatted_columns[col_idx].append(_maybe_group(cell))
 
         if use_dcolumn:
             num_specs = [
                 calculate_dcolumn_format_for_column(formatted_columns[i], f"stats_batch_{batch_idx}_col_{i}")
                 for i in range(num_cols)
             ]
+        elif app_group:
+            num_specs = ["r"] * num_cols
         else:
             num_specs = [siunitx_column_spec(formatted_columns[i]) for i in range(num_cols)]
         data_col_spec = "l" + ("" if not num_specs else " " + " ".join(num_specs))
@@ -347,7 +387,7 @@ def generate_statistics_latex_batches(
         input_units = _statistics_input_units_for_labels(block_units, data_column_labels)
 
         def _format_summary_value(value, sigma, is_input: bool) -> str:
-            return _format_table_value(
+            cell = _format_table_value(
                 value,
                 sigma,
                 digits,
@@ -356,6 +396,7 @@ def generate_statistics_latex_batches(
                 is_input=is_input,
                 group_size=group_size,
             )[0]
+            return _maybe_group(cell)
 
         summary_rows = build_statistics_latex_summary_rows(
             result,
@@ -419,7 +460,9 @@ def generate_statistics_latex_batches(
         lines_block.extend(["\\bottomrule", "\\end{tabular}", "\\end{table}", ""])
         return lines_block
 
-    lines = _statistics_latex_preamble(use_dcolumn=use_dcolumn, group_size=group_size)
+    lines = _statistics_latex_preamble(
+        use_dcolumn=use_dcolumn, group_size=group_size, native_group_width=native_group_width
+    )
 
     title = f"Statistical Summary ({value_col})"
     base_caption = caption if caption else f"Statistical summary for {value_col}"

@@ -46,6 +46,8 @@ from shared.latex_engine import (
     UnsupportedPlatformError,
     find_app_root,
     resolve_engine,
+    resolve_engine_for_mode,
+    siunitx_supports_digit_group_size,
 )
 
 import tempfile
@@ -116,6 +118,29 @@ class WindowLatexCompileMixin:
             )
             return
         self._load_latex_into_editor(self.current_latex_path, show_message=show_message)
+
+    def _latex_engine_mode(self) -> str:
+        """The user's engine MODE: 'auto' | 'bundled' | 'local'. Reads latex_engine_combo's
+        current data (the combo hosts the mode now); defaults to 'auto'."""
+        combo = getattr(self, "latex_engine_combo", None)
+        if combo is not None:
+            data = combo.currentData()
+            if data in {"auto", "bundled", "local"}:
+                return str(data)
+        return "auto"
+
+    def _resolve_compile_engine(self) -> "EngineChoice | None":
+        """Resolve the compile engine for the current mode (no install prompt here)."""
+        return resolve_engine_for_mode(self._latex_engine_mode(), bundle_root=find_app_root())
+
+    def _engine_supports_group_width(self) -> bool:
+        """True iff the engine that will compile honours siunitx digit-group-size — i.e. the
+        tex writers can use S-column native variable-width grouping. False → app-side text
+        grouping. Resolved + probed (cached in shared.latex_engine)."""
+        choice = self._resolve_compile_engine()
+        if choice is None or not choice.path:
+            return False
+        return siunitx_supports_digit_group_size(choice.path)
 
     def compile_latex_to_pdf(self):
         if getattr(self, "_latex_compile_worker", None) is not None:

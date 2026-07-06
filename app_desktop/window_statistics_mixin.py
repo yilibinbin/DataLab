@@ -312,6 +312,10 @@ class WindowStatisticsMixin:
         use_dcolumn = (
             self.dcolumn_checkbox.isChecked() if hasattr(self, "dcolumn_checkbox") else False
         )
+        # Engine-adaptive grouping: if the compile engine's siunitx honours digit-group-size
+        # (local TeX) use native S-column variable-width grouping; otherwise (bundled
+        # Tectonic) the writer pre-groups the cells itself.
+        native = self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True
         if len(display_batches) == 1:
             entry = display_batches[0]
             generate_statistics_latex(
@@ -326,6 +330,7 @@ class WindowStatisticsMixin:
                 caption=self._caption_value(),
                 latex_group_size=group_size,
                 units=entry.get("units") if isinstance(entry.get("units"), Mapping) else None,
+                native_group_width=native,
             )
         else:
             generate_statistics_latex_batches(
@@ -337,6 +342,7 @@ class WindowStatisticsMixin:
                 caption=self._caption_value(),
                 uncertainty_digits=self._uncertainty_digits_value(),
                 latex_group_size=group_size,
+                native_group_width=native,
             )
         self._load_latex_into_editor(output_path)
         return str(output_path)
