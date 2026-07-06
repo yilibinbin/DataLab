@@ -97,6 +97,37 @@ def test_result_rail_has_overview_and_data_table(qtbot: Any) -> None:
     assert window.result_tabs.tabToolTip(window.result_tabs_indices["numeric"]) == "数值结果"
 
 
+def test_latex_pdf_tabs_removed_from_result_tabs_but_widgets_survive(qtbot: Any) -> None:
+    """The TeX/PDF result tabs are gone (the on-demand preview dialog is the viewer),
+    but the underlying widgets stay alive off-screen so the dialog, workspace round-trip,
+    and compile paths keep reading them.
+
+    WHY: latex_edit holds results.latex.source (persisted + read by the preview dialog);
+    latex_engine_combo/pdf_zoom_spin are compile/preview state. Removing the visible tabs
+    must NOT delete these widgets — only relocate them out of result_tabs."""
+    window = _window(qtbot)
+
+    # result_tabs now carries exactly numeric/image/log — no TeX/PDF tab.
+    titles = {window.result_tabs.tabText(i) for i in range(window.result_tabs.count())}
+    assert "TeX" not in titles
+    assert "PDF" not in titles
+    assert window.result_tabs.count() == 3
+    assert set(window.result_tabs_indices) == {"numeric", "image", "log"}
+
+    # The load-bearing widgets still exist and keep their schema keys.
+    assert window.latex_edit.property("datalab_schema_key") == "results.latex.source"
+    assert window.latex_engine_combo.property("datalab_schema_key") == "latex.engine"
+    assert window.pdf_zoom_spin.property("datalab_schema_key") == "pdf.zoom_percent"
+
+    # They live in the off-screen holder, not in result_tabs.
+    holder = window._offscreen_result_views
+    assert window.latex_edit in holder.findChildren(type(window.latex_edit))
+    assert window.pdf_zoom_spin in holder.findChildren(type(window.pdf_zoom_spin))
+    # holder is a child of the window (so findChildren/schema scan see it) but hidden.
+    assert holder.parentWidget() is not None
+    assert holder.isVisibleTo(window) is False
+
+
 def test_result_rail_uses_csv_state_without_hidden_table_projection(qtbot: Any) -> None:
     window = _window(qtbot)
     window._set_csv_data([{"k": "2.47e-3", "y": "2.46e-6"}], ["k", "y"], "result.csv")

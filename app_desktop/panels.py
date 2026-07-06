@@ -125,12 +125,16 @@ from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS
 _LANG_ZH = "zh"
 _LANG_EN = "en"
 _LANG_AUTO = "auto"
+# Visible result subtabs, in order. TeX/PDF are intentionally NOT here: the on-demand
+# LaTeX preview dialog is their viewer now (opened by the result-panel 生成 TeX / 预览 PDF
+# buttons). The latex/pdf widgets are still built — hosted off-screen in
+# ``_offscreen_result_views`` — so the dialog, workspace round-trip, and compile paths
+# keep reading them; see build_right_panel and DESKTOP_RESULT_VIEWS (which keeps all 5
+# view specs for the off-screen widgets + result_view_titles).
 _RESULT_VIEW_ORDER = (
     "result.numeric",
     "result.image",
     "result.log",
-    "result.latex",
-    "result.pdf",
 )
 
 
@@ -1576,9 +1580,6 @@ def build_right_panel(self, layout: QVBoxLayout):
     latex_layout.addLayout(latex_controls_row)
 
     latex_layout.addWidget(self.latex_edit)
-    latex_spec = DESKTOP_RESULT_VIEWS["result.latex"]
-    latex_index = self.result_tabs.addTab(latex_widget, result_view_tab_title(latex_spec.key, _LANG_ZH))
-    self.result_tabs.setTabToolTip(latex_index, result_view_tooltip(latex_spec.key, _LANG_ZH))
 
     # PDF result view
     pdf_widget = QWidget()
@@ -1627,9 +1628,20 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.pdf_container_layout.setAlignment(Qt.AlignTop)
     self.pdf_scroll.setWidget(self.pdf_container)
     pdf_layout.addWidget(self.pdf_scroll)
-    pdf_spec = DESKTOP_RESULT_VIEWS["result.pdf"]
-    pdf_index = self.result_tabs.addTab(pdf_widget, result_view_tab_title(pdf_spec.key, _LANG_ZH))
-    self.result_tabs.setTabToolTip(pdf_index, result_view_tooltip(pdf_spec.key, _LANG_ZH))
+
+    # TeX/PDF are NOT added as tabs (the preview dialog is their viewer). The widgets stay
+    # alive in an off-screen holder — a hidden child of the details panel — so schema-scan
+    # /findChildren still see them (schema keys + bindings intact) while nothing shows them
+    # as a tab. latex_edit is read by the preview dialog + workspace + compile; pdf_* by the
+    # PDF preview mixin.
+    self._offscreen_result_views = QWidget(self.workbench_result_details_panel)
+    self._offscreen_result_views.setObjectName("offscreen_result_views")
+    _offscreen_layout = QVBoxLayout(self._offscreen_result_views)
+    _offscreen_layout.setContentsMargins(0, 0, 0, 0)
+    _offscreen_layout.addWidget(latex_widget)
+    _offscreen_layout.addWidget(pdf_widget)
+    self._offscreen_result_views.setVisible(False)
+
     _bind_result_latex_pdf_schema_fields(
         self,
         lbl_digits=lbl_digits,

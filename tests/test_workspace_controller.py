@@ -802,7 +802,7 @@ def test_workspace_restore_clamps_invalid_ui_indices(qtbot) -> None:
 
     source = ExtrapolationWindow()
     qtbot.addWidget(source)
-    source.result_tabs.setCurrentIndex(source.result_tabs_indices["latex"])
+    source.result_tabs.setCurrentIndex(source.result_tabs_indices["log"])
     source.result_edit.setPlainText("Result")
     bundle = capture_workspace(source, title="invalid ui")
     bundle.manifest["workspace"]["ui"].update(

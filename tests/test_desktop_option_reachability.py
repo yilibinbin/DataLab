@@ -370,8 +370,12 @@ def _reveal_result_only_control(window: Any, app: Any, key: str) -> None:
         window.result_tabs.setCurrentIndex(indices["numeric"])
     elif key == "results.log":
         window.result_tabs.setCurrentIndex(indices["log"])
-    elif key in {"results.latex.source", "latex.engine"}:
-        window.result_tabs.setCurrentIndex(indices["latex"])
+    elif key in {"results.latex.source", "latex.engine", "pdf.zoom_percent"}:
+        # TeX/PDF are no longer result_tabs subtabs — their widgets live off-screen
+        # (the on-demand preview dialog is the viewer). Reveal the holder to make the
+        # persisted-state inputs (results.latex.source, latex.engine, pdf.zoom_percent)
+        # reachable for the sweep.
+        window._offscreen_result_views.setVisible(True)
     elif key in {"results.image.log_x", "results.image.log_y"}:
         # Log-scale toggles are shown only in fitting mode with plots enabled,
         # on the image subtab (see _update_log_scale_visibility).
@@ -381,10 +385,6 @@ def _reveal_result_only_control(window: Any, app: Any, key: str) -> None:
         window.result_tabs.setCurrentIndex(indices["image"])
     elif key in {"results.image.zoom_percent", "results.image.page"}:
         window.result_tabs.setCurrentIndex(indices["image"])
-    elif key == "pdf.zoom_percent":
-        # PDF-zoom spinbox lives in the PDF preview toolbar on the PDF subtab,
-        # hidden until a result populates self.tabs.
-        window.result_tabs.setCurrentIndex(indices["pdf"])
     else:  # pragma: no cover - defensive; test_every_input_prefix... guards this
         raise AssertionError(f"unhandled result-only key {key!r}")
     app.processEvents()
@@ -678,20 +678,18 @@ def test_caption_edit_reachable_via_latex_then_caption_checkbox(window: Any) -> 
     _assert_reachable_in_place(window, window.caption_edit, gate=gate)
 
 
-def test_latex_engine_combo_hidden_pre_result(window: Any) -> None:
-    """Pre-result, the LaTeX result tab container (self.tabs) is hidden."""
-    latex_index = window.result_tabs_indices["latex"]
-    window.result_tabs.setCurrentIndex(latex_index)
+def test_latex_engine_combo_hidden_pre_reveal(window: Any) -> None:
+    """The TeX/PDF widgets live in a hidden off-screen holder (the preview dialog is their
+    viewer). Until the holder is revealed, latex_engine_combo is not visible-to-window."""
+    assert window._offscreen_result_views.isVisibleTo(window) is False
     assert window.latex_engine_combo.isVisibleTo(window) is False
 
 
-def test_latex_engine_combo_reachable_only_in_non_empty_result(window: Any) -> None:
-    """latex_engine_combo is reachable only once a result populates ``self.tabs``."""
+def test_latex_engine_combo_reachable_when_offscreen_holder_revealed(window: Any) -> None:
+    """latex_engine_combo is reachable once the off-screen result-views holder is shown."""
     widget = window.latex_engine_combo
 
     def gate() -> None:
-        _drive_non_empty_result(window)
-        latex_index = window.result_tabs_indices["latex"]
-        window.result_tabs.setCurrentIndex(latex_index)
+        window._offscreen_result_views.setVisible(True)
 
     _assert_reachable_in_place(window, widget, gate=gate)
