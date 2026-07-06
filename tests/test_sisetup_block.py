@@ -134,6 +134,38 @@ def test_block_omits_v3_key_when_group_size_matches_v2_default() -> None:
     assert "digit-group-size" not in block
 
 
+def test_emit_digit_group_size_true_emits_unguarded_override() -> None:
+    """When the app has PROBED the engine and knows its siunitx honours
+    digit-group-size, emit the key UNGUARDED (no \\@ifpackagelater date heuristic) — the
+    probe is authoritative. This is how a capable local TeX gets true variable-width S-column
+    grouping."""
+    from datalab_latex.sisetup_block import build_sisetup_block
+
+    block = build_sisetup_block(group_size=6, include_dcolumn=False, emit_digit_group_size=True)
+    assert "digit-group-size = 6" in block
+    assert "@ifpackagelater" not in block  # probe replaces the date guard
+
+
+def test_emit_digit_group_size_false_never_emits_the_key() -> None:
+    """When the app probed the engine as NOT supporting the key (bundled Tectonic), never
+    emit it — the doc must still compile there (app-side grouping handles width instead)."""
+    from datalab_latex.sisetup_block import build_sisetup_block
+
+    block = build_sisetup_block(group_size=6, include_dcolumn=False, emit_digit_group_size=False)
+    assert "digit-group-size" not in block
+    assert "@ifpackagelater" not in block
+
+
+def test_emit_digit_group_size_none_keeps_legacy_date_guard() -> None:
+    """Default (None) preserves the backward-compatible \\@ifpackagelater guard for callers
+    not yet passing a probe result."""
+    from datalab_latex.sisetup_block import build_sisetup_block
+
+    block = build_sisetup_block(group_size=4, include_dcolumn=False)
+    assert "@ifpackagelater" in block
+    assert "digit-group-size = 4" in block
+
+
 def test_block_dcolumn_branch_skips_grouping() -> None:
     """The dcolumn branch keeps ``group-digits = false`` to defer to
     dcolumn's column-spec for alignment — no grouping options."""
@@ -209,6 +241,9 @@ def test_no_more_raw_digit_group_size_outside_helper() -> None:
     matches = [
         line for line in result.stdout.splitlines()
         if "sisetup_block.py" not in line  # the central helper is allowed
+        # The capability PROBE (not an emitter) deliberately embeds the key to test whether
+        # the engine's siunitx rejects it — that is its whole purpose, not emitter drift.
+        and "latex_engine.py" not in line
     ]
     assert not matches, (
         "Hard-coded digit-group-size emit found outside the central helper:\n"
