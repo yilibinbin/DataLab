@@ -50,7 +50,7 @@ _COMPUTE_CONTROLS = (
     "generate_plots_checkbox",
 )
 _LATEX_CONTROLS = (
-    "generate_latex_checkbox",
+    # generate_latex_checkbox removed in 4·4d — the LaTeX options are always visible now.
     "dcolumn_checkbox",
     "latex_group_size_spin",
     "caption_checkbox",
@@ -154,3 +154,16 @@ def test_latex_dialog_has_no_output_path_field(window: Any) -> None:
         assert control in dialog.findChildren(type(control)), (
             f"{attr} must live inside the LaTeX options dialog"
         )
+
+
+def test_latex_dialog_has_no_generate_checkbox_and_options_always_visible(window: Any) -> None:
+    """The 生成 LaTeX 文件 checkbox was removed (4·4d) — it gated nothing (the run never
+    writes tex). The LaTeX options widget is now always visible when the dialog opens."""
+    assert not hasattr(window, "generate_latex_checkbox")
+    assert not hasattr(window, "_toggle_latex_options")
+
+    dialog = _dialog(window, "latex")
+    dialog.open_dialog()
+    QApplication.processEvents()
+    assert window.latex_options_widget.isVisibleTo(dialog) is True
+    dialog.close()

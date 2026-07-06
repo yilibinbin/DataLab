@@ -1037,8 +1037,6 @@ def test_run_validation_error_does_not_leave_result_overview_running(qtbot: Any,
 
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
-    window.generate_latex_checkbox.setChecked(True)
-    window.output_file_edit.setText("")
     monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: None)
     window._apply_language("en")
 
@@ -1051,9 +1049,10 @@ def test_run_validation_error_does_not_reset_results_before_worker(qtbot: Any, m
     from PySide6.QtWidgets import QMessageBox
 
     window = _window(qtbot)
+    # A bare root_solving window (no equations/unknowns) fails validation on run — the
+    # trigger for "results must not be reset before the worker starts". (The
+    # generate_latex_checkbox setup was vestigial; removed in 4·4d.)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
-    window.generate_latex_checkbox.setChecked(True)
-    window.output_file_edit.setText("")
     monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: None)
     reset_called = False
 
@@ -1112,8 +1111,6 @@ def test_run_validation_error_preserves_previous_valid_result_overview(qtbot: An
     assert window.workbench_result_overview.text() == "Result ready; plot and text available; no tabular data"
 
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
-    window.generate_latex_checkbox.setChecked(True)
-    window.output_file_edit.setText("")
     monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: None)
 
     window.run_calculation()

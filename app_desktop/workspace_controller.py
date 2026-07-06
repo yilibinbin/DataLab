@@ -752,7 +752,8 @@ def _restore_common_config(window: Any, common: Any, latex: Any) -> None:
         _set_value(getattr(window, "mpmath_precision_spin", None), common.get("mpmath_precision"))
         _set_value(getattr(window, "uncertainty_digits_spin", None), common.get("uncertainty_digits"))
         _set_value(getattr(window, "display_digits_spin", None), common.get("display_digits"))
-        _set_checked_if(window, "generate_latex_checkbox", common.get("generate_latex"))
+        # generate_latex_checkbox was removed (4·4d); an old workspace's "generate_latex"
+        # key in common config is simply ignored on restore.
         _set_checked_if(window, "generate_plots_checkbox", common.get("generate_plots"))
         _set_checked_if(window, "verbose_checkbox", common.get("verbose"))
         _set_checked_if(window, "scientific_checkbox", common.get("display_scientific"))
@@ -1112,7 +1113,7 @@ def _capture_config(window: Any) -> dict[str, Any]:
         "common": {
             "mpmath_precision": _value(getattr(window, "mpmath_precision_spin", None), 16),
             "uncertainty_digits": _value(getattr(window, "uncertainty_digits_spin", None), 1),
-            "generate_latex": _checked(getattr(window, "generate_latex_checkbox", None)),
+            # generate_latex removed (4·4d — the checkbox is gone; run never writes tex).
             "generate_plots": _checked(getattr(window, "generate_plots_checkbox", None)),
             "verbose": _checked(getattr(window, "verbose_checkbox", None)),
             "display_scientific": _checked(getattr(window, "scientific_checkbox", None)),

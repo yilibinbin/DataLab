@@ -1064,12 +1064,9 @@ def build_left_panel(self):
     self.parallel_nested_policy_combo.currentIndexChanged.connect(
         lambda _index: save_current_parallel_config(self)
     )
-    self.generate_latex_checkbox = QCheckBox("生成 LaTeX 文件")
-    self.generate_latex_checkbox.setChecked(False)
-    self.generate_latex_checkbox.toggled.connect(self._toggle_latex_options)
-    self._register_text(self.generate_latex_checkbox, "生成 LaTeX 文件", "Generate LaTeX")
-    options_layout.addWidget(self.generate_latex_checkbox)
-
+    # The "生成 LaTeX 文件" checkbox was removed (4·4d): the run never writes tex (tex is
+    # generated on demand from the result), so it gated nothing. The LaTeX options below are
+    # now always visible in the LaTeX 选项 dialog.
     self.latex_options_widget = QWidget()
     latex_layout = QFormLayout(self.latex_options_widget)
     # The LaTeX output PATH field is no longer shown in the options — the path is chosen
@@ -1166,7 +1163,6 @@ def build_left_panel(self):
     # layout), then re-add to each dialog's content — reparenting the SAME instances.
     options_layout.removeItem(precision_layout)
     options_layout.removeItem(parallel_layout)
-    options_layout.removeWidget(self.generate_latex_checkbox)
     options_layout.removeWidget(self.latex_options_widget)
     options_layout.removeWidget(self.generate_plots_checkbox)
     options_layout.removeWidget(self.verbose_checkbox)
@@ -1183,7 +1179,6 @@ def build_left_panel(self):
     latex_content = QWidget()
     latex_content.setObjectName("latex_options_content")
     latex_content_layout = QVBoxLayout(latex_content)
-    latex_content_layout.addWidget(self.generate_latex_checkbox)
     latex_content_layout.addWidget(self.latex_options_widget)
 
     self.compute_options_dialog = build_options_dialog(
@@ -1958,13 +1953,6 @@ def _bind_global_options_schema_fields(
             for zh, en, data in nested_policy_items
         ],
     )
-    generate_latex_field = FormFieldSpec(
-        key="output.latex.enabled",
-        widget_kind="checkbox",
-        label=LocalizedText("生成 LaTeX 文件", "Generate LaTeX"),
-        tooltip=LocalizedText("启用后将计算结果写入 LaTeX 文件。", "When enabled, write calculation results to a LaTeX file."),
-        required=False,
-    )
     input_digits_field = FormFieldSpec(
         key="output.latex.input_digits",
         widget_kind="number",
@@ -2034,7 +2022,6 @@ def _bind_global_options_schema_fields(
         _mark_schema_choices(combo)
 
     for field, widget in [
-        (generate_latex_field, self.generate_latex_checkbox),
         (dcolumn_field, self.dcolumn_checkbox),
         (caption_enabled_field, self.caption_checkbox),
         (caption_field, self.caption_edit),

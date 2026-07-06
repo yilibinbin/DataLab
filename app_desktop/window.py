@@ -566,7 +566,6 @@ class ExtrapolationWindow(
         self._initialize_workspace_tracking()
         self._init_theme_tracking()
         self._update_method_state()
-        self._toggle_latex_options(self.generate_latex_checkbox.isChecked())
         self._apply_language(self._system_lang if self._lang_mode == _LANG_AUTO else self._lang_mode)
         self._update_workspace_window_title()
         QTimer.singleShot(500, self._update_controller.maybe_show_startup_update_notice)
@@ -826,7 +825,6 @@ class ExtrapolationWindow(
         for check_name in (
             "use_file_checkbox",
             "use_constants_file_checkbox",
-            "generate_latex_checkbox",
             "generate_plots_checkbox",
             "verbose_checkbox",
             "error_units_enabled_checkbox",
@@ -1279,11 +1277,6 @@ class ExtrapolationWindow(
     def _show_about(self):
         lang = "en" if self._is_en() else "zh"
         show_about_dialog(parent=self, lang=lang)
-
-    def _toggle_latex_options(self, checked: bool):
-        self.latex_options_widget.setVisible(checked)
-        # Sync caption row visibility when LaTeX toggle changes
-        self._toggle_caption_input(self.caption_checkbox.isChecked() if hasattr(self, "caption_checkbox") else False)
 
     def _toggle_caption_input(self, checked: bool):
         if hasattr(self, "caption_edit"):

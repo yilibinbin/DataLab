@@ -64,7 +64,9 @@ def test_global_precision_and_parallel_controls_have_schema_metadata(window: Any
 
 
 def test_global_latex_plot_and_log_controls_have_schema_metadata(window: Any) -> None:
-    assert window.generate_latex_checkbox.property("datalab_schema_key") == "output.latex.enabled"
+    # generate_latex_checkbox (output.latex.enabled) was removed in 4·4d — the run never
+    # writes tex, so it gated nothing; the LaTeX options are always visible now.
+    assert not hasattr(window, "generate_latex_checkbox")
     # The LaTeX output-PATH field + browse button are no longer part of the options UI
     # (the path is chosen at save-time in the TeX window). They remain as detached widgets
     # but carry NO schema binding, so they are not enumerated as reachable config inputs.

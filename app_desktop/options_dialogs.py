@@ -4,7 +4,7 @@ Replaces the inline toggle panels (``workbench_options_panel``) with real, resiz
 non-modal dialog windows — per the 2026-07-05 spec (user chose "真独立窗口"). Each dialog
 holds the SAME real option controls (reparented ONCE at build time into the dialog), so:
 
-* the run pipeline keeps reading ``self.mpmath_precision_spin`` / ``self.generate_latex_checkbox``
+* the run pipeline keeps reading ``self.mpmath_precision_spin`` / ``self.latex_group_size_spin``
   etc. — unchanged; the controls just live in the dialog now;
 * there are NO hidden state-holders and NO mirror widgets (a hidden real would fail the
   reachability sweep, which enumerates every schema-keyed input);

@@ -340,15 +340,13 @@ def _open_option_panels(window: Any, app: Any) -> None:
 
 
 def _reveal_output_gates(window: Any, app: Any) -> None:
-    """Reveal the LaTeX-output group and its doubly-gated caption input.
+    """Reveal the LaTeX-output group and its gated caption input.
 
-    ``output.latex.*`` is hidden until generate_latex_checkbox is checked, and
-    ``output.latex.caption`` needs caption_checkbox too. Both gate checkboxes are
-    themselves schema-bound controls in the ``output`` group, now hosted in the LaTeX
-    toolbar panel — so open the option panels first.
+    The 生成 LaTeX 文件 checkbox was removed (4·4d) — the LaTeX options are now always
+    visible in the LaTeX 选项 dialog. ``output.latex.caption`` still needs caption_checkbox
+    checked, and the controls live in the LaTeX dialog — so open the option dialogs first.
     """
     _open_option_panels(window, app)
-    window.generate_latex_checkbox.setChecked(True)
     window.caption_checkbox.setChecked(True)
     app.processEvents()
 
@@ -665,14 +663,13 @@ def test_data_file_edit_reachable_via_use_file_checkbox(window: Any) -> None:
 
 
 def test_caption_edit_reachable_via_latex_then_caption_checkbox(window: Any) -> None:
-    """caption_edit is triply-gated: open the LaTeX panel, then generate_latex_checkbox
-    AND caption_checkbox (both hosted inside that panel)."""
+    """caption_edit is doubly-gated: open the LaTeX 选项 dialog, then caption_checkbox
+    (the 生成 LaTeX 文件 checkbox was removed in 4·4d — options are always visible)."""
     assert hasattr(window, "caption_edit")
     app = QApplication.instance()
 
     def gate() -> None:
         _open_option_panels(window, app)
-        window.generate_latex_checkbox.setChecked(True)
         window.caption_checkbox.setChecked(True)
 
     _assert_reachable_in_place(window, window.caption_edit, gate=gate)

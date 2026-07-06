@@ -29,7 +29,7 @@ def test_about_dialog_uses_reduce3j_style_message_box_with_icon_and_links() -> N
 def test_window_show_about_uses_custom_about_dialog() -> None:
     text = (ROOT / "app_desktop" / "window.py").read_text(encoding="utf-8")
     start = text.index("    def _show_about(self):")
-    end = text.index("    def _toggle_latex_options", start)
+    end = text.index("    def _toggle_caption_input", start)
     show_about = text[start:end]
 
     assert "from .about_dialog import show_about_dialog" in text

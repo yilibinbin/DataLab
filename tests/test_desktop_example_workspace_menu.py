@@ -262,7 +262,7 @@ def test_example_workspace_can_run_default_calculation(qtbot, monkeypatch, examp
 
     try:
         assert win._open_workspace_from_path(source, as_template=True), source.name
-        win.generate_latex_checkbox.setChecked(False)
+        # generate_latex_checkbox removed in 4·4d — run never writes tex, so no toggle needed.
         win.generate_plots_checkbox.setChecked(False)
         # The implicit example ships a 300s self-consistent-fit timeout. On slow
         # shared CI runners (~2-3x slower, suite run concurrently) the fit needs
