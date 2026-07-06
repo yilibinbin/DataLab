@@ -783,6 +783,9 @@ class WindowExtrapolationMixin:
             else False,
             language="en" if self._is_en() else "zh",
             root_units=_root_units_for_rows(raw_rows, latex_inputs.get("units")),
+            native_group_width=self._engine_supports_group_width()
+            if hasattr(self, "_engine_supports_group_width")
+            else True,
         )
         self._load_latex_into_editor(tex_path)
         return str(tex_path)
