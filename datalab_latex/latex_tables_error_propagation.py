@@ -11,7 +11,12 @@ from shared.error_propagation_engine import (
 from shared.uncertainty import UncertainValue, parse_uncertainty_format
 
 from .expression_engine import format_latex_formula
-from .latex_formatting import _format_value_for_latex_file, _siunitx_column_spec, calculate_dcolumn_format_for_column
+from .latex_formatting import (
+    _format_value_for_latex_file,
+    _siunitx_column_spec,
+    calculate_dcolumn_format_for_column,
+    group_digits_both_sides,
+)
 from .latex_tables_common import (
     _build_standalone_preamble,
     _estimate_page_geometry,
@@ -191,8 +196,14 @@ def generate_error_propagation_table(
     latex_group_size: int = 3,
     input_units: Mapping[str, str] | None = None,
     result_unit: str | None = None,
+    native_group_width: bool = True,
 ) -> None:
     """Generate a LaTeX table for error propagation results."""
+    # App-side grouping when the engine can't vary the siunitx group WIDTH (non-native) and
+    # grouping is on in siunitx (non-dcolumn) mode: pre-group each numeric cell + use plain r
+    # columns instead of S columns siunitx would re-group at a fixed 3.
+    _group = max(0, int(latex_group_size))
+    app_group = (not native_group_width) and (not use_dcolumn) and _group > 0
     if used_columns is None:
         header_indices = list(range(len(headers)))
     else:
@@ -234,6 +245,11 @@ def generate_error_propagation_table(
         )
         formatted_result_column.append(result_formatted)
         column_lengths[-1] = max(column_lengths[-1], _string_length_hint(result_formatted))
+    if app_group:
+        def _wrap(cell: str) -> str:
+            return "\\text{" + group_digits_both_sides(cell, _group) + "}"
+        formatted_columns = [[_wrap(c) for c in col] for col in formatted_columns]
+        formatted_result_column = [_wrap(c) for c in formatted_result_column]
     page_w, _ = _estimate_page_geometry(column_lengths, len(parsed_data) + 6)
     cjk_segments = [
         caption if caption else "",
@@ -250,6 +266,7 @@ def generate_error_propagation_table(
         include_dcolumn=use_dcolumn,
         needs_cjk=needs_cjk,
         latex_group_size=latex_group_size,
+        native_group_width=native_group_width,
     )
 
     header_cols = ["$n$"]
@@ -275,6 +292,9 @@ def generate_error_propagation_table(
                 "result_col",
             )
             table_format = "c " + " ".join(data_formats) + " " + result_format
+        elif app_group:
+            # Cells are pre-grouped + wrapped in \text{}; plain right-aligned columns.
+            table_format = "c " + " ".join(["r"] * len(formatted_columns)) + " r"
         else:
             data_formats = [_siunitx_column_spec(col_data[start_row:end_row]) for col_data in formatted_columns]
             result_format = _siunitx_column_spec(formatted_result_column[start_row:end_row])

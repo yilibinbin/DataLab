@@ -97,11 +97,15 @@ def _build_standalone_preamble(
     include_dcolumn: bool = False,
     needs_cjk: bool = False,
     latex_group_size: int = 3,
+    native_group_width: bool = True,
 ) -> list[str]:
     """Return a minimal standalone LaTeX preamble tuned for fast compilation.
 
     Args:
         latex_group_size: Group size for grouping digits (0 = no grouping)
+        native_group_width: When True the engine honours siunitx digit-group-size (emit it
+            for native S-column variable-width grouping); when False (bundled Tectonic) the
+            cells are pre-grouped app-side, so don't emit the key.
     """
     group_size = max(0, int(latex_group_size))
     doc_class = "\\documentclass[varwidth={0:.2f}in,border=12pt]{{standalone}}".format(width_in)
@@ -145,10 +149,12 @@ def _build_standalone_preamble(
     # documents still compile against older TeX Live distributions where
     # siunitx v2 is the default. (Was 5 near-duplicate inline copies
     # before — removing them all keeps the format drift-free.)
+    emit_dgs = bool(native_group_width and not include_dcolumn and group_size > 0)
     preamble.append(
         build_sisetup_block(
             group_size=group_size,
             include_dcolumn=include_dcolumn,
+            emit_digit_group_size=emit_dgs,
         ).rstrip("\n")
     )
     preamble.append("")

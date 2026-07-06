@@ -877,6 +877,9 @@ class WindowExtrapolationMixin:
             else 3,
             input_units=_input_units_for_headers(headers, units_payload),
             result_unit=_result_unit_from_units(units_payload),
+            native_group_width=self._engine_supports_group_width()
+            if hasattr(self, "_engine_supports_group_width")
+            else True,
         )
         self._load_latex_into_editor(output_path)
         return str(output_path)
