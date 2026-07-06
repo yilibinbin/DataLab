@@ -633,6 +633,50 @@ def add_spacing_to_number(number_str: str, for_siunitx: bool = False, group_size
     return number_str
 
 
+def group_digits_both_sides(number_str: str, group_size: int, sep: str = "\\,") -> str:
+    """Group BOTH the integer and fractional parts of a number by ``group_size`` digits.
+
+    Unlike :func:`add_spacing_to_number` (which only spaces the fractional part), this
+    inserts ``sep`` every ``group_size`` digits in the integer part (from the decimal point
+    leftward, thousands-style) AND the fractional part (rightward). Any leading sign and any
+    trailing suffix (uncertainty ``(NN)``, exponent) are preserved untouched.
+
+    This is the app-side grouping path used when the LaTeX engine's siunitx cannot honour a
+    variable digit-group width (the bundled Tectonic siunitx is pinned at 3): the number is
+    pre-grouped here so any width renders correctly with a plain (non-S) column.
+
+    Returns ``number_str`` unchanged when ``group_size <= 0``.
+    """
+    try:
+        group_size = int(group_size)
+    except Exception:
+        group_size = 3
+    if group_size <= 0:
+        return number_str
+
+    match = re.match(r"^([+\-−]?)(\d+)(?:\.(\d+))?(.*)$", number_str.strip())
+    if not match:
+        return number_str
+    sign, int_part, frac_part, tail = match.groups()
+
+    grouped_int_chars: list[str] = []
+    for i, ch in enumerate(reversed(int_part)):
+        if i > 0 and i % group_size == 0:
+            grouped_int_chars.append(sep)
+        grouped_int_chars.append(ch)
+    grouped_int = "".join(reversed(grouped_int_chars))
+
+    result = (sign or "") + grouped_int
+    if frac_part is not None:
+        grouped_frac_chars: list[str] = []
+        for i, ch in enumerate(frac_part):
+            if i > 0 and i % group_size == 0:
+                grouped_frac_chars.append(sep)
+            grouped_frac_chars.append(ch)
+        result += "." + "".join(grouped_frac_chars)
+    return result + (tail or "")
+
+
 def add_latex_spacing_to_number(number_str: str, group_size: int = 3) -> str:
     """
     Add LaTeX thin spaces (\\\\,) every N digits in the decimal part of a number.

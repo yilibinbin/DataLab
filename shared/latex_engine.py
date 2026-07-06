@@ -33,6 +33,7 @@ import hashlib
 import os
 import platform
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -533,3 +534,125 @@ def tectonic_compile_argv(binary: str, tex_path: Path | str) -> list[str]:
         "--",
         str(tex_path),
     ]
+
+
+# ---------------------------------------------------------------------------
+# siunitx capability probe (does the engine's siunitx honour digit-group-size?)
+# ---------------------------------------------------------------------------
+
+# A minimal document that FAILS to compile iff siunitx rejects ``digit-group-size``
+# (LaTeX3 key-unknown). Newer siunitx (>= ~3.1, local TeX Live) compiles it; the
+# Tectonic-bundled 3.0.49 errors out. Kept tiny so the probe is fast.
+_DIGIT_GROUP_SIZE_PROBE_TEX = (
+    "\\documentclass{article}\n"
+    "\\usepackage{siunitx}\n"
+    "\\sisetup{group-digits = all, digit-group-size = 4}\n"
+    "\\begin{document}\\num{12345678}\\end{document}\n"
+)
+
+# Cache: engine binary path -> supports digit-group-size (bool). Populated on first probe.
+_capability_cache: dict[str, bool] = {}
+
+
+def _reset_capability_cache() -> None:
+    """Clear the probe cache (tests + when the engine selection changes)."""
+    _capability_cache.clear()
+
+
+def engine_probe_argv(binary: str, tex_path: Path | str) -> list[str]:
+    """Argv to compile ``tex_path`` with ``binary`` for a NON-interactive one-shot probe.
+
+    Tectonic and the LaTeX engines take different flags; the stem decides which (matching
+    the compile worker's own dispatch)."""
+    if Path(binary).stem.lower().endswith("tectonic"):
+        return tectonic_compile_argv(binary, tex_path)
+    return [
+        binary,
+        "-no-shell-escape",
+        "-interaction=nonstopmode",
+        "-halt-on-error",
+        str(tex_path),
+    ]
+
+
+def siunitx_supports_digit_group_size(engine_path: str) -> bool:
+    """Return True iff ``engine_path``'s siunitx honours ``digit-group-size``.
+
+    Compiles a tiny probe doc once per engine path (cached). Any launch failure, timeout,
+    or non-zero exit → False (treated as "not supported"), so a broken/missing engine never
+    crashes the caller — the app falls back to app-side text grouping.
+    """
+    if not engine_path:
+        return False
+    if engine_path in _capability_cache:
+        return _capability_cache[engine_path]
+
+    supported = False
+    try:
+        with tempfile.TemporaryDirectory(prefix="datalab_siprobe_") as tmp:
+            tex = Path(tmp) / "siprobe.tex"
+            tex.write_text(_DIGIT_GROUP_SIZE_PROBE_TEX, encoding="utf-8")
+            argv = engine_probe_argv(engine_path, tex)
+            proc = subprocess.run(
+                argv,
+                cwd=tmp,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            supported = proc.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        supported = False
+
+    _capability_cache[engine_path] = supported
+    return supported
+
+
+# Ordered preference of PATH LaTeX engines to try in local/auto modes.
+_LOCAL_ENGINE_PREFERENCE = ("xelatex", "pdflatex", "lualatex")
+
+
+def resolve_engine_for_mode(
+    mode: str, *, bundle_root: Path | str | None = None
+) -> EngineChoice | None:
+    """Resolve a compile engine per the user's engine MODE.
+
+    - ``"bundled"`` → the internal Tectonic only (guaranteed, network-installable). Group
+      WIDTH is fixed at 3 (its siunitx lacks digit-group-size); the writers fall back to
+      app-side text grouping.
+    - ``"local"`` → a PATH LaTeX engine (xelatex/pdflatex/lualatex) only; no Tectonic
+      fallback. Returns None if the user has no local TeX.
+    - ``"auto"`` (default) → prefer a PATH engine whose siunitx honours digit-group-size
+      (so S-column native variable-width grouping works); otherwise fall back to Tectonic.
+
+    Returns an :class:`EngineChoice` (with a resolved ``path``) or None when nothing usable
+    is found for the mode.
+    """
+    if mode == "bundled":
+        return resolve_engine("tectonic", bundle_root=bundle_root)
+
+    def _first_local() -> EngineChoice | None:
+        for name in _LOCAL_ENGINE_PREFERENCE:
+            choice = resolve_engine(name, bundle_root=bundle_root)
+            if choice is not None:
+                return choice
+        return None
+
+    if mode == "local":
+        return _first_local()
+
+    # auto: a capable local engine wins; else fall back to Tectonic (always available once
+    # installed). An incapable local engine is not preferred over Tectonic because the whole
+    # point of auto is to get the best grouping — but both produce correct PDFs, so if
+    # Tectonic is missing we still return the local engine rather than nothing.
+    tectonic = resolve_engine("tectonic", bundle_root=bundle_root)
+    for name in _LOCAL_ENGINE_PREFERENCE:
+        choice = resolve_engine(name, bundle_root=bundle_root)
+        if choice is None:
+            continue
+        if siunitx_supports_digit_group_size(choice.path):
+            return choice
+        # Remember the first usable-but-incapable local engine as a last resort.
+        if tectonic is None:
+            return choice
+    return tectonic or _first_local()
