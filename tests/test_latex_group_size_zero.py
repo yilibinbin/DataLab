@@ -67,7 +67,7 @@ def test_siunitx_mode_with_grouping():
         print("sisetup configuration:")
         print(sisetup)
 
-        assert "group-digits = decimal" in content, "Expected group-digits=decimal"
+        assert "group-digits = all" in content, "Expected group-digits=all (groups integer + decimal parts)"
         # Pre-fix the assertion was ``digit-group-size = 3``, but the
         # central helper now omits that key when ``group_size == 3``
         # (it matches both siunitx v2 and v3 built-in defaults). The

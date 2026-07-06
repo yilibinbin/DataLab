@@ -85,7 +85,10 @@ def build_sisetup_block(
     # guard below.
     lines.extend(
         [
-            "    group-digits = decimal,",
+            # ``all`` groups BOTH the integer and decimal parts (thousands separators);
+            # ``decimal`` grouped only the fractional digits, so integers like 12345678
+            # rendered ungrouped and users saw "grouping does nothing".
+            "    group-digits = all,",
             r"    group-separator = {\,},",
             f"    group-minimum-digits = {group_size},",
             "    tight-spacing = true,",

@@ -67,6 +67,19 @@ def test_block_uses_group_minimum_digits_for_v2_compat() -> None:
     assert "group-minimum-digits = 3" in block
 
 
+def test_block_groups_integer_part_not_only_decimals() -> None:
+    """When grouping is enabled it must group the INTEGER part (thousands
+    separators) — the common case. ``group-digits = decimal`` grouped only the
+    fractional digits, so 12345678.00 rendered as 12345678.00 (integer ungrouped),
+    which users saw as 'grouping does nothing'. ``group-digits = all`` groups both
+    the integer and decimal parts (12 345 678.00)."""
+    from datalab_latex.sisetup_block import build_sisetup_block
+
+    block = build_sisetup_block(group_size=3, include_dcolumn=False)
+    assert "group-digits = all" in block
+    assert "group-digits = decimal" not in block
+
+
 def test_block_wraps_v3_key_in_ifpackagelater_guard() -> None:
     """``digit-group-size`` is a siunitx-v3 key but the activation
     history is messy: siunitx 3.0.49 (the version Tectonic bundles,
