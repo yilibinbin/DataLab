@@ -611,6 +611,33 @@ def siunitx_supports_digit_group_size(engine_path: str) -> bool:
 # Ordered preference of PATH LaTeX engines to try in local/auto modes.
 _LOCAL_ENGINE_PREFERENCE = ("xelatex", "pdflatex", "lualatex")
 
+# All engine names the discovery UI enumerates (local engines first, tectonic last).
+_ALL_ENGINE_NAMES = ("xelatex", "pdflatex", "lualatex", "tectonic")
+
+
+def discover_all_engines(
+    *, bundle_root: Path | str | None = None
+) -> list[tuple[str, EngineChoice]]:
+    """Enumerate the LaTeX engines actually available on this machine.
+
+    Returns ``(engine_name, EngineChoice)`` pairs — one per engine that resolves (system
+    PATH, bundled TinyTeX, or an already-installed Tectonic). Engines not found are omitted;
+    two names resolving to the same binary path are listed once. The order follows
+    ``_ALL_ENGINE_NAMES`` (local engines first, tectonic last). Callers build the engine
+    selector from this so the dropdown shows the real detected compilers.
+    """
+    found: list[tuple[str, EngineChoice]] = []
+    seen_paths: set[str] = set()
+    for name in _ALL_ENGINE_NAMES:
+        choice = resolve_engine(name, bundle_root=bundle_root)
+        if choice is None or not choice.path:
+            continue
+        if choice.path in seen_paths:
+            continue
+        seen_paths.add(choice.path)
+        found.append((name, choice))
+    return found
+
 
 def resolve_engine_for_mode(
     mode: str, *, bundle_root: Path | str | None = None

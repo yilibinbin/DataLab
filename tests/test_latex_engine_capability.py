@@ -128,3 +128,56 @@ def test_mode_auto_prefers_capable_local_then_falls_back_to_tectonic() -> None:
     ):
         choice = resolve_engine_for_mode("auto")
         assert choice in (xe, tect)
+
+
+# --- discover_all_engines (concrete engines found on this machine) ----------
+
+from shared.latex_engine import discover_all_engines
+
+
+def test_discover_all_engines_lists_found_engines_with_paths() -> None:
+    xe = EngineChoice(path="/usr/bin/xelatex", source="system")
+    pl = EngineChoice(path="/usr/bin/pdflatex", source="system")
+    tect = EngineChoice(path="/opt/datalab/bin/tectonic", source="auto-tectonic")
+
+    def fake_resolve(engine, **kw):
+        return {"xelatex": xe, "pdflatex": pl, "tectonic": tect}.get(engine)
+
+    with patch("shared.latex_engine.resolve_engine", side_effect=fake_resolve):
+        found = discover_all_engines()
+
+    names = [name for name, _choice in found]
+    # Only engines that actually resolved appear; each carries its EngineChoice.
+    assert "xelatex" in names
+    assert "pdflatex" in names
+    assert "tectonic" in names
+    by_name = dict(found)
+    assert by_name["xelatex"].path == "/usr/bin/xelatex"
+    assert by_name["tectonic"].source == "auto-tectonic"
+
+
+def test_discover_all_engines_omits_missing_engines() -> None:
+    xe = EngineChoice(path="/usr/bin/xelatex", source="system")
+
+    def fake_resolve(engine, **kw):
+        return xe if engine == "xelatex" else None
+
+    with patch("shared.latex_engine.resolve_engine", side_effect=fake_resolve):
+        found = discover_all_engines()
+
+    names = [name for name, _ in found]
+    assert names == ["xelatex"]  # lualatex/pdflatex/tectonic not found → omitted
+
+
+def test_discover_all_engines_deduplicates_same_path() -> None:
+    # If two engine names resolve to the SAME binary path, list it once.
+    shared_choice = EngineChoice(path="/usr/bin/xelatex", source="system")
+
+    def fake_resolve(engine, **kw):
+        return shared_choice if engine in ("xelatex", "pdflatex") else None
+
+    with patch("shared.latex_engine.resolve_engine", side_effect=fake_resolve):
+        found = discover_all_engines()
+
+    paths = [choice.path for _, choice in found]
+    assert paths.count("/usr/bin/xelatex") == 1

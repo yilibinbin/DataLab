@@ -350,6 +350,13 @@ class WindowI18nMixin:
                 if idx >= 0:
                     combo.setCurrentIndex(idx)
             combo.blockSignals(False)
+        # The engine combo is dynamically populated (自动 + detected engines), so it is NOT
+        # in _combo_translations; re-run its populate to retranslate the 自动/Auto label while
+        # preserving the detected engine rows + current selection.
+        if hasattr(self, "latex_engine_combo"):
+            from app_desktop.panels import populate_latex_engine_combo
+
+            populate_latex_engine_combo(self)
         # 更新占位文本
         if hasattr(self, "mode_combo"):
             self._update_manual_placeholder(self.mode_combo.currentData())

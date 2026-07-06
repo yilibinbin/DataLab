@@ -225,8 +225,10 @@ def test_workspace_round_trips_common_and_latex_precision_settings(qtbot) -> Non
     # caption text + TeX engine are also captured at save; they must round-trip
     # too, or the F11 "captured but never restored" fix is incomplete.
     source.caption_edit.setText("Table 1: extrapolated limits")
-    # engine is now an engine MODE (auto/bundled/local), stored by combo data.
-    source.latex_engine_combo.setCurrentIndex(source.latex_engine_combo.findData("bundled"))
+    # The engine combo is 自动 + detected engines (data = "auto" or an engine PATH). "auto"
+    # is the portable default and must round-trip; a machine-specific path that no longer
+    # matches on restore falls back to auto (graceful — asserted separately below).
+    source.latex_engine_combo.setCurrentIndex(source.latex_engine_combo.findData("auto"))
 
     bundle = capture_workspace(source, title="precision settings")
 
@@ -241,7 +243,7 @@ def test_workspace_round_trips_common_and_latex_precision_settings(qtbot) -> Non
     assert target.latex_input_precision_spin.value() == 40
     assert target.latex_group_size_spin.value() == 5
     assert target.caption_edit.text() == "Table 1: extrapolated limits"
-    assert target.latex_engine_combo.currentData() == "bundled"
+    assert target.latex_engine_combo.currentData() == "auto"
 
 
 def test_workspace_round_trips_fitting_log_axes(qtbot) -> None:

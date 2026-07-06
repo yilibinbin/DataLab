@@ -119,18 +119,29 @@ class WindowLatexCompileMixin:
             return
         self._load_latex_into_editor(self.current_latex_path, show_message=show_message)
 
-    def _latex_engine_mode(self) -> str:
-        """The user's engine MODE: 'auto' | 'bundled' | 'local'. Reads latex_engine_combo's
-        current data (the combo hosts the mode now); defaults to 'auto'."""
+    def _latex_engine_selection(self):
+        """The combo's current data: 'auto' (or 'bundled'/'local' legacy modes), or an
+        absolute engine PATH for a concrete pick. None if the combo is absent."""
         combo = getattr(self, "latex_engine_combo", None)
-        if combo is not None:
-            data = combo.currentData()
-            if data in {"auto", "bundled", "local"}:
-                return str(data)
-        return "auto"
+        return combo.currentData() if combo is not None else None
+
+    def _latex_engine_mode(self) -> str:
+        """Back-compat mode accessor: 'auto' | 'bundled' | 'local'. A concrete-path selection
+        counts as 'auto' for callers that only care about the mode."""
+        data = self._latex_engine_selection()
+        return str(data) if data in {"auto", "bundled", "local"} else "auto"
 
     def _resolve_compile_engine(self) -> "EngineChoice | None":
-        """Resolve the compile engine for the current mode (no install prompt here)."""
+        """Resolve the compile engine for the current selection (no install prompt here).
+
+        A concrete-engine pick (the combo data is an absolute path) is used directly; the
+        'auto'/'bundled'/'local' modes go through resolve_engine_for_mode."""
+        data = self._latex_engine_selection()
+        if isinstance(data, str) and data not in {"auto", "bundled", "local"} and data:
+            candidate = Path(data)
+            if candidate.exists():
+                source = "auto-tectonic" if candidate.stem.lower().endswith("tectonic") else "system"
+                return EngineChoice(path=str(candidate), source=source)
         return resolve_engine_for_mode(self._latex_engine_mode(), bundle_root=find_app_root())
 
     def _engine_supports_group_width(self) -> bool:

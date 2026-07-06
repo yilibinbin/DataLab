@@ -1544,20 +1544,12 @@ def build_right_panel(self, layout: QVBoxLayout):
     latex_controls_row.addSpacing(16)
     latex_controls_row.addWidget(lbl_engine)
     self.latex_engine_combo = QComboBox()
-    # Items (自动 / 内置 Tectonic / 本地 TeX) + data (auto/bundled/local) come from the
-    # latex.engine schema field's choices (single source of truth in shared/ui_specs.py —
-    # drives both desktop + web). The value is an engine MODE, not a binary; the compile
-    # mixin resolves the actual engine per mode. _mark_schema_choices retranslates the
-    # labels on language switch.
-    _latex_engine_field = _result_control_field("result.latex", "latex.engine")
-    _latex_engine_items = [
-        (_c.label.zh, _c.label.en, _c.value) for _c in _latex_engine_field.choices
-    ]
-    for _zh, _en, _data in _latex_engine_items:
-        self.latex_engine_combo.addItem(_zh, _data)
-    # Register for language-switch retranslation (rebuilds items in the active language,
-    # preserving the current selection by data) — same mechanism as the parallel combos.
-    self._register_combo(self.latex_engine_combo, _latex_engine_items)
+    # First item is 自动 (data "auto"); after it, the concrete engines actually detected on
+    # this machine (xelatex/pdflatex/lualatex/tectonic) are listed dynamically with their
+    # paths — the user can let auto choose or pick a specific compiler. See
+    # populate_latex_engine_combo (built once here; the auto item retranslates on language
+    # switch, engine names are proper nouns and stay as-is).
+    populate_latex_engine_combo(self)
     latex_controls_row.addWidget(self.latex_engine_combo)
     engine_btn = QPushButton("选择引擎路径…")
     engine_btn.clicked.connect(self._prompt_engine_selection)
@@ -1870,6 +1862,46 @@ def _update_data_summary(self):
 
 def _mark_schema_choices(combo: QComboBox) -> None:
     combo.setProperty("datalab_schema_choices", True)
+
+
+# Source labels for detected engines, shown after the engine name in the dropdown.
+_ENGINE_SOURCE_LABELS = {
+    "system": ("系统", "system"),
+    "bundled": ("捆绑", "bundled"),
+    "auto-tectonic": ("内置", "bundled"),
+}
+
+
+def populate_latex_engine_combo(self) -> None:
+    """Fill ``latex_engine_combo`` with 自动 + the engines actually detected on this machine.
+
+    Item data is ``"auto"`` for the auto entry, or the engine's absolute PATH for a concrete
+    pick (the compile mixin uses the path directly). The 自动 label retranslates on language
+    switch; engine names are proper nouns and stay as-is. Called once at build time (and
+    again by a refresh if the environment changes)."""
+    from shared.latex_engine import discover_all_engines
+
+    combo = self.latex_engine_combo
+    current = combo.currentData()
+    combo.blockSignals(True)
+    combo.clear()
+
+    lang_en = bool(getattr(self, "_is_en", lambda: False)())
+    combo.addItem("Auto" if lang_en else "自动", "auto")
+    # NOT registered with _register_combo — that generic sweep would rebuild the whole combo
+    # from a static list and wipe the dynamic engine rows. Instead _apply_language re-runs
+    # this function (see _refresh_engine_combo_language) so 自动↔Auto retranslates while the
+    # detected engine rows are preserved.
+
+    for name, choice in discover_all_engines():
+        src_zh, src_en = _ENGINE_SOURCE_LABELS.get(choice.source, (choice.source, choice.source))
+        label = f"{name} ({src_en if lang_en else src_zh})"
+        combo.addItem(label, choice.path)
+
+    if current is not None:
+        idx = combo.findData(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+    combo.blockSignals(False)
 
 
 def _bind_global_options_schema_fields(
