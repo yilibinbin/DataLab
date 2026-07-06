@@ -25,17 +25,25 @@ def _sample_fit_result() -> FitResult:
 
 
 def test_build_fit_latex_preamble_includes_expected_packages():
+    # native_group_width True (default) → the app probed the engine as capable, so
+    # digit-group-size is emitted UNGUARDED (the probe replaces the old \@ifpackagelater
+    # date heuristic). group-minimum-digits gates WHEN grouping kicks in.
     text = "\n".join(writer.build_fit_latex_preamble(use_dcolumn=False, digits=16, latex_group_size=4))
     assert "\\usepackage{siunitx}" in text
-    # ``digit-group-size`` is siunitx-v3 only; the helper wraps it in
-    # an ``\@ifpackagelater`` guard pinned to siunitx 3.0's release
-    # date (2020-02-08) so v2 installs fall back to the built-in
-    # default rather than erroring out. The v2/v3-safe key that
-    # gates WHEN grouping kicks in is ``group-minimum-digits``.
     assert "digit-group-size = 4" in text
-    assert "@ifpackagelater" in text
+    assert "@ifpackagelater" not in text
     assert "group-minimum-digits = 4" in text
     assert "\\usepackage{dcolumn}" not in text
+
+    # native_group_width False (bundled Tectonic can't vary the width) → never emit
+    # digit-group-size; the writer pre-groups the cells app-side instead.
+    text_bundled = "\n".join(
+        writer.build_fit_latex_preamble(
+            use_dcolumn=False, digits=16, latex_group_size=4, native_group_width=False
+        )
+    )
+    assert "digit-group-size" not in text_bundled
+    assert "@ifpackagelater" not in text_bundled
 
     text_dcolumn = "\n".join(writer.build_fit_latex_preamble(use_dcolumn=True, digits=16, latex_group_size=4))
     assert "\\usepackage{dcolumn}" in text_dcolumn
