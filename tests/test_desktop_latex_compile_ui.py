@@ -152,6 +152,48 @@ def test_compile_latex_uses_resolved_engine_over_tectonic_fallback(
             window._latex_compile_progress = None
 
 
+def test_compile_preserves_engine_invocation_name_not_symlink_target(
+    window: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """TeX Live dispatches the LaTeX format by the invocation name (argv[0]): calling
+    'xelatex' loads the LaTeX format, but following the symlink to its 'xetex' target loads
+    the plain-TeX format and \\documentclass becomes undefined. So the compile must pass the
+    engine's OWN path (xelatex), NOT the resolved symlink target (xetex).
+    """
+    import app_desktop.window_latex_compile_mixin as latex_mixin
+    from shared.latex_engine import EngineChoice
+
+    # A fake xelatex that is a symlink to a 'xetex'-named target.
+    xetex_target = tmp_path / "xetex"
+    xetex_target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    xetex_target.chmod(0o755)
+    xelatex_link = tmp_path / "xelatex"
+    xelatex_link.symlink_to(xetex_target)
+
+    window.current_latex_path = tmp_path / "report.tex"
+    window.latex_edit.setPlainText(r"\documentclass{article}\begin{document}x\end{document}")
+    monkeypatch.setattr(
+        window, "_resolve_compile_engine",
+        lambda: EngineChoice(path=str(xelatex_link), source="system"),
+    )
+    _DummyLatexCompileWorker.instances.clear()
+    monkeypatch.setattr(latex_mixin, "_LatexCompileWorker", _DummyLatexCompileWorker)
+
+    window.compile_latex_to_pdf()
+    worker = _DummyLatexCompileWorker.instances[0]
+    try:
+        # The worker must receive the 'xelatex'-named path, not the 'xetex' symlink target.
+        assert Path(worker.kwargs["engine_path"]).name == "xelatex"
+        assert worker.kwargs["engine_name"] == "xelatex"
+    finally:
+        worker.started = False
+        window._latex_compile_worker = None
+        progress = getattr(window, "_latex_compile_progress", None)
+        if progress is not None:
+            progress.close()
+            window._latex_compile_progress = None
+
+
 def test_compile_latex_reports_error_when_no_engine_available(
     window: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

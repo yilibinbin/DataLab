@@ -1180,6 +1180,9 @@ def build_left_panel(self):
     latex_content.setObjectName("latex_options_content")
     latex_content_layout = QVBoxLayout(latex_content)
     latex_content_layout.addWidget(self.latex_options_widget)
+    # The engine selector row is built later (with the off-screen latex widgets); keep a
+    # handle to this layout so it can be appended into the LaTeX 选项 dialog then.
+    self._latex_options_content_layout = latex_content_layout
 
     self.compute_options_dialog = build_options_dialog(
         self, "compute_options_dialog", "计算选项", "Compute options", compute_content
@@ -1539,27 +1542,31 @@ def build_right_panel(self, layout: QVBoxLayout):
     )
     latex_controls_row.addWidget(latex_font_spin)
 
-    lbl_engine = QLabel("LaTeX 引擎：")
-    self._register_text(lbl_engine, "LaTeX 引擎：", "LaTeX engine:")
-    latex_controls_row.addSpacing(16)
-    latex_controls_row.addWidget(lbl_engine)
-    self.latex_engine_combo = QComboBox()
-    # First item is 自动 (data "auto"); after it, the concrete engines actually detected on
-    # this machine (xelatex/pdflatex/lualatex/tectonic) are listed dynamically with their
-    # paths — the user can let auto choose or pick a specific compiler. See
-    # populate_latex_engine_combo (built once here; the auto item retranslates on language
-    # switch, engine names are proper nouns and stay as-is).
-    populate_latex_engine_combo(self)
-    latex_controls_row.addWidget(self.latex_engine_combo)
-    engine_btn = QPushButton("选择引擎路径…")
-    engine_btn.clicked.connect(self._prompt_engine_selection)
-    self._register_text(engine_btn, "选择引擎路径…", "Select engine path…")
-    self.latex_engine_path_button = engine_btn
-    latex_controls_row.addWidget(engine_btn)
     latex_controls_row.addStretch()
     latex_layout.addLayout(latex_controls_row)
 
     latex_layout.addWidget(self.latex_edit)
+
+    # LaTeX ENGINE selector — placed in the LaTeX 选项 dialog (not this off-screen latex tab)
+    # so the user can actually see + pick it. First item 自动; then the engines actually
+    # detected on this machine (populate_latex_engine_combo).
+    lbl_engine = QLabel("LaTeX 引擎：")
+    self._register_text(lbl_engine, "LaTeX 引擎：", "LaTeX engine:")
+    self.latex_engine_combo = QComboBox()
+    populate_latex_engine_combo(self)
+    engine_btn = QPushButton("选择引擎路径…")
+    engine_btn.clicked.connect(self._prompt_engine_selection)
+    self._register_text(engine_btn, "选择引擎路径…", "Select engine path…")
+    self.latex_engine_path_button = engine_btn
+    _engine_row_widget = QWidget()
+    _engine_row = QHBoxLayout(_engine_row_widget)
+    _engine_row.setContentsMargins(0, 0, 0, 0)
+    _engine_row.addWidget(lbl_engine)
+    _engine_row.addWidget(self.latex_engine_combo)
+    _engine_row.addWidget(engine_btn)
+    _engine_row.addStretch()
+    if getattr(self, "_latex_options_content_layout", None) is not None:
+        self._latex_options_content_layout.addWidget(_engine_row_widget)
 
     # PDF result view
     pdf_widget = QWidget()

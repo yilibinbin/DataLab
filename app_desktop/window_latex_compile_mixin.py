@@ -187,7 +187,12 @@ class WindowLatexCompileMixin:
                 ),
             )
             return
-        engine_path = _safe_resolve_path(engine_exec)
+        # Do NOT resolve() the engine binary: TeX Live dispatches the LaTeX format by the
+        # invocation name (argv[0]). ``xelatex``/``pdflatex``/``lualatex`` are typically
+        # symlinks to a shared ``xetex``/``pdftex`` binary; following the symlink would call
+        # it as ``xetex`` and load the PLAIN-TeX format, making \documentclass undefined.
+        # Expand ~ only; keep the name that selects the format.
+        engine_path = Path(engine_exec).expanduser()
         if not engine_path.exists():
             QMessageBox.critical(
                 self,

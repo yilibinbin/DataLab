@@ -368,11 +368,12 @@ def _reveal_result_only_control(window: Any, app: Any, key: str) -> None:
         window.result_tabs.setCurrentIndex(indices["numeric"])
     elif key == "results.log":
         window.result_tabs.setCurrentIndex(indices["log"])
-    elif key in {"results.latex.source", "latex.engine", "pdf.zoom_percent"}:
-        # TeX/PDF are no longer result_tabs subtabs — their widgets live off-screen
-        # (the on-demand preview dialog is the viewer). Reveal the holder to make the
-        # persisted-state inputs (results.latex.source, latex.engine, pdf.zoom_percent)
-        # reachable for the sweep.
+    elif key == "latex.engine":
+        # The engine selector lives in the LaTeX 选项 dialog now — reveal it by opening it.
+        window.latex_options_dialog.open_dialog()
+    elif key in {"results.latex.source", "pdf.zoom_percent"}:
+        # TeX/PDF display widgets live off-screen (the preview dialog is the viewer); reveal
+        # the holder to make the persisted-state inputs reachable for the sweep.
         window._offscreen_result_views.setVisible(True)
     elif key in {"results.image.log_x", "results.image.log_y"}:
         # Log-scale toggles are shown only in fitting mode with plots enabled,
@@ -676,17 +677,17 @@ def test_caption_edit_reachable_via_latex_then_caption_checkbox(window: Any) -> 
 
 
 def test_latex_engine_combo_hidden_pre_reveal(window: Any) -> None:
-    """The TeX/PDF widgets live in a hidden off-screen holder (the preview dialog is their
-    viewer). Until the holder is revealed, latex_engine_combo is not visible-to-window."""
-    assert window._offscreen_result_views.isVisibleTo(window) is False
+    """The engine selector lives in the LaTeX 选项 dialog (closed by default), so
+    latex_engine_combo is not visible-to-window until the dialog is opened."""
+    assert window.latex_options_dialog.isVisible() is False
     assert window.latex_engine_combo.isVisibleTo(window) is False
 
 
-def test_latex_engine_combo_reachable_when_offscreen_holder_revealed(window: Any) -> None:
-    """latex_engine_combo is reachable once the off-screen result-views holder is shown."""
+def test_latex_engine_combo_reachable_when_latex_dialog_open(window: Any) -> None:
+    """latex_engine_combo is reachable once the LaTeX 选项 dialog is opened."""
     widget = window.latex_engine_combo
 
     def gate() -> None:
-        window._offscreen_result_views.setVisible(True)
+        window.latex_options_dialog.open_dialog()
 
     _assert_reachable_in_place(window, widget, gate=gate)
