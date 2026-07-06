@@ -502,11 +502,18 @@ class WindowFittingFormattersMixin:
     def _latex_escape(self, text: str) -> str:
         return _fit_latex_writer.latex_escape(text)
 
+    def _fit_native_group_width(self) -> bool:
+        """Whether the compile engine's siunitx honours digit-group-size (native S-column
+        variable-width grouping). False → the writer pre-groups the cells app-side."""
+        probe = getattr(self, "_engine_supports_group_width", None)
+        return bool(probe()) if callable(probe) else True
+
     def _fit_latex_preamble(self, use_dcolumn: bool, digits: int, latex_group_size: int) -> list[str]:
         return _fit_latex_writer.build_fit_latex_preamble(
             use_dcolumn=use_dcolumn,
             digits=digits,
             latex_group_size=latex_group_size,
+            native_group_width=self._fit_native_group_width(),
         )
 
     def _fit_latex_block(
@@ -571,4 +578,5 @@ class WindowFittingFormattersMixin:
             default_uncertainty_digits=default_unc_digits,
             cleaned_substituted=cleaned_sub,
             units=units,
+            native_group_width=self._fit_native_group_width(),
         )
