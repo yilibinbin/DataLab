@@ -212,13 +212,14 @@ def test_left_rail_sections_are_ordered_input_first(qtbot: Any) -> None:
         if (item := window.left_layout.itemAt(index)).widget() is not None
     ]
 
-    # Two-pane layout: the merged pane starts with 输入 (input_section) and ends with the
-    # run footer; the per-mode config panels sit in between. The mode selector moved to the
-    # toolbar and the empty output_setup_section is no longer added to the pane.
+    # Two-pane layout: the merged pane starts with 输入 (input_section); the per-mode config
+    # panels follow. The mode selector moved to the toolbar; the empty output_setup_section
+    # and the bottom run_section (开始执行 removed in 4·4c — run is on the toolbar) are no
+    # longer added to the pane.
     assert section_names[0] == "input_section"
-    assert section_names[-1] == "run_section"
     assert "mode_section" not in section_names
     assert "output_setup_section" not in section_names
+    assert "run_section" not in section_names
 
 
 def test_empty_manual_table_uses_one_editable_draft_row(qtbot: Any) -> None:
@@ -334,6 +335,7 @@ def test_configuration_sections_live_in_the_merged_pane(qtbot: Any) -> None:
     assert window.mode_section.parentWidget() is not merged
     assert window.mode_section.parentWidget() is not window.workbench_config_content
     assert window.input_section.parentWidget() is merged
-    # output_setup_section is a detached compatibility widget (empty; no longer in the pane).
+    # output_setup_section and run_section are detached compatibility widgets (empty; no
+    # longer added to the pane — output options moved to the toolbar, 开始执行 removed in 4·4c).
     assert window.output_setup_section.parentWidget() is not merged
-    assert window.run_section.parentWidget() is merged
+    assert window.run_section.parentWidget() is not merged

@@ -88,7 +88,6 @@ def test_workbench_keeps_legacy_public_widget_attributes(qtbot: Any) -> None:
         "result_tabs",
         "result_edit",
         "latex_edit",
-        "run_button",
         "workbench_run_button",
     ):
         assert getattr(window, name, None) is not None, name

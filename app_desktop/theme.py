@@ -326,27 +326,6 @@ QWidget[datalab_config_card="true"] QGroupBox::title {{
     top: 0px;
     padding: 0px;
 }}
-QWidget[datalab_config_card="true"] QPushButton[datalab_primary_run_button="true"] {{
-    min-height: 28px;
-    padding: 4px 10px;
-    color: #ffffff;
-    background: #2563eb;
-    border: 1px solid #2563eb;
-    border-radius: 6px;
-    font-weight: 600;
-}}
-QWidget[datalab_config_card="true"] QPushButton[datalab_primary_run_button="true"]:hover {{
-    background: #1d4ed8;
-    border-color: #1d4ed8;
-}}
-QWidget[datalab_config_card="true"] QPushButton[datalab_primary_run_button="true"][datalab_run_state="stop"] {{
-    background: #dc2626;
-    border-color: #dc2626;
-}}
-QWidget[datalab_config_card="true"] QPushButton[datalab_primary_run_button="true"][datalab_run_state="stop"]:hover {{
-    background: #b91c1c;
-    border-color: #b91c1c;
-}}
 """
 
 

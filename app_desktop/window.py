@@ -654,12 +654,16 @@ class ExtrapolationWindow(
         # the default "Run" text even mid-run. Re-run the state-specific setter so
         # a running (Stop) button keeps its Stop label and state in the new
         # language, and the shortcut is restored either way.
-        run_state = self.run_button.property("datalab_run_state") if hasattr(self, "run_button") else None
+        # The bottom 开始执行 toggle was removed (4·4c); run-state now lives on the
+        # _datalab_run_state attribute, reflected by the toolbar 运行/停止 pair. Replay
+        # the state-specific setter so a running (stop) toolbar state survives a language
+        # switch, and re-install the Ctrl+Return shortcut on the toolbar run button.
+        run_state = getattr(self, "_datalab_run_state", "run")
         if run_state == "stop" and hasattr(self, "_set_button_to_stop_mode"):
             self._set_button_to_stop_mode()
-        elif run_state == "run" and hasattr(self, "_set_button_to_run_mode"):
+        elif hasattr(self, "_set_button_to_run_mode"):
             self._set_button_to_run_mode()
-        elif hasattr(self, "_reapply_run_button_shortcut"):
+        if hasattr(self, "_reapply_run_button_shortcut"):
             self._reapply_run_button_shortcut()
         if hasattr(self, "_update_constants_visibility"):
             self._update_constants_visibility()

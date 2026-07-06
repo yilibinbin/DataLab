@@ -205,6 +205,14 @@ def build_workbench_toolbar(owner: object) -> QWidget:
         tooltip_zh="停止正在运行的计算。",
         tooltip_en="Stop the running calculation.",
     )
+    # Ctrl/⌘+Return runs from the toolbar 运行 button (the bottom 开始执行 button that used
+    # to own this shortcut was removed in 4·4c). 停止 starts disabled — the run/stop state
+    # machine (window_extrapolation_mixin._set_button_to_stop_mode/_run_mode) enables 停止
+    # and disables 运行 while a job runs, then reverses when it finishes.
+    from PySide6.QtGui import QKeySequence
+
+    dynamic_owner.workbench_run_button.setShortcut(QKeySequence("Ctrl+Return"))
+    dynamic_owner.workbench_stop_button.setEnabled(False)
     layout.addWidget(dynamic_owner.workbench_run_button)
     layout.addWidget(dynamic_owner.workbench_stop_button)
 

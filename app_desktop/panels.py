@@ -367,10 +367,10 @@ def build_ui(self):
     self.workbench_workspace_layout.addWidget(self.workbench_variable_panel)
     reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
     populate_variable_workspace_panel(self)
-    # Footer at the BOTTOM of the merged pane. ``output_setup_section`` is no longer added
-    # to the layout — it became an empty dead-space widget after the options moved to the
-    # toolbar dialogs; the attribute is kept for compatibility but never shown.
-    self.workbench_workspace_layout.addWidget(self.run_section)
+    # ``output_setup_section`` and ``run_section`` are no longer added to the layout — the
+    # first went empty when options moved to the toolbar dialogs, the second when the
+    # bottom 开始执行 button was removed (4·4c; run is on the toolbar). Both attributes are
+    # kept for compatibility but never shown.
     self._build_right_panel(self.workbench_result_layout)
     # Part C/D: always-visible result status strip (footer of the result rail) +
     # click-to-open overview popover. Both read the shared result-state source and
@@ -696,11 +696,10 @@ def _table_required_min_width(table: QTableWidget) -> int:
 
 
 def _config_card_sections(self) -> tuple[QWidget, ...]:
+    # run_section is no longer a visible card (bottom 开始执行 removed in 4·4c); only the
+    # input section remains a styled config card in the merged pane.
     sections: list[QWidget] = []
-    for attr in (
-        "input_section",
-        "run_section",
-    ):
+    for attr in ("input_section",):
         section = getattr(self, attr, None)
         if isinstance(section, QWidget):
             sections.append(section)
@@ -1197,19 +1196,11 @@ def build_left_panel(self):
     # latex_options_dialog is opened from the result-panel 「LaTeX 选项」 button
     # (result_latex_options_button), bound in build_right_panel after that button exists.
 
-    self.run_button = QPushButton("开始执行")
-    self.run_button.setObjectName("run_button")
-    self.run_button.setProperty("datalab_primary_run_button", True)
-    self.run_button.setProperty("datalab_run_state", "run")
-    # Ctrl/⌘+Return is the standard "execute" shortcut; a button shortcut fires
-    # the click, so it runs or stops depending on the button's current state.
-    self.run_button.setShortcut(QKeySequence("Ctrl+Return"))
-    # Register the tooltip for retranslation (not a one-shot setToolTip) so it
-    # switches with the UI language like the button text.
-    self._register_text(self.run_button, "开始执行 (Ctrl+Return)", "Run (Ctrl+Return)", "setToolTip")
-    self._register_text(self.run_button, "开始执行", "Run")
-    self.run_button.clicked.connect(lambda _checked=False: self.run_calculation())
-    self.run_section_layout.addWidget(self.run_button)
+    # The bottom 开始执行 button was removed (4·4c): it duplicated the toolbar 运行 button.
+    # Run/stop is driven by the toolbar 运行 / 停止 pair (workbench_run_button /
+    # workbench_stop_button); Ctrl+Return runs via the toolbar run button (shortcut set in
+    # workbench_toolbar.py). run_section stays an empty compat widget, not added to the
+    # layout (like output_setup_section).
     self._update_model_controls()
 
 def build_right_panel(self, layout: QVBoxLayout):

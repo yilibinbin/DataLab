@@ -119,38 +119,41 @@ class WindowExtrapolationMixin:
         )
 
     def _reapply_run_button_shortcut(self):
-        """Re-apply the run button's execute shortcut.
+        """Re-apply the toolbar run button's execute shortcut.
 
-        QPushButton.setText() clears an explicitly-set shortcut in PySide6, so
-        every retranslation or run/stop text swap silently drops Ctrl/⌘+Return
-        (it only survived when the new text equalled the old). Re-apply it after
-        any text change to keep the shortcut installed in every language.
+        QPushButton.setText() clears an explicitly-set shortcut in PySide6, so any
+        retranslation could silently drop Ctrl/⌘+Return. Re-apply it after any text
+        change to keep the shortcut installed in every language. The bottom 开始执行
+        button was removed (4·4c) — Ctrl+Return now runs via the toolbar 运行 button.
         """
-        button = getattr(self, "run_button", None)
+        button = getattr(self, "workbench_run_button", None)
         if button is not None:
             from PySide6.QtGui import QKeySequence
 
             button.setShortcut(QKeySequence("Ctrl+Return"))
 
     def _set_button_to_stop_mode(self):
-        """Change the run button to stop mode (red color, stop text)."""
-        if hasattr(self, "run_button"):
-            self.run_button.setText(self._tr("停止", "Stop"))
-            self._reapply_run_button_shortcut()
-            self.run_button.setStyleSheet("")
-            self.run_button.setProperty("datalab_run_state", "stop")
-            self.run_button.style().unpolish(self.run_button)
-            self.run_button.style().polish(self.run_button)
+        """Reflect a running job on the toolbar: disable 运行, enable 停止.
+
+        The bottom 开始执行 toggle was removed (4·4c); the toolbar's dedicated 运行 /
+        停止 pair + the job-status label carry run-state feedback now."""
+        self._datalab_run_state = "stop"
+        run_button = getattr(self, "workbench_run_button", None)
+        if run_button is not None:
+            run_button.setEnabled(False)
+        stop_button = getattr(self, "workbench_stop_button", None)
+        if stop_button is not None:
+            stop_button.setEnabled(True)
 
     def _set_button_to_run_mode(self):
-        """Restore the run button to normal run mode."""
-        if hasattr(self, "run_button"):
-            self.run_button.setText(self._tr("开始执行", "Run"))
-            self._reapply_run_button_shortcut()
-            self.run_button.setStyleSheet("")
-            self.run_button.setProperty("datalab_run_state", "run")
-            self.run_button.style().unpolish(self.run_button)
-            self.run_button.style().polish(self.run_button)
+        """Restore the idle toolbar state: enable 运行, disable 停止."""
+        self._datalab_run_state = "run"
+        run_button = getattr(self, "workbench_run_button", None)
+        if run_button is not None:
+            run_button.setEnabled(True)
+        stop_button = getattr(self, "workbench_stop_button", None)
+        if stop_button is not None:
+            stop_button.setEnabled(False)
 
     def _stop_current_worker(self):
         """Request all running workers to stop."""

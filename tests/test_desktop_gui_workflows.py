@@ -52,7 +52,7 @@ def _enter_manual_text(window: Any, text: str) -> None:
 
 
 def _click_run_and_wait(qtbot: Any, window: Any, *, timeout: int = 10000) -> None:
-    qtbot.mouseClick(window.run_button, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(window.workbench_run_button, Qt.MouseButton.LeftButton)
     qtbot.waitUntil(lambda: not window._has_running_worker(), timeout=timeout)
     QApplication.processEvents()
 
