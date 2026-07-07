@@ -187,7 +187,7 @@ class WindowFittingResidualsMixin:
     ) -> Path | None:
         digits = self.latex_input_precision_spin.value() if hasattr(self, "latex_input_precision_spin") else 16
         if latex_group_size is not None:
-            group_size = max(1, int(latex_group_size))
+            group_size = max(0, int(latex_group_size))  # 0 = 不分组 must survive (F1)
         else:
             group_size = self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3
         tex_path = Path(output_path).expanduser()
@@ -450,6 +450,20 @@ class WindowFittingResidualsMixin:
                     batch_texts.append(header + "\n" + self._tr("未获得该批次结果。", "No result for this batch."))
             combined = "\n\n".join(batch_texts)
             self._set_result_text(combined, final_result=True)
+            # Stash the tex-rebuild data so 生成 TeX works on demand for batch fits too
+            # (previously only single-fit + comparison stashed → batch 生成 TeX returned None).
+            self.remember_latex_inputs(
+                "fit_batches",
+                {
+                    "latex_batches": latex_batches,
+                    "use_dcolumn": use_dcolumn,
+                    "latex_group_size": (
+                        int(ctx["latex_group_size"])
+                        if ctx.get("latex_group_size") is not None
+                        else 3
+                    ),
+                },
+            )
             self._set_image_list("fit", figure_paths)
             if csv_rows:
                 self._set_csv_data(
@@ -600,6 +614,32 @@ class WindowFittingResidualsMixin:
             return None
         self._load_latex_into_editor(tex_path)
         return str(tex_path)
+
+    def generate_fitting_batches_latex_on_demand(self) -> str | None:
+        """Rebuild the batch-fit LaTeX tex ON DEMAND from the stashed batches + LIVE dcolumn/
+        digits — no recompute. Mirrors _write_fitting_latex_batches but targets a temp path so
+        生成 TeX works for batch fits (previously only single-fit + comparison stashed)."""
+        store = getattr(self, "_last_latex_inputs", {}) or {}
+        latex_inputs = store.get("fit_batches")
+        if not isinstance(latex_inputs, dict):
+            return None
+        batches = latex_inputs.get("latex_batches")
+        if not isinstance(batches, list) or not batches:
+            return None
+        use_dcolumn = (
+            self.dcolumn_checkbox.isChecked()
+            if hasattr(self, "dcolumn_checkbox")
+            else bool(latex_inputs.get("use_dcolumn"))
+        )
+        _gs = latex_inputs.get("latex_group_size")
+        group_size = int(_gs) if _gs is not None else 3  # 0 = 不分组 must survive (not `or 3`)
+        output_path = self.latex_output_path_for_run(True)
+        return str(
+            self._write_fitting_latex_batches(
+                batches, output_path, use_dcolumn, latex_group_size=group_size
+            )
+            or output_path
+        )
 
     def _on_fit_finished(self, payload: FitResultPayload):
         try:

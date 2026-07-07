@@ -2920,17 +2920,16 @@ class ExtrapolationWindow(
             "error": "generate_error_latex_on_demand",
             "statistics": "generate_statistics_latex_on_demand",
             "fit_single": "generate_fitting_latex_on_demand",
+            "fit_batches": "generate_fitting_batches_latex_on_demand",
             "fitting_comparison": "generate_fitting_comparison_latex_on_demand",
         }
         store = getattr(self, "_last_latex_inputs", {}) or {}
-        # Map the current result kind to its stash key (result kinds and stash keys mostly
-        # match; fit_single is the exception).
+        # Map the current result kind to its stash key (result kinds and stash keys match now
+        # that fit_batches has its own builder + stash).
         current = getattr(self, "_last_result_kind", None)
         order = []
         if current in builders:
             order.append(current)
-        elif current in ("fit_single", "fit_batches", "fitting_comparison") and "fit_single" in builders:
-            order.append("fit_single")
         for key in builders:
             if key not in order:
                 order.append(key)
