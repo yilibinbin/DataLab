@@ -283,7 +283,19 @@ class WindowLatexCompileMixin:
 
         if outcome.error:
             self._append_log(outcome.error)
-            QMessageBox.critical(self, self._tr("编译失败", "Compilation Failed"), outcome.error)
+            # The compile error can be a full LaTeX log (many lines) — a plain critical box
+            # would grow past the screen and hide OK. Put the log in the scrollable detail pane.
+            from app_desktop.message_dialogs import show_bounded_critical
+
+            show_bounded_critical(
+                self,
+                self._tr("编译失败", "Compilation Failed"),
+                outcome.error,
+                summary=self._tr(
+                    "LaTeX 编译失败。点击“显示详细信息”查看完整日志。",
+                    "LaTeX compilation failed. Click “Show Details” for the full log.",
+                ),
+            )
             return
 
         if outcome.succeeded:
