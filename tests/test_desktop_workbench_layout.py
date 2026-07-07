@@ -196,7 +196,11 @@ def test_status_strip_owns_workspace_and_job_status(qtbot: Any) -> None:
     assert window.workspace_status_label.parentWidget() is window.workbench_status_strip
     assert window.job_status_label.parentWidget() is window.workbench_status_strip
     assert window.workspace_status_label.text() in {"已保存", "Saved", "未保存", "Unsaved"}
-    assert window.job_status_label.text() in {"就绪", "Ready", "运行中", "Running"}
+    # The chip now shows the rich 5-state status word (+ optional summary); with no result it
+    # reads 等待/Waiting rather than the old bare 就绪/Ready.
+    assert window.job_status_label.text() in {
+        "就绪", "Ready", "运行中", "Running", "等待", "Waiting", "已就绪",
+    }
 
 
 def test_status_strip_tracks_dirty_and_running_state(qtbot: Any) -> None:
@@ -210,4 +214,5 @@ def test_status_strip_tracks_dirty_and_running_state(qtbot: Any) -> None:
     assert window.job_status_label.text() == "Running"
 
     window._set_button_to_run_mode()
-    assert window.job_status_label.text() == "Ready"
+    # No result yet → the rich chip reads Waiting (was the old bare "Ready").
+    assert window.job_status_label.text() == "Waiting"

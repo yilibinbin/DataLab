@@ -1202,8 +1202,11 @@ def build_left_panel(self):
     self._update_model_controls()
 
 def build_right_panel(self, layout: QVBoxLayout):
+    # The overview card is built but NOT added to the visible layout: the toolbar status chip
+    # is the overview entry point now (user-approved). The widget stays alive off-layout so
+    # refresh_result_overview's writes to its sub-widgets remain valid (mirrors the 4·4b
+    # "remove from view, keep widget" pattern), and the popover reads the same result state.
     self.workbench_result_overview_panel = build_result_overview(self)
-    layout.addWidget(self.workbench_result_overview_panel)
     self.workbench_history_panel = build_history_panel(self)
     layout.addWidget(self.workbench_history_panel)
 

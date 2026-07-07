@@ -144,7 +144,8 @@ def test_workbench_status_labels_refresh_after_english_language_switch(qtbot: An
     window._on_language_change(2)
 
     assert window.workspace_status_label.text() == "Saved"
-    assert window.job_status_label.text() == "Ready"
+    # Rich status chip: no result yet → Waiting (was the old bare Ready).
+    assert window.job_status_label.text() == "Waiting"
 
     window._workspace_dirty = True
     window._update_workspace_window_title()
@@ -171,7 +172,8 @@ def test_workbench_job_status_refreshes_on_run_stop_mode_methods(
     monkeypatch.setattr(window, "_has_running_worker", lambda: False)
     window._set_button_to_run_mode()
 
-    assert window.job_status_label.text() == "Ready"
+    # No result → rich chip reads Waiting (was the old bare Ready).
+    assert window.job_status_label.text() == "Waiting"
     assert window._datalab_run_state == "run"
     assert window.workbench_run_button.isEnabled() is True
     assert window.workbench_stop_button.isEnabled() is False

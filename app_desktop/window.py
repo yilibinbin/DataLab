@@ -2876,6 +2876,34 @@ class ExtrapolationWindow(
         history_panel = getattr(self, "workbench_history_panel", None)
         if history_panel is not None:
             history_panel.refresh()
+        self._refresh_toolbar_status_chip()
+
+    def _refresh_toolbar_status_chip(self, *, running: bool | None = None) -> None:
+        """Drive the toolbar status chip from the shared result state: a rich 5-state word
+        (已就绪/计算中/失败/完成/等待) + a one-line summary (· N 行表格). The chip is the sole
+        result-overview entry point now that the left-rail card is gone.
+
+        ``running`` forces the running state for the run/stop button-mode path, which fires
+        before the worker-state source reflects the transition."""
+        chip = getattr(self, "job_status_label", None)
+        if chip is None:
+            return
+        from app_desktop.workbench_results import _overview_state, _status_badge
+        from app_desktop.result_overview_popover import _value_summary
+
+        if running:
+            chip.setText(self._tr("运行中", "Running"))
+            return
+        state = _overview_state(self)
+        _status, label = _status_badge(self, state)
+        summary = _value_summary(self, state, _status)
+        chip.setText(f"{label} · {summary}" if summary and summary != "—" else label)
+
+    def _open_result_overview_from_toolbar(self) -> None:
+        """Open the (existing) result-overview popover, anchored to the toolbar status chip."""
+        from app_desktop.result_overview_popover import open_result_overview_popover
+
+        open_result_overview_popover(self)
 
     def _export_csv_data(self):
         if not getattr(self, "_csv_rows", None):

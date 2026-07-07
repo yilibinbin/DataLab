@@ -39,16 +39,17 @@ class _OverviewCardClickFilter(QObject):
 
 
 def install_overview_popover_trigger(owner: Any) -> None:
-    """Install a click filter on the existing overview card (idempotent)."""
-    card = getattr(owner, "workbench_result_overview_panel", None)
-    if card is None:
+    """Install a click filter on the toolbar status chip (the sole overview entry point now
+    that the left-rail card is removed from the visible layout). Idempotent."""
+    chip = getattr(owner, "job_status_label", None)
+    if chip is None:
         return
     if getattr(owner, "_result_overview_popover_filter", None) is not None:
         return
     click_filter = _OverviewCardClickFilter(owner)
-    card.installEventFilter(click_filter)
+    chip.installEventFilter(click_filter)
     owner._result_overview_popover_filter = click_filter
-    card.setCursor(Qt.CursorShape.PointingHandCursor)
+    chip.setCursor(Qt.CursorShape.PointingHandCursor)
 
 
 def _tr(owner: Any, zh: str, en: str) -> str:
@@ -184,10 +185,13 @@ def _points_fallback(owner: Any, state: Any, columns: int) -> str:
 def open_result_overview_popover(owner: Any) -> QWidget:
     """Build/refresh the popover, position it near the overview card, and show it."""
     popover = build_result_overview_popover(owner)
-    card = getattr(owner, "workbench_result_overview_panel", None)
-    if card is not None:
+    # Anchor to the toolbar status chip (the entry point); fall back to the (off-layout) card.
+    anchor = getattr(owner, "job_status_label", None) or getattr(
+        owner, "workbench_result_overview_panel", None
+    )
+    if anchor is not None:
         try:
-            global_pos = card.mapToGlobal(card.rect().bottomLeft())
+            global_pos = anchor.mapToGlobal(anchor.rect().bottomLeft())
             popover.move(global_pos)
         except (RuntimeError, AttributeError):
             pass

@@ -75,10 +75,11 @@ def test_screenshot_manifest_includes_common_workbench_panels(tmp_path) -> None:
         regions = screenshot["regions"]
         spec = MODE_WORKBENCH_SPECS[screenshot["mode"]]
 
-        result_metric = regions["workbench_result_overview_panel"]
-        assert result_metric["visible"] is True
-        assert result_metric["width"] >= 160
-        assert result_metric["height"] >= 48
+        # The result-overview card was moved off the visible layout: the toolbar status chip
+        # is the overview entry point now (user-approved redesign). The card region may be
+        # absent or reported not-visible — either way it must NOT occupy result-rail space.
+        result_metric = regions.get("workbench_result_overview_panel")
+        assert result_metric is None or result_metric["visible"] is False
 
         result_details_metric = regions["workbench_result_details_panel"]
         assert result_details_metric["visible"] is True
