@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from mpmath import mp
@@ -93,7 +93,9 @@ def latex_escape(text: object) -> str:
     return _canonical_latex_escape(text)
 
 
-def _comparison_latex_row(row: Mapping[str, Any], *, group_cell=None) -> str:
+def _comparison_latex_row(
+    row: Mapping[str, Any], *, group_cell: Callable[[str], str] | None = None
+) -> str:
     cells = [
         latex_escape(row.get("order", "")),
         latex_escape(row.get("model_label", "")),
@@ -106,7 +108,9 @@ def _comparison_latex_row(row: Mapping[str, Any], *, group_cell=None) -> str:
     return " & ".join(cells) + " \\\\"
 
 
-def _latex_metric_cell(value: Any, *, group_cell=None) -> str:
+def _latex_metric_cell(
+    value: Any, *, group_cell: Callable[[str], str] | None = None
+) -> str:
     text = _metric_text(value)
     if not text:
         return "\\multicolumn{1}{c}{}"
