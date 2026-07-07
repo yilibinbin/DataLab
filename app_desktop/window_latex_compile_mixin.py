@@ -172,9 +172,15 @@ class WindowLatexCompileMixin:
         if choice is not None and choice.path and Path(choice.path).exists():
             engine = Path(choice.path).stem
             engine_exec = choice.path
-        else:
+        elif self._latex_engine_mode() != "local":
+            # Only auto/bundled may fall back to the Tectonic auto-install. "local" mode is
+            # an explicit user choice of a local TeX — never prompt a 30 MB Tectonic download
+            # behind their back (CodeRabbit CR-1).
             engine = "tectonic"
             engine_exec = self._ensure_latex_engine(engine)
+        else:
+            engine = "local"
+            engine_exec = None
         if not engine_exec:
             QMessageBox.critical(
                 self,

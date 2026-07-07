@@ -194,6 +194,35 @@ def test_compile_preserves_engine_invocation_name_not_symlink_target(
             window._latex_compile_progress = None
 
 
+def test_compile_local_mode_does_not_fall_back_to_tectonic_install(
+    window: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """In 'local' mode the user explicitly chose a local TeX; if none resolves, compile must
+    NOT fall back to the Tectonic auto-install (a 30 MB download prompt) — it must report an
+    error and start no worker (CodeRabbit finding CR-1)."""
+    import app_desktop.window_latex_compile_mixin as latex_mixin
+
+    window.current_latex_path = tmp_path / "report.tex"
+    window.latex_edit.setPlainText(r"\documentclass{article}\begin{document}x\end{document}")
+
+    ensure_calls: list[str] = []
+    monkeypatch.setattr(window, "_latex_engine_mode", lambda: "local")
+    monkeypatch.setattr(window, "_resolve_compile_engine", lambda: None)
+    monkeypatch.setattr(window, "_ensure_latex_engine", lambda e: ensure_calls.append(e))
+    critical_calls: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        latex_mixin.QMessageBox, "critical", lambda *args: critical_calls.append(args)
+    )
+    _DummyLatexCompileWorker.instances.clear()
+    monkeypatch.setattr(latex_mixin, "_LatexCompileWorker", _DummyLatexCompileWorker)
+
+    window.compile_latex_to_pdf()
+
+    assert ensure_calls == [], "local mode must not trigger the Tectonic install fallback"
+    assert _DummyLatexCompileWorker.instances == []
+    assert critical_calls, "no usable local engine must surface a critical error"
+
+
 def test_compile_latex_reports_error_when_no_engine_available(
     window: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
