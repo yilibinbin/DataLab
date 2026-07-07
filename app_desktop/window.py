@@ -2511,6 +2511,9 @@ class ExtrapolationWindow(
         else:
             self.result_edit.setPlainText(text)
             text_format = "plain"
+        # setMarkdown/setPlainText reset the document's default font to the app default, so the
+        # user's chosen font size would be lost on every new result — re-apply it.
+        self._reapply_result_font_size()
         self._last_result_text = text
         self._last_result_text_format = text_format
         self._last_result_rendered_text = self.result_edit.toPlainText()
@@ -2550,6 +2553,13 @@ class ExtrapolationWindow(
             "setToolTip",
         )
         spin.valueChanged.connect(lambda value, target=editor: self._apply_editor_font_size(target, value))
+        # Remember which spin drives which editor so the size can be re-applied after content
+        # is re-rendered (setMarkdown resets the effective font — see _set_result_text).
+        registry = getattr(self, "_editor_font_spins", None)
+        if registry is None:
+            registry = {}
+            self._editor_font_spins = registry
+        registry[id(editor)] = (editor, spin)
         control_layout.addWidget(spin)
         control_layout.addStretch()
         parent_layout.addLayout(control_layout)
@@ -2558,6 +2568,22 @@ class ExtrapolationWindow(
         font = editor.font()
         font.setPointSize(size)
         editor.setFont(font)
+        # setMarkdown renders through the DOCUMENT's default font; set that too so the size
+        # takes effect on already-rendered markdown content, not just future plain text.
+        doc = editor.document() if hasattr(editor, "document") else None
+        if doc is not None:
+            doc.setDefaultFont(font)
+
+    def _reapply_result_font_size(self):
+        """Re-apply the user's chosen font size to the result editor after its content was
+        re-rendered (setMarkdown resets the document's default font to the app default)."""
+        registry = getattr(self, "_editor_font_spins", None)
+        if not registry:
+            return
+        entry = registry.get(id(self.result_edit)) if hasattr(self, "result_edit") else None
+        if entry is not None:
+            _editor, spin = entry
+            self._apply_editor_font_size(self.result_edit, spin.value())
 
     # Display formatting helpers (only affect presentation; core calculations remain at mpmath precision)
     def _display_digits_limit(self) -> int:

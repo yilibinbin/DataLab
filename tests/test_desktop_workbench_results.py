@@ -97,6 +97,25 @@ def test_result_rail_has_overview_and_data_table(qtbot: Any) -> None:
     assert window.result_tabs.tabToolTip(window.result_tabs_indices["numeric"]) == "数值结果"
 
 
+def test_result_font_size_survives_content_rerender(qtbot: Any) -> None:
+    """Changing the result font size must live-update the output AND survive the next result
+    render. setMarkdown resets the document's default font, so without re-applying the chosen
+    size, every new result would silently revert to the app default (user-reported)."""
+    window = _window(qtbot)
+    registry = getattr(window, "_editor_font_spins", {})
+    entry = registry.get(id(window.result_edit))
+    assert entry is not None, "result_edit has no registered font-size spin"
+    _editor, spin = entry
+
+    window._set_result_text("# Result\n\nModel: A*x", final_result=True)
+    spin.setValue(20)
+    assert window.result_edit.document().defaultFont().pointSize() == 20
+
+    # A new result re-renders via setMarkdown — the chosen size must persist.
+    window._set_result_text("# New Result\n\nModel: B*x", final_result=True)
+    assert window.result_edit.document().defaultFont().pointSize() == 20
+
+
 def test_latex_pdf_tabs_removed_from_result_tabs_but_widgets_survive(qtbot: Any) -> None:
     """The TeX/PDF result tabs are gone (the on-demand preview dialog is the viewer),
     but the underlying widgets stay alive off-screen so the dialog, workspace round-trip,
