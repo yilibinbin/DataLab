@@ -656,6 +656,19 @@ def resolve_engine_for_mode(
     is found for the mode.
     """
     if mode == "bundled":
+        # "内置" must force the bundled/auto-installed Tectonic — NOT a system-PATH tectonic
+        # (resolve_engine checks PATH first, which would let a system binary shadow the
+        # bundled one; dual-model review F5). Prefer bundled TinyTeX, then ~/.datalab/bin.
+        if bundle_root is None:
+            bundle_root = find_app_root()
+        bun_path = discover_bundled_engine(bundle_root, "tectonic")
+        if bun_path:
+            return EngineChoice(path=bun_path, source="bundled")
+        candidate = tectonic_install_dir() / tectonic_executable_name()
+        if candidate.is_file():
+            return EngineChoice(path=str(candidate), source="auto-tectonic")
+        # Nothing bundled/installed yet — fall back to whatever resolve_engine finds so the
+        # caller can trigger the Tectonic auto-install path.
         return resolve_engine("tectonic", bundle_root=bundle_root)
 
     def _first_local() -> EngineChoice | None:
@@ -668,18 +681,19 @@ def resolve_engine_for_mode(
     if mode == "local":
         return _first_local()
 
-    # auto: a capable local engine wins; else fall back to Tectonic (always available once
-    # installed). An incapable local engine is not preferred over Tectonic because the whole
-    # point of auto is to get the best grouping — but both produce correct PDFs, so if
-    # Tectonic is missing we still return the local engine rather than nothing.
+    # auto: a CAPABLE local engine wins (best grouping); else fall back to Tectonic (always
+    # available once installed); else an incapable local engine (still produces correct PDFs,
+    # just fixed-width grouping). Must scan ALL local engines for a capable one before
+    # settling — returning the first incapable one early would skip a later capable engine
+    # (dual-model review F4).
     tectonic = resolve_engine("tectonic", bundle_root=bundle_root)
+    first_incapable: EngineChoice | None = None
     for name in _LOCAL_ENGINE_PREFERENCE:
         choice = resolve_engine(name, bundle_root=bundle_root)
         if choice is None:
             continue
         if siunitx_supports_digit_group_size(choice.path):
             return choice
-        # Remember the first usable-but-incapable local engine as a last resort.
-        if tectonic is None:
-            return choice
-    return tectonic or _first_local()
+        if first_incapable is None:
+            first_incapable = choice
+    return tectonic or first_incapable

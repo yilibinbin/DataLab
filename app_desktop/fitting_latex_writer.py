@@ -41,7 +41,10 @@ def latex_escape(text: str) -> str:
 def build_fit_latex_preamble(
     *, use_dcolumn: bool, digits: int, latex_group_size: int, native_group_width: bool = True
 ) -> list[str]:
-    group_size = max(1, int(latex_group_size))
+    # max(0, ...) not max(1, ...): group_size 0 must stay 0 so build_sisetup_block emits the
+    # "no grouping" body (group-digits = false). max(1,..) forced 0→1 → grouping stayed ON,
+    # contradicting the UI's "0 = 不分组" (dual-model review F1).
+    group_size = max(0, int(latex_group_size))
     lines = [
         "\\documentclass{article}",
         "\\usepackage{ifxetex}",

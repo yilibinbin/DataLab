@@ -230,7 +230,8 @@ class WindowFittingResidualsMixin:
         job: FittingComparisonJob,
     ) -> Path | None:
         digits = int(getattr(job, "latex_digits", 16) or 16)
-        group_size = int(getattr(job, "latex_group_size", 3) or 3)
+        _gs = getattr(job, "latex_group_size", 3)
+        group_size = int(_gs) if _gs is not None else 3  # 0 = 不分组 must survive (not `or 3`)
         tex_path = Path(job.output_path).expanduser()
         try:
             comparison_rows = build_comparison_table_rows_from_payload(payload)
@@ -247,6 +248,10 @@ class WindowFittingResidualsMixin:
                 comparison_rows,
                 use_dcolumn=job.use_dcolumn,
                 caption_text=job.caption or self._tr("选定拟合比较", "Selected fit comparison"),
+                latex_group_size=group_size,
+                native_group_width=self._fit_native_group_width()
+                if hasattr(self, "_fit_native_group_width")
+                else True,
             )
         )
         lines.append("\\end{document}")
@@ -467,7 +472,11 @@ class WindowFittingResidualsMixin:
                     latex_batches,
                     output_path,
                     use_dcolumn,
-                    latex_group_size=int(ctx.get("latex_group_size", 3) or 3),
+                    latex_group_size=(
+                        int(ctx["latex_group_size"])
+                        if ctx.get("latex_group_size") is not None
+                        else 3
+                    ),  # 0 = 不分组 must survive (not `or 3`)
                 )
             self.tabs.setCurrentIndex(self.result_tab_index)
             QMessageBox.information(self, self._tr("完成", "Done"), self._tr("批量拟合完成。", "Batch fitting completed."))
@@ -506,7 +515,8 @@ class WindowFittingResidualsMixin:
             if hasattr(self, "latex_input_precision_spin")
             else int(latex_inputs.get("latex_digits") or 16)
         )
-        group_size = int(latex_inputs.get("latex_group_size") or 3)
+        _gs = latex_inputs.get("latex_group_size")
+        group_size = int(_gs) if _gs is not None else 3  # 0 = 不分组 must survive (not `or 3`)
         output_path = self.latex_output_path_for_run(True)
         lines = self._fit_latex_preamble(use_dcolumn, digits, group_size)
         lines.extend(
@@ -559,7 +569,8 @@ class WindowFittingResidualsMixin:
             if hasattr(self, "latex_input_precision_spin")
             else int(latex_inputs.get("latex_digits") or 16)
         )
-        group_size = int(latex_inputs.get("latex_group_size") or 3)
+        _gs = latex_inputs.get("latex_group_size")
+        group_size = int(_gs) if _gs is not None else 3  # 0 = 不分组 must survive (not `or 3`)
         try:
             comparison_rows = build_comparison_table_rows_from_payload(payload)
         except ValueError:
@@ -571,6 +582,10 @@ class WindowFittingResidualsMixin:
                 use_dcolumn=use_dcolumn,
                 caption_text=latex_inputs.get("caption")
                 or self._tr("选定拟合比较", "Selected fit comparison"),
+                latex_group_size=group_size,
+                native_group_width=self._fit_native_group_width()
+                if hasattr(self, "_fit_native_group_width")
+                else True,
             )
         )
         lines.append("\\end{document}")
@@ -720,7 +735,11 @@ class WindowFittingResidualsMixin:
                 {
                     "payload": dict(payload.payload),
                     "latex_digits": int(getattr(job, "latex_digits", 16) or 16),
-                    "latex_group_size": int(getattr(job, "latex_group_size", 3) or 3),
+                    "latex_group_size": (
+                        int(getattr(job, "latex_group_size", 3))
+                        if getattr(job, "latex_group_size", 3) is not None
+                        else 3
+                    ),  # 0 = 不分组 must survive (not `or 3`)
                     "use_dcolumn": bool(getattr(job, "use_dcolumn", True)),
                     "caption": getattr(job, "caption", None),
                 },

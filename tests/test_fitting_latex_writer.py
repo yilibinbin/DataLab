@@ -52,6 +52,15 @@ def test_build_fit_latex_preamble_includes_expected_packages():
     assert "digit-group-size" not in text_dcolumn
 
 
+def test_group_size_zero_disables_fitting_grouping():
+    # F1 (dual-model review): the UI says group size 0 = 不分组. The preamble previously
+    # coerced 0→1 (max(1,..)) so grouping stayed ON. It must now emit the "no grouping" body.
+    text = "\n".join(writer.build_fit_latex_preamble(use_dcolumn=False, digits=16, latex_group_size=0))
+    assert "group-digits = false" in text
+    assert "digit-group-size" not in text
+    assert "group-minimum-digits" not in text
+
+
 def test_build_fit_latex_block_generates_siunitx_column_spec():
     fit_result = _sample_fit_result()
     lines = writer.build_fit_latex_block(

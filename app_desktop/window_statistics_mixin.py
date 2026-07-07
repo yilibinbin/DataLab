@@ -516,6 +516,7 @@ class WindowStatisticsMixin:
                     uncertainty_digits=self._uncertainty_digits_value(),
                     caption=self._caption_value(),
                     latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                    native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
                     units=entry.get("units") if isinstance(entry.get("units"), Mapping) else None,
                 )
             else:
@@ -528,6 +529,7 @@ class WindowStatisticsMixin:
                     caption=self._caption_value(),
                     uncertainty_digits=self._uncertainty_digits_value(),
                     latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                    native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
                 )
             self._append_log(f"统计平均 LaTeX 已写入: {output_path}")
             self._load_latex_into_editor(output_path)
@@ -636,6 +638,7 @@ class WindowStatisticsMixin:
                 digits=self.latex_input_precision_spin.value() if hasattr(self, "latex_input_precision_spin") else 16,
                 uncertainty_digits=self._uncertainty_digits_value(),
                 latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
                 units=snapshot.get("units") if isinstance(snapshot.get("units"), Mapping) else None,
             )
             self._append_log(f"分组统计 LaTeX 已写入: {output_path}")
@@ -737,6 +740,7 @@ class WindowStatisticsMixin:
                 caption_text=self._caption_value(),
                 use_dcolumn=self.dcolumn_checkbox.isChecked(),
                 latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
                 units=snapshot.get("units") if isinstance(snapshot.get("units"), Mapping) else None,
             )
             self._append_log(f"协方差/相关矩阵 LaTeX 已写入: {output_path}")
@@ -1051,6 +1055,7 @@ class WindowStatisticsMixin:
                 caption=self._caption_value(),
                 uncertainty_digits=self._uncertainty_digits_value(),
                 latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
             )
             self._append_log(f"时间序列统计 LaTeX 已写入: {output_path}")
             self._load_latex_into_editor(output_path)
@@ -1281,6 +1286,7 @@ class WindowStatisticsMixin:
                 caption=self._caption_value(),
                 uncertainty_digits=self._uncertainty_digits_value(),
                 latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
             )
             self._append_log(f"假设检验 LaTeX 已写入: {output_path}")
             self._load_latex_into_editor(output_path)
@@ -1415,6 +1421,7 @@ class WindowStatisticsMixin:
                 caption=self._caption_value(),
                 uncertainty_digits=self._uncertainty_digits_value(),
                 latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
             )
             self._append_log(f"Bootstrap 统计 LaTeX 已写入: {output_path}")
             self._load_latex_into_editor(output_path)

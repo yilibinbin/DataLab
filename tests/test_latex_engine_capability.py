@@ -11,9 +11,13 @@ These tests stub the actual subprocess so they don't invoke a real engine.
 from __future__ import annotations
 
 from unittest.mock import patch
+from pathlib import Path
 
 from shared.latex_engine import (
+    EngineChoice,
+    discover_all_engines,
     engine_probe_argv,
+    resolve_engine_for_mode,
     siunitx_supports_digit_group_size,
     _reset_capability_cache,
 )
@@ -81,16 +85,33 @@ def test_probe_failure_to_launch_returns_false_not_raise() -> None:
 
 # --- engine-mode resolution (auto / bundled / local) -----------------------
 
-from shared.latex_engine import EngineChoice, resolve_engine_for_mode
-
 
 def test_mode_bundled_prefers_tectonic() -> None:
+    # When nothing is bundled/installed yet, bundled mode falls back to resolve_engine so the
+    # caller can trigger the Tectonic auto-install. (The happy path — a real bundled binary —
+    # is covered by test_mode_bundled_does_not_return_a_system_path_tectonic.)
     tect = EngineChoice(path="/opt/datalab/bin/tectonic", source="auto-tectonic")
-    with patch("shared.latex_engine.resolve_engine", return_value=tect) as r:
+    with patch("shared.latex_engine.discover_bundled_engine", return_value=None), patch(
+        "shared.latex_engine.tectonic_install_dir", return_value=Path("/nonexistent")
+    ), patch("shared.latex_engine.resolve_engine", return_value=tect) as r:
         choice = resolve_engine_for_mode("bundled")
         assert choice is tect
-        # bundled mode resolves the tectonic engine only.
         assert r.call_args.args[0] == "tectonic"
+
+
+def test_mode_bundled_does_not_return_a_system_path_tectonic(tmp_path) -> None:
+    # F5 (dual-model review): "bundled" must force the bundled/auto-installed Tectonic, NOT a
+    # system-PATH one. discover_bundled_engine returns the bundled path; resolve_engine (which
+    # checks PATH first) must NOT be consulted for the win.
+    bundled = str(tmp_path / "bundled" / "tectonic")
+    with patch("shared.latex_engine.discover_bundled_engine", return_value=bundled), patch(
+        "shared.latex_engine.resolve_engine"
+    ) as resolve:
+        choice = resolve_engine_for_mode("bundled")
+        assert choice is not None
+        assert choice.path == bundled
+        assert choice.source == "bundled"
+        resolve.assert_not_called()  # bundled path resolved directly, not via PATH-first resolve_engine
 
 
 def test_mode_local_prefers_a_path_latex_engine() -> None:
@@ -105,6 +126,24 @@ def test_mode_local_prefers_a_path_latex_engine() -> None:
         choice = resolve_engine_for_mode("local")
         assert choice is xe
         assert "tectonic" not in calls  # local mode must not fall back to tectonic
+
+
+def test_mode_auto_scans_all_locals_for_a_capable_one_not_first_incapable() -> None:
+    # F4 (dual-model review): auto must NOT return the first incapable local engine and skip a
+    # later capable one. xelatex incapable, pdflatex capable, tectonic absent → pick pdflatex.
+    xe = EngineChoice(path="/usr/bin/xelatex", source="system")
+    pl = EngineChoice(path="/usr/bin/pdflatex", source="system")
+
+    def fake_resolve(engine, **kw):
+        return {"xelatex": xe, "pdflatex": pl}.get(engine)  # tectonic → None
+
+    def fake_probe(path):
+        return path == "/usr/bin/pdflatex"  # only pdflatex capable
+
+    with patch("shared.latex_engine.resolve_engine", side_effect=fake_resolve), patch(
+        "shared.latex_engine.siunitx_supports_digit_group_size", side_effect=fake_probe
+    ):
+        assert resolve_engine_for_mode("auto") is pl
 
 
 def test_mode_auto_prefers_capable_local_then_falls_back_to_tectonic() -> None:
@@ -131,8 +170,6 @@ def test_mode_auto_prefers_capable_local_then_falls_back_to_tectonic() -> None:
 
 
 # --- discover_all_engines (concrete engines found on this machine) ----------
-
-from shared.latex_engine import discover_all_engines
 
 
 def test_discover_all_engines_lists_found_engines_with_paths() -> None:

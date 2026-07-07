@@ -501,6 +501,7 @@ def generate_statistics_bootstrap_latex(
     caption: str | None = None,
     uncertainty_digits: int | None = None,
     latex_group_size: int = 3,
+    native_group_width: bool = True,
 ):
     """Generate a standalone LaTeX report from a bootstrap statistics snapshot."""
 
@@ -513,7 +514,9 @@ def generate_statistics_bootstrap_latex(
     if not batches:
         raise ValueError("statistics bootstrap snapshot has no batches.")
 
-    lines = _statistics_latex_preamble(use_dcolumn=use_dcolumn, group_size=group_size)
+    lines = _statistics_latex_preamble(
+        use_dcolumn=use_dcolumn, group_size=group_size, native_group_width=native_group_width
+    )
     base_caption = latex_escape(caption or "Bootstrap confidence intervals")
     lines.extend(
         [
@@ -617,6 +620,7 @@ def generate_statistics_time_series_latex(
     caption: str | None = None,
     uncertainty_digits: int | None = None,
     latex_group_size: int = 3,
+    native_group_width: bool = True,
 ):
     """Generate a standalone LaTeX report from a time-series statistics snapshot."""
 
@@ -716,7 +720,9 @@ def generate_statistics_time_series_latex(
             r"Status & Window rows \\"
         )
     )
-    lines = _statistics_latex_preamble(use_dcolumn=use_dcolumn, group_size=group_size)
+    lines = _statistics_latex_preamble(
+        use_dcolumn=use_dcolumn, group_size=group_size, native_group_width=native_group_width
+    )
     escaped_caption = latex_escape(base_caption)
     lines.extend(
         [
@@ -759,6 +765,7 @@ def generate_statistics_hypothesis_latex(
     caption: str | None = None,
     uncertainty_digits: int | None = None,
     latex_group_size: int = 3,
+    native_group_width: bool = True,
 ):
     """Generate a standalone LaTeX report from a hypothesis-test snapshot."""
 
@@ -807,7 +814,9 @@ def generate_statistics_hypothesis_latex(
         else "Metric & \\multicolumn{1}{c}{Value} & Note \\\\"
     )
 
-    lines = _statistics_latex_preamble(use_dcolumn=use_dcolumn, group_size=group_size)
+    lines = _statistics_latex_preamble(
+        use_dcolumn=use_dcolumn, group_size=group_size, native_group_width=native_group_width
+    )
     lines.extend(
         [
             "\\geometry{margin=1in}",
