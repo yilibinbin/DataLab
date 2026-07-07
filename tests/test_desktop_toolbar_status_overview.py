@@ -80,3 +80,6 @@ def test_overview_card_removed_from_visible_result_layout(qtbot: Any) -> None:
     rail = getattr(window, "workbench_result_details_panel", None) or window
     # The card is not laid out inside the visible result rail.
     assert card.parent() is not rail
+    # ...and must not have been orphaned to a top-level widget either (CodeRabbit CR): a
+    # parentless card would leak as a stray window. It stays parented to the main window.
+    assert card.parent() is not None

@@ -207,6 +207,12 @@ class WindowFittingResidualsMixin:
                     latex_group_size=group_size,
                     batch_index=entry.get("index"),
                     units=entry.get("units"),
+                    # Pass the run's snapshotted target/variable/uncertainty so on-demand TeX
+                    # ignores later live-widget edits (Codex adversarial-review finding). None
+                    # entries (run-time write path) keep the old live-widget fallback.
+                    target_column=entry.get("target_column"),
+                    variable_pairs=entry.get("variable_pairs"),
+                    default_uncertainty_digits=entry.get("uncertainty_digits"),
                 )
             )
         lines.append("\\end{document}")
@@ -436,6 +442,12 @@ class WindowFittingResidualsMixin:
                             "substituted": substituted or "",
                             "figure_path": fig_path,
                             "units": payload.units,
+                            # Snapshot the run's target column + variable mapping + uncertainty
+                            # digits so on-demand TeX stays faithful even if the user edits the
+                            # live fit widgets afterwards (Codex adversarial-review finding).
+                            "target_column": job.target_column,
+                            "variable_pairs": list(job.variable_map.items()),
+                            "uncertainty_digits": getattr(job, "uncertainty_digits", None),
                         }
                     )
                     csv_rows.extend(

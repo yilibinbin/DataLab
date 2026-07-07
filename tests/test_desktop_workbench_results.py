@@ -119,10 +119,18 @@ def test_fit_model_line_honours_display_digits(qtbot: Any) -> None:
     window.display_digits_spin.setValue(6)
     text6, _ = window._format_fit_display(fr, "A*x + B", "STALE", units=None)
 
+    # Isolate the substituted MODEL line (CodeRabbit CR): asserting on the whole text would
+    # pass via the parameter table, which independently formats A at the same digits — that
+    # wouldn't prove the model-line rebuild itself responds. Assert on the model line only.
+    def _model_line(text: str) -> str:
+        return next(
+            ln for ln in text.splitlines() if "代入参数" in ln or "With params" in ln
+        )
+
     # The passed-in "STALE" substituted must be ignored; the model line reflects live digits.
     assert "STALE" not in text3
-    assert "2.123*x" in text3.replace(" ", "").replace("`", "") or "2.123" in text3
-    assert "2.123457" in text6
+    assert "2.123" in _model_line(text3)
+    assert "2.123457" in _model_line(text6)
     assert text3 != text6
 
 

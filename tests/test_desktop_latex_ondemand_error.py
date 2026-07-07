@@ -42,7 +42,6 @@ def _payload() -> dict[str, Any]:
     ]
     results = [parse_uncertainty_format("4.0(4)")] * len(parsed_data)
     constants = {"k": parse_uncertainty_format("9.8(1)")}
-    table_segments = [(0, 1), (1, 2)]
     return {
         "headers": headers,
         "parsed_data": parsed_data,

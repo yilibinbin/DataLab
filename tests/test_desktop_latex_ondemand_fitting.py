@@ -136,3 +136,47 @@ def test_fitting_ondemand_returns_none_without_stash(window: Any) -> None:
     QApplication.processEvents()
     window._last_latex_inputs = {}
     assert window.generate_fitting_latex_on_demand() is None
+
+
+def test_batch_fitting_ondemand_immune_to_post_run_widget_edits(window: Any) -> None:
+    """Batch-fit on-demand TeX must use the run's snapshotted target column + variable mapping,
+    NOT the live fit widgets — else editing them after the fit silently corrupts the TeX
+    (Codex adversarial-review finding)."""
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
+    QApplication.processEvents()
+    window._last_result_kind = "fit_batches"
+    window.remember_latex_inputs(
+        "fit_batches",
+        {
+            "latex_batches": [
+                {
+                    "index": 1,
+                    "headers": ["x", "y"],
+                    "rows": [(mp.mpf("0"), mp.mpf("1")), (mp.mpf("1"), mp.mpf("3"))],
+                    "sigma_rows": [(None, None), (None, None)],
+                    "fit_result": _fit_result(),
+                    "expression": "A*x",
+                    "substituted": "",
+                    "units": None,
+                    "figure_path": None,
+                    "target_column": "y",
+                    "variable_pairs": [("x", "x")],
+                    "uncertainty_digits": 1,
+                }
+            ],
+            "use_dcolumn": False,
+            "latex_group_size": 3,
+        },
+    )
+    # Corrupt the live widgets AFTER the fit — on-demand must ignore them.
+    window.fit_target_edit.setText("x")
+    variable_edit, column_edit, *_ = window.variable_rows[0]
+    variable_edit.setText("zzz")
+    column_edit.setText("y")
+    QApplication.processEvents()
+
+    path = window.generate_fitting_batches_latex_on_demand()
+    assert path is not None
+    tex = window.latex_edit.toPlainText()
+    # The corrupted variable name must NOT appear; the run's real mapping (x) is used.
+    assert "zzz" not in tex
