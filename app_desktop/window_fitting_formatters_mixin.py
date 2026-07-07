@@ -119,7 +119,14 @@ class WindowFittingFormattersMixin:
         headers.append("note")
         return headers
 
-    def _build_substituted_expression(self, expression: str, params: dict[str, mp.mpf], digits: int | None = None) -> str:
+    def _build_substituted_expression(
+        self,
+        expression: str,
+        params: dict[str, mp.mpf],
+        digits: int | None = None,
+        *,
+        use_display_format: bool = False,
+    ) -> str:
         if not expression:
             return ""
 
@@ -133,6 +140,10 @@ class WindowFittingFormattersMixin:
                 mp_value = mp.mpf(params[name])
                 if mp.isnan(mp_value) or mp.isinf(mp_value):
                     return str(mp_value)
+                # use_display_format → honour the live 小数位数/有效位数 + 科学计数法 toggles so
+                # the on-screen model line updates with them (LaTeX/CSV paths keep nstr).
+                if use_display_format and hasattr(self, "_format_display_value"):
+                    return self._format_display_value(mp_value)
                 return mp.nstr(mp_value, precision)
             return name
 
@@ -352,6 +363,14 @@ class WindowFittingFormattersMixin:
 
     def _format_fit_display(self, fit_result: FitResult, expression: str | None, substituted: str | None, batch_idx: int = 1, units: Mapping[str, Any] | None = None, **_ignored) -> tuple[str, list[dict[str, object]]]:
         """Return formatted fit summary text/CSV rows (numbers only; LaTeX unaffected)."""
+        # Re-derive the substituted model line from the live display digits + scientific toggle
+        # so the numbers OUTSIDE the table (the model expression) respond to those controls too
+        # (user-reported: they were frozen at the fit's output digits). Fall back to the passed
+        # substituted if we can't rebuild (e.g. no expression/params).
+        if expression and fit_result.params:
+            substituted = self._build_substituted_expression(
+                expression, fit_result.params, use_display_format=True
+            )
         text = self._format_fit_result_text(fit_result, expression, substituted, units=units)
         csv_rows = self._build_fit_csv_rows(fit_result, expression or "", batch_idx=batch_idx, units=units)
         return text, csv_rows

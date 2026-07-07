@@ -97,6 +97,35 @@ def test_result_rail_has_overview_and_data_table(qtbot: Any) -> None:
     assert window.result_tabs.tabToolTip(window.result_tabs_indices["numeric"]) == "数值结果"
 
 
+def test_fit_model_line_honours_display_digits(qtbot: Any) -> None:
+    """The substituted model line (numbers OUTSIDE the result table) must respond to the
+    display digits / scientific toggles, not stay frozen at the fit's output digits
+    (user-reported)."""
+    import mpmath as mp
+    from fitting.hp_fitter import FitResult
+
+    window = _window(qtbot)
+    fr = FitResult(
+        params={"A": mp.mpf("2.123456789"), "B": mp.mpf("1.987654321")},
+        param_errors={"A": mp.mpf("0.1"), "B": mp.mpf("0.1")},
+        chi2=mp.mpf("0.5"), reduced_chi2=mp.mpf("0.25"), aic=mp.mpf("0"), bic=mp.mpf("0"),
+        r2=mp.mpf("1"), rmse=mp.mpf("0.1"), residuals=[mp.mpf("0.1")], fitted_curve=[],
+        covariance=[[mp.mpf("0.01")]], param_errors_stat={"A": mp.mpf("0.1")},
+        param_errors_sys={}, param_errors_total={"A": mp.mpf("0.1")}, details={"dof": 1},
+    )
+    window.scientific_checkbox.setChecked(False)
+    window.display_digits_spin.setValue(3)
+    text3, _ = window._format_fit_display(fr, "A*x + B", "STALE", units=None)
+    window.display_digits_spin.setValue(6)
+    text6, _ = window._format_fit_display(fr, "A*x + B", "STALE", units=None)
+
+    # The passed-in "STALE" substituted must be ignored; the model line reflects live digits.
+    assert "STALE" not in text3
+    assert "2.123*x" in text3.replace(" ", "").replace("`", "") or "2.123" in text3
+    assert "2.123457" in text6
+    assert text3 != text6
+
+
 def test_result_font_size_survives_content_rerender(qtbot: Any) -> None:
     """Changing the result font size must live-update the output AND survive the next result
     render. setMarkdown resets the document's default font, so without re-applying the chosen
