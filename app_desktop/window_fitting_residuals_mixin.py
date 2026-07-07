@@ -634,12 +634,12 @@ class WindowFittingResidualsMixin:
         _gs = latex_inputs.get("latex_group_size")
         group_size = int(_gs) if _gs is not None else 3  # 0 = 不分组 must survive (not `or 3`)
         output_path = self.latex_output_path_for_run(True)
-        return str(
-            self._write_fitting_latex_batches(
-                batches, output_path, use_dcolumn, latex_group_size=group_size
-            )
-            or output_path
+        tex_path = self._write_fitting_latex_batches(
+            batches, output_path, use_dcolumn, latex_group_size=group_size
         )
+        # Return None (not a fake path) on write failure so the caller doesn't try to load a
+        # file that was never written — matches generate_fitting_comparison_latex_on_demand.
+        return str(tex_path) if tex_path is not None else None
 
     def _on_fit_finished(self, payload: FitResultPayload):
         try:
