@@ -2174,6 +2174,12 @@ class ExtrapolationWindow(
             from app_desktop.theme import input_data_tabs_style
 
             input_tabs.setStyleSheet(input_data_tabs_style(dark=new_dark))
+        # The constants editor's style (incl. theme-varying button colors) is set once at
+        # construction/embedding — refresh it too so its buttons follow a live theme toggle
+        # (same class as the formula-preview/tabs stale-style fix, Claude self-review C-G).
+        constants_editor = getattr(self, "input_constants_editor", None)
+        if constants_editor is not None and hasattr(constants_editor, "refresh_theme_style"):
+            constants_editor.refresh_theme_style()
         if hasattr(self, "_refresh_main_splitter_left_min_width"):
             self._refresh_main_splitter_left_min_width()
 

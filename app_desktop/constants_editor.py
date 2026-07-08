@@ -147,6 +147,15 @@ class ConstantsEditor(QWidget):
         self.style().unpolish(self)
         self.style().polish(self)
 
+    def refresh_theme_style(self) -> None:
+        """Re-apply the (theme-dependent) editor style for the current embedded state. Its style is
+        otherwise set once at construction/embedding, so a live light↔dark toggle would leave the
+        button colors stale — the theme refresh calls this."""
+        embedded = bool(self.property("datalab_constants_embedded"))
+        self.setStyleSheet(constants_editor_style(embedded=embedded))
+        self.style().unpolish(self)
+        self.style().polish(self)
+
     def set_control_labels(
         self,
         *,
