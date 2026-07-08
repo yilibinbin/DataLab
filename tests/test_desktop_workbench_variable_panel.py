@@ -146,32 +146,15 @@ def test_variable_panel_summary_updates_when_rows_change(qtbot: Any) -> None:
     assert window.workbench_variable_summary.text() == "1 parameter"
 
 
-def test_variable_panel_can_collapse_without_losing_state(qtbot: Any) -> None:
+def test_variable_panel_has_no_collapse_button(qtbot: Any) -> None:
+    """The 折叠/展开 collapse button was removed from the variable panel (user request) — the
+    panel is compact and always relevant when visible; it self-hides when the mode has none."""
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
-    window.custom_params_table.set_rows([{"name": "A", "initial": "1"}])
     QApplication.processEvents()
-
-    button = window.workbench_variable_toggle_button
+    assert not hasattr(window, "workbench_variable_toggle_button")
     assert window.workbench_variable_stack.isVisible()
-
-    button.click()
-    QApplication.processEvents()
-
-    assert not window.workbench_variable_stack.isVisible()
-    assert window.workbench_variable_summary.isVisible()
-    rows = window.custom_params_table.rows()
-    assert rows[0]["name"] == "A"
-    assert rows[0]["initial"] == "1"
-
-    button.click()
-    QApplication.processEvents()
-
-    assert window.workbench_variable_stack.isVisible()
-    rows = window.custom_params_table.rows()
-    assert rows[0]["name"] == "A"
-    assert rows[0]["initial"] == "1"
 
 
 def test_variable_panel_population_is_idempotent(qtbot: Any) -> None:

@@ -395,6 +395,56 @@ QTabWidget#result_detail_tabs QTabBar::scroller {{
 """
 
 
+def input_data_tabs_style(*, dark: bool | None = None) -> str:
+    """Rounded, modern styling for the 输入数据 / 常数 sheet tabs (input_data_tabs). Mirrors the
+    result-detail tab chrome so the input area matches the rest of the workbench."""
+    dark = is_dark_theme() if dark is None else bool(dark)
+    if dark:
+        border = "rgba(255, 255, 255, 0.14)"
+        panel_bg = "#1c2129"
+        tab_bg = "#161a21"
+        tab_hover = "#222833"
+        selected_bg = "#2a313c"
+        selected_fg = "#f8fafc"
+        muted_fg = "#9aa4b2"
+    else:
+        border = "#cbd5e1"
+        panel_bg = "#ffffff"
+        tab_bg = "#f1f5f9"
+        tab_hover = "#e2e8f0"
+        selected_bg = "#ffffff"
+        selected_fg = "#111827"
+        muted_fg = "#475569"
+    return f"""
+QTabWidget#input_data_tabs::pane {{
+    border: 1px solid {border};
+    border-radius: 8px;
+    background: {panel_bg};
+    top: -1px;
+}}
+QTabWidget#input_data_tabs QTabBar::tab {{
+    min-width: 60px;
+    padding: 6px 14px;
+    font-size: 13px;
+    color: {muted_fg};
+    background: {tab_bg};
+    border: 1px solid {border};
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    margin-right: 2px;
+}}
+QTabWidget#input_data_tabs QTabBar::tab:selected {{
+    color: {selected_fg};
+    background: {selected_bg};
+    font-weight: 600;
+}}
+QTabWidget#input_data_tabs QTabBar::tab:hover {{
+    background: {tab_hover};
+}}
+"""
+
+
 def result_overview_card_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
     if dark:

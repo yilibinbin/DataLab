@@ -59,6 +59,7 @@ from app_desktop.theme import (
     SECTION_SPACING,
     config_card_style,
     data_input_card_style,
+    input_data_tabs_style,
     is_dark_theme,
     result_detail_card_style,
     result_overview_card_style,
@@ -1002,7 +1003,9 @@ def build_left_panel(self):
 
     self.input_data_tabs = QTabWidget()
     self.input_data_tabs.setObjectName("input_data_tabs")
-    self.input_data_tabs.setDocumentMode(True)
+    # documentMode=False so the styled pane border (rounded, from input_data_tabs_style) renders.
+    self.input_data_tabs.setDocumentMode(False)
+    self.input_data_tabs.setStyleSheet(input_data_tabs_style(dark=is_dark_theme()))
     self.input_data_tabs.addTab(self._data_tab, self._tr("输入数据", "Data input"))
     self.input_data_tabs.addTab(self._constants_tab, self._tr("常数", "Constants"))
     self.input_section_layout.addWidget(self.input_data_tabs)

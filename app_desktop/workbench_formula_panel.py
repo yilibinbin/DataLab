@@ -409,6 +409,13 @@ def refresh_formula_workspace_panel(owner: Any) -> None:
     label = getattr(owner, "workbench_formula_preview_label", None)
     if label is None:
         return
+    # Re-apply the preview surface style for the CURRENT theme. It was set once at construction
+    # (before the theme was applied), so a dark session kept the light-theme box → a light,
+    # near-invisible border in the dark UI (looked like no/incomplete rounded border). This
+    # refresh runs on theme + mode change.
+    from app_desktop.theme import formula_inline_preview_style, is_dark_theme
+
+    label.setStyleSheet(formula_inline_preview_style(dark=is_dark_theme()))
     if not bool(getattr(owner, "_workbench_formula_populated", False)):
         populate_formula_workspace_panel(owner)
     panel = getattr(owner, "workbench_formula_panel", None)
