@@ -1,5 +1,10 @@
 # Left workspace column → two blocks (data + one config card)
 
+> **STATUS: IMPLEMENTED** (commit ea1885d). The column is now [input_section] +
+> [workbench_config_card], with the card ordered mode_stack → formula → variable. The review
+> findings below (S1/P-A/S3/S4/S5 + P-B/C/D) were all fixed first; S2 was withdrawn as a
+> misjudgment.
+
 ## Problem
 
 The left workspace column stacks **four** blocks top-to-bottom:
