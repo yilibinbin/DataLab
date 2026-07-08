@@ -115,6 +115,10 @@ class ConstantsEditor(QWidget):
         self.table_view.setHorizontalHeaderLabels(["Name", "Value"])
         self.table_view.setMinimumHeight(120)
         self.table_view.itemChanged.connect(self._on_table_changed)
+        # Excel-like block copy (Ctrl/Cmd+C → TSV).
+        from app_desktop.table_copy import install_cell_copy
+
+        install_cell_copy(self.table_view)
         self.stack.addWidget(self.table_view)
 
         self.text_view = QPlainTextEdit()

@@ -15,6 +15,7 @@ import weakref
 from PySide6.QtCore import Qt, QObject, QEvent
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -365,7 +366,11 @@ def build_ui(self):
     populate_formula_workspace_panel(self)
     self.workbench_variable_panel = build_variable_workspace_panel(self)
     self.workbench_workspace_layout.addWidget(self.workbench_variable_panel)
-    reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
+    # stretch=0 (not 1): the mode_stack is a CurrentPageStack that sizes to the ACTIVE page, so
+    # a short config card (e.g. error propagation) must NOT be inflated to fill leftover height
+    # — that produced a hollow gap above/below the card. With stretch=0 + the column's AlignTop,
+    # leftover space pools at the bottom of the scroll canvas instead of around the card.
+    reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=0)
     populate_variable_workspace_panel(self)
     # ``output_setup_section`` and ``run_section`` are no longer added to the layout — the
     # first went empty when options moved to the toolbar dialogs, the second when the
@@ -911,6 +916,9 @@ def build_left_panel(self):
     _apply_equal_column_stretch(self.manual_table)
     self.manual_table.setAlternatingRowColors(True)
     self.manual_table.setStyleSheet(view_helpers.get_table_style())
+    # Excel-like block selection + copy: select a rectangular range and Ctrl/Cmd+C copies it
+    # as TSV (paste handled by the same filter).
+    self.manual_table.setSelectionMode(QAbstractItemView.SelectionMode.ContiguousSelection)
     self.manual_table.installEventFilter(_TablePasteFilter(self.manual_table, self))
     self.manual_table.itemChanged.connect(lambda *_args: _update_data_summary(self))
     manual_table_model = self.manual_table.model()
@@ -944,6 +952,13 @@ def build_left_panel(self):
 
     self.mode_stack = CurrentPageStack()
     self.mode_stack.setObjectName("mode_stack")
+    # A QStackedWidget defaults to Expanding vertical policy, so it would grow past the current
+    # page's sizeHint and leave a hollow gap around a short config card. Maximum keeps it at the
+    # active page's natural height; leftover space pools below (column is AlignTop + adds a
+    # trailing stretch after the stack is reparented in).
+    _mode_stack_policy = self.mode_stack.sizePolicy()
+    _mode_stack_policy.setVerticalPolicy(QSizePolicy.Policy.Maximum)
+    self.mode_stack.setSizePolicy(_mode_stack_policy)
     _build_mode_stack_pages(self)
 
     # Options
@@ -2285,7 +2300,8 @@ def _clear_table(self):
 
 
 class _TablePasteFilter(QObject):
-    """Event filter that intercepts Ctrl/Cmd+V on a QTableWidget to handle CSV paste."""
+    """Event filter for a QTableWidget: Ctrl/Cmd+V pastes CSV/TSV, Ctrl/Cmd+C copies the
+    selected cells as TSV (Excel-compatible)."""
 
     def __init__(self, table_widget, window):
         super().__init__(table_widget)
@@ -2295,6 +2311,9 @@ class _TablePasteFilter(QObject):
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.KeyPress:
             from PySide6.QtGui import QKeySequence
+            if event.matches(QKeySequence.StandardKey.Copy):
+                if self._copy_selection():
+                    return True
             if event.matches(QKeySequence.StandardKey.Paste):
                 clipboard = QApplication.clipboard()
                 text = clipboard.text()
@@ -2304,3 +2323,10 @@ class _TablePasteFilter(QObject):
                         _load_text_into_table(self._window, text)
                         return True
         return super().eventFilter(obj, event)
+
+    def _copy_selection(self) -> bool:
+        """Copy the selected cell block to the clipboard as TSV so it pastes cleanly into
+        Excel/Sheets (shared with the constants table via table_copy)."""
+        from app_desktop.table_copy import _copy_selection_as_tsv
+
+        return _copy_selection_as_tsv(self._table)
