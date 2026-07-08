@@ -2163,6 +2163,17 @@ class ExtrapolationWindow(
             self.refresh_workbench_result_details_card()
         if hasattr(self, "refresh_workbench_variable_panel"):
             self.refresh_workbench_variable_panel()
+        # Re-apply theme-dependent styles that are otherwise set once at construction, so a live
+        # light↔dark toggle updates them too (Codex review P2/P3):
+        # - the formula rendered-preview surface (restyled inside refresh_workbench_formula_panel);
+        # - the input_data_tabs rounded chrome.
+        if hasattr(self, "refresh_workbench_formula_panel"):
+            self.refresh_workbench_formula_panel()
+        input_tabs = getattr(self, "input_data_tabs", None)
+        if input_tabs is not None:
+            from app_desktop.theme import input_data_tabs_style
+
+            input_tabs.setStyleSheet(input_data_tabs_style(dark=new_dark))
         if hasattr(self, "_refresh_main_splitter_left_min_width"):
             self._refresh_main_splitter_left_min_width()
 

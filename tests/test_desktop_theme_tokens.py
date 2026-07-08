@@ -90,6 +90,29 @@ def test_apply_desktop_theme_refreshes_workbench_cards(qtbot: Any, monkeypatch: 
     assert "#20242b" in window.stats_box.styleSheet()
 
 
+def test_theme_toggle_restyles_formula_preview_and_input_tabs(
+    qtbot: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex review P2/P3: the formula rendered-preview surface + input_data_tabs style are set
+    once at construction, so a live light↔dark toggle must re-apply them via _apply_desktop_theme
+    — else they keep a stale light style in a dark UI."""
+    from app_desktop.window import ExtrapolationWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = ExtrapolationWindow()
+    qtbot.addWidget(window)
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
+    app.processEvents()
+
+    monkeypatch.setattr("app_desktop.theme.is_dark_theme", lambda: True)
+    monkeypatch.setattr("app_desktop.panels.is_dark_theme", lambda: True)
+    window._apply_desktop_theme()
+    app.processEvents()
+
+    assert "#20242b" in window.workbench_formula_preview_label.styleSheet()  # dark surface
+    assert "#1c2129" in window.input_data_tabs.styleSheet()  # dark tab pane
+
+
 def test_theme_exposes_semantic_text_and_message_styles() -> None:
     from app_desktop import theme
 
