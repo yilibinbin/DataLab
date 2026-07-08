@@ -192,6 +192,9 @@ def configure_formula_preview_label(label: QLabel, *, constrain_size: bool = Fal
     label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
     label.setCursor(Qt.CursorShape.PointingHandCursor)
     label.setToolTip("Click to enlarge formula")
+    # WA_StyledBackground makes Qt honour the stylesheet's border-radius on a QLabel — without
+    # it the rounded background/border isn't clipped to the corners, so they look squared-off.
+    label.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     label.setStyleSheet(formula_inline_preview_style())
 
 

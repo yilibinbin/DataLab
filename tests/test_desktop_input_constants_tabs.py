@@ -36,8 +36,10 @@ def test_input_and_constants_are_sheet_tabs(qtbot: Any) -> None:
     window = _window(qtbot)
     tabs = window.input_data_tabs
     assert tabs is not None
-    # Both hosted widgets live inside the tab widget (input data always; constants when shown).
-    assert tabs.indexOf(window.manual_box) != -1
+    # The 输入数据 tab hosts a self-contained container (file toggle + picker + manual table).
+    assert tabs.indexOf(window._data_tab) != -1
+    # The manual table lives inside that data tab.
+    assert window.manual_box.parent() is window._data_tab
 
 
 def test_constants_tab_only_in_constant_using_modes(qtbot: Any) -> None:
@@ -57,6 +59,29 @@ def test_constants_tab_only_in_constant_using_modes(qtbot: Any) -> None:
     QApplication.processEvents()
     assert _tab_titles(window) == ["输入数据", "常数"]
     assert window.input_constants_editor is editor_before
+
+
+def test_each_tab_has_independent_data_file_toggle(qtbot: Any) -> None:
+    """输入数据 and 常数 each have their own 使用数据文件 checkbox (independent), placed inside
+    their tab (below the tab bar) — toggling one must not affect the other, and must not
+    corrupt the inactive tab."""
+    window = _window(qtbot)
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("error"))
+    QApplication.processEvents()
+
+    # Both checkboxes exist and live inside their respective tabs.
+    assert window.use_file_checkbox.parent() is window._data_tab
+    assert window.use_constants_file_checkbox.parent() is window._constants_tab
+
+    tabs = window.input_data_tabs
+    tabs.setCurrentIndex(tabs.indexOf(window._constants_tab))
+    QApplication.processEvents()
+    window.use_constants_file_checkbox.setChecked(True)
+    QApplication.processEvents()
+    # Constants file picker un-hides (isHidden reflects explicit show/hide regardless of whether
+    # the top-level window is shown); the data-file checkbox is untouched.
+    assert window.constants_file_row.isHidden() is False
+    assert window.use_file_checkbox.isChecked() is False
 
 
 def test_input_tabs_retranslate(qtbot: Any) -> None:

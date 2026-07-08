@@ -380,9 +380,9 @@ class WindowI18nMixin:
             if input_tabs is not None:
                 for index in range(input_tabs.count()):
                     widget = input_tabs.widget(index)
-                    if widget is getattr(self, "manual_box", None):
+                    if widget is getattr(self, "_data_tab", None):
                         input_tabs.setTabText(index, "输入数据" if effective_lang == _LANG_ZH else "Data input")
-                    elif widget is getattr(self, "input_constants_editor", None):
+                    elif widget is getattr(self, "_constants_tab", None):
                         input_tabs.setTabText(index, "常数" if effective_lang == _LANG_ZH else "Constants")
             if hasattr(self, "latex_edit"):
                 self.latex_edit.setPlaceholderText(

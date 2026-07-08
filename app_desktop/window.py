@@ -2210,16 +2210,17 @@ class ExtrapolationWindow(
         constant-using modes. The constants editor widget is reused (added/removed, not
         rebuilt), so its state + serialization are untouched."""
         tabs = getattr(self, "input_data_tabs", None)
-        editor = getattr(self, "input_constants_editor", None)
-        if tabs is None or editor is None:
+        const_tab = getattr(self, "_constants_tab", None)
+        if tabs is None or const_tab is None:
             return
-        index = tabs.indexOf(editor)
+        index = tabs.indexOf(const_tab)
         if visible and index == -1:
-            tabs.addTab(editor, self._tr("常数", "Constants"))
+            tabs.addTab(const_tab, self._tr("常数", "Constants"))
         elif not visible and index != -1:
             tabs.removeTab(index)  # removeTab does not delete the widget; state is preserved
-            if tabs.currentWidget() is not getattr(self, "manual_box", None):
-                data_index = tabs.indexOf(getattr(self, "manual_box", None))
+            data_tab = getattr(self, "_data_tab", None)
+            if tabs.currentWidget() is not data_tab:
+                data_index = tabs.indexOf(data_tab)
                 if data_index != -1:
                     tabs.setCurrentIndex(data_index)
 
@@ -2239,11 +2240,11 @@ class ExtrapolationWindow(
                 and self.use_constants_file_checkbox.isChecked()
             )
 
-        # Constants now live in a sheet tab (输入数据 / 常数). Show the 常数 tab only in
-        # constant-using modes; other modes show just 输入数据 (user-approved). Keep the
-        # legacy setVisible for any code/test that still reads editor visibility directly.
+        # Constants now live in a sheet tab (输入数据 / 常数). The TAB's presence controls
+        # visibility — do NOT also call editor.setVisible(), which fought the tab hosting and
+        # made the hidden editor render over the active tab (overlap regression). The 常数 tab
+        # shows only in constant-using modes; other modes show just 输入数据.
         self._set_constants_tab_visible(visible)
-        self.input_constants_editor.setVisible(visible)
         self.input_constants_editor.set_inputs_visible(inputs_visible)
         self.input_constants_editor.set_control_labels(
             add_row=self._tr("+ 行", "+ Row"),

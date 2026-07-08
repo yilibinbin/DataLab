@@ -820,12 +820,13 @@ def build_left_panel(self):
         "setToolTip",
     )
     self.use_file_checkbox.toggled.connect(self._on_data_source_toggle)
-    source_row = QHBoxLayout()
-    source_row.setSpacing(6)
-    source_row.addWidget(self.use_file_checkbox)
-    source_row.addStretch()
-    self.input_section_layout.addLayout(source_row)
-    self.input_section_layout.addWidget(self.file_box)
+    # The 使用数据文件 checkbox + file picker are NOT added to input_section_layout here — they
+    # go INSIDE the 输入数据 tab (below the tab bar), so the data-file toggle only affects the
+    # data tab and never bleeds into the 常数 tab (which has its own file controls).
+    self._data_source_row = QHBoxLayout()
+    self._data_source_row.setSpacing(6)
+    self._data_source_row.addWidget(self.use_file_checkbox)
+    self._data_source_row.addStretch()
     self.file_box.hide()
 
     # Manual data — table editor + text fallback
@@ -943,11 +944,53 @@ def build_left_panel(self):
     # Merge input data + constants into sheet-like tabs (输入数据 / 常数) to reuse space instead
     # of stacking two tables. The 常数 tab is added/removed by mode (see _set_constants_tab_
     # visible) — only constant-using modes (error/custom-fit/implicit) show it.
+    # Each tab is SELF-CONTAINED: the 输入数据 tab holds its own 使用数据文件 checkbox + file
+    # picker + table, so the data-file toggle can never bleed into the 常数 tab.
+    self._data_tab = QWidget()
+    _data_tab_layout = QVBoxLayout(self._data_tab)
+    _data_tab_layout.setContentsMargins(0, 6, 0, 0)
+    _data_tab_layout.setSpacing(6)
+    _data_tab_layout.addLayout(self._data_source_row)
+    _data_tab_layout.addWidget(self.file_box)
+    _data_tab_layout.addWidget(self.manual_box)
+
+    # 常数 tab: its OWN 使用数据文件 checkbox + file picker (independent from the data tab).
+    # The backend already supports constants-from-file (workers_core reads constants_file_path);
+    # only the UI was missing. Manual constants table hides when the file source is on.
+    self._constants_tab = QWidget()
+    _const_tab_layout = QVBoxLayout(self._constants_tab)
+    _const_tab_layout.setContentsMargins(0, 6, 0, 0)
+    _const_tab_layout.setSpacing(6)
+
+    self.use_constants_file_checkbox = QCheckBox("使用数据文件")
+    self.use_constants_file_checkbox.setChecked(False)
+    self._register_text(self.use_constants_file_checkbox, "使用数据文件", "Use data file")
+    self.use_constants_file_checkbox.toggled.connect(self._on_constants_source_toggle)
+    _const_source_row = QHBoxLayout()
+    _const_source_row.setSpacing(6)
+    _const_source_row.addWidget(self.use_constants_file_checkbox)
+    _const_source_row.addStretch()
+    _const_tab_layout.addLayout(_const_source_row)
+
+    self.constants_file_row = QWidget()
+    _const_file_layout = QHBoxLayout(self.constants_file_row)
+    _const_file_layout.setContentsMargins(0, 0, 0, 0)
+    _const_file_layout.setSpacing(6)
+    self.constants_file_edit = QLineEdit()
+    _const_file_layout.addWidget(self.constants_file_edit)
+    _const_browse = QPushButton("浏览…")
+    _const_browse.clicked.connect(self.browse_constants_file)
+    self._register_text(_const_browse, "浏览…", "Browse…")
+    _const_file_layout.addWidget(_const_browse)
+    self.constants_file_row.hide()
+    _const_tab_layout.addWidget(self.constants_file_row)
+    _const_tab_layout.addWidget(self.input_constants_editor)
+
     self.input_data_tabs = QTabWidget()
     self.input_data_tabs.setObjectName("input_data_tabs")
     self.input_data_tabs.setDocumentMode(True)
-    self.input_data_tabs.addTab(self.manual_box, self._tr("输入数据", "Data input"))
-    self.input_data_tabs.addTab(self.input_constants_editor, self._tr("常数", "Constants"))
+    self.input_data_tabs.addTab(self._data_tab, self._tr("输入数据", "Data input"))
+    self.input_data_tabs.addTab(self._constants_tab, self._tr("常数", "Constants"))
     self.input_section_layout.addWidget(self.input_data_tabs)
 
     self.error_constants_editor = self.input_constants_editor

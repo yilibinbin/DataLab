@@ -161,6 +161,10 @@ def test_error_schema_bound_controls_keep_mode_and_constants_toggle_behavior(win
     window.error_constants_editor.set_rows([{"name": "K", "value": "2.0(1)"}])
     QApplication.processEvents()
     assert window.error_constants_editor.isChecked() is True
+    # Constants now live on the 常数 sheet tab; activate it so its controls are visible.
+    tabs = window.input_data_tabs
+    tabs.setCurrentIndex(tabs.indexOf(window._constants_tab))
+    QApplication.processEvents()
     assert window.error_constants_editor.controls_widget.isVisible()
 
 
