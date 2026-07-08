@@ -10,6 +10,10 @@ from typing import Any, cast
 
 from PySide6.QtWidgets import QComboBox, QTableWidget, QTableWidgetItem
 
+from app_desktop.latex_inputs_serialization import (
+    decode_latex_inputs,
+    encode_latex_inputs,
+)
 from app_desktop.fitting_input_normalization import (
     normalize_constants_state,
     normalize_parameter_rows,
@@ -1861,6 +1865,13 @@ def capture_workspace(
         "config": workspace["config"],
         "workspace": workspace,
     }
+    # Persist the on-demand-tex stash so 生成 TeX works after reopening WITHOUT recomputing.
+    # It lives at the manifest top level (not inside `workspace`, which is model-validated and
+    # would drop unknown keys). Encoded to a JSON-safe, full-precision form.
+    latex_inputs = getattr(window, "_last_latex_inputs", None)
+    encoded_latex_inputs = encode_latex_inputs(latex_inputs)
+    if encoded_latex_inputs:
+        manifest["latex_inputs"] = encoded_latex_inputs
     _fit_history_to_manifest_budget(window, manifest)
     return WorkspaceBundle(manifest=manifest, attachments=attachments)
 
@@ -2059,7 +2070,12 @@ def _restore_workspace_contents(window: Any, manifest: dict[str, Any], attachmen
         window._last_result_semantic_snapshot_kind = None
     window._last_result_kind = None
     window._last_result_payloads = {}
-    window._last_latex_inputs = {}
+    # Rehydrate the on-demand-tex stash so 生成 TeX works after reopening without recomputing.
+    # Best-effort: a malformed/older manifest simply yields an empty stash (old behaviour).
+    try:
+        window._last_latex_inputs = decode_latex_inputs(manifest.get("latex_inputs"))
+    except Exception:
+        window._last_latex_inputs = {}
     _restore_ui_state(window, workspace.get("ui") or {})
     window._workspace_snapshot_only = bool(snapshot.get("present"))
     window._workspace_history_store = history_store
