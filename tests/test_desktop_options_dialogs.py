@@ -39,9 +39,11 @@ def window(qtbot: Any) -> Any:
 
 
 # Real controls that must live in each dialog (and stay window.<attr>).
+# NOTE: uncertainty_digits_spin was intentionally moved OUT of the compute dialog into the
+# result panel's display-format row (adjustable post-run with live re-render — user request);
+# its placement is covered by test_uncertainty_digits_lives_in_result_panel_* instead.
 _COMPUTE_CONTROLS = (
     "mpmath_precision_spin",
-    "uncertainty_digits_spin",
     "parallel_mode_combo",
     "parallel_max_workers_spin",
     "parallel_reserve_cores_spin",
@@ -123,16 +125,17 @@ def test_compute_controls_live_in_dialog_and_reachable_when_open(window: Any) ->
 
 def test_editing_dialog_control_is_the_run_read_state(window: Any) -> None:
     """The control in the dialog IS the object the run pipeline reads — not a mirror.
-    Editing it changes the value the run sees. A spy on the real signal proves it fired."""
-    real = window.uncertainty_digits_spin
+    Editing it changes the value the run sees. A spy on the real signal proves it fired.
+    (Uses mpmath_precision_spin; uncertainty_digits_spin moved to the result panel.)"""
+    real = window.mpmath_precision_spin
     fired: list[int] = []
     real.valueChanged.connect(fired.append)
     try:
         _button(window, "compute").click()
         QApplication.processEvents()
-        real.setValue(7)
-        assert real.value() == 7
-        assert fired == [7]
+        real.setValue(77)
+        assert real.value() == 77
+        assert fired == [77]
     finally:
         real.valueChanged.disconnect(fired.append)
 

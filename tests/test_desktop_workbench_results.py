@@ -97,6 +97,41 @@ def test_result_rail_has_overview_and_data_table(qtbot: Any) -> None:
     assert window.result_tabs.tabToolTip(window.result_tabs_indices["numeric"]) == "数值结果"
 
 
+def test_uncertainty_digits_lives_in_result_panel_and_live_rerenders(qtbot: Any) -> None:
+    """不确定度位数 moved from the toolbar compute-options into the result panel: it must be
+    parented under the result tabs AND live-re-render the on-screen result when changed (user
+    request — adjustable post-run like decimal places, no recompute)."""
+    from shared.uncertainty import parse_uncertainty_format
+
+    window = _window(qtbot)
+    spin = window.uncertainty_digits_spin
+    # Parented under the result tabs, not the toolbar options.
+    names = []
+    p = spin.parentWidget()
+    for _ in range(8):
+        if p is None:
+            break
+        names.append(p.objectName())
+        p = p.parentWidget()
+    assert any("result" in n for n in names), f"spin not under result panel: {names}"
+
+    # Changing it live-re-renders the error-propagation result (formatter reads the value).
+    kw = dict(
+        headers=["A", "B"],
+        data_rows=[[parse_uncertainty_format("1.0(1)"), parse_uncertainty_format("2.0(2)")]],
+        results=[parse_uncertainty_format("4.123456(789)")],
+        formula="A+B",
+        units=None,
+    )
+    spin.setValue(1)
+    t1, _ = window._format_error_display(**kw)
+    spin.setValue(4)
+    t4, _ = window._format_error_display(**kw)
+    assert t1 != t4
+    assert "4.1235(8)" in t1
+    assert "4.1234560(7890)" in t4
+
+
 def test_fit_model_line_honours_display_digits(qtbot: Any) -> None:
     """The substituted model line (numbers OUTSIDE the result table) must respond to the
     display digits / scientific toggles, not stay frozen at the fit's output digits

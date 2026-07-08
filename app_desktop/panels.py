@@ -965,18 +965,20 @@ def build_left_panel(self):
     except Exception:
         pass
 
-    # Uncertainty digits option (always visible, not tied to LaTeX toggle)
+    # Uncertainty digits option (always visible, not tied to LaTeX toggle).
+    # The widget itself is created here so the FormFieldSpec binding + reveal system keep
+    # working, but it is PLACED in the result panel's display-format row (see build_result_*),
+    # next to 小数位数/科学计数法, so it can be adjusted post-run with live re-render. Its label
+    # travels with it; we keep a reference for that placement.
     self.uncertainty_digits_spin = QSpinBox()
     self.uncertainty_digits_spin.setRange(1, 12)
     self.uncertainty_digits_spin.setValue(1)
     unc_label = QLabel("不确定度位数：")
     self._register_text(unc_label, "不确定度位数：", "Uncertainty digits:")
+    self.uncertainty_digits_label = unc_label
 
     precision_layout.addWidget(label_precision)
     precision_layout.addWidget(self.mpmath_precision_spin)
-    precision_layout.addSpacing(16)
-    precision_layout.addWidget(unc_label)
-    precision_layout.addWidget(self.uncertainty_digits_spin)
     precision_layout.addStretch()
     options_layout.addLayout(precision_layout)
 
@@ -1339,6 +1341,16 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.display_digits_spin.setValue(10)
     self.display_digits_spin.valueChanged.connect(self._on_display_format_changed)
     fmt_row.addWidget(self.display_digits_spin)
+    # Uncertainty digits sits alongside 小数位数/科学计数法 so it can be tuned AFTER a run with a
+    # live re-render (_format_error/extrapolation_display already read _uncertainty_digits_value
+    # at render time — connecting valueChanged is all that's needed). The widget was created in
+    # build_left_panel (keeping its FormFieldSpec binding); it is reparented into this row.
+    if hasattr(self, "uncertainty_digits_spin"):
+        fmt_row.addSpacing(8)
+        if hasattr(self, "uncertainty_digits_label"):
+            fmt_row.addWidget(self.uncertainty_digits_label)
+        self.uncertainty_digits_spin.valueChanged.connect(self._on_display_format_changed)
+        fmt_row.addWidget(self.uncertainty_digits_spin)
     fmt_row.addStretch()
     numeric_layout.addLayout(fmt_row)
 
