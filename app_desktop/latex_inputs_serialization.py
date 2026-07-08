@@ -23,17 +23,25 @@ import mpmath as mp
 from fitting.hp_fitter import FitResult
 from shared.uncertainty import UncertainValue
 
-# Precision for encoding mp.mpf → string. mpmath's process-global dps can be lower than the
-# value's true precision; 50 significant digits comfortably covers the app's display/LaTeX use
-# without bloating the workspace. Values are re-parsed as mp.mpf on decode.
-_MPF_STR_DIGITS = 50
+# Working precision used to RECONSTRUCT an mpf from its raw (sign, mantissa, exp) parts. It must
+# comfortably exceed the mantissa bit width of any stored value; 1e6 dps (the app's clamp ceiling)
+# guarantees the man * 2^exp product is formed without rounding. See _decode.
+_MPF_RECONSTRUCT_DPS = 1_000_000
 
 
 def _encode(obj: Any) -> Any:
     if isinstance(obj, bool):  # bool before int/mpf (bool is an int subclass)
         return obj
     if isinstance(obj, mp.mpf):
-        return {"__t__": "mpf", "v": mp.nstr(obj, _MPF_STR_DIGITS, strip_zeros=False)}
+        # Store the EXACT binary value as (sign, mantissa, exp) integers — NOT a decimal string
+        # via mp.nstr, which capped precision at a fixed digit count AND re-rounded to the ambient
+        # mp.dps on decode (two-sided precision loss, review S1). A finite mpf equals
+        # (-1)^sign * mantissa * 2^exp exactly; special values (inf/nan) have no finite mantissa
+        # so fall back to their string form.
+        if mp.isfinite(obj):
+            sign, man, exp, _bc = obj._mpf_
+            return {"__t__": "mpf", "s": int(sign), "m": str(int(man)), "e": int(exp)}
+        return {"__t__": "mpf_special", "v": mp.nstr(obj)}
     if isinstance(obj, FitResult):
         return {
             "__t__": "fit",
@@ -64,6 +72,17 @@ def _decode(obj: Any) -> Any:
     if isinstance(obj, dict):
         tag = obj.get("__t__")
         if tag == "mpf":
+            # Reconstruct man * 2^exp under a working precision wide enough that the product is
+            # formed WITHOUT rounding to the ambient mp.dps — exact regardless of session dps.
+            if "m" in obj:
+                with mp.workdps(_MPF_RECONSTRUCT_DPS):
+                    value = mp.mpf(int(obj["m"])) * mp.power(2, int(obj["e"]))
+                    return -value if int(obj.get("s", 0)) else value
+            # Back-compat: an older workspace may hold the legacy decimal-string form. Parse it
+            # under high precision so at least the stored digits survive.
+            with mp.workdps(_MPF_RECONSTRUCT_DPS):
+                return mp.mpf(obj["v"])
+        if tag == "mpf_special":
             return mp.mpf(obj["v"])
         if tag == "tuple":
             return tuple(_decode(x) for x in obj["items"])

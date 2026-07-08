@@ -35,6 +35,37 @@ def test_mpf_roundtrips_at_full_precision() -> None:
         assert decoded["error"]["x"] == v  # exact, no precision loss
 
 
+def test_mpf_high_precision_survives_decode_at_low_dps() -> None:
+    """Review S1: encoding stored a fixed 50-digit decimal string and decode reparsed at the
+    ambient mp.dps, so a high-precision workspace reopened at low dps lost precision. The value is
+    now stored as exact (sign, mantissa, exp) and reconstructed under high workdps — lossless
+    regardless of the session's mp.dps."""
+    prev = mp.mp.dps
+    try:
+        mp.mp.dps = 80
+        v = mp.mpf("1.2345678901234567890123456789012345678901234567890123456789012345")
+        encoded = encode_latex_inputs({"error": {"x": v}})
+        mp.mp.dps = 15  # reopen in a LOW-precision session
+        decoded = decode_latex_inputs(encoded)["error"]["x"]
+        mp.mp.dps = 80
+        assert decoded == v  # exact — not truncated to ~16 digits
+
+        # A value beyond the old 50-digit encode cap also survives.
+        mp.mp.dps = 130
+        big = mp.mpf("3." + "14159265358979323846" * 6)
+        assert decode_latex_inputs(encode_latex_inputs({"e": {"x": big}}))["e"]["x"] == big
+    finally:
+        mp.mp.dps = prev
+
+
+def test_mpf_special_values_roundtrip() -> None:
+    for sv in (mp.inf, -mp.inf, mp.mpf("0"), mp.mpf("-2.5"), mp.mpf("1e-50")):
+        out = decode_latex_inputs(encode_latex_inputs({"e": {"x": sv}}))["e"]["x"]
+        assert out == sv
+    nan_out = decode_latex_inputs(encode_latex_inputs({"e": {"x": mp.nan}}))["e"]["x"]
+    assert mp.isnan(nan_out)
+
+
 def test_tuple_list_dict_nesting_roundtrips() -> None:
     store = {
         "error": {
