@@ -2905,6 +2905,12 @@ class ExtrapolationWindow(
 
         open_result_overview_popover(self)
 
+    def _toggle_history_popup(self) -> None:
+        """Open/close the history panel in a toolbar-anchored popup (moved off the result rail)."""
+        from app_desktop.history_popup import toggle_history_popup
+
+        toggle_history_popup(self)
+
     def _export_csv_data(self):
         if not getattr(self, "_csv_rows", None):
             QMessageBox.information(

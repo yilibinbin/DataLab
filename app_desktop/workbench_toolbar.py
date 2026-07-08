@@ -248,6 +248,18 @@ def build_workbench_toolbar(owner: object) -> QWidget:
 
     layout.addSpacing(8)
 
+    dynamic_owner.history_button = make_toolbar_button(
+        owner,
+        "历史",
+        "History",
+        "history_button",
+        QStyle.StandardPixmap.SP_FileDialogDetailedView,
+        "_toggle_history_popup",
+        tooltip_zh="打开结果历史（恢复、对比、删除等）。",
+        tooltip_en="Open the result history (restore, compare, delete, …).",
+    )
+    layout.addWidget(dynamic_owner.history_button)
+
     dynamic_owner.docs_button = make_toolbar_button(
         owner,
         "文档",

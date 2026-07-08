@@ -27,7 +27,12 @@ def panel(qtbot: Any) -> Any:
     win._apply_language("zh")
     qtbot.addWidget(win)
     win.show()
-    return win.workbench_history_panel
+    # The history panel now lives off the visible layout (opened via the toolbar 历史 popup),
+    # so show it directly for visibility assertions on its collapse behaviour.
+    panel = win.workbench_history_panel
+    panel.setParent(None)
+    panel.show()
+    return panel
 
 
 def test_history_collapsed_by_default(panel: Any) -> None:

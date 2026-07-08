@@ -1212,8 +1212,12 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.workbench_result_overview_panel = build_result_overview(self)
     self.workbench_result_overview_panel.setParent(self)
     self.workbench_result_overview_panel.hide()
+    # History is opened from a toolbar 历史 button as a popup now (user request), so the panel
+    # is NOT added to the result layout — it is parented to the window and hidden until the
+    # popup hosts it (history_popup.toggle_history_popup reparents the real widget in/out).
     self.workbench_history_panel = build_history_panel(self)
-    layout.addWidget(self.workbench_history_panel)
+    self.workbench_history_panel.setParent(self)
+    self.workbench_history_panel.hide()
 
     self.workbench_result_details_panel = QWidget()
     self.workbench_result_details_panel.setObjectName("workbench_result_details_panel")
