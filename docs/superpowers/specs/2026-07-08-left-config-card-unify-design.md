@@ -61,3 +61,66 @@ formula/variables show only their mode config (the sub-panels self-hide).
 - Switching each mode keeps the card content correct; formula/variable sub-blocks self-hide in
   modes that don't use them (no empty gap).
 - Screenshot manifest updated for the new grouping.
+
+---
+
+## Known bugs from the three-model serial review (Claude → Codex → Gemini, code-grounded, reproduced)
+
+Run against diff `74109e7..HEAD` (this session's UI work). To be fixed alongside / before the
+config-card restructure. Severity + attribution noted.
+
+### In-scope (introduced this session) — fix before merge
+
+- **S1 [HIGH] mpf precision loss, two-sided.** `app_desktop/latex_inputs_serialization.py`:
+  `_MPF_STR_DIGITS = 50` caps encoding at 50 significant digits, and `_decode` does
+  `mp.mpf(obj["v"])` which reparses at the ambient `mp.dps`. A high-precision workspace (UI allows
+  compute up to `MAX_MPMATH_DPS` + 200 LaTeX digits) loses precision on reopen → regenerated
+  on-demand TeX is numerically wrong. Reproduced by all three models.
+  **Fix**: encode with enough digits for the value's own precision (not a fixed 50 — e.g. derive
+  from `mp.mp.dps` at encode time or a large safe cap); decode inside `mp.workdps(N)` so the parse
+  is not truncated by the ambient session precision.
+
+- **S2 [MEDIUM] constants-file source does not round-trip.** `workspace_controller` restore
+  (~line 1897) unconditionally clears `use_constants_file_checkbox` and only restores the path
+  text, so a file-backed constants workspace silently reverts to manual constants on reopen (the
+  capture correctly records `source_kind="file"`). **Fix**: restore the checkbox + `constants_file_row`
+  visibility from the saved `source_kind`.
+
+- **S3 [MEDIUM] `mode_stack` Maximum policy clips dynamic-growth modes.** The hollow-gap fix set
+  `mode_stack` to `QSizePolicy.Maximum` + stretch=0. A mode whose config grows after layout
+  (fitting → comparison reveals a candidate list) is clipped ~19px (page.height 586 < sizeHint
+  603, even in a tall window). **Fix**: use `Preferred` vertical policy (grows to content) with the
+  column's existing `AlignTop` preventing short-page inflation — verified un-clips (626, gap=0 on
+  short modes preserved).
+
+- **S4 [MEDIUM] stale tests** assert `manual_box` is a direct child of `input_section`, but it now
+  lives under `_data_tab`: `tests/test_desktop_workbench_data_area.py:46`,
+  `tests/test_desktop_workbench_editor_canvas.py:34`. **Fix**: update the parent assertions.
+
+- **S5 [cosmetic] status chip duplication.** `_refresh_toolbar_status_chip` builds
+  `f"{label} · {summary}"`; for failed/running states `_value_summary` returns the same word →
+  "Failed · Failed" / "Running · Running". **Fix**: omit the summary when it equals the status word.
+
+### Pre-existing (some newly reachable via the new constants-file UI) — separate fix
+
+- **P-A [MEDIUM crash] unguarded file read** in `workspace_controller._capture_data_section:264`
+  (`Path(path_text).read_bytes()`): saving a workspace crashes (`FileNotFoundError`) if the data OR
+  constants file was moved/deleted. Exists on main for the data path; the new constants-file UI
+  adds a second trigger. **Fix**: guard the read (skip/attach-empty + keep the path) for both.
+- **P-B [low]** `line.split()` in the file-text canonicaliser drops empty cells → column shift.
+- **P-C [low]** `use_file` True + empty path tags `source_kind="file"` but captures the manual
+  table (inconsistent state, no attachment). Newly reachable via constants file UI.
+- **P-D [low]** unsafe `row["name"]/row["value"]` in constants capture (KeyError on malformed row;
+  compare the safe `.get()` used elsewhere). Newly reachable via constants file UI.
+- **P-E [low]** implicit-config migration double-convert `AttributeError` for legacy `schema != 2`
+  workspaces. Unrelated to this session.
+
+### Refuted / theoretical (note only)
+
+- **`__t__` tag collision**: a stash dict colliding with a real serializer tag (`{"__t__":"mpf",...}`)
+  would misdecode, but the stash never holds user-controlled arbitrary dicts — not reachable.
+  Optional defense-in-depth: wrap plain dicts under a `"dict"` tag so no bare `__t__` is trusted.
+
+Adversarial note: Codex escalated S1 to the encode side; Codex refuted S3 but the refutation was
+OVERTURNED by a tall-window reproduction; Gemini surfaced the pre-existing serialization cluster
+(P-A…P-E). The Gemini CLI channel timed out on the full prompt and succeeded on a shorter retry.
