@@ -44,28 +44,6 @@ def _combo_current_data(owner, attr_name: str, default: str) -> str:
     return default
 
 
-def _unit_rows_to_map(owner, editor_attr: str, label_zh: str, label_en: str) -> dict[str, str]:
-    editor = getattr(owner, editor_attr, None)
-    if editor is None:
-        return {}
-    rows_func = getattr(editor, "rows", None)
-    rows = rows_func() if callable(rows_func) else []
-    values: dict[str, str] = {}
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        name = str(row.get("name") or "").strip()
-        unit = str(row.get("value") or "").strip()
-        if not name and not unit:
-            continue
-        if not name or not unit:
-            raise ValueError(owner._tr(f"{label_zh}的符号和单位都需要填写。", f"{label_en} requires both symbol and unit."))
-        if name in values:
-            raise ValueError(owner._tr(f"{label_zh}重复：{name}", f"Duplicate {label_en}: {name}"))
-        values[name] = unit
-    return values
-
-
 def _error_output_unit(units: object) -> str:
     if not isinstance(units, Mapping):
         return ""
