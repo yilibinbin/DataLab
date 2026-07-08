@@ -935,12 +935,20 @@ def build_left_panel(self):
 
     self._data_stack.setCurrentIndex(_STACK_PAGE_TABLE)  # table view by default
     manual_layout.addWidget(self._data_stack)
-    self.input_section_layout.addWidget(self.manual_box)
 
     from app_desktop.constants_editor import ConstantsEditor
     self.input_constants_editor = ConstantsEditor(min_rows=1, checked=False, numeric_mode="uncertainty")
     self.input_constants_editor.set_embedded_in_workbench(True)
-    self.input_section_layout.addWidget(self.input_constants_editor)
+
+    # Merge input data + constants into sheet-like tabs (输入数据 / 常数) to reuse space instead
+    # of stacking two tables. The 常数 tab is added/removed by mode (see _set_constants_tab_
+    # visible) — only constant-using modes (error/custom-fit/implicit) show it.
+    self.input_data_tabs = QTabWidget()
+    self.input_data_tabs.setObjectName("input_data_tabs")
+    self.input_data_tabs.setDocumentMode(True)
+    self.input_data_tabs.addTab(self.manual_box, self._tr("输入数据", "Data input"))
+    self.input_data_tabs.addTab(self.input_constants_editor, self._tr("常数", "Constants"))
+    self.input_section_layout.addWidget(self.input_data_tabs)
 
     self.error_constants_editor = self.input_constants_editor
     self.custom_constants_editor = self.input_constants_editor

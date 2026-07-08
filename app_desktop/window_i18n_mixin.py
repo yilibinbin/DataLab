@@ -374,6 +374,16 @@ class WindowI18nMixin:
                     self.result_tabs.setTabToolTip(index, result_view_tooltip(view_key, effective_lang))
             if hasattr(self, "main_tabs_indices"):
                 self.tabs.setTabText(self.main_tabs_indices["result"], "结果" if effective_lang == _LANG_ZH else "Result")
+            # Input-data sheet tabs (输入数据 / 常数) — retranslate by matching the hosted widget,
+            # since the 常数 tab is added/removed by mode so its index is not fixed.
+            input_tabs = getattr(self, "input_data_tabs", None)
+            if input_tabs is not None:
+                for index in range(input_tabs.count()):
+                    widget = input_tabs.widget(index)
+                    if widget is getattr(self, "manual_box", None):
+                        input_tabs.setTabText(index, "输入数据" if effective_lang == _LANG_ZH else "Data input")
+                    elif widget is getattr(self, "input_constants_editor", None):
+                        input_tabs.setTabText(index, "常数" if effective_lang == _LANG_ZH else "Constants")
             if hasattr(self, "latex_edit"):
                 self.latex_edit.setPlaceholderText(
                     "% LaTeX 内容将在此显示…" if effective_lang == _LANG_ZH else "% LaTeX content will appear here…"

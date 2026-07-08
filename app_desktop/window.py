@@ -2205,6 +2205,24 @@ class ExtrapolationWindow(
             self._refresh_main_splitter_left_min_width()
         self._update_constants_visibility()
 
+    def _set_constants_tab_visible(self, visible: bool) -> None:
+        """Add or remove the 常数 sheet tab from the input-data tabs so it only appears in
+        constant-using modes. The constants editor widget is reused (added/removed, not
+        rebuilt), so its state + serialization are untouched."""
+        tabs = getattr(self, "input_data_tabs", None)
+        editor = getattr(self, "input_constants_editor", None)
+        if tabs is None or editor is None:
+            return
+        index = tabs.indexOf(editor)
+        if visible and index == -1:
+            tabs.addTab(editor, self._tr("常数", "Constants"))
+        elif not visible and index != -1:
+            tabs.removeTab(index)  # removeTab does not delete the widget; state is preserved
+            if tabs.currentWidget() is not getattr(self, "manual_box", None):
+                data_index = tabs.indexOf(getattr(self, "manual_box", None))
+                if data_index != -1:
+                    tabs.setCurrentIndex(data_index)
+
     def _update_constants_visibility(self):
         if not hasattr(self, "input_constants_editor") or self.input_constants_editor is None:
             return
@@ -2221,6 +2239,10 @@ class ExtrapolationWindow(
                 and self.use_constants_file_checkbox.isChecked()
             )
 
+        # Constants now live in a sheet tab (输入数据 / 常数). Show the 常数 tab only in
+        # constant-using modes; other modes show just 输入数据 (user-approved). Keep the
+        # legacy setVisible for any code/test that still reads editor visibility directly.
+        self._set_constants_tab_visible(visible)
         self.input_constants_editor.setVisible(visible)
         self.input_constants_editor.set_inputs_visible(inputs_visible)
         self.input_constants_editor.set_control_labels(
