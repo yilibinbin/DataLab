@@ -80,11 +80,16 @@ config-card restructure. Severity + attribution noted.
   from `mp.mp.dps` at encode time or a large safe cap); decode inside `mp.workdps(N)` so the parse
   is not truncated by the ambient session precision.
 
-- **S2 [MEDIUM] constants-file source does not round-trip.** `workspace_controller` restore
-  (~line 1897) unconditionally clears `use_constants_file_checkbox` and only restores the path
-  text, so a file-backed constants workspace silently reverts to manual constants on reopen (the
-  capture correctly records `source_kind="file"`). **Fix**: restore the checkbox + `constants_file_row`
-  visibility from the saved `source_kind`.
+- **~~S2~~ [WITHDRAWN — was a misjudgment].** Codex-2 flagged that restore clears
+  `use_constants_file_checkbox` → "file-backed constants silently become manual". Verifying
+  against the suite showed this is BY DESIGN: on save the file's CONTENTS are captured as an
+  attachment and inlined into the editor on restore, so the workspace is self-contained and does
+  not depend on the external file still existing (test
+  `test_workspace_restores_file_backed_data_for_statistics_time_series` deletes the file then
+  asserts checkbox=False + data inlined). The proposed "fix" broke that decoupling and was
+  reverted. No data is lost; only the file-source toggle is intentionally off. Kept a regression
+  test asserting the file CONTENT survives the round-trip. (Lesson: a review finding that
+  contradicts an existing intentional test must be verified against the suite before "fixing".)
 
 - **S3 [MEDIUM] `mode_stack` Maximum policy clips dynamic-growth modes.** The hollow-gap fix set
   `mode_stack` to `QSizePolicy.Maximum` + stretch=0. A mode whose config grows after layout

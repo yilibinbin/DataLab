@@ -1901,11 +1901,11 @@ def _restore_data_section(window: Any, section: dict[str, Any], *, constants: bo
         stack = getattr(window, "_data_stack", None)
     source_kind = section.get("source_kind")
     if use_file_checkbox is not None:
-        # Restore the file-source flag from the saved source_kind (review S2): it was
-        # unconditionally cleared, so a file-backed data/constants workspace silently reverted to
-        # manual input on reopen. Setting it also fires the toggle handler, which shows the file
-        # row + hides the manual table.
-        use_file_checkbox.setChecked(source_kind == "file")
+        # Intentionally clear the file-source flag: on save the file's CONTENTS are captured as an
+        # attachment and inlined into the manual editor on restore, so the workspace is
+        # self-contained and does NOT depend on the external file still existing (it may be gone).
+        # (Review S2 proposed keeping this on, but that broke the intended decoupling — reverted.)
+        use_file_checkbox.setChecked(False)
     if file_edit is not None:
         file_edit.setText(str(section.get("source_path_label") or ""))
     if stack is not None:
