@@ -76,19 +76,31 @@ def test_shell_sections_are_visible_in_expected_order(qtbot: Any) -> None:
         for index in range(window.left_layout.count())
         if window.left_layout.itemAt(index).widget() is not None
     ]
-    # input is first; mode_stack + per-mode config follow. The mode selector card, the
-    # empty output_setup_section, AND the bottom run_section (开始执行 removed in 4·4c —
-    # run is on the toolbar) are all gone from the layout.
+    # The column is now exactly TWO direct blocks: [input_section] + [workbench_config_card]. The
+    # per-mode config (mode_stack + formula + variable) was merged INTO the card (config-card
+    # restructure), so those are no longer direct children of the column.
     assert layout_names[0] == "input_section"
     assert "mode_section" not in layout_names
     assert "output_setup_section" not in layout_names
     assert "run_section" not in layout_names
-    assert "workbench_formula_panel" in layout_names
+    assert "workbench_config_card" in layout_names
     input_idx = layout_names.index("input_section")
-    stack_idx = layout_names.index("mode_stack")
-    assert input_idx < stack_idx, "order must be 输入 → 配置"
+    card_idx = layout_names.index("workbench_config_card")
+    assert input_idx < card_idx, "order must be 输入 → 配置卡片"
+    # Inside the card, mode config is ABOVE formula, which is above variable.
+    card_layout = window.workbench_config_card.layout()
+    card_names = [
+        card_layout.itemAt(i).widget().objectName()
+        for i in range(card_layout.count())
+        if card_layout.itemAt(i).widget() is not None
+    ]
+    assert (
+        card_names.index("mode_stack")
+        < card_names.index("workbench_formula_panel")
+        < card_names.index("workbench_variable_panel")
+    )
 
-    assert window.mode_stack.parentWidget() is window.workbench_workspace_content
+    assert window.mode_stack.parentWidget() is window.workbench_config_card
     assert window.custom_params_table is not None
     assert window.custom_constants_editor is not None
 

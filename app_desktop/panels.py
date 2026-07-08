@@ -358,21 +358,34 @@ def build_ui(self):
     self.left_container = self.workbench_workspace_content
     self._left_scroll = self.workbench_workspace_canvas
 
-    # Order in the merged pane (top→bottom): input_section (added by _build_left_panel),
-    # then the per-mode config (formula/variable/mode_stack), then output_setup + run.
+    # The left workspace column is exactly TWO blocks: [输入数据 tabs] (added by _build_left_panel)
+    # + [one config card]. The config card wraps the per-mode config in a single QGroupBox, ordered
+    # mode config FIRST (mode_stack — holds the model selector etc.), then the shared formula input,
+    # then the shared variable mapping. All three are per-mode stacked widgets that switch together;
+    # the formula/variable panels self-hide in modes that don't use them (no gap). This replaces the
+    # old three-separate-blocks layout so users "pick the model first, then see its fields".
     self._build_left_panel()
+    self.workbench_config_card = QGroupBox()
+    self.workbench_config_card.setObjectName("workbench_config_card")
+    self.workbench_config_card.setProperty("datalab_config_card", True)
+    _config_card_layout = QVBoxLayout(self.workbench_config_card)
+    _config_card_layout.setSpacing(CONTROL_SPACING)
+    # NB: inner margins are set by _style_config_card (10px) below — it is the single source of
+    # the card padding and also runs on theme change, so we don't set margins here.
+
+    # mode_stack (CurrentPageStack) pins its own height to the active page's sizeHint (no gap / no
+    # clip, review S3); formula/variable panels build per-mode pages and self-hide when unused.
+    reparent_widget(_config_card_layout, self.mode_stack, stretch=0)
     self.workbench_formula_panel = build_formula_workspace_panel(self)
-    self.workbench_workspace_layout.addWidget(self.workbench_formula_panel)
+    _config_card_layout.addWidget(self.workbench_formula_panel)
     populate_formula_workspace_panel(self)
     self.workbench_variable_panel = build_variable_workspace_panel(self)
-    self.workbench_workspace_layout.addWidget(self.workbench_variable_panel)
-    # The mode_stack (CurrentPageStack) pins its own height to the ACTIVE page's sizeHint (see
-    # current_page_stack.py) so it neither inflates a short mode into a hollow gap nor clips a mode
-    # whose config grows after layout (fitting→comparison, review S3). stretch=0 + a trailing
-    # stretch pool leftover column height below the stack.
-    reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=0)
-    self.workbench_workspace_layout.addStretch(1)
+    _config_card_layout.addWidget(self.workbench_variable_panel)
     populate_variable_workspace_panel(self)
+
+    self.workbench_workspace_layout.addWidget(self.workbench_config_card)
+    self.workbench_workspace_layout.addStretch(1)
+    _style_config_card(self.workbench_config_card, dark=is_dark_theme())
     # ``output_setup_section`` and ``run_section`` are no longer added to the layout — the
     # first went empty when options moved to the toolbar dialogs, the second when the
     # bottom 开始执行 button was removed (4·4c; run is on the toolbar). Both attributes are
@@ -705,7 +718,7 @@ def _config_card_sections(self) -> tuple[QWidget, ...]:
     # run_section is no longer a visible card (bottom 开始执行 removed in 4·4c); only the
     # input section remains a styled config card in the merged pane.
     sections: list[QWidget] = []
-    for attr in ("input_section",):
+    for attr in ("input_section", "workbench_config_card"):
         section = getattr(self, attr, None)
         if isinstance(section, QWidget):
             sections.append(section)
