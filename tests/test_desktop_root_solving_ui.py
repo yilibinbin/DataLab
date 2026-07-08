@@ -133,14 +133,6 @@ def test_root_controls_have_schema_bindings(window: Any) -> None:
     assert window.root_constants_editor.property("datalab_schema_key") == "root.constants"
     assert window.root_constants_editor.property("datalab_schema_required") is False
     assert window.root_constants_editor.table_view.property("datalab_schema_key") is None
-    assert window.root_units_enabled_checkbox.property("datalab_schema_key") == "root_solving.units.enabled"
-    assert window.root_units_inputs_editor.property("datalab_schema_key") == "root_solving.units.inputs"
-    assert window.root_units_constants_editor.property("datalab_schema_key") == "root_solving.units.constants"
-    assert window.root_units_output_edit.property("datalab_schema_key") == "root_solving.units.outputs.result"
-    assert window.root_units_body.isHidden()
-    window.root_units_enabled_checkbox.setChecked(True)
-    QApplication.processEvents()
-    assert not window.root_units_body.isHidden()
     assert find_unbound_required_widgets(window.root_box) == []
 
 
@@ -359,9 +351,6 @@ def test_root_solving_job_uses_active_data_source_and_preserves_raw_cells(window
     window.root_mode_combo.setCurrentIndex(window.root_mode_combo.findData("scalar"))
     window.manual_data_edit.setPlainText("A\n4.0(2)\n9.00(3)")
     window._data_stack.setCurrentIndex(1)
-    window.root_units_enabled_checkbox.setChecked(True)
-    window.root_units_inputs_editor.set_rows([{"name": "A", "value": "m^2"}])
-    window.root_units_output_edit.setText("m")
 
     job = window._build_root_solving_job(data_path=None, manual_content=window.manual_data_edit.toPlainText())
 
@@ -370,8 +359,6 @@ def test_root_solving_job_uses_active_data_source_and_preserves_raw_cells(window
     assert job.mode == "scalar"
     assert job.core_request is not None
     assert job.core_request.inputs["data_headers"] == ["A"]
-    assert job.core_request.inputs["units"]["inputs"] == {"A": {"unit": "m^2"}}
-    assert job.core_request.inputs["units"]["outputs"] == {"result": {"unit": "m"}}
 
 
 def test_root_solving_job_uses_sectioned_input_constants(window: Any) -> None:

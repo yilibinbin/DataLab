@@ -759,7 +759,6 @@ class ExtrapolationWindow(
             getattr(self, "stats_hypothesis_alpha_edit", None),
             getattr(self, "stats_time_series_time_column_edit", None),
             getattr(self, "stats_time_series_ewma_value_edit", None),
-            getattr(self, "error_units_output_edit", None),
             getattr(self, "output_file_edit", None),
             getattr(self, "caption_edit", None),
             getattr(self, "latex_edit", None),
@@ -786,8 +785,6 @@ class ExtrapolationWindow(
             "custom_constants_editor",
             "implicit_constants_editor",
             "root_constants_editor",
-            "error_units_inputs_editor",
-            "error_units_constants_editor",
         ):
             editor = getattr(self, editor_name, None)
             if editor is None or id(editor) in connected_constant_editors:
@@ -801,7 +798,6 @@ class ExtrapolationWindow(
             "method_combo",
             "levin_variant_combo",
             "error_method_combo",
-            "error_units_mode_combo",
             "stats_workflow_combo",
             "stats_mode_combo",
             "stats_bootstrap_target_combo",
@@ -827,7 +823,6 @@ class ExtrapolationWindow(
             "use_constants_file_checkbox",
             "generate_plots_checkbox",
             "verbose_checkbox",
-            "error_units_enabled_checkbox",
             "scientific_checkbox",
             "dcolumn_checkbox",
             "caption_checkbox",

@@ -86,9 +86,8 @@ _SCHEMA_KEY_PROPERTY = "datalab_schema_key"
 #
 # (2) The app's OWN custom editable-editor widgets (subclass QWidget directly, so
 #     no Qt base class catches them — they must be named):
-#   * ConstantsEditor — the units inputs/constants/parameters editors (e.g.
-#     error.units.inputs, fitting.units.parameters); gated by each mode's units
-#     mode, editable once units are enabled.
+#   * ConstantsEditor — the constants editors (e.g. error.constants,
+#     root.constants); gated by each mode, editable once the constants toggle is on.
 #   * ParameterTable — fitting custom/implicit parameter tables
 #     (fitting.custom.parameters, fitting.implicit.parameters).
 #   * DetectedRowsTable — the root-solving unknowns table (root.unknowns).
@@ -339,15 +338,43 @@ def _open_option_panels(window: Any, app: Any) -> None:
     app.processEvents()
 
 
+def _reveal_tab_hosted_controls(window: Any, app: Any) -> None:
+    """Activate the tabs that host controls moved by the input/result restructures, so those
+    controls become isVisibleTo(window). Two moves need this:
+    - the constants editor now lives on the 常数 sheet tab of input_data_tabs;
+    - 不确定度位数 (options.uncertainty_digits) moved onto the result-detail numeric tab (next to
+      小数位数/科学计数法).
+    Both are genuine, visible user gates (click the tab); the sweep must open them.
+    """
+    tabs = getattr(window, "input_data_tabs", None)
+    const_tab = getattr(window, "_constants_tab", None)
+    if tabs is not None and const_tab is not None:
+        idx = tabs.indexOf(const_tab)
+        if idx != -1:
+            tabs.setCurrentIndex(idx)
+    # 不确定度位数 sits on the numeric result tab next to 小数位数/科学计数法, which is hidden until
+    # a result exists — so drive a minimal result then activate the numeric tab (same reveal the
+    # display-format controls use).
+    if hasattr(window, "_set_csv_data"):
+        window._set_csv_data([{"x": "1", "y": "2"}], headers=["x", "y"], suggestion="r.csv")
+    result_tabs = getattr(window, "result_tabs", None)
+    indices = getattr(window, "result_tabs_indices", None)
+    if result_tabs is not None and isinstance(indices, dict) and "numeric" in indices:
+        result_tabs.setCurrentIndex(indices["numeric"])
+    app.processEvents()
+
+
 def _reveal_output_gates(window: Any, app: Any) -> None:
     """Reveal the LaTeX-output group and its gated caption input.
 
     The 生成 LaTeX 文件 checkbox was removed (4·4d) — the LaTeX options are now always
     visible in the LaTeX 选项 dialog. ``output.latex.caption`` still needs caption_checkbox
     checked, and the controls live in the LaTeX dialog — so open the option dialogs first.
+    Also reveal the tab-hosted controls (constants tab + result numeric tab).
     """
     _open_option_panels(window, app)
     window.caption_checkbox.setChecked(True)
+    _reveal_tab_hosted_controls(window, app)
     app.processEvents()
 
 
@@ -479,6 +506,8 @@ def test_per_mode_input_controls_all_reachable(window: Any, mode: str) -> None:
     app = QApplication.instance()
     prefixes = _PER_MODE_PREFIXES[mode]
     _switch_mode(window, app, mode)
+    # Constants live on the 常数 sheet tab now — activate it so the constants editor is reachable.
+    _reveal_tab_hosted_controls(window, app)
 
     all_controls = _enumerate_input_controls(window)
     parents = {id(w): w.parent() for w, _ in all_controls}

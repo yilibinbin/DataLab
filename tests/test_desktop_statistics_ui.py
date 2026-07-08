@@ -55,13 +55,6 @@ def test_statistics_inputs_have_schema_metadata(window: Any) -> None:
     assert window.stats_trim_fraction_edit.property("datalab_schema_required") is False
     assert window.stats_trim_fraction_edit.placeholderText()
     assert window.stats_trim_fraction_edit.toolTip()
-    assert window.stats_units_enabled_checkbox.property("datalab_schema_key") == "statistics.units.enabled"
-    assert window.stats_units_inputs_editor.property("datalab_schema_key") == "statistics.units.inputs"
-    assert window.stats_units_output_edit.property("datalab_schema_key") == "statistics.units.outputs.result"
-    assert window.stats_units_body.isHidden()
-    window.stats_units_enabled_checkbox.setChecked(True)
-    QApplication.processEvents()
-    assert not window.stats_units_body.isHidden()
 
 
 def test_statistics_mode_and_options_have_schema_metadata(window: Any) -> None:
@@ -280,67 +273,6 @@ def test_statistics_trim_fraction_control_visible_only_for_descriptive(window: A
     assert window.stats_trim_fraction_edit.isHidden()
 
 
-def test_standard_statistics_run_passes_visible_units_to_core_request(
-    window: Any,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app_desktop import window_extrapolation_mixin
-    from app_desktop.workers_core import CalcJob
-
-    class _Signal:
-        def connect(self, callback: object) -> None:
-            captured.setdefault("connections", []).append(callback)
-
-        def disconnect(self, *_args: object) -> None:
-            return
-
-    class _DummyCalcWorker:
-        finished_ok = _Signal()
-        failed = _Signal()
-        finished = _Signal()
-        cancelled = _Signal()
-        log_ready = _Signal()
-
-        def __init__(self, job: CalcJob) -> None:
-            captured["job"] = job
-
-        def start(self) -> None:
-            captured["started"] = True
-
-        def isRunning(self) -> bool:  # noqa: N802 - Qt-style test double
-            return False
-
-        def request_stop(self) -> None:
-            captured["stopped"] = True
-
-    captured: dict[str, Any] = {}
-    monkeypatch.setattr(window_extrapolation_mixin, "CalcWorker", _DummyCalcWorker)
-
-    window.mode_combo.setCurrentIndex(window.mode_combo.findData("statistics"))
-    window.stats_workflow_combo.setCurrentIndex(window.stats_workflow_combo.findData("standard"))
-    window.stats_value_column_edit.setText("A")
-    window.manual_data_edit.setPlainText("A\n1\n2\n")
-    window._data_stack.setCurrentIndex(1)
-    window.stats_units_enabled_checkbox.setChecked(True)
-    window.stats_units_inputs_editor.set_rows([{"name": "A", "value": "J"}])
-    window.stats_units_output_edit.setText("J")
-
-    window.run_calculation()
-
-    job = captured["job"]
-    assert captured["started"] is True
-    assert job.mode == "statistics"
-    assert job.core_request is not None
-    assert job.core_request.inputs["units"]["inputs"] == {"A": {"unit": "J"}}
-    assert job.core_request.inputs["units"]["outputs"] == {"result": {"unit": "J"}}
-    # The worker rebuilds its own per-column requests from job fields and does not use
-    # job.core_request, so the units must also be attached to the job itself or normal
-    # single-column statistics runs silently drop all unit metadata.
-    assert job.units_config is not None
-    assert job.units_config["inputs"] == {"A": "J"}
-    assert job.units_config["outputs"] == {"result": "J"}
-
-
 def test_statistics_bootstrap_visibility_replaces_regular_mode_controls(window: Any) -> None:
     window.stats_workflow_combo.setCurrentIndex(window.stats_workflow_combo.findData("standard"))
     window.stats_mode_combo.setCurrentIndex(window.stats_mode_combo.findData("mean"))
@@ -551,19 +483,15 @@ def test_statistics_bootstrap_direct_run_uses_semantic_snapshot(window: Any) -> 
     window.stats_bootstrap_target_combo.setCurrentIndex(window.stats_bootstrap_target_combo.findData("mean"))
     window.stats_bootstrap_resamples_spin.setValue(100)
     window.stats_bootstrap_seed_edit.setText("42")
-    window.stats_units_enabled_checkbox.setChecked(True)
-    window.stats_units_output_edit.setText("m")
 
     window._run_statistics_mode(False, "")
 
     assert window._last_result_kind == "statistics_bootstrap"
     assert window._last_result_semantic_snapshot_kind == "statistics_bootstrap"
     assert window._last_result_semantic_snapshot["mode"] == "bootstrap_confidence_intervals"
-    assert window._last_result_semantic_snapshot["units"]["outputs"]["result"]["unit"] == "m"
     assert window._last_result_semantic_snapshot["bootstrap"]["resample_count"] == 100
     assert window._last_result_semantic_snapshot["bootstrap"]["seed"] == 42
     assert any(row["metric"] == "bootstrap_ci_lower" for row in window._csv_rows)
-    assert any(row["metric"] == "bootstrap_ci_lower" and row["value_unit"] == "m" for row in window._csv_rows)
     assert "Bootstrap CI lower" in window.result_edit.toPlainText()
 
 
@@ -764,50 +692,6 @@ def test_statistics_time_series_direct_run_exports_latex_and_plot(window: Any, t
     assert window.current_stats_figures
     assert window._current_stats_plot_metadata[0]["plot_key"] == "statistics.time_series"
     assert Path(window.current_stats_figures[0]).read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
-
-
-def test_statistics_time_series_direct_run_routes_units_to_text_latex_and_plot(
-    window: Any,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import shared.plotting as plotting
-
-    captured: dict[str, object] = {}
-
-    def fake_render(spec: object) -> bytes:
-        captured["spec"] = spec
-        return b"\x89PNG\r\n\x1a\nunit"
-
-    monkeypatch.setattr(plotting, "render_statistics_time_series_plot_from_spec", fake_render)
-
-    window._apply_language("en")
-    window.manual_data_edit.setPlainText("t A S\nday_1 1.0 0.1\nday_2 2.0 0.2\nday_3 4.0 0.3\n")
-    window._data_stack.setCurrentIndex(1)
-    window.stats_workflow_combo.setCurrentIndex(window.stats_workflow_combo.findData("time_series_rolling"))
-    window.stats_time_series_method_combo.setCurrentIndex(
-        window.stats_time_series_method_combo.findData("rolling_mean")
-    )
-    window.stats_value_column_edit.setText("A")
-    window.stats_sigma_column_edit.setText("S")
-    window.stats_time_series_time_column_edit.setText("t")
-    window.stats_time_series_window_size_spin.setValue(2)
-    window.stats_time_series_min_periods_spin.setValue(2)
-    window.stats_units_enabled_checkbox.setChecked(True)
-    window.stats_units_output_edit.setText("m")
-    window.generate_plots_checkbox.setChecked(True)
-    tex_path = tmp_path / "time-series-units.tex"
-
-    window._run_statistics_mode(True, str(tex_path))
-
-    snapshot = window._last_result_semantic_snapshot
-    spec = captured["spec"]
-    content = tex_path.read_text(encoding="utf-8")
-    assert snapshot["units"]["outputs"]["result"]["unit"] == "m"
-    assert "Value unit" in window.result_edit.toPlainText()
-    assert "Column & Unit & Row & Time" in content
-    assert any(row["column"] == "A" and row["value_unit"] == "m" for row in window._csv_rows)
-    assert spec.labels.y_axis == "Value [m]"  # type: ignore[attr-defined]
 
 
 def test_statistics_matrix_direct_run_exports_latex_and_heatmap(window: Any, tmp_path: Path) -> None:

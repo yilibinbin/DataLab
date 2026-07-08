@@ -1184,93 +1184,21 @@ class WindowExtrapolationMixin:
             payload["units"] = units
         self._remember_last_result("error", payload)
 
+    # The units feature (启用单位标注 + per-variable unit tables) was removed — it was not general
+    # enough and duplicated the data/constants symbol columns. The run/compute/LaTeX paths are all
+    # None-safe for units, so every mode now passes units_config=None. These collectors return None
+    # for any legacy caller that still asks.
     def _collect_error_units_config(self):
-        checkbox = getattr(self, "error_units_enabled_checkbox", None)
-        if checkbox is None:
-            units = getattr(self, "error_units_config", None)
-            return units if isinstance(units, Mapping) else None
-        if not checkbox.isChecked():
-            return None
-        units: dict[str, object] = {
-            "enabled": True,
-            "mode": _combo_current_data(self, "error_units_mode_combo", "display_only"),
-            "inputs": _unit_rows_to_map(self, "error_units_inputs_editor", "输入单位", "input units"),
-            "constants": _unit_rows_to_map(self, "error_units_constants_editor", "常数单位", "constant units"),
-        }
-        output_edit = getattr(self, "error_units_output_edit", None)
-        output_unit = output_edit.text().strip() if output_edit is not None else ""
-        if output_unit:
-            units["outputs"] = {"result": output_unit}
-        return units
-
-    def _collect_display_units_config(
-        self,
-        attr_prefix: str,
-        *,
-        label_zh: str,
-        label_en: str,
-        include_constants: bool = False,
-        include_parameters: bool = False,
-    ):
-        checkbox = getattr(self, f"{attr_prefix}_units_enabled_checkbox", None)
-        if checkbox is None:
-            units = getattr(self, f"{attr_prefix}_units_config", None)
-            return units if isinstance(units, Mapping) else None
-        if not checkbox.isChecked():
-            return None
-        units: dict[str, object] = {
-            "enabled": True,
-            "mode": "display_only",
-            "inputs": _unit_rows_to_map(
-                self,
-                f"{attr_prefix}_units_inputs_editor",
-                f"{label_zh}输入单位",
-                f"{label_en} input units",
-            ),
-        }
-        if include_constants:
-            units["constants"] = _unit_rows_to_map(
-                self,
-                f"{attr_prefix}_units_constants_editor",
-                f"{label_zh}常数单位",
-                f"{label_en} constant units",
-            )
-        if include_parameters:
-            units["parameters"] = _unit_rows_to_map(
-                self,
-                f"{attr_prefix}_units_parameters_editor",
-                f"{label_zh}参数单位",
-                f"{label_en} parameter units",
-            )
-        output_edit = getattr(self, f"{attr_prefix}_units_output_edit", None)
-        output_unit = output_edit.text().strip() if output_edit is not None else ""
-        if output_unit:
-            units["outputs"] = {"result": output_unit}
-        return units
+        return None
 
     def _collect_root_units_config(self):
-        return self._collect_display_units_config(
-            "root",
-            label_zh="求根",
-            label_en="root-solving",
-            include_constants=True,
-        )
+        return None
 
     def _collect_statistics_units_config(self):
-        return self._collect_display_units_config(
-            "stats",
-            label_zh="统计",
-            label_en="statistics",
-        )
+        return None
 
     def _collect_fitting_units_config(self):
-        return self._collect_display_units_config(
-            "fit",
-            label_zh="拟合",
-            label_en="fitting",
-            include_constants=True,
-            include_parameters=True,
-        )
+        return None
 
     def _split_extrapolation_result(self, result):
         return split_extrapolation_result(result)

@@ -563,25 +563,6 @@ def build_fitting_mode_view(owner: Any) -> QGroupBox:
     )
     weight_row.addWidget(owner.fit_weighted_checkbox)
     fit_layout.addLayout(weight_row)
-    fit_layout.addWidget(
-        view_helpers.make_display_unit_controls(
-            owner,
-            attr_prefix="fit",
-            schema_prefix="fitting",
-            input_tooltip_zh="拟合输入列的单位。符号使用变量映射中的数据列名，例如 A。",
-            input_tooltip_en="Units for fitting input columns. Symbols use data column names from the variable mapping, such as A.",
-            include_constants=True,
-            constants_tooltip_zh="拟合常数的单位。符号必须与自定义或隐式常数名一致。",
-            constants_tooltip_en="Units for fitting constants. Symbols must match custom or implicit constant names.",
-            include_parameters=True,
-            parameters_tooltip_zh="拟合参数的单位。符号必须与参数列表中的参数名一致。",
-            parameters_tooltip_en="Units for fitting parameters. Symbols must match parameter-table names.",
-            output_label_zh="目标 result 单位：",
-            output_label_en="Target result unit:",
-            output_tooltip_zh="可选。用于拟合结果、残差、LaTeX 和图中的单位显示；不改变优化算法。",
-            output_tooltip_en="Optional. Used for fit results, residuals, LaTeX, and plots; it does not change optimization.",
-        )
-    )
 
     owner.inverse_min_spin.valueChanged.connect(owner._on_model_settings_changed)
     owner.inverse_max_spin.valueChanged.connect(owner._on_model_settings_changed)
