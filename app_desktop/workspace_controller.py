@@ -256,7 +256,13 @@ def _capture_data_section(window: Any, *, constants: bool = False) -> tuple[dict
 
     raw_path = None
     source_path = path_text or None
-    source_kind = "file" if use_file else ("manual_text" if stack is not None and stack.currentIndex() == 1 else "manual_table")
+    # Only claim source_kind="file" when there is an actual path (review P-C): use_file with an
+    # empty path used to tag the section "file" while capturing the manual table → inconsistent
+    # state with no attachment. Fall back to the manual kind so save/restore stay coherent.
+    _text_view = stack is not None and stack.currentIndex() == 1
+    source_kind = (
+        "file" if (use_file and path_text) else ("manual_text" if _text_view else "manual_table")
+    )
     if constants and editor is not None and not use_file:
         source_kind = "manual_text" if editor.using_text_view() else "manual_table"
     canonical: dict[str, Any]
@@ -274,14 +280,28 @@ def _capture_data_section(window: Any, *, constants: bool = False) -> tuple[dict
         canonical = {"rows": []}
     elif constants and editor is not None:
         rows = editor.rows()
-        canonical = {"headers": ["Name", "Value"], "rows": [[row["name"], row["value"]] for row in rows]}
+        # Safe key access (review P-D): a malformed row lacking name/value must not KeyError-crash
+        # the save (mirrors the .get() used in the restore path).
+        canonical = {
+            "headers": ["Name", "Value"],
+            "rows": [[row.get("name", ""), row.get("value", "")] for row in rows],
+        }
         decoded_text = editor.raw_text()
         encoding = "utf-8"
         raw = decoded_text.encode("utf-8")
     elif source_kind == "manual_text":
         decoded_text = _text(text_edit)
         encoding = "utf-8"
-        canonical = {"rows": [line.split() for line in decoded_text.splitlines() if line.strip()]}
+        # The text itself round-trips via decoded_text; this canonical is the derived tabular
+        # view. Split on TAB when present so empty cells are preserved (review P-B: bare .split()
+        # dropped empty cells and shifted columns left); fall back to whitespace otherwise.
+        canonical = {
+            "rows": [
+                (line.split("\t") if "\t" in line else line.split())
+                for line in decoded_text.splitlines()
+                if line.strip()
+            ]
+        }
         raw = decoded_text.encode("utf-8")
     else:
         if table is None:
