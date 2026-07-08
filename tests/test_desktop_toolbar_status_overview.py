@@ -46,6 +46,22 @@ def test_toolbar_status_chip_is_clickable_and_opens_popover(qtbot: Any) -> None:
     assert opened, "clicking the toolbar status chip must open the overview popover"
 
 
+def test_toolbar_status_chip_no_duplicate_word(qtbot: Any) -> None:
+    """Review S5: failed/running states must not render "Failed · Failed" / "Running · Running" —
+    the summary is dropped when it equals the status word."""
+    window = _window(qtbot)
+    window._apply_language("en")
+    window._last_result_kind = "error"
+    window._mark_workbench_result_failed()
+    window._refresh_toolbar_status_chip()
+    assert "·" not in window.job_status_label.text()  # "Failed", not "Failed · Failed"
+
+    from app_desktop.shell_layout import set_workbench_job_status
+
+    set_workbench_job_status(window, running=True)
+    assert window.job_status_label.text() == "Running"  # not "Running · Running"
+
+
 def test_toolbar_status_chip_shows_rich_status_word(qtbot: Any) -> None:
     window = _window(qtbot)
     # Before any run: the chip shows the waiting/ready word (not the old bare 就绪/Ready only).

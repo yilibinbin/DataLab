@@ -84,6 +84,45 @@ def test_each_tab_has_independent_data_file_toggle(qtbot: Any) -> None:
     assert window.use_file_checkbox.isChecked() is False
 
 
+def test_constants_file_source_round_trips_in_workspace(qtbot: Any, tmp_path: Any) -> None:
+    """Review S2: a file-backed constants workspace must reopen as file-backed. Restore used to
+    unconditionally clear use_constants_file_checkbox → silent revert to manual constants."""
+    from app_desktop import workspace_controller as wc
+
+    consts = tmp_path / "consts.txt"
+    consts.write_text("ALPHA 7.30(11)\n", encoding="utf-8")
+
+    src = _window(qtbot)
+    src.mode_combo.setCurrentIndex(src.mode_combo.findData("error"))
+    QApplication.processEvents()
+    src.use_constants_file_checkbox.setChecked(True)
+    src.constants_file_edit.setText(str(consts))
+    QApplication.processEvents()
+    bundle = wc.capture_workspace(src, title="t")
+
+    dst = _window(qtbot)
+    dst.mode_combo.setCurrentIndex(dst.mode_combo.findData("error"))
+    QApplication.processEvents()
+    wc.restore_workspace(dst, bundle.manifest, bundle.attachments)
+    QApplication.processEvents()
+    assert dst.use_constants_file_checkbox.isChecked() is True
+    assert dst.constants_file_edit.text() == str(consts)
+
+
+def test_workspace_save_survives_missing_source_file(qtbot: Any) -> None:
+    """Review P-A: saving a workspace whose data/constants file was deleted must not crash."""
+    from app_desktop import workspace_controller as wc
+
+    window = _window(qtbot)
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("error"))
+    QApplication.processEvents()
+    window.use_file_checkbox.setChecked(True)
+    window.data_file_edit.setText("/tmp/definitely_missing_datalab_file.csv")
+    QApplication.processEvents()
+    bundle = wc.capture_workspace(window, title="t")  # must not raise
+    assert bundle is not None
+
+
 def test_input_tabs_retranslate(qtbot: Any) -> None:
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("error"))

@@ -2920,7 +2920,10 @@ class ExtrapolationWindow(
         state = _overview_state(self)
         _status, label = _status_badge(self, state)
         summary = _value_summary(self, state, _status)
-        chip.setText(f"{label} · {summary}" if summary and summary != "—" else label)
+        # Drop the summary when it is empty, a dash, or identical to the status word — otherwise
+        # failed/running states rendered "Failed · Failed" / "Running · Running" (review S5).
+        show_summary = bool(summary) and summary != "—" and summary != label
+        chip.setText(f"{label} · {summary}" if show_summary else label)
 
     def _open_result_overview_from_toolbar(self) -> None:
         """Open the (existing) result-overview popover, anchored to the toolbar status chip."""

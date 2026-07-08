@@ -261,7 +261,13 @@ def _capture_data_section(window: Any, *, constants: bool = False) -> tuple[dict
         source_kind = "manual_text" if editor.using_text_view() else "manual_table"
     canonical: dict[str, Any]
     if use_file and path_text:
-        raw = Path(path_text).read_bytes()
+        # Guard the file read (review P-A): if the file was moved/deleted/unreadable since the
+        # user picked it, saving the workspace must NOT crash. Keep the source as "file" and the
+        # path (so the user can re-point it), but attach empty content rather than raising.
+        try:
+            raw = Path(path_text).read_bytes()
+        except OSError:
+            raw = b""
         decoded_text, encoding = _decode_bytes(raw)
         raw_path = f"attachments/sources/{section_name}.bin"
         attachments[raw_path] = raw
@@ -1895,7 +1901,11 @@ def _restore_data_section(window: Any, section: dict[str, Any], *, constants: bo
         stack = getattr(window, "_data_stack", None)
     source_kind = section.get("source_kind")
     if use_file_checkbox is not None:
-        use_file_checkbox.setChecked(False)
+        # Restore the file-source flag from the saved source_kind (review S2): it was
+        # unconditionally cleared, so a file-backed data/constants workspace silently reverted to
+        # manual input on reopen. Setting it also fires the toggle handler, which shows the file
+        # row + hides the manual table.
+        use_file_checkbox.setChecked(source_kind == "file")
     if file_edit is not None:
         file_edit.setText(str(section.get("source_path_label") or ""))
     if stack is not None:

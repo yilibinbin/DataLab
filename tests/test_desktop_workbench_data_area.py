@@ -43,11 +43,14 @@ def test_actual_data_editor_lives_in_left_input_area(qtbot: Any) -> None:
 
     # Two-pane layout: the input section lives in the merged workspace pane.
     assert window.input_section.parentWidget() is window.workbench_workspace_content
-    assert window.manual_box.parentWidget() is window.input_section
-    assert window.input_section_layout.indexOf(window.manual_box) >= 0
+    # Input data + file picker now live inside the 输入数据 tab (_data_tab), which the
+    # input_data_tabs widget hosts in the input section (sheet-tab restructure).
+    assert window.manual_box.parentWidget() is window._data_tab
+    assert window.file_box.parentWidget() is window._data_tab
+    assert window.input_data_tabs.indexOf(window._data_tab) >= 0
+    assert window.input_section_layout.indexOf(window.input_data_tabs) >= 0
     assert window.manual_table.parentWidget() is window._data_stack
     assert window.manual_data_edit.parentWidget() is window._data_stack
-    assert window.file_box.parentWidget() is window.input_section
 
 
 def test_manual_data_card_has_title_and_live_summary(qtbot: Any) -> None:

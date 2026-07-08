@@ -366,11 +366,12 @@ def build_ui(self):
     populate_formula_workspace_panel(self)
     self.workbench_variable_panel = build_variable_workspace_panel(self)
     self.workbench_workspace_layout.addWidget(self.workbench_variable_panel)
-    # stretch=0 (not 1): the mode_stack is a CurrentPageStack that sizes to the ACTIVE page, so
-    # a short config card (e.g. error propagation) must NOT be inflated to fill leftover height
-    # — that produced a hollow gap above/below the card. With stretch=0 + the column's AlignTop,
-    # leftover space pools at the bottom of the scroll canvas instead of around the card.
+    # The mode_stack (CurrentPageStack) pins its own height to the ACTIVE page's sizeHint (see
+    # current_page_stack.py) so it neither inflates a short mode into a hollow gap nor clips a mode
+    # whose config grows after layout (fitting→comparison, review S3). stretch=0 + a trailing
+    # stretch pool leftover column height below the stack.
     reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=0)
+    self.workbench_workspace_layout.addStretch(1)
     populate_variable_workspace_panel(self)
     # ``output_setup_section`` and ``run_section`` are no longer added to the layout — the
     # first went empty when options moved to the toolbar dialogs, the second when the
@@ -1003,13 +1004,9 @@ def build_left_panel(self):
 
     self.mode_stack = CurrentPageStack()
     self.mode_stack.setObjectName("mode_stack")
-    # A QStackedWidget defaults to Expanding vertical policy, so it would grow past the current
-    # page's sizeHint and leave a hollow gap around a short config card. Maximum keeps it at the
-    # active page's natural height; leftover space pools below (column is AlignTop + adds a
-    # trailing stretch after the stack is reparented in).
-    _mode_stack_policy = self.mode_stack.sizePolicy()
-    _mode_stack_policy.setVerticalPolicy(QSizePolicy.Policy.Maximum)
-    self.mode_stack.setSizePolicy(_mode_stack_policy)
+    # CurrentPageStack pins its own fixed height to the ACTIVE page's sizeHint (see
+    # current_page_stack.py) — this is what prevents both the hollow gap on short modes and the
+    # clip on modes whose config grows after layout (review S3). No size-policy override needed.
     _build_mode_stack_pages(self)
 
     # Options
