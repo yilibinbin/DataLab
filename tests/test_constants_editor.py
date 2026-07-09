@@ -48,6 +48,27 @@ def test_constants_editor_round_trips_table_rows(qtbot):
     assert editor.constants_dict(validate=True) == {"K": "1.23", "R": "3.0"}
 
 
+def test_constants_editor_shows_row_count_summary(qtbot):
+    """The constants editor shows an "N 行" count (like the data card) that tracks filled rows."""
+    editor = ConstantsEditor()
+    qtbot.addWidget(editor)
+
+    assert editor.summary_label.text() == "0 行"
+    editor.set_rows([{"name": "K", "value": "1.23"}, {"name": "R", "value": "3.0"}])
+    editor._emit_changed()
+    assert editor.summary_label.text() == "2 行"
+
+
+def test_constants_editor_help_and_summary_are_in_the_controls_row(qtbot):
+    """The ? help button and the row-count summary sit in the controls row (next to 文本视图),
+    NOT on a separate header line."""
+    editor = ConstantsEditor()
+    qtbot.addWidget(editor)
+
+    assert editor.help_button.parent() is editor.view_toggle_button.parent()
+    assert editor.summary_label.parent() is editor.view_toggle_button.parent()
+
+
 def test_constants_editor_standalone_card_style_is_default(qtbot):
     editor = ConstantsEditor()
     qtbot.addWidget(editor)

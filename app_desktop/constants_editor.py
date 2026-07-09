@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QPlainTextEdit,
     QStackedWidget,
@@ -73,22 +74,12 @@ class ConstantsEditor(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(6)
+        # The checkbox is legacy/hidden; keep it for callers that still poke it, but it no longer
+        # occupies its own header row (the summary + ? sit in the controls row, like the data card).
         self.checkbox = QCheckBox(checkbox_text)
         self.checkbox.setChecked(bool(checked))
         self.checkbox.toggled.connect(self._on_checked_changed)
         self.checkbox.hide()
-        header_layout.addWidget(self.checkbox)
-        self.help_button = _HelpButton("?")
-        self.help_button.setFlat(True)
-        self.help_button.setFocusPolicy(Qt.NoFocus)
-        self.help_button.setFixedWidth(24)
-        self.help_button.hide()
-        header_layout.addWidget(self.help_button)
-        header_layout.addStretch()
-        layout.addLayout(header_layout)
 
         self.controls_widget = QWidget()
         controls_layout = QHBoxLayout(self.controls_widget)
@@ -108,6 +99,17 @@ class ConstantsEditor(QWidget):
         controls_layout.addWidget(self.clear_button)
         controls_layout.addWidget(self.view_toggle_button)
         controls_layout.addStretch()
+        # Row-count summary (mirrors the data card's "N 行"), then the ? help button — both on the
+        # RIGHT of the controls row, not a separate header line.
+        self.summary_label = QLabel("")
+        self.summary_label.setObjectName("constants_summary")
+        controls_layout.addWidget(self.summary_label)
+        self.help_button = _HelpButton("?")
+        self.help_button.setFlat(True)
+        self.help_button.setFocusPolicy(Qt.NoFocus)
+        self.help_button.setFixedWidth(24)
+        self.help_button.hide()
+        controls_layout.addWidget(self.help_button)
         layout.addWidget(self.controls_widget)
 
         self.stack = QStackedWidget()
@@ -134,6 +136,7 @@ class ConstantsEditor(QWidget):
         layout.addWidget(self.stack)
 
         self._on_checked_changed(self.checkbox.isChecked())
+        self._update_summary()
         self._constructed = True
 
     def set_embedded_in_workbench(self, embedded: bool) -> None:
@@ -286,7 +289,19 @@ class ConstantsEditor(QWidget):
         self.controls_widget.setEnabled(visible)
         self.stack.setEnabled(visible)
 
+    def _update_summary(self) -> None:
+        """Show the number of filled constant rows (mirrors the data card's "N 行")."""
+        label = getattr(self, "summary_label", None)
+        if label is None:
+            return
+        try:
+            count = len([r for r in self.rows() if (r.get("name") or r.get("value"))])
+        except Exception:
+            count = 0
+        label.setText(f"{count} 行")
+
     def _emit_changed(self, *_args: object) -> None:
+        self._update_summary()
         if not self._syncing:
             self.changed.emit()
 

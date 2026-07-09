@@ -836,11 +836,11 @@ def build_left_panel(self):
     # Data file — label + path edit + Browse all on ONE row. No 使用数据文件 checkbox: the file
     # picker sits directly with the data, and a non-empty path takes PRECEDENCE over the manual
     # input below (see _active_input_bundle).
-    # Plain margin-less container (matches the 常数 tab's constants_file_row exactly, so the two
-    # tabs share identical file-row insets — not a bordered QGroupBox with 9px padding).
+    # Plain container (matches the 常数 tab's constants_file_row exactly). A little L/R padding so
+    # the row isn't flush against the tab edge, and the tab layout adds a gap before the card below.
     self.file_box = QWidget()
     file_layout = QHBoxLayout(self.file_box)
-    file_layout.setContentsMargins(0, 0, 0, 0)
+    file_layout.setContentsMargins(4, 2, 4, 2)
     file_layout.setSpacing(6)
     self._data_file_label = QLabel(self._tr("数据文件：", "Data file:"))
     self._register_text(self._data_file_label, "数据文件：", "Data file:")
@@ -945,6 +945,25 @@ def build_left_panel(self):
     table_toolbar.addWidget(clear_btn)
     table_toolbar.addWidget(self._data_view_toggle)
     table_toolbar.addStretch()
+    # ? help button on the right of the data toolbar (mirrors the constants editor's ?).
+    self.manual_data_help_btn = QPushButton("?")
+    self.manual_data_help_btn.setFlat(True)
+    self.manual_data_help_btn.setFixedWidth(24)
+    self.manual_data_help_btn.setFocusPolicy(Qt.NoFocus)
+    self.manual_data_help_btn.setToolTip(
+        self._tr(
+            "输入数据：每列一个变量，每行一组数据；也可用上方“数据文件”从文件读取。",
+            "Data input: one variable per column, one sample per row; or read from a file via 数据文件 above.",
+        )
+    )
+    self._register_text(
+        self.manual_data_help_btn,
+        "输入数据：每列一个变量，每行一组数据；也可用上方“数据文件”从文件读取。",
+        "Data input: one variable per column, one sample per row; or read from a file via 数据文件 above.",
+        "setToolTip",
+    )
+    self.manual_data_help_btn.clicked.connect(self._show_data_file_hint)
+    table_toolbar.addWidget(self.manual_data_help_btn)
     manual_layout.addLayout(table_toolbar)
 
     # Stacked widget: table view (0) / text view (1)
@@ -988,7 +1007,7 @@ def build_left_panel(self):
     self._data_tab = QWidget()
     _data_tab_layout = QVBoxLayout(self._data_tab)
     _data_tab_layout.setContentsMargins(0, 6, 0, 0)
-    _data_tab_layout.setSpacing(6)
+    _data_tab_layout.setSpacing(10)  # gap between the file row and the data card below
     _data_tab_layout.addWidget(self.file_box)
     _data_tab_layout.addWidget(self.manual_box)
 
@@ -998,13 +1017,13 @@ def build_left_panel(self):
     self._constants_tab = QWidget()
     _const_tab_layout = QVBoxLayout(self._constants_tab)
     _const_tab_layout.setContentsMargins(0, 6, 0, 0)
-    _const_tab_layout.setSpacing(6)
+    _const_tab_layout.setSpacing(10)  # gap between the file row and the constants card below
 
     # Symmetric with the data tab: no checkbox — a non-empty constants-file path takes precedence
     # over the manual constants table below.
     self.constants_file_row = QWidget()
     _const_file_layout = QHBoxLayout(self.constants_file_row)
-    _const_file_layout.setContentsMargins(0, 0, 0, 0)
+    _const_file_layout.setContentsMargins(4, 2, 4, 2)
     _const_file_layout.setSpacing(6)
     _const_file_label = QLabel(self._tr("常数文件：", "Constants file:"))
     self._register_text(_const_file_label, "常数文件：", "Constants file:")
