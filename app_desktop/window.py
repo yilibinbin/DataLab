@@ -477,7 +477,9 @@ class ExtrapolationWindow(
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DataLab")
-        self.resize(1280, 760)
+        # Open wider so the left config/data pane (min ~528px) + the result pane form a
+        # result-heavy ~1:3 split without cramping either (see build_workbench_main_splitter).
+        self.resize(1680, 900)
         self._window_icon = None
         self._apply_window_icon()
         # OS light/dark preference, detected cross-platform (Qt colorScheme on
@@ -592,6 +594,22 @@ class ExtrapolationWindow(
     def _refresh_main_splitter_left_min_width(self) -> None:
         from . import panels as _panels
         _panels._refresh_main_splitter_left_min_width(self)
+
+    def showEvent(self, event):  # type: ignore[no-untyped-def]
+        super().showEvent(event)
+        # Apply the default result-heavy ~1:3 pane ratio ONCE, at the real shown width (build-time
+        # width is stale). The left pane is clamped to its content minimum, so on narrow windows
+        # the ratio widens toward the left; on wide windows it approaches 1:3.
+        if getattr(self, "_pane_ratio_applied", False):
+            return
+        splitter = getattr(self, "_main_splitter", None)
+        if splitter is None or splitter.count() < 2:
+            return
+        self._pane_ratio_applied = True
+        total = max(1, splitter.width())
+        left_min = splitter.widget(0).minimumWidth()
+        left = max(left_min, total // 4)
+        splitter.setSizes([left, total - left])
 
     def _bind_workbench_spec_schema_keys(self) -> None:
         from . import panels as _panels

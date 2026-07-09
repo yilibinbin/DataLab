@@ -134,19 +134,21 @@ def build_workbench_main_splitter(owner: object) -> QSplitter:
     splitter.addWidget(result_frame)
     for index in range(splitter.count()):
         splitter.setCollapsible(index, False)
+    # Left (config/data) : right (result) defaults to ~1:3 — the result pane is where the output
+    # lives and deserves the bulk of the width. Both panes stretch (the result faster) so the ratio
+    # is preserved as the window resizes, while WORKSPACE_CANVAS_MIN_WIDTH keeps the left usable.
     splitter.setStretchFactor(0, 1)
-    splitter.setStretchFactor(1, 0)
+    splitter.setStretchFactor(1, 3)
 
+    # Initial sizes target ~1:3 (result gets 3×). The left pane can't go below
+    # WORKSPACE_CANVAS_MIN_WIDTH, so on narrow windows the ratio widens toward the left minimum;
+    # on wide windows it approaches a true 1:3. Assume a reasonable default width if the window
+    # hasn't been sized yet (owner_width==0 at build), so the first paint isn't left-heavy.
     owner_width = int(getattr(owner, "width", lambda: 0)() or 0)
-    available = max(
-        owner_width,
-        WORKSPACE_CANVAS_MIN_WIDTH + RESULT_RAIL_WIDTH,
-    )
-    workspace_width = max(
-        WORKSPACE_CANVAS_MIN_WIDTH,
-        available - RESULT_RAIL_WIDTH,
-    )
-    splitter.setSizes([workspace_width, RESULT_RAIL_WIDTH])
+    default_width = 1600
+    available = max(owner_width or default_width, WORKSPACE_CANVAS_MIN_WIDTH + RESULT_RAIL_WIDTH)
+    workspace_width = max(WORKSPACE_CANVAS_MIN_WIDTH, available // 4)
+    splitter.setSizes([workspace_width, available - workspace_width])
     return splitter
 
 
