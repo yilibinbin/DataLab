@@ -45,6 +45,26 @@ def test_formula_preview_renders_pixmap(qtbot) -> None:
     assert not label.text().strip()
 
 
+def test_inline_preview_pixmap_fits_inside_padded_box(qtbot) -> None:
+    """The rendered pixmap must stay INSIDE the label's padded content box so the rounded border
+    stays visible — a tall formula scaled to the label's outer max height would paint over the
+    bottom padding/border (the "border not closed" bug)."""
+    from app_desktop import formula_preview as fp
+
+    label = QLabel()
+    qtbot.addWidget(label)
+    fp.configure_formula_preview_label(label, constrain_size=True)
+    # A tall nested fraction that would otherwise hit the outer height cap.
+    fp.update_formula_preview_with_empty_text(label, "(a/b + c/d)/(e/f + g/h) + (i/j)/(k/l)")
+
+    pixmap = label.pixmap()
+    assert pixmap is not None and not pixmap.isNull()
+    # The pixmap is capped below the label's outer max, leaving room for padding + border.
+    assert pixmap.height() <= fp._INLINE_PREVIEW_PIXMAP_MAX_HEIGHT
+    assert pixmap.width() <= fp._INLINE_PREVIEW_PIXMAP_MAX_WIDTH
+    assert fp._INLINE_PREVIEW_PIXMAP_MAX_HEIGHT < fp._INLINE_PREVIEW_MAX_HEIGHT
+
+
 def test_formula_preview_label_does_not_force_parent_width(qtbot) -> None:
     from app_desktop.formula_preview import FormulaPreviewLabel, update_formula_preview
 

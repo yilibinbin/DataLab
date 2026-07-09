@@ -35,6 +35,13 @@ from app_desktop.theme import (
 _IDENTIFIER_RE: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _INLINE_PREVIEW_MAX_WIDTH: Final = 520
 _INLINE_PREVIEW_MAX_HEIGHT: Final = 104
+# The label reserves 12px padding + a 1px border on each side (formula_inline_preview_style). The
+# rendered pixmap must fit INSIDE that inset, otherwise a tall formula fills the label edge-to-edge
+# and paints over the bottom padding/rounded border (the "border not closed" bug). Cap the pixmap a
+# little smaller than the label content box so the rounded border always stays visible.
+_INLINE_PREVIEW_INSET: Final = 2 * (12 + 1)
+_INLINE_PREVIEW_PIXMAP_MAX_HEIGHT: Final = _INLINE_PREVIEW_MAX_HEIGHT - _INLINE_PREVIEW_INSET
+_INLINE_PREVIEW_PIXMAP_MAX_WIDTH: Final = _INLINE_PREVIEW_MAX_WIDTH - _INLINE_PREVIEW_INSET
 
 
 class FormulaPreviewLabel(QLabel):
@@ -267,14 +274,16 @@ def update_formula_preview_with_empty_text(
     )
     pixmap = QPixmap()
     if result.ok and result.png_bytes and _load_png_pixmap(pixmap, result.png_bytes):
-        if pixmap.width() > _INLINE_PREVIEW_MAX_WIDTH:
+        # Scale to fit INSIDE the label's padded content box (leaving the border visible), not to the
+        # label's outer max size — see _INLINE_PREVIEW_PIXMAP_MAX_* above.
+        if pixmap.width() > _INLINE_PREVIEW_PIXMAP_MAX_WIDTH:
             pixmap = pixmap.scaledToWidth(
-                _INLINE_PREVIEW_MAX_WIDTH,
+                _INLINE_PREVIEW_PIXMAP_MAX_WIDTH,
                 Qt.TransformationMode.SmoothTransformation,
             )
-        if pixmap.height() > _INLINE_PREVIEW_MAX_HEIGHT:
+        if pixmap.height() > _INLINE_PREVIEW_PIXMAP_MAX_HEIGHT:
             pixmap = pixmap.scaledToHeight(
-                _INLINE_PREVIEW_MAX_HEIGHT,
+                _INLINE_PREVIEW_PIXMAP_MAX_HEIGHT,
                 Qt.TransformationMode.SmoothTransformation,
             )
         label.setPixmap(pixmap)
