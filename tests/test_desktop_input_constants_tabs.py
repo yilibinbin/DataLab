@@ -24,6 +24,10 @@ from app_desktop.window import ExtrapolationWindow
 def _window(qtbot: Any) -> ExtrapolationWindow:
     window = ExtrapolationWindow()
     qtbot.addWidget(window)
+    # Pin the UI language so title assertions are platform-independent: a fresh window otherwise
+    # follows QLocale.system(), which is zh on a dev Mac but en on Linux CI — the tab-title tests
+    # here assert Chinese labels, so make that explicit. (Tests that check EN re-apply "en" after.)
+    window._apply_language("zh")
     return window
 
 
