@@ -68,6 +68,7 @@ from app_desktop.theme import (
     result_tab_pane_style,
     table_style,
     workbench_section_card_style,
+    workbench_title_text_style,
 )
 from app_desktop.workbench_layout import (
     build_workbench_main_splitter,
@@ -520,7 +521,7 @@ def _bind_workbench_state_roles(self) -> None:
     _constants_title = getattr(self.input_constants_editor, "title_label", None)
     if _constants_title is not None:
         self._register_text(_constants_title, "输入常数", "Constants")
-        _constants_title.setStyleSheet("font-weight: 600;")
+        _constants_title.setStyleSheet(workbench_title_text_style())
     shared_constants_editor = self.input_constants_editor
     for editor_name in (
         "error_constants_editor",
