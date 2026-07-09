@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app_desktop.theme import variable_panel_style
+from app_desktop.theme import CARD_PADDING, variable_panel_style
 from app_desktop.workbench_layout import reparent_widget
 from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
 
@@ -138,7 +138,7 @@ def _make_variable_section(owner: Any, mode: str, mount: Any) -> tuple[QFrame, Q
     section.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
     outer = QVBoxLayout(section)
-    outer.setContentsMargins(10, 8, 10, 10)
+    outer.setContentsMargins(*CARD_PADDING)
     outer.setSpacing(8)
 
     title_row = QWidget()

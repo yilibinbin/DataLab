@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
-from app_desktop.theme import result_overview_card_style
+from app_desktop.theme import CARD_PADDING, result_overview_card_style
 
 MAX_RESULT_OVERVIEW_ROWS = 50
 MAX_RESULT_OVERVIEW_STATE_ROWS = 100
@@ -47,7 +47,7 @@ def build_result_overview(owner: Any) -> QWidget:
     widget.setObjectName("workbench_result_overview_panel")
     widget.setStyleSheet(result_overview_card_style())
     layout = QVBoxLayout(widget)
-    layout.setContentsMargins(10, 8, 10, 8)
+    layout.setContentsMargins(*CARD_PADDING)
     layout.setSpacing(4)
 
     title_row = QWidget()

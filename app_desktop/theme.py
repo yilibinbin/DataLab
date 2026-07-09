@@ -16,9 +16,14 @@ SPACE_LG = 12   # workspace gutter           (== WORKSPACE_GUTTER)
 
 # Inner titled-box content margin (replaces ad-hoc 8,8,8,8).
 INNER_BOX_MARGIN = SPACE_MD            # 8
-# Card content margins (replaces ad-hoc 12,10,12,12).
+# Card content margins (legacy — kept as aliases; no card actually used (12,10,12,12)).
 CARD_MARGIN_H = SPACE_LG               # 12
 CARD_MARGIN_V = PANEL_MARGIN           # 10
+# The ONE canonical card content padding (design review R2/R3). Every titled card content layout
+# uses this so the six cards stop each hard-coding a slightly different tuple
+# ((10,8,10,10)/(10,8,10,8)/(10,10,10,10)/(8,8,8,8)). Order: (left, top, right, bottom) — a hair
+# less on top for the title baseline.
+CARD_PADDING = (PANEL_MARGIN, SPACE_MD, PANEL_MARGIN, PANEL_MARGIN)  # (10, 8, 10, 10)
 
 # Vertical space a *styled* QGroupBox (one whose QSS sets a border) must reserve
 # above its content so the title band never overlaps the first control. Must be
@@ -583,7 +588,6 @@ QPushButton[datalab_data_toolbar_button="true"]:hover {{
 
 def variable_panel_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    card_bg = _tok("card_bg", dark)
     border = _tok("border", dark)
     title_fg = _tok("text_primary", dark)
     muted_fg = _tok("text_muted", dark)
@@ -591,6 +595,9 @@ def variable_panel_style(*, dark: bool | None = None) -> str:
     panel_bg = _tok("card_bg", dark) if dark else _tok("region_bg", dark)
     button_bg = _tok("surface_raised", dark)
     button_hover = _tok("surface_hover", dark)
+    # Borderless inset for section cards: a hair raised (dark) / recessed (light) vs the config card
+    # they sit inside, so they read as grouped sub-sections without a competing 1px border.
+    section_bg = _tok("surface_raised", dark) if dark else _tok("card_bg_muted", dark)
     return f"""
 QWidget#workbench_variable_panel {{
     background: {panel_bg};
@@ -599,10 +606,14 @@ QLabel#workbench_variable_title {{
     color: {title_fg};
     font-weight: 600;
 }}
+/* The variable panel lives INSIDE the config card (itself bordered). A bordered section card here
+   would stack a second 1px border ~10px in (design review R3 double-border). Instead distinguish the
+   section by a subtle inset background + radius and NO border — the surrounding gap does the
+   separating. */
 QFrame[datalab_variable_section_card="true"] {{
-    background: {card_bg};
-    border: 1px solid {border};
-    border-radius: {REGION_RADIUS}px;
+    background: {section_bg};
+    border: none;
+    border-radius: {RADIUS_CONTROL}px;
 }}
 QFrame[datalab_variable_section_card="true"] QLabel {{
     color: {title_fg};

@@ -56,6 +56,7 @@ from app_desktop.parallel_preferences import (
 from app_desktop.result_view_titles import result_view_tab_title, result_view_tooltip
 from app_desktop.shell_layout import build_workbench_bar, update_workbench_status
 from app_desktop.theme import (
+    CARD_PADDING,
     CONTROL_SPACING,
     SECTION_SPACING,
     config_card_style,
@@ -765,7 +766,7 @@ def _style_config_card(section: QWidget, *, dark: bool | None = None) -> None:
     section.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     layout = section.layout()
     if layout is not None:
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(*CARD_PADDING)
     section.setStyleSheet(config_card_style(dark=dark))
     section.style().unpolish(section)
     section.style().polish(section)
@@ -880,7 +881,7 @@ def build_left_panel(self):
     self.manual_box.setProperty("datalab_data_card", True)
     self.manual_box.setStyleSheet(data_input_card_style(dark=is_dark_theme()))
     manual_layout = QVBoxLayout(self.manual_box)
-    manual_layout.setContentsMargins(10, 8, 10, 10)
+    manual_layout.setContentsMargins(*CARD_PADDING)
     manual_layout.setSpacing(6)
 
     data_header = QHBoxLayout()
@@ -1372,7 +1373,7 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.workbench_result_details_panel.setProperty("datalab_result_detail_card", True)
     self.workbench_result_details_panel.setStyleSheet(result_detail_card_style(dark=is_dark_theme()))
     details_layout = QVBoxLayout(self.workbench_result_details_panel)
-    details_layout.setContentsMargins(10, 8, 10, 10)
+    details_layout.setContentsMargins(*CARD_PADDING)
     details_layout.setSpacing(6)
     self.workbench_result_details_title = QLabel(self._tr("结果详情", "Result details"))
     self.workbench_result_details_title.setObjectName("workbench_result_details_title")
