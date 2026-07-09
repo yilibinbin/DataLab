@@ -35,7 +35,14 @@ STATUS_STRIP_HEIGHT = 26
 CONFIG_RAIL_WIDTH = 320
 RESULT_RAIL_WIDTH = 380
 WORKSPACE_GUTTER = 12
+# --- Radius scale (design review R2) ---
+# Three tiers instead of the previous 3/4/5/6/8 drift. Cards/panes/tab-panes = CARD; buttons +
+# small controls + preview surfaces = CONTROL; status chips = PILL. (Scrollbar handle 3px and the
+# tutorial overlay 10px stay bespoke; embedded constants stays 0px on purpose.)
 REGION_RADIUS = 8
+RADIUS_CARD = 8
+RADIUS_CONTROL = 6
+RADIUS_PILL = 100
 WORKBENCH_FORMULA_PANEL_SINGLE_MAX_HEIGHT = 268
 WORKBENCH_FORMULA_PANEL_MULTI_MAX_HEIGHT = 392
 WORKBENCH_FORMULA_TITLE_ROW_MAX_HEIGHT = 42
@@ -247,7 +254,7 @@ def formula_preview_surface_style(*, dark: bool | None = None) -> str:
     background = "#1f2328" if dark else _tok("card_bg", dark)
     color = _tok("text_primary", dark)
     border = _tok("border", dark)
-    return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: 4px; padding: 12px;"
+    return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: {RADIUS_CONTROL}px; padding: 12px;"
 
 
 def formula_preview_error_surface_style(*, dark: bool | None = None) -> str:
@@ -255,7 +262,7 @@ def formula_preview_error_surface_style(*, dark: bool | None = None) -> str:
     background = "#431407" if dark else "#fff4f2"
     color = "#fed7aa" if dark else "#8a1c13"
     border = "#9a3412" if dark else "#f2b8b5"
-    return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: 4px; padding: 8px;"
+    return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: {RADIUS_CONTROL}px; padding: 8px;"
 
 
 def formula_preview_source_edit_style(*, dark: bool | None = None) -> str:
@@ -369,7 +376,7 @@ QLabel#workbench_result_details_empty_label {{
 }}
 QTabWidget#result_detail_tabs::pane {{
     border: 1px solid {border};
-    border-radius: 6px;
+    border-radius: {RADIUS_CARD}px;
     background: {panel_bg};
     top: -1px;
 }}
@@ -416,7 +423,7 @@ def input_data_tabs_style(*, dark: bool | None = None) -> str:
     return f"""
 QTabWidget#input_data_tabs::pane {{
     border: 1px solid {border};
-    border-radius: 8px;
+    border-radius: {RADIUS_CARD}px;
     background: {panel_bg};
     top: -1px;
 }}
@@ -524,7 +531,7 @@ QLabel#workbench_result_overview_meta {{
 QWidget#workbench_result_summary_grid {{
     background: {summary_bg};
     border: 1px solid {border};
-    border-radius: 5px;
+    border-radius: {RADIUS_CONTROL}px;
 }}
 QLabel[datalab_result_summary_label="true"] {{
     color: {muted_fg};
@@ -566,7 +573,7 @@ QPushButton[datalab_data_toolbar_button="true"] {{
     color: {button_fg};
     background: {button_bg};
     border: 1px solid {border};
-    border-radius: 5px;
+    border-radius: {RADIUS_CONTROL}px;
 }}
 QPushButton[datalab_data_toolbar_button="true"]:hover {{
     background: {button_hover};
@@ -610,7 +617,7 @@ QPushButton[datalab_variable_toolbar_button="true"] {{
     color: {button_fg};
     background: {button_bg};
     border: 1px solid {border};
-    border-radius: 5px;
+    border-radius: {RADIUS_CONTROL}px;
 }}
 QPushButton[datalab_variable_toolbar_button="true"]:hover {{
     background: {button_hover};
@@ -645,7 +652,7 @@ QWidget[datalab_constants_card="true"] QPushButton {{
     color: {button_fg};
     background: {button_bg};
     border: 1px solid {border};
-    border-radius: 5px;
+    border-radius: {RADIUS_CONTROL}px;
 }}
 QWidget[datalab_constants_card="true"] QPushButton:hover {{
     background: {button_hover};
