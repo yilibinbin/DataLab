@@ -21,6 +21,7 @@ from typing import Any
 import mpmath as mp
 
 from fitting.hp_fitter import FitResult
+from shared.precision import MAX_MPMATH_DPS, precision_guard
 from shared.uncertainty import UncertainValue
 
 # Working precision used to RECONSTRUCT an mpf from its raw (sign, mantissa, exp) parts. It must
@@ -75,12 +76,12 @@ def _decode(obj: Any) -> Any:
             # Reconstruct man * 2^exp under a working precision wide enough that the product is
             # formed WITHOUT rounding to the ambient mp.dps — exact regardless of session dps.
             if "m" in obj:
-                with mp.workdps(_MPF_RECONSTRUCT_DPS):
+                with precision_guard(_MPF_RECONSTRUCT_DPS, clamp_max=MAX_MPMATH_DPS):
                     value = mp.mpf(int(obj["m"])) * mp.power(2, int(obj["e"]))
                     return -value if int(obj.get("s", 0)) else value
             # Back-compat: an older workspace may hold the legacy decimal-string form. Parse it
             # under high precision so at least the stored digits survive.
-            with mp.workdps(_MPF_RECONSTRUCT_DPS):
+            with precision_guard(_MPF_RECONSTRUCT_DPS, clamp_max=MAX_MPMATH_DPS):
                 return mp.mpf(obj["v"])
         if tag == "mpf_special":
             return mp.mpf(obj["v"])

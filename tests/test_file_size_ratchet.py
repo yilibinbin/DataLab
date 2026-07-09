@@ -26,16 +26,17 @@ _HEADROOM = 40
 # past baseline + _HEADROOM. Shrink these numbers as god-files get split.
 _BASELINE: dict[str, int] = {
     # Raised across the feat/toolbar-options-popup feature (adaptive workbench, on-demand
-    # LaTeX, engine-adaptive digit grouping, toolbar status chip). The growth is the sum of
-    # that approved multi-commit feature; splitting these god-files is a separate XL effort.
-    "app_desktop/window.py": 3324,
+    # LaTeX, engine-adaptive digit grouping, toolbar status chip, file-precedence inputs,
+    # design-review token pass). The growth is the sum of that approved multi-commit feature;
+    # splitting these god-files is a separate XL effort.
+    "app_desktop/window.py": 3467,
     "app_desktop/workers_core.py": 2793,
     "datalab_core/statistics.py": 2768,
     "datalab_core/uncertainty.py": 2407,
-    "app_desktop/panels.py": 2287,
+    "app_desktop/panels.py": 2478,
     "datalab_core/recipes.py": 2055,
     "shared/plotting.py": 2045,
-    "app_desktop/workspace_controller.py": 2081,
+    "app_desktop/workspace_controller.py": 2130,
     "app_desktop/window_statistics_mixin.py": 2003,
     "datalab_core/history_compare.py": 1765,
     "datalab_core/statistics_hypothesis.py": 1504,
@@ -59,6 +60,9 @@ _BASELINE: dict[str, int] = {
     # 800-line soft limit; consciously baselined.
     "app_desktop/workers_qt.py": 807,
     "datalab_latex/latex_formatting.py": 890,
+    # Crossed 800 during the design-review token pass (semantic color _TOKENS + _tok resolver,
+    # radius/CARD_PADDING scale) — the growth is one theme's single source of truth; baselined.
+    "app_desktop/theme.py": 802,
     # Crossed 800 when the batch-fit on-demand LaTeX builder + F1 group-size fixes landed
     # (fixing the user-reported "拟合无法生成 tex"); consciously baselined.
     "app_desktop/window_fitting_residuals_mixin.py": 813,
