@@ -122,11 +122,12 @@ def test_theme_exposes_semantic_text_and_message_styles() -> None:
     assert "background: transparent" in config_style
     assert "QGroupBox::title" in config_style
     assert "font-weight" in theme.workbench_title_text_style()
-    assert "#4b5563" in theme.workbench_muted_text_style(dark=False)
+    # text_muted converged to the majority hex (#64748b light / #9aa4b2 dark) — design review P1.
+    assert "#64748b" in theme.workbench_muted_text_style(dark=False)
     assert "#9aa4b2" in theme.workbench_muted_text_style(dark=True)
     assert "#aa5500" in theme.workbench_warning_text_style(dark=False)
     assert "font-weight" in theme.workbench_formula_caption_style(dark=False)
-    assert "#4b5563" in theme.workbench_formula_caption_style(dark=False)
+    assert "#64748b" in theme.workbench_formula_caption_style(dark=False)
     assert "border-radius" in theme.workbench_message_surface_style(kind="description", dark=False)
     assert "border-radius" in theme.workbench_message_surface_style(kind="error", dark=True)
     assert "border-radius" in theme.round_icon_button_style()

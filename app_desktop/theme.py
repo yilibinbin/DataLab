@@ -49,6 +49,30 @@ def is_dark_theme() -> bool:
     return app.palette().window().color().lightness() < 128
 
 
+# --- Semantic color tokens (single source of truth per role) ---
+# Each role had 3–4 near-duplicate hexes scattered across the *_style functions (design review P1).
+# These collapse them to one value per (role, theme). Style functions resolve through _tok() so a
+# role's color is defined exactly once. Values chosen to match the previous dominant hex per role.
+_TOKENS: dict[str, tuple[str, str]] = {
+    # role: (light, dark)
+    "text_primary": ("#0f172a", "#e5e7eb"),   # titles + primary body (was #1f2328/#111827/#111111/#dfe1e5/#f8fafc)
+    "text_muted": ("#64748b", "#9aa4b2"),      # secondary/caption text (was #4b5563/#475569/#57606a/#a5b4c3/#bfc1c5)
+    "border": ("#d8dee8", "rgba(255, 255, 255, 0.10)"),  # card border (was #d0d7de/#cbd5e1/#e5e7eb/.14/.16)
+    "card_bg": ("#ffffff", "#20242b"),         # base card background
+    "card_bg_muted": ("#f8fafc", "#20242b"),   # inset/muted card background
+    "region_bg": ("#f3f5f7", "#181a1f"),       # app/region background
+    "surface_raised": ("#f8fafc", "#262b34"),  # buttons / tab base (was #303746/#2b313a/#2a313c/#222833 dark)
+    "surface_hover": ("#eef2f7", "#303746"),   # button/tab hover
+}
+
+
+def _tok(name: str, dark: bool | None = None) -> str:
+    """Resolve a semantic color token for the active (or forced) theme."""
+    dark = is_dark_theme() if dark is None else bool(dark)
+    light_value, dark_value = _TOKENS[name]
+    return dark_value if dark else light_value
+
+
 def scrollbar_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
     handle = "rgba(255, 255, 255, 0.12)" if dark else "rgba(0, 0, 0, 0.12)"
@@ -159,9 +183,7 @@ def workbench_title_text_style() -> str:
 
 
 def workbench_muted_text_style(*, dark: bool | None = None) -> str:
-    dark = is_dark_theme() if dark is None else bool(dark)
-    color = "#9aa4b2" if dark else "#4b5563"
-    return f"color: {color};"
+    return f"color: {_tok('text_muted', dark)};"
 
 
 def workbench_warning_text_style(*, dark: bool | None = None) -> str:
@@ -185,9 +207,9 @@ def workbench_message_surface_style(
         background = "#431407" if dark else "#fff7ed"
         border = "#9a3412" if dark else "#fed7aa"
     elif kind == "description":
-        color = "#9aa4b2" if dark else "#4b5563"
-        background = "#20242b" if dark else "#f9fafb"
-        border = "rgba(255, 255, 255, 0.10)" if dark else "#e5e7eb"
+        color = _tok("text_muted", dark)
+        background = _tok("card_bg", dark) if dark else "#f9fafb"
+        border = _tok("border", dark)
     else:
         raise ValueError(f"Unknown workbench message surface kind: {kind}")
     return f"color: {color}; background: {background}; border: 1px solid {border}; border-radius: 6px; padding: 6px;"
@@ -195,16 +217,10 @@ def workbench_message_surface_style(
 
 def workbench_section_card_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    if dark:
-        card_bg = "#20242b"
-        border = "rgba(255, 255, 255, 0.10)"
-        title_fg = "#e5e7eb"
-        muted_fg = "#a5b4c3"
-    else:
-        card_bg = "#ffffff"
-        border = "#d8dee8"
-        title_fg = "#0f172a"
-        muted_fg = "#64748b"
+    card_bg = _tok("card_bg", dark)
+    border = _tok("border", dark)
+    title_fg = _tok("text_primary", dark)
+    muted_fg = _tok("text_muted", dark)
     return f"""
 QGroupBox[datalab_workbench_section_host="true"] {{
     border: none;
@@ -228,9 +244,9 @@ QLabel[datalab_workbench_section_description="true"] {{
 
 def formula_preview_surface_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    background = "#1f2328" if dark else "#ffffff"
-    color = "#f8fafc" if dark else "#111111"
-    border = "rgba(255, 255, 255, 0.16)" if dark else "#d0d7de"
+    background = "#1f2328" if dark else _tok("card_bg", dark)
+    color = _tok("text_primary", dark)
+    border = _tok("border", dark)
     return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: 4px; padding: 12px;"
 
 
@@ -244,17 +260,17 @@ def formula_preview_error_surface_style(*, dark: bool | None = None) -> str:
 
 def formula_preview_source_edit_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    background = "#1f2328" if dark else "#ffffff"
-    color = "#f8fafc" if dark else "#111111"
-    border = "rgba(255, 255, 255, 0.16)" if dark else "#d0d7de"
+    background = "#1f2328" if dark else _tok("card_bg", dark)
+    color = _tok("text_primary", dark)
+    border = _tok("border", dark)
     return f"background: {background}; color: {color}; border: 1px solid {border};"
 
 
 def formula_inline_preview_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    background = "#20242b" if dark else "#f8fafc"
-    color = "#f8fafc" if dark else "#111827"
-    border = "rgba(255, 255, 255, 0.14)" if dark else "#cbd5e1"
+    background = _tok("card_bg_muted", dark)
+    color = _tok("text_primary", dark)
+    border = _tok("border", dark)
     return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: 6px; padding: 12px;"
 
 
@@ -284,7 +300,7 @@ def tutorial_overlay_title_style() -> str:
 
 
 def tutorial_overlay_body_style() -> str:
-    return "font-size: 11pt; color: #333;"
+    return f"font-size: 11pt; color: {_tok('text_primary', True)};"
 
 
 def result_tab_pane_style() -> str:
@@ -297,14 +313,9 @@ QTabWidget::pane {
 
 def config_card_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    if dark:
-        panel_bg = "#20242b"
-        border = "rgba(255, 255, 255, 0.10)"
-        title_fg = "#e5e7eb"
-    else:
-        panel_bg = "#ffffff"
-        border = "#d8dee8"
-        title_fg = "#1f2328"
+    panel_bg = _tok("card_bg", dark)
+    border = _tok("border", dark)
+    title_fg = _tok("text_primary", dark)
     return f"""
 QWidget[datalab_config_card="true"] {{
     background: {panel_bg};
@@ -331,24 +342,14 @@ QWidget[datalab_config_card="true"] QGroupBox::title {{
 
 def result_detail_card_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    if dark:
-        panel_bg = "#20242b"
-        tab_bg = "#262b34"
-        tab_hover = "#303746"
-        selected_bg = "#1f2937"
-        border = "rgba(255, 255, 255, 0.10)"
-        title_fg = "#e5e7eb"
-        muted_fg = "#a5b4c3"
-        selected_fg = "#f8fafc"
-    else:
-        panel_bg = "#ffffff"
-        tab_bg = "#f6f8fb"
-        tab_hover = "#eef2f7"
-        selected_bg = "#ffffff"
-        border = "#d8dee8"
-        title_fg = "#0f172a"
-        muted_fg = "#64748b"
-        selected_fg = "#0f172a"
+    panel_bg = _tok("card_bg", dark)
+    border = _tok("border", dark)
+    title_fg = _tok("text_primary", dark)
+    muted_fg = _tok("text_muted", dark)
+    selected_fg = _tok("text_primary", dark)
+    tab_bg = _tok("surface_raised", dark)
+    tab_hover = _tok("surface_hover", dark)
+    selected_bg = "#1f2937" if dark else "#ffffff"
     return f"""
 QWidget#workbench_result_details_panel {{
     background: {panel_bg};
@@ -399,22 +400,19 @@ def input_data_tabs_style(*, dark: bool | None = None) -> str:
     """Rounded, modern styling for the 输入数据 / 常数 sheet tabs (input_data_tabs). Mirrors the
     result-detail tab chrome so the input area matches the rest of the workbench."""
     dark = is_dark_theme() if dark is None else bool(dark)
+    border = _tok("border", dark)
+    selected_fg = _tok("text_primary", dark)
+    muted_fg = _tok("text_muted", dark)
     if dark:
-        border = "rgba(255, 255, 255, 0.14)"
         panel_bg = "#1c2129"
         tab_bg = "#161a21"
         tab_hover = "#222833"
         selected_bg = "#2a313c"
-        selected_fg = "#f8fafc"
-        muted_fg = "#9aa4b2"
     else:
-        border = "#cbd5e1"
         panel_bg = "#ffffff"
         tab_bg = "#f1f5f9"
         tab_hover = "#e2e8f0"
         selected_bg = "#ffffff"
-        selected_fg = "#111827"
-        muted_fg = "#475569"
     return f"""
 QTabWidget#input_data_tabs::pane {{
     border: 1px solid {border};
@@ -447,13 +445,13 @@ QTabWidget#input_data_tabs QTabBar::tab:hover {{
 
 def result_overview_card_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
+    panel_bg = _tok("card_bg", dark)
+    border = _tok("border", dark)
+    title_fg = _tok("text_primary", dark)
+    body_fg = _tok("text_primary", dark)
+    muted_fg = _tok("text_muted", dark)
+    summary_bg = _tok("surface_raised", dark)
     if dark:
-        panel_bg = "#20242b"
-        summary_bg = "#262b34"
-        border = "rgba(255, 255, 255, 0.10)"
-        title_fg = "#e5e7eb"
-        body_fg = "#f8fafc"
-        muted_fg = "#a5b4c3"
         waiting_bg = "#334155"
         waiting_fg = "#cbd5e1"
         running_bg = "#1e3a8a"
@@ -465,12 +463,6 @@ def result_overview_card_style(*, dark: bool | None = None) -> str:
         complete_bg = "#78350f"
         complete_fg = "#fde68a"
     else:
-        panel_bg = "#ffffff"
-        summary_bg = "#f8fafc"
-        border = "#d0d7de"
-        title_fg = "#0f172a"
-        body_fg = "#111827"
-        muted_fg = "#64748b"
         waiting_bg = "#f1f5f9"
         waiting_fg = "#475569"
         running_bg = "#dbeafe"
@@ -547,22 +539,13 @@ QLabel[datalab_result_summary_value="true"] {{
 
 def data_input_card_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    if dark:
-        panel_bg = "#20242b"
-        button_bg = "#262b34"
-        button_hover = "#303746"
-        border = "rgba(255, 255, 255, 0.10)"
-        title_fg = "#e5e7eb"
-        muted_fg = "#a5b4c3"
-        button_fg = "#e5e7eb"
-    else:
-        panel_bg = "#ffffff"
-        button_bg = "#f8fafc"
-        button_hover = "#eef2f7"
-        border = "#d8dee8"
-        title_fg = "#0f172a"
-        muted_fg = "#64748b"
-        button_fg = "#1f2328"
+    panel_bg = _tok("card_bg", dark)
+    border = _tok("border", dark)
+    title_fg = _tok("text_primary", dark)
+    muted_fg = _tok("text_muted", dark)
+    button_fg = _tok("text_primary", dark)
+    button_bg = _tok("surface_raised", dark)
+    button_hover = _tok("surface_hover", dark)
     return f"""
 QGroupBox#manual_box {{
     background: {panel_bg};
@@ -593,24 +576,14 @@ QPushButton[datalab_data_toolbar_button="true"]:hover {{
 
 def variable_panel_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    if dark:
-        panel_bg = "#20242b"
-        card_bg = "#20242b"
-        button_bg = "#262b34"
-        button_hover = "#303746"
-        border = "rgba(255, 255, 255, 0.10)"
-        title_fg = "#e5e7eb"
-        muted_fg = "#a5b4c3"
-        button_fg = "#e5e7eb"
-    else:
-        panel_bg = "#f3f5f7"
-        card_bg = "#ffffff"
-        button_bg = "#f8fafc"
-        button_hover = "#eef2f7"
-        border = "#d8dee8"
-        title_fg = "#0f172a"
-        muted_fg = "#64748b"
-        button_fg = "#1f2328"
+    card_bg = _tok("card_bg", dark)
+    border = _tok("border", dark)
+    title_fg = _tok("text_primary", dark)
+    muted_fg = _tok("text_muted", dark)
+    button_fg = _tok("text_primary", dark)
+    panel_bg = _tok("card_bg", dark) if dark else _tok("region_bg", dark)
+    button_bg = _tok("surface_raised", dark)
+    button_hover = _tok("surface_hover", dark)
     return f"""
 QWidget#workbench_variable_panel {{
     background: {panel_bg};
@@ -651,18 +624,11 @@ def constants_editor_style(
     dark: bool | None = None,
 ) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    if dark:
-        card_bg = "#20242b"
-        button_bg = "#262b34"
-        button_hover = "#303746"
-        border = "rgba(255, 255, 255, 0.10)"
-        button_fg = "#e5e7eb"
-    else:
-        card_bg = "#f8fafc"
-        button_bg = "#f8fafc"
-        button_hover = "#eef2f7"
-        border = "#d8dee8"
-        button_fg = "#1f2328"
+    card_bg = _tok("card_bg_muted", dark)
+    border = _tok("border", dark)
+    button_fg = _tok("text_primary", dark)
+    button_bg = _tok("surface_raised", dark)
+    button_hover = _tok("surface_hover", dark)
     if embedded:
         return f"""
 QWidget[datalab_constants_card="true"] {{
@@ -707,7 +673,7 @@ def workbench_toolbar_style(*, dark: bool | None = None) -> str:
     border = "rgba(255, 255, 255, 0.10)" if dark else "rgba(31, 35, 40, 0.12)"
     bg = "#20242b" if dark else "#f8fafc"
     fg = "#e5e7eb" if dark else "#1f2328"
-    hover = "#2b313a" if dark else "#eef2f7"
+    hover = _tok("surface_hover", dark)
     active = "#2563eb" if dark else "#2563eb"
     return f"""
 QFrame#workbench_toolbar {{
@@ -740,10 +706,10 @@ QFrame#workbench_toolbar QToolButton#workbench_run_button {{
 
 def workbench_region_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    app_bg = "#181a1f" if dark else "#f3f5f7"
-    panel_bg = "#20242b" if dark else "#ffffff"
-    border = "rgba(255, 255, 255, 0.10)" if dark else "#d8dee8"
-    fg = "#e5e7eb" if dark else "#1f2328"
+    app_bg = _tok("region_bg", dark)
+    panel_bg = _tok("card_bg", dark)
+    border = _tok("border", dark)
+    fg = _tok("text_primary", dark)
     return f"""
 QWidget#workbench_root {{
     background: {app_bg};
