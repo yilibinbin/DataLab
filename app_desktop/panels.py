@@ -862,14 +862,8 @@ def build_left_panel(self):
     browse_btn.clicked.connect(self.browse_data_file)
     self._register_text(browse_btn, "浏览…", "Browse…")
     file_layout.addWidget(browse_btn)
-    self.use_file_hint_btn = QPushButton("?")
-    self.use_file_hint_btn.setFlat(True)
-    self.use_file_hint_btn.setFixedWidth(22)
-    self.use_file_hint_btn.setFocusPolicy(Qt.NoFocus)
-    self.use_file_hint_btn.setToolTip("")
-    self.use_file_hint_btn.clicked.connect(self._show_data_file_hint)
-    self.use_file_hint_btn.hide()
-    file_layout.addWidget(self.use_file_hint_btn)
+    # (The data-file "?" help now lives on the data card's toolbar as manual_data_help_btn; the old
+    # permanently-hidden use_file_hint_btn was removed — /simplify.)
     # Compatibility shim: many callers read `use_file_checkbox.isChecked()` / _checked(...) to
     # decide file-vs-manual. With the checkbox gone, this shim reports checked==(a file path is
     # entered), so every existing caller gets file-precedence with no per-caller change.

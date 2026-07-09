@@ -41,13 +41,14 @@ CONFIG_RAIL_WIDTH = 320
 RESULT_RAIL_WIDTH = 380
 WORKSPACE_GUTTER = 12
 # --- Radius scale (design review R2) ---
-# Three tiers instead of the previous 3/4/5/6/8 drift. Cards/panes/tab-panes = CARD; buttons +
-# small controls + preview surfaces = CONTROL; status chips = PILL. (Scrollbar handle 3px and the
-# tutorial overlay 10px stay bespoke; embedded constants stays 0px on purpose.)
+# Two tiers instead of the previous 3/4/5/6/8 drift: cards/panes/tab-panes/status-chips = CARD (8),
+# buttons + small controls + preview surfaces = CONTROL (6). (Scrollbar handle 3px and the tutorial
+# overlay 10px stay bespoke; embedded constants stays 0px on purpose.)
+# REGION_RADIUS is the historical card-radius name still used across the codebase; RADIUS_CARD is
+# an alias for it (one value, two names) so the two never drift.
 REGION_RADIUS = 8
-RADIUS_CARD = 8
+RADIUS_CARD = REGION_RADIUS
 RADIUS_CONTROL = 6
-RADIUS_PILL = 100
 WORKBENCH_FORMULA_PANEL_SINGLE_MAX_HEIGHT = 268
 WORKBENCH_FORMULA_PANEL_MULTI_MAX_HEIGHT = 392
 WORKBENCH_FORMULA_TITLE_ROW_MAX_HEIGHT = 42
@@ -224,7 +225,7 @@ def workbench_message_surface_style(
         border = _tok("border", dark)
     else:
         raise ValueError(f"Unknown workbench message surface kind: {kind}")
-    return f"color: {color}; background: {background}; border: 1px solid {border}; border-radius: 6px; padding: 6px;"
+    return f"color: {color}; background: {background}; border: 1px solid {border}; border-radius: {RADIUS_CONTROL}px; padding: 6px;"
 
 
 def workbench_section_card_style(*, dark: bool | None = None) -> str:
@@ -283,7 +284,7 @@ def formula_inline_preview_style(*, dark: bool | None = None) -> str:
     background = _tok("card_bg_muted", dark)
     color = _tok("text_primary", dark)
     border = _tok("border", dark)
-    return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: 6px; padding: 12px;"
+    return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: {RADIUS_CONTROL}px; padding: 12px;"
 
 
 def pdf_preview_viewport_style(*, inverted: bool = False) -> str:
@@ -502,7 +503,7 @@ QLabel#workbench_result_overview_title {{
 }}
 QLabel#workbench_result_status_badge,
 QLabel#result_status_strip_status {{
-    border-radius: 8px;
+    border-radius: {RADIUS_CARD}px;
     font-size: 11px;
     font-weight: 600;
     padding: 2px 7px;
@@ -676,7 +677,7 @@ QWidget[datalab_constants_card="true"] QPushButton:hover {{
 QWidget[datalab_constants_card="true"] {{
     background: {card_bg};
     border: 1px solid {border};
-    border-radius: 6px;
+    border-radius: {RADIUS_CONTROL}px;
 }}
 QWidget[datalab_constants_card="true"] QCheckBox {{
     font-weight: 600;
@@ -709,7 +710,7 @@ QFrame#workbench_toolbar QPushButton {{
     min-height: 34px;
     padding: 4px 8px;
     border: 1px solid transparent;
-    border-radius: 6px;
+    border-radius: {RADIUS_CONTROL}px;
     color: {fg};
 }}
 QFrame#workbench_toolbar QToolButton:hover,
@@ -785,6 +786,8 @@ QPushButton {
 
 
 def round_icon_button_style() -> str:
+    # Plain (non-f) QSS string with literal braces elsewhere — keep the radius literal (6 = CONTROL)
+    # rather than convert the whole block to an f-string just for one value.
     return """
 QPushButton {
     border-radius: 6px;

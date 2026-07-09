@@ -630,7 +630,11 @@ class ExtrapolationWindow(
             # Expand to ~72% of the width (leave the result pane usable), never below the min.
             target_left = max(left_min, int(total * 0.72))
         else:
-            target_left = getattr(self, "_input_collapsed_left", max(splitter.widget(0).minimumWidth(), total // 4))
+            # Collapse only ever runs after an expand recorded the pre-expand width; if it somehow
+            # runs first, fall back to the current width (a no-op) rather than re-deriving a ratio.
+            target_left = getattr(self, "_input_collapsed_left", None)
+            if target_left is None:
+                target_left = splitter.sizes()[0]
         target_left = min(target_left, total - splitter.widget(1).minimumWidth())
         if button is not None:
             button.setText("⤡" if expanding else "⤢")
@@ -932,7 +936,22 @@ class ExtrapolationWindow(
             self._update_data_source_visibility()
         constants_file_edit = getattr(self, "constants_file_edit", None)
         if constants_file_edit is not None and hasattr(self, "_update_constants_visibility"):
-            constants_file_edit.textChanged.connect(lambda *_a: self._update_constants_visibility())
+            self._constants_file_was_empty = not constants_file_edit.text().strip()
+            constants_file_edit.textChanged.connect(self._on_constants_file_path_changed)
+
+    def _on_constants_file_path_changed(self, *_args) -> None:
+        # _update_constants_visibility is a full-panel refresh (QSS reparse, column re-stretch, i18n
+        # labels) — only the manual-inputs enabled state depends on the path here, and that only
+        # changes when the path flips between empty and non-empty. Gate to that transition so typing
+        # a path doesn't re-run the whole refresh per keystroke (efficiency review).
+        edit = getattr(self, "constants_file_edit", None)
+        if edit is None:
+            return
+        is_empty = not edit.text().strip()
+        if is_empty == getattr(self, "_constants_file_was_empty", True):
+            return
+        self._constants_file_was_empty = is_empty
+        self._update_constants_visibility()
 
     def _workspace_guard_running(self) -> bool:
         if self._has_running_worker():
@@ -2520,8 +2539,6 @@ class ExtrapolationWindow(
         self._current_data_help_text = base.strip()
         placeholder = base + example
         self.manual_data_edit.setPlaceholderText(placeholder)
-        if hasattr(self, "use_file_hint_btn"):
-            self.use_file_hint_btn.setToolTip(base + example)
         # 根据行数动态调整高度，保证示例完整可见
         line_count = placeholder.count("\n") + 1
         target_height = max(120, int(line_count * 18 + 40))
