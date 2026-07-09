@@ -854,8 +854,17 @@ def build_left_panel(self):
     self._register_text(self._data_file_label, "数据文件：", "Data file:")
     file_layout.addWidget(self._data_file_label)
     self.data_file_edit = QLineEdit()
-    self.data_file_edit.setPlaceholderText(
-        self._tr("数据文件路径（可选，填写后忽略下方手动输入）", "Data file path (optional; overrides manual input below)")
+    self._register_text(
+        self.data_file_edit,
+        "数据文件路径（可选，填写后忽略下方手动输入）",
+        "Data file path (optional; overrides manual input below)",
+        "setPlaceholderText",
+    )
+    self._register_text(
+        self.data_file_edit,
+        "数据文件路径（可选）。填写后从该文件读取数据，忽略下方手动输入；留空则使用手动输入。",
+        "Data file path (optional). When set, data is read from this file and the manual input below is ignored; leave blank to use manual input.",
+        "setToolTip",
     )
     file_layout.addWidget(self.data_file_edit)
     browse_btn = QPushButton("浏览…")
@@ -1031,8 +1040,17 @@ def build_left_panel(self):
     self._register_text(_const_file_label, "常数文件：", "Constants file:")
     _const_file_layout.addWidget(_const_file_label)
     self.constants_file_edit = QLineEdit()
-    self.constants_file_edit.setPlaceholderText(
-        self._tr("常数文件路径（可选，填写后忽略下方手动输入）", "Constants file path (optional; overrides manual input below)")
+    self._register_text(
+        self.constants_file_edit,
+        "常数文件路径（可选，填写后忽略下方手动输入）",
+        "Constants file path (optional; overrides manual input below)",
+        "setPlaceholderText",
+    )
+    self._register_text(
+        self.constants_file_edit,
+        "常数文件路径（可选）。填写后从该文件读取常数，忽略下方手动输入；留空则使用手动输入。",
+        "Constants file path (optional). When set, constants are read from this file and the manual input below is ignored; leave blank to use manual input.",
+        "setToolTip",
     )
     _const_file_layout.addWidget(self.constants_file_edit)
     _const_browse = QPushButton("浏览…")
