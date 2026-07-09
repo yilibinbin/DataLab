@@ -836,8 +836,11 @@ def build_left_panel(self):
     # Data file — label + path edit + Browse all on ONE row. No 使用数据文件 checkbox: the file
     # picker sits directly with the data, and a non-empty path takes PRECEDENCE over the manual
     # input below (see _active_input_bundle).
-    self.file_box = QGroupBox("")
+    # Plain margin-less container (matches the 常数 tab's constants_file_row exactly, so the two
+    # tabs share identical file-row insets — not a bordered QGroupBox with 9px padding).
+    self.file_box = QWidget()
     file_layout = QHBoxLayout(self.file_box)
+    file_layout.setContentsMargins(0, 0, 0, 0)
     file_layout.setSpacing(6)
     self._data_file_label = QLabel(self._tr("数据文件：", "Data file:"))
     self._register_text(self._data_file_label, "数据文件：", "Data file:")
