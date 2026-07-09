@@ -308,7 +308,9 @@ QWidget#card {
 
 
 def tutorial_overlay_title_style() -> str:
-    return "font-size: 16pt; font-weight: 600;"
+    # The tutorial card is always white — pin the title to dark text (like the body) so it stays
+    # readable when the OS is in dark mode (otherwise it inherits the near-white default). (G-1.)
+    return f"font-size: 16pt; font-weight: 600; color: {_tok('text_primary', False)};"
 
 
 def tutorial_overlay_body_style() -> str:
