@@ -635,6 +635,11 @@ class ExtrapolationWindow(
         if button is not None:
             button.setText("⤡" if expanding else "⤢")
 
+        # Stop any in-flight animation first — otherwise a rapid re-click leaves the previous
+        # animation running and BOTH drive the splitter, so they fight (visible stutter).
+        previous = getattr(self, "_input_expand_anim", None)
+        if previous is not None:
+            previous.stop()
         start_left = splitter.sizes()[0]
         anim = QVariantAnimation(self)
         anim.setDuration(220)
