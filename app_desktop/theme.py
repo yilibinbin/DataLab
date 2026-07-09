@@ -312,7 +312,10 @@ def tutorial_overlay_title_style() -> str:
 
 
 def tutorial_overlay_body_style() -> str:
-    return f"font-size: 11pt; color: {_tok('text_primary', True)};"
+    # The tutorial card is ALWAYS white (single-theme by design), so body text must be DARK in both
+    # themes — use the light-theme primary text, not the theme-following token (which would be the
+    # near-white dark-theme value on a white card → unreadable). (Codex review R-2.)
+    return f"font-size: 11pt; color: {_tok('text_primary', False)};"
 
 
 def result_tab_pane_style() -> str:

@@ -32,6 +32,36 @@ def _tab_titles(window: ExtrapolationWindow) -> list[str]:
     return [tabs.tabText(i) for i in range(tabs.count())]
 
 
+def test_data_file_path_disables_manual_editor(qtbot: Any) -> None:
+    """File-precedence feedback (Codex/Claude review): entering a data-file path greys the manual
+    data card (it's ignored at run time); clearing the path re-enables it."""
+    window = _window(qtbot)
+    window.show()
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("error"))
+    QApplication.processEvents()
+
+    assert window.manual_box.isEnabled() is True
+    window.data_file_edit.setText("/tmp/data.csv")
+    QApplication.processEvents()
+    assert window.manual_box.isEnabled() is False
+    window.data_file_edit.clear()
+    QApplication.processEvents()
+    assert window.manual_box.isEnabled() is True
+
+
+def test_constants_file_path_hides_manual_constants_inputs(qtbot: Any) -> None:
+    """Entering a constants-file path hides the manual constants inputs (ignored at run time)."""
+    window = _window(qtbot)
+    window.show()
+    window.mode_combo.setCurrentIndex(window.mode_combo.findData("error"))
+    QApplication.processEvents()
+
+    assert window.input_constants_editor.inputs_visible() is True
+    window.constants_file_edit.setText("/tmp/consts.csv")
+    QApplication.processEvents()
+    assert window.input_constants_editor.inputs_visible() is False
+
+
 def test_input_and_constants_are_sheet_tabs(qtbot: Any) -> None:
     window = _window(qtbot)
     tabs = window.input_data_tabs

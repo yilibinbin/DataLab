@@ -923,6 +923,17 @@ class ExtrapolationWindow(
             if spin is not None:
                 spin.valueChanged.connect(self._mark_workspace_dirty)
 
+        # File-precedence feedback (Codex/Claude review): entering a data/constants file path makes
+        # the manual editor below inactive at run time, so reflect that live — grey the data card and
+        # refresh constants visibility whenever the file path changes.
+        data_file_edit = getattr(self, "data_file_edit", None)
+        if data_file_edit is not None:
+            data_file_edit.textChanged.connect(lambda *_a: self._update_data_source_visibility())
+            self._update_data_source_visibility()
+        constants_file_edit = getattr(self, "constants_file_edit", None)
+        if constants_file_edit is not None and hasattr(self, "_update_constants_visibility"):
+            constants_file_edit.textChanged.connect(lambda *_a: self._update_constants_visibility())
+
     def _workspace_guard_running(self) -> bool:
         if self._has_running_worker():
             QMessageBox.information(
@@ -1367,15 +1378,15 @@ class ExtrapolationWindow(
         if hasattr(self, "error_mc_seed_edit"):
             self.error_mc_seed_edit.setEnabled(is_mc)
 
-    def _on_data_source_toggle(self, checked: bool):
-        if hasattr(self, "file_box"):
-            self.file_box.setVisible(checked)
-        if hasattr(self, "manual_box"):
-            self.manual_box.setVisible(not checked)
-        if hasattr(self, "use_file_hint_btn"):
-            hint_text = getattr(self, "_current_example_text", "") or self.manual_data_edit.placeholderText()
-            self.use_file_hint_btn.setToolTip(hint_text)
-            self.use_file_hint_btn.setVisible(checked)
+    def _update_data_source_visibility(self):
+        """File-precedence feedback (Codex/Claude review): when a data-file path is entered the
+        manual table below is ignored at run time, so DISABLE it (grey, non-editable) rather than
+        leave it looking active. Disabling — not hiding — avoids a layout jump while typing."""
+        manual_box = getattr(self, "manual_box", None)
+        file_edit = getattr(self, "data_file_edit", None)
+        if manual_box is None or file_edit is None:
+            return
+        manual_box.setEnabled(not bool(file_edit.text().strip()))
 
     def _on_stats_mode_change(self):
         workflow = (
