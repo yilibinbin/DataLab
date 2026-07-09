@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTabWidget,
     QTextBrowser,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -1030,6 +1031,27 @@ def build_left_panel(self):
     self.input_data_tabs.setStyleSheet(input_data_tabs_style(dark=is_dark_theme()))
     self.input_data_tabs.addTab(self._data_tab, self._tr("输入数据", "Data input"))
     self.input_data_tabs.addTab(self._constants_tab, self._tr("常数", "Constants"))
+
+    # Expand/collapse toggle in the tab bar's top-right corner: expands the input area rightward
+    # (widening the left pane) to show many data columns, then collapses back to the default width.
+    # Smooth width animation lives on the window (_toggle_input_area_expanded).
+    self.input_expand_button = QToolButton()
+    self.input_expand_button.setObjectName("input_expand_button")
+    self.input_expand_button.setText("⤢")
+    self.input_expand_button.setCheckable(True)
+    self.input_expand_button.setCursor(Qt.PointingHandCursor)
+    self.input_expand_button.setFocusPolicy(Qt.NoFocus)
+    self.input_expand_button.setAutoRaise(True)
+    self.input_expand_button.setToolTip(self._tr("展开输入区（显示更多数据列）", "Expand the input area (show more data columns)"))
+    self._register_text(
+        self.input_expand_button,
+        "展开输入区（显示更多数据列）",
+        "Expand the input area (show more data columns)",
+        "setToolTip",
+    )
+    self.input_expand_button.clicked.connect(self._toggle_input_area_expanded)
+    self.input_data_tabs.setCornerWidget(self.input_expand_button, Qt.TopRightCorner)
+
     self.input_section_layout.addWidget(self.input_data_tabs)
 
     self.error_constants_editor = self.input_constants_editor

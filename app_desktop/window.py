@@ -611,6 +611,41 @@ class ExtrapolationWindow(
         left = max(left_min, total // 4)
         splitter.setSizes([left, total - left])
 
+    def _toggle_input_area_expanded(self) -> None:
+        """Expand the input area rightward to show many data columns, or collapse it back — with a
+        smooth width animation on the main splitter. Toggling always returns to the previous
+        (collapsed) width, so it never "expands and stays expanded"."""
+        from PySide6.QtCore import QEasingCurve, QVariantAnimation
+
+        splitter = getattr(self, "_main_splitter", None)
+        button = getattr(self, "input_expand_button", None)
+        if splitter is None or splitter.count() < 2:
+            return
+        total = max(1, sum(splitter.sizes()[:2]))
+        expanding = button.isChecked() if button is not None else True
+        if expanding:
+            # Remember the current (collapsed) left width to restore on collapse.
+            self._input_collapsed_left = splitter.sizes()[0]
+            left_min = splitter.widget(0).minimumWidth()
+            # Expand to ~72% of the width (leave the result pane usable), never below the min.
+            target_left = max(left_min, int(total * 0.72))
+        else:
+            target_left = getattr(self, "_input_collapsed_left", max(splitter.widget(0).minimumWidth(), total // 4))
+        target_left = min(target_left, total - splitter.widget(1).minimumWidth())
+        if button is not None:
+            button.setText("⤡" if expanding else "⤢")
+
+        start_left = splitter.sizes()[0]
+        anim = QVariantAnimation(self)
+        anim.setDuration(220)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        anim.setStartValue(int(start_left))
+        anim.setEndValue(int(target_left))
+        anim.valueChanged.connect(lambda v: splitter.setSizes([int(v), total - int(v)]))
+        # Keep a reference so the animation isn't garbage-collected mid-flight.
+        self._input_expand_anim = anim
+        anim.start()
+
     def _bind_workbench_spec_schema_keys(self) -> None:
         from . import panels as _panels
         _panels._bind_workbench_spec_schema_keys(self)

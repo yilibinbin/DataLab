@@ -1925,11 +1925,12 @@ def _restore_data_section(window: Any, section: dict[str, Any], *, constants: bo
         # not a checkbox. Kept for older callers/tests that still poke it.
         use_file_checkbox.setChecked(False)
     if file_edit is not None:
-        # CLEAR the file path on restore: the file's CONTENTS were captured as an attachment on save
-        # and are inlined into the manual editor here, so the workspace is self-contained and must NOT
-        # depend on the external file (it may be gone). With file-precedence, leaving the path set
-        # would make the run try the (possibly missing) file instead of the inlined data.
-        file_edit.clear()
+        # File-precedence: keep the file path only if the file STILL EXISTS (then the run reads the
+        # live file). If it is gone, clear the path so the run falls back to the inlined data (its
+        # CONTENTS were captured as an attachment on save → the workspace stays self-contained).
+        source_path_label = str(section.get("source_path_label") or "")
+        keep_path = bool(source_path_label) and Path(source_path_label).exists()
+        file_edit.setText(source_path_label if keep_path else "")
     if stack is not None:
         stack.setCurrentIndex(1 if source_kind in {"manual_text", "file"} else 0)
     canonical = section.get("canonical_table") or {}

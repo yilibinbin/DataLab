@@ -89,8 +89,9 @@ def test_each_tab_has_independent_file_input_with_precedence(qtbot: Any) -> None
 
 def test_constants_file_content_is_preserved_across_workspace_roundtrip(qtbot: Any, tmp_path: Any) -> None:
     """A file-backed constants workspace inlines the file CONTENTS on save (self-contained), so on
-    reopen the constants data survives even if the original file is gone. By design the file-source
-    flag is cleared on restore (data lives in the editor now) — this asserts no DATA is lost."""
+    reopen the constants data survives even if the original file is gone. Under file-precedence, if
+    the file is GONE the path is cleared on restore so the run falls back to the inlined data (a
+    remembered-but-missing path would otherwise make the run try to read the missing file)."""
     from app_desktop import workspace_controller as wc
 
     consts = tmp_path / "consts.txt"
@@ -99,7 +100,6 @@ def test_constants_file_content_is_preserved_across_workspace_roundtrip(qtbot: A
     src = _window(qtbot)
     src.mode_combo.setCurrentIndex(src.mode_combo.findData("error"))
     QApplication.processEvents()
-    src.use_constants_file_checkbox.setChecked(True)
     src.constants_file_edit.setText(str(consts))
     QApplication.processEvents()
     bundle = wc.capture_workspace(src, title="t")
@@ -110,9 +110,10 @@ def test_constants_file_content_is_preserved_across_workspace_roundtrip(qtbot: A
     QApplication.processEvents()
     wc.restore_workspace(dst, bundle.manifest, bundle.attachments)
     QApplication.processEvents()
-    # Data preserved (inlined into the constants editor); file path remembered for reference.
+    # Data preserved (inlined into the constants editor); missing file path cleared so the run uses
+    # the inlined data rather than trying to read the deleted file.
     assert "ALPHA" in dst.input_constants_editor.raw_text()
-    assert dst.constants_file_edit.text() == str(consts)
+    assert dst.constants_file_edit.text() == ""
 
 
 def test_workspace_save_survives_missing_source_file(qtbot: Any) -> None:

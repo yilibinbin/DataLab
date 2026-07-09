@@ -37,6 +37,34 @@ def window(qtbot: Any) -> Any:
     return win
 
 
+def test_input_area_expand_toggle_animates_and_restores(window: Any) -> None:
+    """The 输入数据 tabs have a corner expand/collapse toggle that widens the left pane (for many
+    data columns) and collapses back to the previous width — it must never expand-and-stay."""
+    from PySide6.QtWidgets import QSplitter
+
+    splitter = window.findChild(QSplitter, "workbench_main_splitter")
+    assert window.input_data_tabs.cornerWidget() is window.input_expand_button
+
+    initial_left = splitter.sizes()[0]
+    total = sum(splitter.sizes()[:2])
+
+    # Expand: drive the animation to completion; the left pane grows well past its start.
+    window.input_expand_button.setChecked(True)
+    window._toggle_input_area_expanded()
+    window._input_expand_anim.setCurrentTime(window._input_expand_anim.duration())
+    QApplication.processEvents()
+    expanded_left = splitter.sizes()[0]
+    assert expanded_left > initial_left
+    assert expanded_left >= int(total * 0.6)
+
+    # Collapse: returns to the remembered (initial) width, not stuck expanded.
+    window.input_expand_button.setChecked(False)
+    window._toggle_input_area_expanded()
+    window._input_expand_anim.setCurrentTime(window._input_expand_anim.duration())
+    QApplication.processEvents()
+    assert abs(splitter.sizes()[0] - initial_left) <= 2
+
+
 def test_splitter_has_exactly_two_panes(window: Any) -> None:
     """The main splitter drops from 3 panes to 2: merged-left | result."""
     splitter = window._main_splitter
