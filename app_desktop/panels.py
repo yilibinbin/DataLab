@@ -833,11 +833,19 @@ def build_left_panel(self):
     else:  # pragma: no cover - toolbar always builds first in build_ui
         mode_layout.addWidget(self.mode_combo)
 
-    # Data file
+    # Data file — label + path edit + Browse all on ONE row. No 使用数据文件 checkbox: the file
+    # picker sits directly with the data, and a non-empty path takes PRECEDENCE over the manual
+    # input below (see _active_input_bundle).
     self.file_box = QGroupBox("")
     file_layout = QHBoxLayout(self.file_box)
     file_layout.setSpacing(6)
+    self._data_file_label = QLabel(self._tr("数据文件：", "Data file:"))
+    self._register_text(self._data_file_label, "数据文件：", "Data file:")
+    file_layout.addWidget(self._data_file_label)
     self.data_file_edit = QLineEdit()
+    self.data_file_edit.setPlaceholderText(
+        self._tr("数据文件路径（可选，填写后忽略下方手动输入）", "Data file path (optional; overrides manual input below)")
+    )
     file_layout.addWidget(self.data_file_edit)
     browse_btn = QPushButton("浏览…")
     browse_btn.clicked.connect(self.browse_data_file)
@@ -851,21 +859,10 @@ def build_left_panel(self):
     self.use_file_hint_btn.clicked.connect(self._show_data_file_hint)
     self.use_file_hint_btn.hide()
     file_layout.addWidget(self.use_file_hint_btn)
-    # No 使用数据文件 checkbox: the file picker sits directly with the data. A non-empty file path
-    # takes PRECEDENCE over the manual input below (see _resolve_active_input_bundle). The
-    # data_file_edit prompts that it is optional.
-    self.data_file_edit.setPlaceholderText(
-        self._tr("数据文件路径（可选，填写后忽略下方手动输入）", "Data file path (optional; overrides manual input below)")
-    )
     # Compatibility shim: many callers read `use_file_checkbox.isChecked()` / _checked(...) to
     # decide file-vs-manual. With the checkbox gone, this shim reports checked==(a file path is
     # entered), so every existing caller gets file-precedence with no per-caller change.
     self.use_file_checkbox = _FilePathChecked(self.data_file_edit)
-    self._data_file_label = QLabel(self._tr("数据文件：", "Data file:"))
-    self._register_text(self._data_file_label, "数据文件：", "Data file:")
-    self._data_source_row = QHBoxLayout()
-    self._data_source_row.setSpacing(6)
-    self._data_source_row.addWidget(self._data_file_label)
     self.file_box.show()
 
     # Manual data — table editor + text fallback
@@ -989,7 +986,6 @@ def build_left_panel(self):
     _data_tab_layout = QVBoxLayout(self._data_tab)
     _data_tab_layout.setContentsMargins(0, 6, 0, 0)
     _data_tab_layout.setSpacing(6)
-    _data_tab_layout.addLayout(self._data_source_row)
     _data_tab_layout.addWidget(self.file_box)
     _data_tab_layout.addWidget(self.manual_box)
 
