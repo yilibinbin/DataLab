@@ -2272,7 +2272,19 @@ class ExtrapolationWindow(
             self._refresh_main_splitter_left_min_width()
 
     def _update_theme_from_palette(self, *args):
-        self._apply_desktop_theme()
+        # This is a Qt slot wired to the app-global ``paletteChanged`` signal, so it must never let
+        # an exception escape into the event loop. A palette change is purely cosmetic; a stale
+        # formula-population failure cached from an earlier (unrelated) population attempt must not
+        # crash a theme restyle. Log and move on — the real population error is surfaced at its own
+        # call site, not here.
+        try:
+            self._apply_desktop_theme()
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "Theme restyle from palette change skipped after an error", exc_info=True
+            )
 
     def _on_mode_change(self):
         mode = self.mode_combo.currentData()
