@@ -94,6 +94,10 @@ class ConstantsEditor(QWidget):
         self.remove_button.clicked.connect(self._remove_row)
         self.clear_button.clicked.connect(self.clear)
         self.view_toggle_button.clicked.connect(self._toggle_view)
+        # Card title on the LEFT of the controls row (mirrors the data card's "输入数据" title).
+        self.title_label = QLabel("输入常数")
+        self.title_label.setObjectName("constants_title")
+        controls_layout.addWidget(self.title_label)
         controls_layout.addWidget(self.add_button)
         controls_layout.addWidget(self.remove_button)
         controls_layout.addWidget(self.clear_button)

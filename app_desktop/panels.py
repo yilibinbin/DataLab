@@ -515,6 +515,12 @@ def _bind_workbench_state_roles(self) -> None:
     self.implicit_params_table.setObjectName("implicit_params_table")
     self.root_unknowns_table.setObjectName("root_unknowns_table")
     self.input_constants_editor.setObjectName("input_constants_editor")
+    # Register the constants card title for bilingual switching + give it the same weight as the
+    # data card's "输入数据" title.
+    _constants_title = getattr(self.input_constants_editor, "title_label", None)
+    if _constants_title is not None:
+        self._register_text(_constants_title, "输入常数", "Constants")
+        _constants_title.setStyleSheet("font-weight: 600;")
     shared_constants_editor = self.input_constants_editor
     for editor_name in (
         "error_constants_editor",
