@@ -600,8 +600,10 @@ def variable_panel_style(*, dark: bool | None = None) -> str:
     panel_bg = _tok("card_bg", dark) if dark else _tok("region_bg", dark)
     button_bg = _tok("surface_raised", dark)
     button_hover = _tok("surface_hover", dark)
-    # Borderless inset for section cards: a hair raised (dark) / recessed (light) vs the config card
-    # they sit inside, so they read as grouped sub-sections without a competing 1px border.
+    # Section cards get a complete border like the data/constants cards (a subtle inset bg keeps
+    # them distinct from the config card they sit in). A full 1px border reads as a clean, complete
+    # card — preferred over the borderless-inset variant which left the inner table's native frame
+    # edge exposed (incomplete-looking top border).
     section_bg = _tok("surface_raised", dark) if dark else _tok("card_bg_muted", dark)
     return f"""
 QWidget#workbench_variable_panel {{
@@ -611,14 +613,10 @@ QLabel#workbench_variable_title {{
     color: {title_fg};
     font-weight: 600;
 }}
-/* The variable panel lives INSIDE the config card (itself bordered). A bordered section card here
-   would stack a second 1px border ~10px in (design review R3 double-border). Instead distinguish the
-   section by a subtle inset background + radius and NO border — the surrounding gap does the
-   separating. */
 QFrame[datalab_variable_section_card="true"] {{
     background: {section_bg};
-    border: none;
-    border-radius: {RADIUS_CONTROL}px;
+    border: 1px solid {border};
+    border-radius: {RADIUS_CARD}px;
 }}
 QFrame[datalab_variable_section_card="true"] QLabel {{
     color: {title_fg};

@@ -87,8 +87,12 @@ def test_shared_constants_editor_is_input_card_not_variable_panel_card(qtbot: An
     assert editor not in panel.findChildren(type(editor))
     assert editor.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
     assert editor.minimumHeight() >= 52
-    assert editor.layout().contentsMargins().left() == 0
-    assert "border: none" in editor.styleSheet()
+    # The embedded constants card now has its own border + CARD_PADDING inset (like the data card),
+    # per user request — it is no longer transparent/borderless.
+    from app_desktop.theme import CARD_PADDING
+
+    assert editor.layout().contentsMargins().left() == CARD_PADDING[0]
+    assert "border: 1px solid" in editor.styleSheet()
     assert "QPushButton" in editor.styleSheet()
 
 
