@@ -122,6 +122,12 @@ def test_workspace_roundtrip_lets_generate_tex_work_after_reopen(qtbot) -> None:
     recompute because the tex-rebuild stash is persisted in the manifest and rehydrated."""
     import os
 
+    import pytest
+
+    # This is the only Qt-dependent test in the file — skip cleanly (not fixture-not-found) when
+    # pytest-qt / PySide6 are absent, rather than gating the whole (non-Qt) module.
+    pytest.importorskip("pytestqt")
+    pytest.importorskip("PySide6")
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from shared.uncertainty import parse_uncertainty_format
 

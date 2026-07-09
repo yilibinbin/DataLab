@@ -543,7 +543,7 @@ class WindowFittingResidualsMixin:
         )
         _gs = latex_inputs.get("latex_group_size")
         group_size = int(_gs) if _gs is not None else 3  # 0 = 不分组 must survive (not `or 3`)
-        output_path = self.latex_output_path_for_run(True)
+        output_path = self.latex_output_path_for_run(True, reuse=True)
         lines = self._fit_latex_preamble(use_dcolumn, digits, group_size)
         lines.extend(
             self._fit_latex_block(
@@ -615,7 +615,7 @@ class WindowFittingResidualsMixin:
             )
         )
         lines.append("\\end{document}")
-        output_path = self.latex_output_path_for_run(True)
+        output_path = self.latex_output_path_for_run(True, reuse=True)
         from pathlib import Path
 
         tex_path = Path(output_path).expanduser()
@@ -645,7 +645,7 @@ class WindowFittingResidualsMixin:
         )
         _gs = latex_inputs.get("latex_group_size")
         group_size = int(_gs) if _gs is not None else 3  # 0 = 不分组 must survive (not `or 3`)
-        output_path = self.latex_output_path_for_run(True)
+        output_path = self.latex_output_path_for_run(True, reuse=True)
         tex_path = self._write_fitting_latex_batches(
             batches, output_path, use_dcolumn, latex_group_size=group_size
         )

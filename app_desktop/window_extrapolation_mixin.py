@@ -743,7 +743,7 @@ class WindowExtrapolationMixin:
             return None
         from .root_latex_writer import write_root_latex
 
-        output_path = self.latex_output_path_for_run(True)
+        output_path = self.latex_output_path_for_run(True, reuse=True)
         caption = self._caption_value() if hasattr(self, "_caption_value") else ""
         tex_path = write_root_latex(
             output_path=output_path,
@@ -782,7 +782,7 @@ class WindowExtrapolationMixin:
             return None
         from datalab_latex.latex_tables_extrapolation import generate_latex_table
 
-        output_path = self.latex_output_path_for_run(True)
+        output_path = self.latex_output_path_for_run(True, reuse=True)
         caption = self._caption_value() if hasattr(self, "_caption_value") else None
         generate_latex_table(
             headers,
@@ -831,7 +831,7 @@ class WindowExtrapolationMixin:
         from .workers_core import _input_units_for_headers, _result_unit_from_units
 
         units_payload = latex_inputs.get("units")
-        output_path = self.latex_output_path_for_run(True)
+        output_path = self.latex_output_path_for_run(True, reuse=True)
         caption = self._caption_value() if hasattr(self, "_caption_value") else None
         generate_error_propagation_table(
             headers,

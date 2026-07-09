@@ -3108,9 +3108,12 @@ class ExtrapolationWindow(
             "fitting_comparison": "generate_fitting_comparison_latex_on_demand",
         }
         store = getattr(self, "_last_latex_inputs", {}) or {}
-        # Map the current result kind to its stash key (result kinds and stash keys match now
-        # that fit_batches has its own builder + stash).
+        # Map the current result kind to its stash/builder key. Statistics result kinds are
+        # granular (statistics_single/_batches/_grouped/…) but share the single "statistics"
+        # builder + stash, so collapse them; other kinds already equal their builder key.
         current = getattr(self, "_last_result_kind", None)
+        if isinstance(current, str) and current.startswith("statistics"):
+            current = "statistics"
         order = []
         if current in builders:
             order.append(current)
@@ -3128,7 +3131,17 @@ class ExtrapolationWindow(
         """Rebuild the current result's LaTeX tex on demand, then open the preview window on
         the requested tab. If there is no rebuildable result, inform the user instead of
         opening an empty window."""
-        tex_path = self.generate_latex_for_current_result()
+        try:
+            tex_path = self.generate_latex_for_current_result()
+        except (ValueError, OSError, RuntimeError) as exc:
+            # A builder can fail on a bad live format value or a temp-file write error — surface it
+            # as a dialog rather than letting the exception escape the button slot (CodeRabbit).
+            QMessageBox.warning(
+                self,
+                self._tr("生成 LaTeX 失败", "LaTeX generation failed"),
+                self._localize_text(str(exc)),
+            )
+            return
         if tex_path is None:
             QMessageBox.information(
                 self,

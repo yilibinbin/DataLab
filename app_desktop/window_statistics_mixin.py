@@ -298,7 +298,7 @@ class WindowStatisticsMixin:
         sigma_rows = latex_inputs.get("sigma_rows")
         if not isinstance(display_batches, list) or not display_batches:
             return None
-        output_path = self.latex_output_path_for_run(True)
+        output_path = self.latex_output_path_for_run(True, reuse=True)
         digits = (
             self.latex_input_precision_spin.value()
             if hasattr(self, "latex_input_precision_spin")

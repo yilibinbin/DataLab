@@ -64,7 +64,7 @@ from .workers_qt import (
 
 class WindowLatexCompileMixin:
     # ----------------------------------------------------------- LaTeX ops --
-    def latex_output_path_for_run(self, generate_latex: bool) -> str:
+    def latex_output_path_for_run(self, generate_latex: bool, *, reuse: bool = False) -> str:
         """Return the path the run should write the generated tex to.
 
         The LaTeX output PATH is no longer a user-facing option — the user chooses a save
@@ -72,9 +72,17 @@ class WindowLatexCompileMixin:
         we materialize the tex into a per-run TEMP ``.tex`` file (retained so the editor /
         PDF preview can read it back); when off, no tex is written (empty path). This
         decouples "generate + preview" from "save to a user path".
+
+        ``reuse=True`` (on-demand regeneration) returns ONE stable temp path per session and
+        overwrites it, so repeatedly toggling options + regenerating doesn't leak a new temp
+        file each time (CodeRabbit). ``reuse=False`` (a real run) allocates a fresh path.
         """
         if not generate_latex:
             return ""
+        if reuse:
+            path = getattr(self, "_on_demand_latex_temp_path", None)
+            if path:
+                return path
         tmp = tempfile.NamedTemporaryFile(
             prefix="datalab_", suffix=".tex", delete=False
         )
@@ -86,6 +94,8 @@ class WindowLatexCompileMixin:
             paths = []
             self._run_latex_temp_paths = paths
         paths.append(path)
+        if reuse:
+            self._on_demand_latex_temp_path = path
         return path
 
     def open_latex_file(self):

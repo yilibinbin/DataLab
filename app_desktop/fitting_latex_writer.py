@@ -127,7 +127,9 @@ def build_fit_latex_block(
 
     def _maybe_group(cell: str) -> str:
         if app_group and "\\multicolumn" not in cell and "\\text" not in cell:
-            return "\\text{" + group_digits_both_sides(cell, _group) + "}"
+            # The grouped value goes into a plain r column, so return the grouped string directly —
+            # wrapping it in \text{...} (with its \, thin-spaces) broke TeX compilation (CodeRabbit).
+            return group_digits_both_sides(cell, _group)
         return cell
 
     def _format_cell_value(val: mp.mpf, sigma_obj, *, is_input: bool) -> str:
