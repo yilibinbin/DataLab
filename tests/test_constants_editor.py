@@ -85,8 +85,11 @@ def test_constants_editor_can_use_embedded_workbench_style(qtbot):
     editor.set_embedded_in_workbench(True)
 
     assert editor.property("datalab_constants_embedded") is True
-    assert editor.layout().contentsMargins().left() == 0
-    assert "border: none" in editor.styleSheet()
+    # Embedded card now carries its own border (like the data card) + CARD_PADDING inset.
+    from app_desktop.theme import CARD_PADDING
+
+    assert editor.layout().contentsMargins().left() == CARD_PADDING[0]
+    assert "border: 1px solid" in editor.styleSheet()
 
 
 def test_constants_editor_style_is_owned_by_theme() -> None:
@@ -97,8 +100,9 @@ def test_constants_editor_style_is_owned_by_theme() -> None:
 
     assert "datalab_constants_card" in standalone
     assert "border: 1px solid" in standalone
-    assert "background: transparent" in embedded
-    assert "border: none" in embedded
+    # Embedded card is now bordered like the data card (was transparent/borderless).
+    assert "border: 1px solid" in embedded
+    assert "background: transparent" not in embedded
 
 
 def test_constants_editor_module_no_longer_defines_local_style_helper() -> None:

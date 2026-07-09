@@ -655,9 +655,9 @@ def constants_editor_style(
     if embedded:
         return f"""
 QWidget[datalab_constants_card="true"] {{
-    background: transparent;
-    border: none;
-    border-radius: 0px;
+    background: {card_bg};
+    border: 1px solid {border};
+    border-radius: {RADIUS_CARD}px;
 }}
 QWidget[datalab_constants_card="true"] QCheckBox {{
     font-weight: 600;

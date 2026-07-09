@@ -22,7 +22,7 @@ from app_desktop.fitting_input_normalization import (
     normalize_constants_state,
     parse_constants_text,
 )
-from app_desktop.theme import constants_editor_style
+from app_desktop.theme import CARD_PADDING, constants_editor_style
 from app_desktop.widget_hints import set_accessible_description
 
 
@@ -148,8 +148,12 @@ class ConstantsEditor(QWidget):
         self.setProperty("datalab_constants_embedded", embedded)
         layout = self.layout()
         if layout is not None:
-            margin = 0 if embedded else 8
-            layout.setContentsMargins(margin, margin, margin, margin)
+            # Embedded card now has its own border (like the data card) → pad content off it with
+            # the shared CARD_PADDING; standalone keeps its tighter 8px inset.
+            if embedded:
+                layout.setContentsMargins(*CARD_PADDING)
+            else:
+                layout.setContentsMargins(8, 8, 8, 8)
         self.setStyleSheet(constants_editor_style(embedded=embedded))
         self.style().unpolish(self)
         self.style().polish(self)
