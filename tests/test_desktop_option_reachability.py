@@ -676,20 +676,12 @@ def test_manual_table_reachable_in_default_state(window: Any) -> None:
     _assert_reachable_in_place(window, window.manual_table, gate=lambda: None)
 
 
-def test_use_file_checkbox_reachable_in_default_state(window: Any) -> None:
-    """The 使用数据文件 toggle is always visible in the input rail."""
-    assert hasattr(window, "use_file_checkbox")
-    _assert_reachable_in_place(window, window.use_file_checkbox, gate=lambda: None)
-
-
-def test_data_file_edit_reachable_via_use_file_checkbox(window: Any) -> None:
-    """data_file_edit is hidden until the user checks 使用数据文件."""
+def test_data_file_edit_reachable_in_default_state(window: Any) -> None:
+    """The 使用数据文件 checkbox was removed: the data-file picker is now always visible in the
+    输入数据 tab (a non-empty path takes precedence over manual input), so it needs no gate."""
     assert hasattr(window, "data_file_edit")
-    _assert_reachable_in_place(
-        window,
-        window.data_file_edit,
-        gate=lambda: window.use_file_checkbox.setChecked(True),
-    )
+    _reveal_tab_hosted_controls(window, QApplication.instance())
+    _assert_reachable_in_place(window, window.data_file_edit, gate=lambda: None)
 
 
 def test_caption_edit_reachable_via_latex_then_caption_checkbox(window: Any) -> None:

@@ -1921,13 +1921,15 @@ def _restore_data_section(window: Any, section: dict[str, Any], *, constants: bo
         stack = getattr(window, "_data_stack", None)
     source_kind = section.get("source_kind")
     if use_file_checkbox is not None:
-        # Intentionally clear the file-source flag: on save the file's CONTENTS are captured as an
-        # attachment and inlined into the manual editor on restore, so the workspace is
-        # self-contained and does NOT depend on the external file still existing (it may be gone).
-        # (Review S2 proposed keeping this on, but that broke the intended decoupling — reverted.)
+        # Legacy no-op: the file-source flag is now derived from the file-path edit (file-precedence),
+        # not a checkbox. Kept for older callers/tests that still poke it.
         use_file_checkbox.setChecked(False)
     if file_edit is not None:
-        file_edit.setText(str(section.get("source_path_label") or ""))
+        # CLEAR the file path on restore: the file's CONTENTS were captured as an attachment on save
+        # and are inlined into the manual editor here, so the workspace is self-contained and must NOT
+        # depend on the external file (it may be gone). With file-precedence, leaving the path set
+        # would make the run try the (possibly missing) file instead of the inlined data.
+        file_edit.clear()
     if stack is not None:
         stack.setCurrentIndex(1 if source_kind in {"manual_text", "file"} else 0)
     canonical = section.get("canonical_table") or {}

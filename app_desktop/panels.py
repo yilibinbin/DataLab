@@ -166,6 +166,32 @@ _REFCOL_AUTO_MAX_DIFF_EN = "Max-diff column"
 _STACK_PAGE_TABLE = 0
 _STACK_PAGE_TEXT = 1
 
+
+class _FilePathChecked:
+    """Compatibility stand-in for the removed 使用数据文件 checkbox.
+
+    The data source is now driven purely by whether a file path is entered (file takes precedence
+    over manual input). Callers still ask ``use_file_checkbox.isChecked()`` / ``_checked(...)``; this
+    reports ``True`` iff the linked path edit is non-empty. ``setChecked`` is a no-op (the path is the
+    source of truth), so workspace-restore's ``setChecked(False)`` doesn't fight it.
+    """
+
+    class _NoopSignal:
+        def connect(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    def __init__(self, path_edit: QLineEdit) -> None:
+        self._path_edit = path_edit
+        # Callers wire the (former) checkbox's ``toggled`` signal to mark-dirty; the path edit's
+        # own textChanged already covers that, so this is a no-op sink.
+        self.toggled = _FilePathChecked._NoopSignal()
+
+    def isChecked(self) -> bool:
+        return bool(self._path_edit.text().strip())
+
+    def setChecked(self, _value: bool) -> None:
+        return None
+
 _MODE_VIEW_BUILDERS: dict[ModeKey, tuple[str, Callable[[object], QGroupBox]]] = {
     "extrapolation": ("extrap_box", build_extrapolation_mode_view),
     "error": ("error_box", build_error_mode_view),
@@ -824,25 +850,22 @@ def build_left_panel(self):
     self.use_file_hint_btn.clicked.connect(self._show_data_file_hint)
     self.use_file_hint_btn.hide()
     file_layout.addWidget(self.use_file_hint_btn)
-    # 数据来源切换
-    self.use_file_checkbox = QCheckBox("使用数据文件")
-    self.use_file_checkbox.setChecked(False)
-    self._register_text(self.use_file_checkbox, "使用数据文件", "Use data file")
-    self._register_text(
-        self.use_file_checkbox,
-        "启用后从文件读取数据；关闭后在左侧输入区手动输入数据。",
-        "Read data from a file when enabled; otherwise use the manual data input in the left input area.",
-        "setToolTip",
+    # No 使用数据文件 checkbox: the file picker sits directly with the data. A non-empty file path
+    # takes PRECEDENCE over the manual input below (see _resolve_active_input_bundle). The
+    # data_file_edit prompts that it is optional.
+    self.data_file_edit.setPlaceholderText(
+        self._tr("数据文件路径（可选，填写后忽略下方手动输入）", "Data file path (optional; overrides manual input below)")
     )
-    self.use_file_checkbox.toggled.connect(self._on_data_source_toggle)
-    # The 使用数据文件 checkbox + file picker are NOT added to input_section_layout here — they
-    # go INSIDE the 输入数据 tab (below the tab bar), so the data-file toggle only affects the
-    # data tab and never bleeds into the 常数 tab (which has its own file controls).
+    # Compatibility shim: many callers read `use_file_checkbox.isChecked()` / _checked(...) to
+    # decide file-vs-manual. With the checkbox gone, this shim reports checked==(a file path is
+    # entered), so every existing caller gets file-precedence with no per-caller change.
+    self.use_file_checkbox = _FilePathChecked(self.data_file_edit)
+    self._data_file_label = QLabel(self._tr("数据文件：", "Data file:"))
+    self._register_text(self._data_file_label, "数据文件：", "Data file:")
     self._data_source_row = QHBoxLayout()
     self._data_source_row.setSpacing(6)
-    self._data_source_row.addWidget(self.use_file_checkbox)
-    self._data_source_row.addStretch()
-    self.file_box.hide()
+    self._data_source_row.addWidget(self._data_file_label)
+    self.file_box.show()
 
     # Manual data — table editor + text fallback
     self.manual_box = QGroupBox("")
@@ -977,27 +1000,26 @@ def build_left_panel(self):
     _const_tab_layout.setContentsMargins(0, 6, 0, 0)
     _const_tab_layout.setSpacing(6)
 
-    self.use_constants_file_checkbox = QCheckBox("使用数据文件")
-    self.use_constants_file_checkbox.setChecked(False)
-    self._register_text(self.use_constants_file_checkbox, "使用数据文件", "Use data file")
-    self.use_constants_file_checkbox.toggled.connect(self._on_constants_source_toggle)
-    _const_source_row = QHBoxLayout()
-    _const_source_row.setSpacing(6)
-    _const_source_row.addWidget(self.use_constants_file_checkbox)
-    _const_source_row.addStretch()
-    _const_tab_layout.addLayout(_const_source_row)
-
+    # Symmetric with the data tab: no checkbox — a non-empty constants-file path takes precedence
+    # over the manual constants table below.
     self.constants_file_row = QWidget()
     _const_file_layout = QHBoxLayout(self.constants_file_row)
     _const_file_layout.setContentsMargins(0, 0, 0, 0)
     _const_file_layout.setSpacing(6)
+    _const_file_label = QLabel(self._tr("常数文件：", "Constants file:"))
+    self._register_text(_const_file_label, "常数文件：", "Constants file:")
+    _const_file_layout.addWidget(_const_file_label)
     self.constants_file_edit = QLineEdit()
+    self.constants_file_edit.setPlaceholderText(
+        self._tr("常数文件路径（可选，填写后忽略下方手动输入）", "Constants file path (optional; overrides manual input below)")
+    )
     _const_file_layout.addWidget(self.constants_file_edit)
     _const_browse = QPushButton("浏览…")
     _const_browse.clicked.connect(self.browse_constants_file)
     self._register_text(_const_browse, "浏览…", "Browse…")
     _const_file_layout.addWidget(_const_browse)
-    self.constants_file_row.hide()
+    self.constants_file_row.show()
+    self.use_constants_file_checkbox = _FilePathChecked(self.constants_file_edit)
     _const_tab_layout.addWidget(self.constants_file_row)
     _const_tab_layout.addWidget(self.input_constants_editor)
 

@@ -61,27 +61,30 @@ def test_constants_tab_only_in_constant_using_modes(qtbot: Any) -> None:
     assert window.input_constants_editor is editor_before
 
 
-def test_each_tab_has_independent_data_file_toggle(qtbot: Any) -> None:
-    """输入数据 and 常数 each have their own 使用数据文件 checkbox (independent), placed inside
-    their tab (below the tab bar) — toggling one must not affect the other, and must not
-    corrupt the inactive tab."""
+def test_each_tab_has_independent_file_input_with_precedence(qtbot: Any) -> None:
+    """输入数据 and 常数 each have their own file picker (no checkbox) inside their tab. A non-empty
+    file path takes precedence over the manual input; the two tabs' file inputs are independent."""
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("error"))
     QApplication.processEvents()
 
-    # Both checkboxes exist and live inside their respective tabs.
-    assert window.use_file_checkbox.parent() is window._data_tab
-    assert window.use_constants_file_checkbox.parent() is window._constants_tab
-
-    tabs = window.input_data_tabs
-    tabs.setCurrentIndex(tabs.indexOf(window._constants_tab))
-    QApplication.processEvents()
-    window.use_constants_file_checkbox.setChecked(True)
-    QApplication.processEvents()
-    # Constants file picker un-hides (isHidden reflects explicit show/hide regardless of whether
-    # the top-level window is shown); the data-file checkbox is untouched.
+    # Each file picker lives inside its own tab; both file rows are always shown (no gate).
+    assert window.data_file_edit.text() == ""
+    assert window.constants_file_edit.text() == ""
+    assert window.file_box.parent() is window._data_tab
+    assert window.constants_file_row.parent() is window._constants_tab
+    assert window.file_box.isHidden() is False
     assert window.constants_file_row.isHidden() is False
+
+    # A constants-file path drives constants "use file" without touching the data file, and vice versa.
+    window.constants_file_edit.setText("/tmp/constants.csv")
+    QApplication.processEvents()
+    assert window.use_constants_file_checkbox.isChecked() is True
     assert window.use_file_checkbox.isChecked() is False
+
+    window.data_file_edit.setText("/tmp/data.csv")
+    QApplication.processEvents()
+    assert window.use_file_checkbox.isChecked() is True
 
 
 def test_constants_file_content_is_preserved_across_workspace_roundtrip(qtbot: Any, tmp_path: Any) -> None:
