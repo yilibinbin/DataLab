@@ -16,6 +16,17 @@ from PySide6.QtWidgets import QApplication
 from app_desktop.workbench_results import MAX_RESULT_OVERVIEW_ROWS
 
 
+@pytest.fixture(autouse=True)
+def _no_blocking_message_boxes(monkeypatch: Any) -> None:
+    """A modal QMessageBox blocks forever in the offscreen/headless CI (no one clicks OK), which
+    hangs the whole serial run. Several tests here drive the fit error path (or feed minimal mock
+    jobs that trip it), so make critical/warning/information non-blocking for every test."""
+    from PySide6.QtWidgets import QMessageBox
+
+    for name in ("critical", "warning", "information"):
+        monkeypatch.setattr(QMessageBox, name, staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
+
+
 def _window(qtbot: Any) -> Any:
     from app_desktop.window import ExtrapolationWindow
 
@@ -718,6 +729,10 @@ def test_fit_batches_tabular_success_clears_running_state(qtbot: Any, monkeypatc
             data_rows=[],
             sigma_rows=[],
             render_plots=False,
+            # The success path stashes the run's target column + variable mapping for on-demand TeX
+            # fidelity (commit 5dc9f60); the mock job must carry them or the stash raises AttributeError.
+            target_column="y",
+            variable_map={"x": "x"},
         ),
         expression="A*x",
         fit_result=SimpleNamespace(params={"A": "1"}),
@@ -1039,7 +1054,18 @@ def test_fit_batch_post_processing_error_keeps_success_overview(qtbot: Any, monk
     )
     window._mark_workbench_result_running()
     payload = SimpleNamespace(
-        job=SimpleNamespace(model_expr="A*x", render_plots=False, headers=[], data_rows=[], sigma_rows=[]),
+        job=SimpleNamespace(
+            model_expr="A*x",
+            render_plots=False,
+            headers=[],
+            data_rows=[],
+            sigma_rows=[],
+            # The success path stashes target_column + variable_map BEFORE the (patched) latex step
+            # errors, so the mock job must carry them or it fails early instead of exercising the
+            # intended post-processing-error path (commit 5dc9f60).
+            target_column="y",
+            variable_map={"x": "x"},
+        ),
         expression="A*x",
         fit_result=SimpleNamespace(params={"A": "1"}, details={}),
         units=None,
