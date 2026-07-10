@@ -857,6 +857,17 @@ def _format_value_for_latex_file(
         except Exception:
             sig = None
 
+    # Non-finite inputs cannot be typeset numerically — int(mp.floor(nan)) deeper
+    # down raises 'cannot convert inf or nan to int' and would discard the whole
+    # table. Guarded HERE (not only in the public wrapper) because the
+    # extrapolation/error-propagation table builders call this private function
+    # directly. An undefined sigma degrades to a bare value; an undefined value
+    # becomes a parse-safe literal cell (valid in both S and dcolumn columns).
+    if sig is not None and not mp.isfinite(sig):
+        sig = None
+    if not mp.isfinite(val):
+        return siunitx_safe_cell(str(mp.nstr(val)), align="c")
+
     if use_dcolumn:
         if sig is not None and not mp.almosteq(sig, mp.mpf("0")):
             return format_uncertainty_notation_for_dcolumn(
@@ -898,14 +909,6 @@ def format_value_for_latex_file(
     zero_uncertainty_mantissa_decimals: int | None = None,
 ) -> str:
     """Public wrapper for LaTeX file-only numeric formatting."""
-    # Non-finite inputs cannot be typeset numerically — int(mp.floor(nan)) deep in
-    # the fixed-place formatter raises and would discard an otherwise-successful
-    # table. An undefined sigma degrades to a bare value; an undefined value
-    # becomes a parse-safe literal cell (works in both S and dcolumn columns).
-    if sigma is not None and not mp.isfinite(mp.mpf(sigma)):
-        sigma = None
-    if not mp.isfinite(mp.mpf(value)):
-        return siunitx_safe_cell(str(mp.nstr(mp.mpf(value))), align="c")
     return _format_value_for_latex_file(
         value=value,
         sigma=sigma,

@@ -38,3 +38,28 @@ def test_nan_sigma_formats_bare_value() -> None:
             mp.mpf("2.5"), None, use_dcolumn=use_dcolumn, **_KW
         )
         assert with_nan_sigma == with_none_sigma
+
+
+def test_private_formatter_is_guarded_for_direct_callers() -> None:
+    """Gemini G-1: the extrapolation/error-propagation table builders call the
+    PRIVATE _format_value_for_latex_file directly, so the guard must live there —
+    a public-wrapper-only guard leaves those paths crashing on nan/inf."""
+    from datalab_latex.latex_formatting import _format_value_for_latex_file
+
+    for use_dcolumn in (False, True):
+        cell = _format_value_for_latex_file(
+            value=mp.mpf("nan"),
+            sigma=None,
+            use_dcolumn=use_dcolumn,
+            latex_input_decimals=6,
+            is_input=True,
+        )
+        assert cell.startswith("\\multicolumn{1}{c}{")
+        bare = _format_value_for_latex_file(
+            value=mp.mpf("2.5"),
+            sigma=mp.mpf("inf"),
+            use_dcolumn=use_dcolumn,
+            latex_input_decimals=6,
+            is_input=True,
+        )
+        assert "inf" not in bare  # non-finite sigma degrades to the bare value

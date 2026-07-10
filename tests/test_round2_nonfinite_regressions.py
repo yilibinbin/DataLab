@@ -71,3 +71,34 @@ def test_desktop_fit_latex_block_survives_nan_sigmas(use_dcolumn: bool) -> None:
     text = "\n".join(lines)
     # The recovered parameter values are present; the NaN sigmas degraded gracefully.
     assert "Param a" in text and "Param z" in text
+
+
+def test_summary_suppresses_undefined_stat_sys_split() -> None:
+    """Gemini G-2: with data sigmas, a degenerate fit yields NaN stat AND sys errors;
+    the summary must not print '(stat nan, sys nan)' after rendering '± N/A'."""
+    from fitting import summarize_fit_result
+
+    definition = ImplicitModelDefinition(
+        x_variables=("x",),
+        implicit_variable="u",
+        equation="a*x",
+        output_expression="u + 1",
+        parameters=("z", "a"),
+    )
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression="u + 1",
+        variables=("x",),
+        parameter_config={"z": {"initial": "1"}},
+        implicit_definition=definition,
+    )
+    fit_result = FitRunner().fit(
+        problem,
+        {"x": [mp.mpf(1), mp.mpf(2), mp.mpf(3)]},
+        [mp.mpf(3), mp.mpf(5), mp.mpf(7)],
+        precision=50,
+        data_sigmas=[mp.mpf("0.1")] * 3,
+    )
+    summary = summarize_fit_result(fit_result)
+    assert "± N/A" in summary
+    assert "nan" not in summary
