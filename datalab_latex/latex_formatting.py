@@ -33,7 +33,7 @@ def _format_workdps(places: int) -> int:
     corrupt every digit past ~16. Floor the working precision to comfortably exceed `places` and
     the value's own magnitude so the rounding is exact regardless of the caller's ambient dps.
     """
-    return max(mp.dps, int(places) + _FORMAT_GUARD_DIGITS)
+    return max(int(mp.dps), int(places) + _FORMAT_GUARD_DIGITS)
 
 
 def _round_to_places(value: mp.mpf, places: int) -> mp.mpf:
