@@ -32,6 +32,7 @@ from .common import (
     _generate_csv_from_rows,
     _is_checked,
     _parse_int,
+    _parse_precision,
 )
 from .plots import _render_extrapolation_plot
 
@@ -160,7 +161,7 @@ def _method_options_payload(
 @mpmath_synchronized
 def _run_extrapolation(data_text: str, form, lang: str = "zh") -> ExtrapolationResultBundle:
     method = (form.get("method") or "power_law").strip()
-    mp_precision = _parse_int(form.get("mp_precision"))
+    mp_precision = _parse_precision(form.get("mp_precision"))
     latex_precision = _parse_int(form.get("latex_precision"))
     latex_group_size = _parse_int(form.get("latex_group_size"))
     if latex_group_size is None:

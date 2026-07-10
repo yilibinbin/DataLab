@@ -53,6 +53,7 @@ from .common import (
     _merged_core_warnings,
     _norm_token,
     _parse_int,
+    _parse_precision,
 )
 from shared.fitting_uncertainty import fit_uncertainty_policy
 from shared.uncertainty import parse_uncertainty_format
@@ -736,7 +737,7 @@ def _generate_fitting_comparison_latex(
 
 @mpmath_synchronized
 def _run_fit(data_text: str, form) -> FitResultBundle:
-    mp_precision = _parse_int(form.get("fit_mp_precision")) or 80
+    mp_precision = _parse_precision(form.get("fit_mp_precision")) or 80
     log_scale = (form.get("fit_log_scale") or "").strip().lower()
     fit_mode = _normalize_fit_mode(form.get("fit_mode"))
     custom_expr = (form.get("fit_custom_expr") or "").strip()

@@ -18,6 +18,7 @@ from .common import (
     _format_number,
     _latex_to_plain,
     _parse_int,
+    _parse_precision,
 )
 
 
@@ -120,7 +121,7 @@ def _root_latex(name: str, value_text: str, uncertainty, uncertainty_digits: int
 
 @mpmath_synchronized
 def _run_root_solving(form, lang: str = "zh") -> RootSolvingResultBundle:
-    mp_precision = _parse_int(form.get("root_mp_precision"))
+    mp_precision = _parse_precision(form.get("root_mp_precision"))
     display_digits = _parse_int(form.get("root_display_digits")) or 12
     uncertainty_digits = _parse_int(form.get("root_uncertainty_digits"))
     if uncertainty_digits is None:

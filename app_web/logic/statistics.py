@@ -33,6 +33,7 @@ from .common import (
     _merged_core_warnings,
     _norm_token,
     _parse_int,
+    _parse_precision,
 )
 from .plots import _render_statistics_plot, _render_statistics_plots
 from shared.uncertainty import has_explicit_uncertainty, parse_uncertainty_format
@@ -166,7 +167,7 @@ def _format_statistics_rows(stats_result: dict, row_count: int, mp_precision: in
 
 @mpmath_synchronized
 def _run_statistics(data_text: str, form, lang: str = "zh") -> StatsResultBundle:
-    mp_precision = _parse_int(form.get("stats_mp_precision"))
+    mp_precision = _parse_precision(form.get("stats_mp_precision"))
     latex_precision = _parse_int(form.get("stats_digits")) or 12
     latex_group_size = _parse_int(form.get("stats_latex_group_size"))
     if latex_group_size is None:
