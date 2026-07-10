@@ -153,7 +153,10 @@ def docs_page(page: str):
             heading_id = re.sub(r"[-\s]+", "-", heading_id).strip("-")
             return f'<{tag} id="{heading_id}">{content}</{tag}>'
 
-        html_content = re.sub(r"<(h[123])>(.+?)</\\1>", add_heading_ids, html_content)
+        # \1 (not \\1) — a real backreference to the opening tag; the old \\1 matched the literal
+        # text "</\1>" which never occurs, so no heading ids were emitted and every TOC anchor was
+        # dead (audit A7).
+        html_content = re.sub(r"<(h[123])>(.+?)</\1>", add_heading_ids, html_content)
 
         page_order = [p["slug"] for p in DOCS_PAGES]
         page_title_map: dict[str, dict[str, str]] = {p["slug"]: dict(p.get("title") or {}) for p in DOCS_PAGES}
