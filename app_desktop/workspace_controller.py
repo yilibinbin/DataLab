@@ -1898,6 +1898,13 @@ def capture_workspace(
     encoded_latex_inputs = encode_latex_inputs(latex_inputs)
     if encoded_latex_inputs:
         manifest["latex_inputs"] = encoded_latex_inputs
+        # The tex-rebuild stash is a best-effort convenience (decode_latex_inputs treats it as
+        # optional; on reopen the user re-runs to regenerate tex). A high-dps fit with many points
+        # can encode to several MiB and blow the 2 MiB manifest budget, which used to make the WHOLE
+        # workspace unsaveable ("manifest exceeds size limit"). Drop the stash rather than fail the
+        # save, so no valid workspace is ever lost to this optional extra (audit A4).
+        if _manifest_json_size_bytes(manifest) > MAX_MANIFEST_BYTES:
+            del manifest["latex_inputs"]
     _fit_history_to_manifest_budget(window, manifest)
     return WorkspaceBundle(manifest=manifest, attachments=attachments)
 

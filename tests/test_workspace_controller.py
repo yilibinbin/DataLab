@@ -4220,3 +4220,29 @@ def test_workspace_round_trip_preserves_workbench_variable_panel_state(qtbot, tm
 
     assert restored.custom_params_table.rows()[0]["name"] == "A"
     assert restored.custom_constants_editor.rows()[0]["name"] == "CR"
+
+
+def test_oversized_latex_inputs_stash_is_dropped_not_a_save_failure(qtbot) -> None:
+    """A high-dps fit with many points can encode _last_latex_inputs to several MiB, over the 2 MiB
+    manifest budget. The optional tex-rebuild stash must be DROPPED so the workspace stays
+    saveable, rather than making the whole save fail (audit A4)."""
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import _manifest_json_size_bytes, capture_workspace
+    from shared.precision import precision_guard
+    from shared.workspace_schema import MAX_MANIFEST_BYTES
+    from mpmath import mp
+
+    win = ExtrapolationWindow()
+    qtbot.addWidget(win)
+
+    with precision_guard(80):
+        big = [mp.sqrt(i + 2) for i in range(6000)]
+    win._last_latex_inputs = {"extrapolation": {"rows": big, "sigma_rows": big, "predicted": big}}
+    bundle = capture_workspace(win, title="big")
+    assert _manifest_json_size_bytes(bundle.manifest) <= MAX_MANIFEST_BYTES
+    assert "latex_inputs" not in bundle.manifest  # oversized stash dropped
+
+    # A small stash stays — the drop only fires when it would blow the budget.
+    win._last_latex_inputs = {"extrapolation": {"rows": [mp.mpf("1.5")]}}
+    small_bundle = capture_workspace(win, title="small")
+    assert "latex_inputs" in small_bundle.manifest
