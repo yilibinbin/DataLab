@@ -537,7 +537,11 @@ FITTING_MODEL_FIELD = select_field(
     choices=[
         _choice("polynomial", "多项式", "Polynomial"),
         _choice("inverse_power", "反幂级数", "Inverse-power series"),
+        _choice("pade", "Padé 拟合", "Padé"),
+        _choice("power_limit", "幂律极限拟合", "Power-law limit"),
         _choice("custom", "自定义模型", "Custom model"),
+        _choice("self_consistent", "自洽隐式模型", "Self-consistent / implicit"),
+        _choice("comparison", "选定拟合比较", "Selected-fit comparison"),
     ],
     tooltip_zh="选择曲线拟合模型。",
     tooltip_en="Choose the curve fitting model.",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -29,8 +30,13 @@ from data_extrapolation_latex_latest import (
 )
 from datalab_latex.sisetup_block import build_sisetup_block
 from fitting import (
+    FitRunner,
+    ImplicitModelDefinition,
+    ImplicitSolveOptions,
+    ModelProblem,
     build_inverse_series_definition,
     build_polynomial_definition,
+    infer_parameter_names,
     render_fitting_overview,
     summarize_fit_result,
 )
@@ -215,6 +221,75 @@ def _pade_template(m: int, n: int) -> tuple[str, dict[str, dict[str, float]]] | 
     denominator = " + ".join(den_terms)
     expression = f"({numerator})/({denominator})"
     return expression, params
+
+
+def _build_self_consistent_problem(
+    form,
+    headers: list[str],
+    rows: list[tuple[mp.mpf, ...]],
+    var_mapping: dict[str, str],
+    x_column: str,
+) -> tuple[ModelProblem, dict[str, list[mp.mpf]]]:
+    """Parse implicit-model form fields into (problem, variable_data).
+
+    Mirrors the desktop's ``_collect_implicit_config`` (window.py). Caller must
+    hold ``_precision_guard`` — ``_column_series`` parses to ``mp.mpf`` at the
+    active ``mp.dps``.
+    """
+    equation = (form.get("fit_implicit_equation") or "").strip()
+    implicit_variable = (form.get("fit_implicit_variable") or "").strip()
+    output_expression = (form.get("fit_implicit_output") or "").strip()
+    if not equation:
+        raise ValueError(_dual_msg("隐式方程不能为空。", "Implicit equation cannot be empty."))
+    if not output_expression:
+        raise ValueError(_dual_msg("输出表达式不能为空。", "Output expression cannot be empty."))
+    if not re.match(r"^[A-Za-z_]\w*$", implicit_variable):
+        raise ValueError(_dual_msg("隐式变量必须是有效标识符。", "Implicit variable must be a valid identifier."))
+
+    method = (form.get("fit_implicit_method") or "fixed_point").strip() or "fixed_point"
+    initial = (form.get("fit_implicit_initial") or "0").strip() or "0"
+    tolerance = (form.get("fit_implicit_tolerance") or "1e-30").strip() or "1e-30"
+    max_iterations = _parse_int(form.get("fit_implicit_max_iter")) or 80
+
+    implicit_params_text = form.get("fit_implicit_params") or ""
+    try:
+        params_cfg = json.loads(implicit_params_text) if str(implicit_params_text).strip() else {}
+        if not isinstance(params_cfg, dict):
+            raise ValueError(_dual_msg("参数配置必须为 JSON 对象（key 为参数名）。", "Parameter config must be a JSON object."))
+        normalized_cfg: dict[str, dict[str, object]] = {
+            str(name): (conf if isinstance(conf, dict) else {"initial": conf}) for name, conf in params_cfg.items()
+        }
+    except Exception as exc:
+        raise ValueError(
+            _dual_msg(f"自洽隐式模型参数解析失败: {exc}", f"Failed to parse self-consistent model parameters: {exc}")
+        ) from exc
+
+    variable_map = dict(var_mapping) if var_mapping else {"x": x_column}
+    x_variables = tuple(variable_map.keys())
+    variable_data = {name: _column_series(headers, rows, col) for name, col in variable_map.items()}
+
+    parameter_names = infer_parameter_names(
+        f"{equation}\n{output_expression}", list(x_variables) + [implicit_variable], list(normalized_cfg.keys())
+    )
+
+    definition = ImplicitModelDefinition(
+        x_variables=x_variables,
+        implicit_variable=implicit_variable,
+        equation=equation,
+        output_expression=output_expression,
+        parameters=tuple(parameter_names),
+        solve_options=ImplicitSolveOptions(
+            method=method, initial=initial, tolerance=tolerance, max_iterations=max_iterations
+        ),
+    )
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression=output_expression,
+        variables=x_variables,
+        parameter_config=normalized_cfg,
+        implicit_definition=definition,
+    )
+    return problem, variable_data
 
 
 def _normalize_fit_mode(raw_mode: str | None) -> str:
@@ -1037,42 +1112,55 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
             model_expr = custom_expr
             variable_map = dict(var_mapping) if var_mapping else {"x": x_column}
             best_label = "自定义模型 / Custom model"
+        elif fit_mode == "self_consistent":
+            problem, variable_data = _build_self_consistent_problem(form, headers, rows, var_mapping, x_column)
+            definition = problem.implicit_definition
+            assert isinstance(definition, ImplicitModelDefinition)
+            fit_res = FitRunner().fit(
+                problem, variable_data, y_vals, precision=mp_precision, weights=fit_weights, data_sigmas=sigma_list
+            )
+            best_label = "自洽隐式模型 / Self-consistent"
+            expression_for_latex = expression_for_csv = definition.output_expression
         else:
             raise _unsupported_fit_mode_error(fit_mode)
 
-        request = build_fitting_request(
-            model_type=fit_mode,
-            headers=headers,
-            data_rows=rows,
-            variable_map=variable_map,
-            target_column=target_column,
-            model_expr=model_expr,
-            sigma_rows=sigma_rows,
-            sigma_series=sigma_list,
-            parameter_config=parameter_config,
-            parameter_names=parameter_names,
-            template_expr=template_expr,
-            template_params=template_params,
-            poly_degree=max(1, poly_degree),
-            inverse_min=inv_min,
-            inverse_max=inv_max,
-            pade_m=pade_m,
-            pade_n=pade_n,
-            weighted=use_weights,
-            refine_with_mcmc=refine_with_mcmc,
-            label=best_label,
-            weights=fit_weights,
-            precision_digits=mp_precision,
-            uncertainty_digits=result_digits,
-            request_id="web-fitting",
-        )
-        core_result = create_core_session_service().submit(request)
-        if core_result.status is not ResultStatus.SUCCEEDED:
-            raise ValueError(_core_failure_message(core_result.payload, "Fitting failed."))
-        fit_res = fitting_payload_to_fit_result(core_result.payload["fit_result"])
-        warnings.extend(_merged_core_warnings(core_result.payload, core_result.warnings))
-        expression_for_latex = core_result.payload.get("expression") if "expression" in core_result.payload else None
-        expression_for_csv = str(expression_for_latex or model_expr)
+        if fit_res is None:
+            request = build_fitting_request(
+                model_type=fit_mode,
+                headers=headers,
+                data_rows=rows,
+                variable_map=variable_map,
+                target_column=target_column,
+                model_expr=model_expr,
+                sigma_rows=sigma_rows,
+                sigma_series=sigma_list,
+                parameter_config=parameter_config,
+                parameter_names=parameter_names,
+                template_expr=template_expr,
+                template_params=template_params,
+                poly_degree=max(1, poly_degree),
+                inverse_min=inv_min,
+                inverse_max=inv_max,
+                pade_m=pade_m,
+                pade_n=pade_n,
+                weighted=use_weights,
+                refine_with_mcmc=refine_with_mcmc,
+                label=best_label,
+                weights=fit_weights,
+                precision_digits=mp_precision,
+                uncertainty_digits=result_digits,
+                request_id="web-fitting",
+            )
+            core_result = create_core_session_service().submit(request)
+            if core_result.status is not ResultStatus.SUCCEEDED:
+                raise ValueError(_core_failure_message(core_result.payload, "Fitting failed."))
+            fit_res = fitting_payload_to_fit_result(core_result.payload["fit_result"])
+            warnings.extend(_merged_core_warnings(core_result.payload, core_result.warnings))
+            expression_for_latex = (
+                core_result.payload.get("expression") if "expression" in core_result.payload else None
+            )
+            expression_for_csv = str(expression_for_latex or model_expr)
+
         params = _collect_params(fit_res)
         metrics = _collect_metrics(fit_res)
         diagnostic_correlations, diagnostic_residuals = _collect_diagnostic_display(fit_res)

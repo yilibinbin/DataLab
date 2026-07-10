@@ -43,7 +43,13 @@ _BASELINE: dict[str, int] = {
     "shared/ui_specs.py": 1203,
     "datalab_core/statistics_grouped.py": 1200,
     "datalab_core/root_solving.py": 1195,
-    "app_web/logic/fitting.py": 1143,
+    # Raised 1143 -> 1238: added the self_consistent (implicit) web-fitting branch,
+    # mirroring desktop's implicit-model form handling (validation, JSON param
+    # parsing, ImplicitModelDefinition/ModelProblem construction) via a dedicated
+    # _build_self_consistent_problem() helper. Consciously re-baselined — the
+    # helper is already factored out and kept as tight as the neighboring `custom`
+    # branch's style allows.
+    "app_web/logic/fitting.py": 1238,
     "app_desktop/window_extrapolation_mixin.py": 1280,
     "datalab_core/report_bundle.py": 1079,
     "root_solving/solver.py": 1076,
