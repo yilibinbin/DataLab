@@ -40,6 +40,28 @@ def test_nan_sigma_formats_bare_value() -> None:
         assert with_nan_sigma == with_none_sigma
 
 
+def test_app_group_wrap_passes_multicolumn_cells_through(tmp_path) -> None:
+    """Codex CX-2: app-side grouping (native_group_width=False, siunitx mode) used to
+    blindly wrap every cell in \\text{...}; wrapping a non-finite \\multicolumn
+    literal cell produces invalid TeX ('Misplaced \\omit')."""
+    from datalab_latex.latex_tables_extrapolation import generate_latex_table
+
+    out = tmp_path / "extrap_nan.tex"
+    generate_latex_table(
+        headers=["S1", "S2", "S3"],
+        data_rows=[(mp.mpf("1"), mp.mpf("2"), mp.mpf("3"))],
+        extrapolated_results=[(mp.mpf("nan"), mp.mpf("0"))],
+        output_filename=str(out),
+        precision=6,
+        use_dcolumn=False,
+        latex_group_size=3,
+        native_group_width=False,  # app_group path
+    )
+    text = out.read_text(encoding="utf-8")
+    assert "\\multicolumn{1}{c}{nan}" in text
+    assert "\\text{\\multicolumn" not in text
+
+
 def test_private_formatter_is_guarded_for_direct_callers() -> None:
     """Gemini G-1: the extrapolation/error-propagation table builders call the
     PRIVATE _format_value_for_latex_file directly, so the guard must live there —

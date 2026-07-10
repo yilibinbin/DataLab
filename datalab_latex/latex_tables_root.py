@@ -96,7 +96,13 @@ def _root_table(
         for row in rows
     ]
     if app_group:
-        value_cells = ["\\text{" + group_digits_both_sides(cell, group_size) + "}" for cell in value_cells]
+        # Skip \multicolumn literal cells (non-finite values): wrapping them in
+        # \text{...} is invalid TeX ("Misplaced \omit").
+        value_cells = [
+            cell if "\\multicolumn" in cell
+            else "\\text{" + group_digits_both_sides(cell, group_size) + "}"
+            for cell in value_cells
+        ]
     if rows and include_dcolumn:
         value_spec = calculate_dcolumn_format_for_column(value_cells, "root_value")
     elif rows and app_group:

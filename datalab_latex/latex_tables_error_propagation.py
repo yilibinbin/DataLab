@@ -247,6 +247,10 @@ def generate_error_propagation_table(
         column_lengths[-1] = max(column_lengths[-1], _string_length_hint(result_formatted))
     if app_group:
         def _wrap(cell: str) -> str:
+            # A non-finite value renders as a \multicolumn literal cell; wrapping it
+            # in \text{...} is invalid TeX ("Misplaced \omit") — pass it through.
+            if "\\multicolumn" in cell:
+                return cell
             return "\\text{" + group_digits_both_sides(cell, _group) + "}"
         formatted_columns = [[_wrap(c) for c in col] for col in formatted_columns]
         formatted_result_column = [_wrap(c) for c in formatted_result_column]
