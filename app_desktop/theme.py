@@ -418,19 +418,17 @@ def input_data_tabs_style(*, dark: bool | None = None) -> str:
     """Rounded, modern styling for the 输入数据 / 常数 sheet tabs (input_data_tabs). Mirrors the
     result-detail tab chrome so the input area matches the rest of the workbench."""
     dark = is_dark_theme() if dark is None else bool(dark)
+    # Resolve every surface through the design tokens so the 输入数据/常数 tab strip matches the
+    # result-detail tab strip across the splitter (this function's whole point) — the P1 token pass
+    # missed these four hardcoded dark hexes, so the two mirror-intended tab strips diverged in dark
+    # mode (audit B5). Mirrors result_detail_card_style's token mapping exactly.
     border = _tok("border", dark)
     selected_fg = _tok("text_primary", dark)
     muted_fg = _tok("text_muted", dark)
-    if dark:
-        panel_bg = "#1c2129"
-        tab_bg = "#161a21"
-        tab_hover = "#222833"
-        selected_bg = "#2a313c"
-    else:
-        panel_bg = "#ffffff"
-        tab_bg = "#f1f5f9"
-        tab_hover = "#e2e8f0"
-        selected_bg = "#ffffff"
+    panel_bg = _tok("card_bg", dark)
+    tab_bg = _tok("surface_raised", dark)
+    tab_hover = _tok("surface_hover", dark)
+    selected_bg = "#1f2937" if dark else "#ffffff"
     return f"""
 QTabWidget#input_data_tabs::pane {{
     border: 1px solid {border};

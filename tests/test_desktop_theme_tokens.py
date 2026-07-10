@@ -110,7 +110,9 @@ def test_theme_toggle_restyles_formula_preview_and_input_tabs(
     app.processEvents()
 
     assert "#20242b" in window.workbench_formula_preview_label.styleSheet()  # dark surface
-    assert "#1c2129" in window.input_data_tabs.styleSheet()  # dark tab pane
+    # The input-tab pane now resolves through the card_bg token (== the result-detail tab strip),
+    # not a hardcoded #1c2129 grey (audit B5).
+    assert "#20242b" in window.input_data_tabs.styleSheet()  # dark tab pane == card_bg token
 
 
 def test_theme_exposes_semantic_text_and_message_styles() -> None:
