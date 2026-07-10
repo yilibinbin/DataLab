@@ -254,15 +254,18 @@ def _build_self_consistent_problem(
     implicit_params_text = form.get("fit_implicit_params") or ""
     try:
         params_cfg = json.loads(implicit_params_text) if str(implicit_params_text).strip() else {}
-        if not isinstance(params_cfg, dict):
-            raise ValueError(_dual_msg("参数配置必须为 JSON 对象（key 为参数名）。", "Parameter config must be a JSON object."))
-        normalized_cfg: dict[str, dict[str, object]] = {
-            str(name): (conf if isinstance(conf, dict) else {"initial": conf}) for name, conf in params_cfg.items()
-        }
     except Exception as exc:
+        # Only JSON syntax errors get wrapped here; the non-dict check below raises
+        # its own already-bilingual message OUTSIDE this try so it is not re-wrapped
+        # into a doubled "汉语 / English / 汉语 / English" string (breaks the locale split).
         raise ValueError(
             _dual_msg(f"自洽隐式模型参数解析失败: {exc}", f"Failed to parse self-consistent model parameters: {exc}")
         ) from exc
+    if not isinstance(params_cfg, dict):
+        raise ValueError(_dual_msg("参数配置必须为 JSON 对象（key 为参数名）。", "Parameter config must be a JSON object."))
+    normalized_cfg: dict[str, dict[str, object]] = {
+        str(name): (conf if isinstance(conf, dict) else {"initial": conf}) for name, conf in params_cfg.items()
+    }
 
     variable_map = dict(var_mapping) if var_mapping else {"x": x_column}
     x_variables = tuple(variable_map.keys())
@@ -980,14 +983,24 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                 err = fit_res.param_errors.get(name) if fit_res.param_errors else None
             val = mp.mpf(value)
             sigma = mp.mpf(err) if err is not None else mp.mpf("0")
-            latex = format_result_with_uncertainty_latex(val, sigma, result_digits)
+            # A non-finite uncertainty (e.g. an unused/degenerate parameter whose
+            # covariance is undefined) cannot be formatted with siunitx —
+            # format_result_with_uncertainty_latex would raise a raw, non-bilingual
+            # "cannot convert inf or nan to int". Render the value alone and mark the
+            # uncertainty unavailable instead of 500-crashing the whole fit response.
+            if mp.isfinite(sigma):
+                latex = format_result_with_uncertainty_latex(val, sigma, result_digits)
+                uncertainty_display = _format_number(sigma, 10)
+            else:
+                latex = ""
+                uncertainty_display = "N/A"
             collected.append(
                 {
                     "name": name,
                     "value_raw": val,
                     "uncertainty_raw": sigma,
                     "value": _format_number(val, 10),
-                    "uncertainty": _format_number(sigma, 10),
+                    "uncertainty": uncertainty_display,
                     "latex": _latex_to_plain(latex) if latex else "",
                 }
             )
