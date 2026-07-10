@@ -18,11 +18,30 @@ def _split_mantissa_exponent(value: mp.mpf) -> tuple[mp.mpf, int]:
     return mantissa, exponent
 
 
+# Extra working digits over `places` so the mp.power(10, places) product and the value*factor
+# multiply never lose the requested fractional digits to the ambient mp.dps.
+_FORMAT_GUARD_DIGITS = 12
+
+
+def _format_workdps(places: int) -> int:
+    """Working precision for formatting a value to `places` decimals.
+
+    These formatters run at the AMBIENT ``mp.dps`` unless guarded; when the caller stashes a
+    high-precision result and formats it later (e.g. on-demand TeX rebuild after the run's own
+    precision_guard has closed), the ambient dps can be the process default (~15) while `places`
+    is 20-200. Without a floor, the intermediate products carry only ~15 sig digits and silently
+    corrupt every digit past ~16. Floor the working precision to comfortably exceed `places` and
+    the value's own magnitude so the rounding is exact regardless of the caller's ambient dps.
+    """
+    return max(mp.dps, int(places) + _FORMAT_GUARD_DIGITS)
+
+
 def _round_to_places(value: mp.mpf, places: int) -> mp.mpf:
     if places <= 0:
         return mp.nint(value)
-    factor = mp.power(10, places)
-    return mp.nint(value * factor) / factor
+    with _precision_guard(_format_workdps(places)):
+        factor = mp.power(10, places)
+        return mp.nint(value * factor) / factor
 
 
 def _format_fixed_places(value: mp.mpf, places: int) -> str:
@@ -33,11 +52,12 @@ def _format_fixed_places(value: mp.mpf, places: int) -> str:
         except Exception:
             text = str(mp.nstr(rounded, n=20, strip_zeros=True))
             return text[:-2] if text.endswith(".0") else text
-    sign = "-" if rounded < 0 else ""
-    abs_val = mp.fabs(rounded)
-    integer_part = int(mp.floor(abs_val))
-    fractional = abs_val - integer_part
-    scaled = int(mp.nint(fractional * mp.power(10, places)))
+    with _precision_guard(_format_workdps(places)):
+        sign = "-" if rounded < 0 else ""
+        abs_val = mp.fabs(rounded)
+        integer_part = int(mp.floor(abs_val))
+        fractional = abs_val - integer_part
+        scaled = int(mp.nint(fractional * mp.power(10, places)))
     frac_str = f"{scaled:0{places}d}"
     return f"{sign}{integer_part}.{frac_str}"
 
