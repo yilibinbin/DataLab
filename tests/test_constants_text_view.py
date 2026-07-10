@@ -93,3 +93,42 @@ def test_table_edits_replace_stale_hidden_text_when_switching_to_text(qtbot):
     assert editor.raw_text() == "E 2"
     assert editor.text() == "E 2"
     assert editor.rows() == [{"name": "E", "value": "2"}]
+
+
+def test_table_view_restore_regenerates_text_from_rows_not_stale_draft(qtbot):
+    """A workspace saved in TABLE view carries a text draft that may be stale w.r.t. the rows. On
+    restore the rows are authoritative; a later table→text toggle must regenerate from those rows,
+    not surface the stale draft (audit A12)."""
+    from app_desktop.workspace_controller import _restore_constants_editor_state
+
+    editor = ConstantsEditor()
+    qtbot.addWidget(editor)
+    _restore_constants_editor_state(
+        editor,
+        {
+            "view": "table",
+            "rows": [{"name": "A", "value": "1"}, {"name": "B", "value": "2"}],
+            "text": "STALE_DRAFT 999",  # does not match the rows
+            "enabled": True,
+        },
+    )
+    editor.use_text_view(True)
+    text = editor.text_view.toPlainText()
+    assert "STALE_DRAFT" not in text
+    assert "A" in text and "B" in text
+    # And the restored rows survive the round trip.
+    editor.use_text_view(False)
+    assert [(r["name"], r["value"]) for r in editor.rows()] == [("A", "1"), ("B", "2")]
+
+
+def test_text_view_restore_keeps_authoritative_text(qtbot):
+    """When saved in TEXT view the stored text IS authoritative and must be preserved on restore."""
+    from app_desktop.workspace_controller import _restore_constants_editor_state
+
+    editor = ConstantsEditor()
+    qtbot.addWidget(editor)
+    _restore_constants_editor_state(
+        editor,
+        {"view": "text", "rows": [{"name": "A", "value": "1"}], "text": "CUSTOM_TEXT 7", "enabled": True},
+    )
+    assert "CUSTOM_TEXT" in editor.text_view.toPlainText()

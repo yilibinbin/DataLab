@@ -567,11 +567,16 @@ def _restore_constants_editor_state(editor: Any, state: Any) -> None:
     if "numeric_mode" in state and hasattr(editor, "set_numeric_mode"):
         editor.set_numeric_mode(str(state.get("numeric_mode") or "uncertainty"))
     editor.set_rows(rows)
-    if text is not None:
-        if hasattr(editor, "set_raw_text"):
-            editor.set_raw_text(str(text))
-        else:
-            editor.set_text(str(text))
+    if text is not None and use_text_view and hasattr(editor, "set_raw_text"):
+        # Only restore the stored text as authoritative when the workspace was saved in TEXT view.
+        # In TABLE view the rows we just restored are authoritative and the saved text is a stale
+        # draft — restoring it (stamped in-sync) defeated the editor's anti-stale guard, so a later
+        # table→text toggle surfaced the stale draft instead of regenerating from the rows. Leaving
+        # the text draft unset keeps _text_source_table_revision out of sync, so the toggle
+        # regenerates from the restored rows (audit A12).
+        editor.set_raw_text(str(text))
+    elif text is not None and not hasattr(editor, "set_raw_text"):
+        editor.set_text(str(text))
     editor.setChecked(bool(state.get("enabled")))
     editor.use_text_view(use_text_view)
 
