@@ -332,6 +332,17 @@ def _format_fit_rows(
     def _fmt(value) -> str:
         return _format_with_precision(value, mp_precision)
 
+    def _fmt_sigma(value) -> str:
+        # An undefined (non-finite) uncertainty renders as "N/A" so the CSV matches
+        # the params table's rendering (one response must not show 'nan' and 'N/A'
+        # for the same sigma).
+        try:
+            if not mp.isfinite(mp.mpf(value)):
+                return "N/A"
+        except Exception:
+            pass
+        return _fmt(value)
+
     if expression:
         rows.append(
             {
@@ -357,9 +368,9 @@ def _format_fit_rows(
                 "section": "parameter",
                 "name": name,
                 "value": _fmt(value),
-                "uncertainty": _fmt(total_errors.get(name, 0)),
-                "stat_error": _fmt(stat_errors.get(name, "")) if name in stat_errors else "",
-                "sys_error": _fmt(sys_errors.get(name, "")) if name in sys_errors else "",
+                "uncertainty": _fmt_sigma(total_errors.get(name, 0)),
+                "stat_error": _fmt_sigma(stat_errors.get(name, "")) if name in stat_errors else "",
+                "sys_error": _fmt_sigma(sys_errors.get(name, "")) if name in sys_errors else "",
                 "note": "",
             }
         )
@@ -1100,28 +1111,31 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                 )
             try:
                 params_cfg = json.loads(custom_params_text) if str(custom_params_text).strip() else {}
-                if not isinstance(params_cfg, dict):
-                    raise ValueError(
-                        _dual_msg(
-                            "参数配置必须为 JSON 对象（key 为参数名）。",
-                            "Parameter config must be a JSON object.",
-                        )
-                    )
-                normalized_cfg: dict[str, dict[str, object]] = {}
-                for name, conf in params_cfg.items():
-                    if isinstance(conf, dict):
-                        normalized_cfg[str(name)] = conf
-                    else:
-                        normalized_cfg[str(name)] = {"initial": conf}
-                parameter_config = normalized_cfg
-                parameter_names = list(normalized_cfg.keys())
             except Exception as exc:
+                # Only JSON syntax errors get wrapped; the non-dict check below raises
+                # its own already-bilingual message OUTSIDE this try (same CR-1 pattern
+                # as _build_self_consistent_problem) so it is not double-wrapped.
                 raise ValueError(
                     _dual_msg(
                         f"自定义模型解析失败: {exc}",
                         f"Failed to parse custom model: {exc}",
                     )
                 ) from exc
+            if not isinstance(params_cfg, dict):
+                raise ValueError(
+                    _dual_msg(
+                        "参数配置必须为 JSON 对象（key 为参数名）。",
+                        "Parameter config must be a JSON object.",
+                    )
+                )
+            normalized_cfg: dict[str, dict[str, object]] = {}
+            for name, conf in params_cfg.items():
+                if isinstance(conf, dict):
+                    normalized_cfg[str(name)] = conf
+                else:
+                    normalized_cfg[str(name)] = {"initial": conf}
+            parameter_config = normalized_cfg
+            parameter_names = list(normalized_cfg.keys())
             model_expr = custom_expr
             variable_map = dict(var_mapping) if var_mapping else {"x": x_column}
             best_label = "自定义模型 / Custom model"

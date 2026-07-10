@@ -134,3 +134,35 @@ def test_run_fit_self_consistent_unused_param_reports_na_instead_of_crashing() -
     assert by_name["z"]["uncertainty"] == "N/A"
     # The real parameter value is still recovered correctly (a = 2 for y = 2x + 1).
     assert mp.almosteq(mp.mpf(str(by_name["a"]["value_raw"])), mp.mpf("2"), rel_eps=mp.mpf("1e-10"))
+    # Round-2 R2-2: the CSV export and text summary must agree with the table —
+    # an undefined sigma is "N/A" on every surface, never a bare "nan".
+    csv_param_lines = [ln for ln in (result.csv_data or "").splitlines() if ",parameter," in ln]
+    assert csv_param_lines and all(",N/A," in ln and ",nan," not in ln for ln in csv_param_lines)
+    assert "± N/A" in result.summary_text
+    assert "± nan" not in result.summary_text
+
+
+def test_run_fit_self_consistent_zero_dof_survives_nan_metrics() -> None:
+    """Round-2 R2-1 regression: dof=0 (2 points, 2 params) makes reduced χ²/AIC/BIC NaN.
+
+    The LaTeX metrics branch used to re-parse 'nan' and crash in
+    format_value_for_latex_file, discarding the whole successful fit behind a
+    generic compute-failed flash. Non-finite metrics must now render as
+    parse-safe literal cells while params/CSV/plot survive.
+    """
+    result = _run_fit(
+        "x y\n1 3\n2 5\n",  # 2 points, 2 inferred params (z unused + a) → dof = 0
+        {
+            "fit_mode": "self_consistent",
+            "fit_implicit_equation": "a*x",
+            "fit_implicit_variable": "u",
+            "fit_implicit_output": "u + 1",
+            "fit_implicit_params": '{"z": {"initial": "1"}}',
+            "fit_mp_precision": "50",
+            "fit_result_digits": "6",
+        },
+    )
+    by_name = {p["name"]: p for p in result.params}
+    assert mp.almosteq(mp.mpf(str(by_name["a"]["value_raw"])), mp.mpf("2"), rel_eps=mp.mpf("1e-10"))
+    # NaN metrics render as parse-safe literal cells in the LaTeX metrics table.
+    assert "\\multicolumn{1}{c}{nan}" in result.latex_text

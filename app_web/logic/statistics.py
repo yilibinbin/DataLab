@@ -130,13 +130,6 @@ def _parse_stats_data(text: str):
                     sigma_val = mp.mpf(uv2.value)
                 except Exception:
                     sigma_val = mp.mpf(token2)
-                if not mp.isfinite(sigma_val):
-                    raise ValueError(
-                        _dual_msg(
-                            f"第 {line_num} 行的不确定度不是有限数: {parts[1]}",
-                            f"Uncertainty on line {line_num} is not finite: {parts[1]}",
-                        )
-                    )
 
             except Exception as exc:
                 raise ValueError(
@@ -145,6 +138,16 @@ def _parse_stats_data(text: str):
                         f"Could not parse line {line_num} as numbers: {line} ({exc})",
                     )
                 ) from exc
+            # Raised OUTSIDE the parse try so this already-bilingual message is not
+            # re-wrapped into a doubled "汉语 / English / 汉语 / English" string
+            # (same CR-1 pattern as the fitting params parsers).
+            if not mp.isfinite(sigma_val):
+                raise ValueError(
+                    _dual_msg(
+                        f"第 {line_num} 行的不确定度不是有限数: {parts[1]}",
+                        f"Uncertainty on line {line_num} is not finite: {parts[1]}",
+                    )
+                )
 
             values.append(val)
             sigmas.append(sigma_val)
