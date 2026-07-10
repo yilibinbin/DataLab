@@ -357,6 +357,17 @@ WYNN_EPSILON_PARAMS = form_section(
     visible_when=VisibilityRule.equals("method", "wynn_epsilon"),
 )
 
+# quadratic ("默认三点公式") derives its three values from the data columns themselves, so it takes
+# no tunable parameters (empty group, like shanks/wynn_epsilon). Added so the desktop offers the
+# backend's default three-point method that the web already exposes (audit B3).
+QUADRATIC_PARAMS = form_section(
+    key="quadratic_params",
+    title_zh="默认三点公式",
+    title_en="Default three-point formula",
+    fields=[],
+    visible_when=VisibilityRule.equals("method", "quadratic"),
+)
+
 
 # ============================================================
 # Complete Method Specifications
@@ -389,6 +400,14 @@ EXTRAPOLATION_METHOD_SPECS: dict[str, MethodSpec] = {
         description_zh=get_method_description("power_law", "zh"),
         description_en=get_method_description("power_law", "en"),
         parameter_groups=[POWER_LAW_PARAMS],
+    ),
+    "quadratic": MethodSpec(
+        key="quadratic",
+        name_zh="默认三点公式",
+        name_en="Default three-point formula",
+        description_zh=get_method_description("quadratic", "zh"),
+        description_en=get_method_description("quadratic", "en"),
+        parameter_groups=[QUADRATIC_PARAMS],
     ),
     "richardson": MethodSpec(
         key="richardson",
@@ -440,6 +459,7 @@ EXTRAPOLATION_METHOD_SPECS: dict[str, MethodSpec] = {
 # Order of methods in the dropdown (desktop GUI order)
 METHOD_DISPLAY_ORDER = [
     "power_law",
+    "quadratic",
     "richardson",
     "shanks",
     "levin_u",

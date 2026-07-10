@@ -39,6 +39,7 @@ def test_extrapolation_method_and_help_have_schema_metadata(window: Any) -> None
     assert window.method_combo.property("datalab_schema_choices") is True
     assert _combo_data(window.method_combo) == [
         "power_law",
+        "quadratic",
         "richardson",
         "shanks",
         "levin_u",
