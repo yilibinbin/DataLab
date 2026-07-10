@@ -60,9 +60,6 @@ _BASELINE: dict[str, int] = {
     # 800-line soft limit; consciously baselined.
     "app_desktop/workers_qt.py": 807,
     "datalab_latex/latex_formatting.py": 890,
-    # Crossed 800 during the design-review token pass (semantic color _TOKENS + _tok resolver,
-    # radius/CARD_PADDING scale) — the growth is one theme's single source of truth; baselined.
-    "app_desktop/theme.py": 802,
     # Crossed 800 when the batch-fit on-demand LaTeX builder + F1 group-size fixes landed
     # (fixing the user-reported "拟合无法生成 tex"); consciously baselined.
     "app_desktop/window_fitting_residuals_mixin.py": 813,

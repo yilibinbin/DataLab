@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flask import Blueprint, flash, render_template, request
+from flask import Blueprint, abort, flash, render_template, request
 
 from .._security_shim import csrf_protect
 from ..logic.common import (
@@ -12,6 +12,23 @@ from .utils import get_lang
 
 
 bp = Blueprint("pages", __name__)
+
+
+@bp.before_request
+def _rate_limit_compute_posts() -> None:
+    """Per-IP rate limit for the heavy compute POST routes (audit A2).
+
+    Each compute route runs an mpmath computation while holding a process-global serial lock, so an
+    attacker hammering them can starve legitimate users. GET (form render) is cheap and untouched;
+    only POST is throttled, reusing the SSE blueprint's battle-tested sliding-window limiter (which
+    also honours the TESTING / DATALAB_SSE_DISABLE_RATE_LIMIT bypasses). Over budget → 429.
+    """
+    if request.method != "POST":
+        return
+    from .sse import _check_rate_limit, _client_ip
+
+    if not _check_rate_limit(_client_ip()):
+        abort(429)
 
 
 SAMPLE_DATA = """A B C
