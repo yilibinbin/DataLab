@@ -1166,13 +1166,21 @@ class ExtrapolationWindow(
                 # file-precedence rule greys out the manual table + its +列/-列/+行/-行
                 # toolbar — the user opens an example and the add/remove buttons are
                 # dead (user-reported). The example rows are already inlined into the
-                # table by the restore, so drop the bundled path and fall back to the
-                # editable manual table. _update_data_source_visibility re-enables
-                # manual_box once the path edit is empty.
-                file_edit = getattr(self, "data_file_edit", None)
-                if file_edit is not None and file_edit.text().strip():
-                    file_edit.clear()
+                # table/editor by the restore, so drop the bundled paths and fall back
+                # to the editable manual inputs. Clearing the path edits re-enables the
+                # manual data box / constants editor (via _update_data_source_visibility
+                # and the constants file-path textChanged handler). Applies to BOTH the
+                # data table and the constants editor (e.g. error-propagation ships its
+                # constants in file mode too).
+                data_file_edit = getattr(self, "data_file_edit", None)
+                if data_file_edit is not None and data_file_edit.text().strip():
+                    data_file_edit.clear()
                     self._update_data_source_visibility()
+                constants_file_edit = getattr(self, "constants_file_edit", None)
+                if constants_file_edit is not None and constants_file_edit.text().strip():
+                    constants_file_edit.clear()
+                    if hasattr(self, "_update_constants_visibility"):
+                        self._update_constants_visibility()
         except Exception as exc:  # noqa: BLE001
             self._workspace_restoring = False
             QMessageBox.critical(self, self._tr("打开失败", "Open failed"), str(exc))

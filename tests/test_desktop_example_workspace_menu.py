@@ -273,6 +273,39 @@ def test_example_workspaces_keep_manual_table_editable(qtbot):
         assert win.manual_table.columnCount() == before + 1, source.name
 
 
+def test_example_with_file_mode_constants_keeps_constants_editor_editable(qtbot):
+    """Same file-precedence bug as the data table, but for the CONSTANTS editor:
+    error-propagation.datalab ships its constants in "file" mode (source_path
+    examples/constants.txt). Opening it as a template must clear the bundled
+    constants path too, so the constants editor + its +行/-行/清除 buttons stay
+    editable and the inlined constants rows survive.
+    """
+    from PySide6.QtWidgets import QAbstractButton, QTableWidget, QWidget
+
+    from app_desktop.window import ExtrapolationWindow, list_example_workspaces
+
+    QApplication.instance() or QApplication([])
+    win = ExtrapolationWindow()
+    _allow_discard(win)
+    qtbot.addWidget(win)
+    win._apply_language("zh")
+
+    source = next(p for p in list_example_workspaces() if p.name == "error-propagation.datalab")
+    assert win._open_workspace_from_path(source, as_template=True)
+
+    # The bundled constants file path must not linger and disable the editor.
+    assert win.constants_file_edit.text().strip() == ""
+    editor = win.findChild(QWidget, "input_constants_editor")
+    assert editor is not None and editor.isEnabled()
+    labels = {"+ 行", "- 行", "清除"}
+    buttons = {b.text(): b for b in editor.findChildren(QAbstractButton) if b.text() in labels}
+    assert labels <= set(buttons)
+    assert all(b.isEnabled() for b in buttons.values())
+    # The inlined constants rows survive the fall-back to manual mode.
+    table = editor.findChild(QTableWidget)
+    assert table is not None and table.rowCount() > 0
+
+
 def test_opening_narrow_example_clears_stale_manual_table_columns(qtbot):
     from app_desktop.window import ExtrapolationWindow, list_example_workspaces
 
