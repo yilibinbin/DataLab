@@ -227,6 +227,52 @@ def test_example_workspaces_open_as_live_templates(qtbot):
             assert _formula_preview_has_content(win), source.name
 
 
+def test_example_workspaces_keep_manual_table_editable(qtbot):
+    """User-reported: after opening an example (e.g. 外推示例), the +列/-列/+行/-行
+    table-editing buttons were dead. Cause: example workspaces ship in "file"
+    data-source mode whose source_path is a RELATIVE path into examples/. When the
+    app runs from the repo root that path resolves, so the file-precedence rule
+    grey-disabled the whole manual_box (table + toolbar). The example rows are
+    inlined into the table anyway, so a template open must land in editable manual
+    mode — the bundled file path is not the user's live data source.
+    """
+    from PySide6.QtWidgets import QAbstractButton, QGroupBox
+
+    from app_desktop.window import ExtrapolationWindow, list_example_workspaces
+
+    QApplication.instance() or QApplication([])
+    win = ExtrapolationWindow()
+    _allow_discard(win)
+    qtbot.addWidget(win)
+    # Pin the language so the button-label match is deterministic regardless of the
+    # runner's system locale (CI defaults to English).
+    win._apply_language("zh")
+
+    editing_labels = {"+ 列", "- 列", "+ 行", "- 行", "清除", "文本视图"}
+    for source in list_example_workspaces():
+        assert win._open_workspace_from_path(source, as_template=True), source.name
+        # The bundled relative file path must not linger as an active data source.
+        assert win.data_file_edit.text().strip() == "", source.name
+        # The manual data box + every editing button are enabled and editable.
+        manual_box = win.findChild(QGroupBox, "manual_box")
+        assert manual_box is not None and manual_box.isEnabled(), source.name
+        assert win.manual_table.isEnabled(), source.name
+        buttons = {
+            b.text(): b
+            for b in manual_box.findChildren(QAbstractButton)
+            if b.text() in editing_labels
+        }
+        assert editing_labels <= set(buttons), source.name
+        assert all(b.isEnabled() for b in buttons.values()), source.name
+        # The example rows survive the fall-back to manual mode (data not lost).
+        assert win.manual_table.rowCount() > 0, source.name
+        # And a table edit actually takes effect (button is live, not just enabled).
+        before = win.manual_table.columnCount()
+        buttons["+ 列"].click()
+        QApplication.processEvents()
+        assert win.manual_table.columnCount() == before + 1, source.name
+
+
 def test_opening_narrow_example_clears_stale_manual_table_columns(qtbot):
     from app_desktop.window import ExtrapolationWindow, list_example_workspaces
 

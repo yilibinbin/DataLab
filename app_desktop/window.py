@@ -1159,6 +1159,20 @@ class ExtrapolationWindow(
                 self._workspace_snapshot_only = False
                 self._workspace_snapshot_stale = False
                 self._set_snapshot_controls_enabled(True)
+            if as_template:
+                # Example workspaces are shipped in "file" data-source mode, whose
+                # source_path is a RELATIVE path into the bundled examples/ dir. When
+                # the app happens to run from the repo root that path resolves, so the
+                # file-precedence rule greys out the manual table + its +列/-列/+行/-行
+                # toolbar — the user opens an example and the add/remove buttons are
+                # dead (user-reported). The example rows are already inlined into the
+                # table by the restore, so drop the bundled path and fall back to the
+                # editable manual table. _update_data_source_visibility re-enables
+                # manual_box once the path edit is empty.
+                file_edit = getattr(self, "data_file_edit", None)
+                if file_edit is not None and file_edit.text().strip():
+                    file_edit.clear()
+                    self._update_data_source_visibility()
         except Exception as exc:  # noqa: BLE001
             self._workspace_restoring = False
             QMessageBox.critical(self, self._tr("打开失败", "Open failed"), str(exc))
