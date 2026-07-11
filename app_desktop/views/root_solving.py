@@ -147,22 +147,6 @@ def build_root_solving_mode_view(owner: Any) -> QGroupBox:
     view_helpers.apply_equal_column_stretch(owner.root_constants_editor.table_view)
     owner.root_constants_editor.table_view.setStyleSheet(view_helpers.get_table_style())
     owner.root_constants_editor.table_view.setMinimumHeight(120)
-    root_layout.addWidget(
-        view_helpers.make_display_unit_controls(
-            owner,
-            attr_prefix="root",
-            schema_prefix="root_solving",
-            input_tooltip_zh="输入数据列的单位。符号使用批处理数据列名，例如 A。",
-            input_tooltip_en="Units for input data columns. Symbols use batch data column names, such as A.",
-            include_constants=True,
-            constants_tooltip_zh="求根常数的单位。符号必须与输入常数名一致。",
-            constants_tooltip_en="Units for root-solving constants. Symbols must match input constant names.",
-            output_label_zh="根 result 单位：",
-            output_label_en="Root result unit:",
-            output_tooltip_zh="可选。用于根结果、LaTeX 和根图中的单位显示；不改变求解算法。",
-            output_tooltip_en="Optional. Used for root result, LaTeX, and root plot labels; it does not change solving.",
-        )
-    )
     _bind_root_schema_fields(owner, lbl_root_equations, lbl_root_mode, lbl_root_unknowns, root_mode_items)
     refresh_root_field_help(owner)
 

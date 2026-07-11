@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QPlainTextEdit,
     QStackedWidget,
@@ -21,7 +22,7 @@ from app_desktop.fitting_input_normalization import (
     normalize_constants_state,
     parse_constants_text,
 )
-from app_desktop.theme import constants_editor_style
+from app_desktop.theme import CARD_PADDING, constants_editor_style
 from app_desktop.widget_hints import set_accessible_description
 
 
@@ -73,22 +74,12 @@ class ConstantsEditor(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(6)
+        # The checkbox is legacy/hidden; keep it for callers that still poke it, but it no longer
+        # occupies its own header row (the summary + ? sit in the controls row, like the data card).
         self.checkbox = QCheckBox(checkbox_text)
         self.checkbox.setChecked(bool(checked))
         self.checkbox.toggled.connect(self._on_checked_changed)
         self.checkbox.hide()
-        header_layout.addWidget(self.checkbox)
-        self.help_button = _HelpButton("?")
-        self.help_button.setFlat(True)
-        self.help_button.setFocusPolicy(Qt.NoFocus)
-        self.help_button.setFixedWidth(24)
-        self.help_button.hide()
-        header_layout.addWidget(self.help_button)
-        header_layout.addStretch()
-        layout.addLayout(header_layout)
 
         self.controls_widget = QWidget()
         controls_layout = QHBoxLayout(self.controls_widget)
@@ -103,11 +94,26 @@ class ConstantsEditor(QWidget):
         self.remove_button.clicked.connect(self._remove_row)
         self.clear_button.clicked.connect(self.clear)
         self.view_toggle_button.clicked.connect(self._toggle_view)
+        # Card title on the LEFT of the controls row (mirrors the data card's "输入数据" title).
+        self.title_label = QLabel("输入常数")
+        self.title_label.setObjectName("constants_title")
+        controls_layout.addWidget(self.title_label)
         controls_layout.addWidget(self.add_button)
         controls_layout.addWidget(self.remove_button)
         controls_layout.addWidget(self.clear_button)
         controls_layout.addWidget(self.view_toggle_button)
         controls_layout.addStretch()
+        # Row-count summary (mirrors the data card's "N 行"), then the ? help button — both on the
+        # RIGHT of the controls row, not a separate header line.
+        self.summary_label = QLabel("")
+        self.summary_label.setObjectName("constants_summary")
+        controls_layout.addWidget(self.summary_label)
+        self.help_button = _HelpButton("?")
+        self.help_button.setFlat(True)
+        self.help_button.setFocusPolicy(Qt.NoFocus)
+        self.help_button.setFixedWidth(24)
+        self.help_button.hide()
+        controls_layout.addWidget(self.help_button)
         layout.addWidget(self.controls_widget)
 
         self.stack = QStackedWidget()
@@ -115,6 +121,10 @@ class ConstantsEditor(QWidget):
         self.table_view.setHorizontalHeaderLabels(["Name", "Value"])
         self.table_view.setMinimumHeight(120)
         self.table_view.itemChanged.connect(self._on_table_changed)
+        # Excel-like block copy (Ctrl/Cmd+C → TSV).
+        from app_desktop.table_copy import install_cell_copy
+
+        install_cell_copy(self.table_view)
         self.stack.addWidget(self.table_view)
 
         self.text_view = QPlainTextEdit()
@@ -130,6 +140,7 @@ class ConstantsEditor(QWidget):
         layout.addWidget(self.stack)
 
         self._on_checked_changed(self.checkbox.isChecked())
+        self._update_summary()
         self._constructed = True
 
     def set_embedded_in_workbench(self, embedded: bool) -> None:
@@ -137,8 +148,21 @@ class ConstantsEditor(QWidget):
         self.setProperty("datalab_constants_embedded", embedded)
         layout = self.layout()
         if layout is not None:
-            margin = 0 if embedded else 8
-            layout.setContentsMargins(margin, margin, margin, margin)
+            # Embedded card now has its own border (like the data card) → pad content off it with
+            # the shared CARD_PADDING; standalone keeps its tighter 8px inset.
+            if embedded:
+                layout.setContentsMargins(*CARD_PADDING)
+            else:
+                layout.setContentsMargins(8, 8, 8, 8)
+        self.setStyleSheet(constants_editor_style(embedded=embedded))
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def refresh_theme_style(self) -> None:
+        """Re-apply the (theme-dependent) editor style for the current embedded state. Its style is
+        otherwise set once at construction/embedding, so a live light↔dark toggle would leave the
+        button colors stale — the theme refresh calls this."""
+        embedded = bool(self.property("datalab_constants_embedded"))
         self.setStyleSheet(constants_editor_style(embedded=embedded))
         self.style().unpolish(self)
         self.style().polish(self)
@@ -273,7 +297,19 @@ class ConstantsEditor(QWidget):
         self.controls_widget.setEnabled(visible)
         self.stack.setEnabled(visible)
 
+    def _update_summary(self) -> None:
+        """Show the number of filled constant rows (mirrors the data card's "N 行")."""
+        label = getattr(self, "summary_label", None)
+        if label is None:
+            return
+        try:
+            count = len([r for r in self.rows() if (r.get("name") or r.get("value"))])
+        except Exception:
+            count = 0
+        label.setText(f"{count} 行")
+
     def _emit_changed(self, *_args: object) -> None:
+        self._update_summary()
         if not self._syncing:
             self.changed.emit()
 

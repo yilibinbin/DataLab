@@ -9,6 +9,7 @@ from shared.latex_escaping import latex_escape as _canonical_latex_escape
 from datalab_latex.latex_formatting import (
     calculate_dcolumn_format_for_column,
     format_value_for_latex_file,
+    group_digits_both_sides,
     siunitx_column_spec,
 )
 from datalab_latex.sisetup_block import build_sisetup_block
@@ -24,7 +25,12 @@ def build_root_latex_document(
     include_dcolumn: bool = False,
     language: str = "zh",
     root_units: Mapping[str, str] | None = None,
+    native_group_width: bool = True,
 ) -> str:
+    # native_group_width True → the engine honours siunitx digit-group-size → emit it (native
+    # S-column variable-width grouping). False → the engine can't (bundled Tectonic) → the
+    # cells are pre-grouped app-side, so don't emit the key.
+    emit_dgs = bool(native_group_width and not include_dcolumn and int(group_size) > 0)
     lines = [
         "\\documentclass{article}",
         "\\usepackage[UTF8]{ctex}" if language == "zh" else "",
@@ -32,7 +38,9 @@ def build_root_latex_document(
         "\\usepackage{dcolumn}" if include_dcolumn else "",
         "\\newcolumntype{d}[1]{D{.}{.}{#1}}" if include_dcolumn else "",
         "\\usepackage{siunitx}",
-        build_sisetup_block(group_size=group_size, include_dcolumn=include_dcolumn).rstrip(),
+        build_sisetup_block(
+            group_size=group_size, include_dcolumn=include_dcolumn, emit_digit_group_size=emit_dgs
+        ).rstrip(),
         "\\begin{document}",
     ]
     lines = [line for line in lines if line]
@@ -47,6 +55,7 @@ def build_root_latex_document(
             language=language,
             include_dcolumn=include_dcolumn,
             root_units=root_units,
+            native_group_width=native_group_width,
         )
     )
     lines.append("\\end{document}")
@@ -62,9 +71,14 @@ def _root_table(
     language: str,
     include_dcolumn: bool,
     root_units: Mapping[str, str] | None,
+    native_group_width: bool = True,
 ) -> list[str]:
     include_unit_column = bool(root_units)
     include_failure_column = any(_text(row.get("failure", "")).strip() for row in rows)
+    # App-side grouping when the engine can't vary the siunitx group WIDTH (non-native) and
+    # grouping is on in siunitx (non-dcolumn) mode: pre-group the value cell + use a plain r
+    # column instead of an S column siunitx would re-group at a fixed 3.
+    app_group = (not native_group_width) and (not include_dcolumn) and group_size > 0
     headers = _headers(
         language,
         include_unit_column=include_unit_column,
@@ -81,9 +95,22 @@ def _root_table(
         )
         for row in rows
     ]
-    value_spec = calculate_dcolumn_format_for_column(value_cells, "root_value") if rows and include_dcolumn else "l"
-    if rows and not include_dcolumn:
+    if app_group:
+        # Skip \multicolumn literal cells (non-finite values): wrapping them in
+        # \text{...} is invalid TeX ("Misplaced \omit").
+        value_cells = [
+            cell if "\\multicolumn" in cell
+            else "\\text{" + group_digits_both_sides(cell, group_size) + "}"
+            for cell in value_cells
+        ]
+    if rows and include_dcolumn:
+        value_spec = calculate_dcolumn_format_for_column(value_cells, "root_value")
+    elif rows and app_group:
+        value_spec = "r"
+    elif rows:
         value_spec = siunitx_column_spec(value_cells)
+    else:
+        value_spec = "l"
     header_cells = [_escape_latex(header) for header in headers]
     value_header_index = 4 if include_unit_column else 3
     header_cells[value_header_index] = "\\multicolumn{1}{c}{" + header_cells[value_header_index] + "}"
@@ -97,7 +124,21 @@ def _root_table(
         " & ".join(header_cells) + r" \\",
         "\\midrule",
     ]
-    for row in rows:
+    for row_idx, row in enumerate(rows):
+        # Use the value cell computed above (already grouped app-side when needed) rather
+        # than recomputing — keeps the cell and the column-format estimate consistent. Note
+        # value_cells was built with include_dcolumn=False; in dcolumn mode re-format it.
+        if include_dcolumn:
+            value_cell = _number_with_uncertainty(
+                row.get("value", ""),
+                row.get("uncertainty", ""),
+                digits=digits,
+                uncertainty_digits=uncertainty_digits,
+                group_size=group_size,
+                include_dcolumn=True,
+            )
+        else:
+            value_cell = value_cells[row_idx]
         lines.append(
             " & ".join(
                 [
@@ -109,14 +150,7 @@ def _root_table(
                         if include_unit_column
                         else []
                     ),
-                    _number_with_uncertainty(
-                        row.get("value", ""),
-                        row.get("uncertainty", ""),
-                        digits=digits,
-                        uncertainty_digits=uncertainty_digits,
-                        group_size=group_size,
-                        include_dcolumn=include_dcolumn,
-                    ),
+                    value_cell,
                     _escape_latex(_text(row.get("backend", ""))),
                     _escape_latex(_text(row.get("mode", ""))),
                     *(

@@ -319,19 +319,6 @@ def build_statistics_mode_view(owner: Any) -> QGroupBox:
     owner.stats_trim_fraction_label = lbl_trim_fraction
     stats_layout.addRow(lbl_trim_fraction, owner.stats_trim_fraction_edit)
     card_layout.addLayout(stats_layout)
-    card_layout.addWidget(
-        view_helpers.make_display_unit_controls(
-            owner,
-            attr_prefix="stats",
-            schema_prefix="statistics",
-            input_tooltip_zh="统计输入列的单位。符号使用数值列名，例如 A 或 B。",
-            input_tooltip_en="Units for statistics input columns. Symbols use value column names, such as A or B.",
-            output_label_zh="统计 result 单位：",
-            output_label_en="Statistics result unit:",
-            output_tooltip_zh="可选。用于统计结果、LaTeX 和图中的单位显示；不改变统计计算。",
-            output_tooltip_en="Optional. Used for statistics results, LaTeX, and plots; it does not change statistics.",
-        )
-    )
 
     _bind_statistics_schema_fields(
         owner,

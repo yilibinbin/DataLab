@@ -21,6 +21,7 @@ def generate_statistics_matrix_latex(
     use_dcolumn: bool = True,
     latex_group_size: int = 3,
     units: Mapping[str, Any] | None = None,
+    native_group_width: bool = True,
 ) -> str:
     """Generate a standalone LaTeX document for statistics matrix payloads."""
 
@@ -36,6 +37,7 @@ def generate_statistics_matrix_latex(
         include_dcolumn=use_dcolumn,
         needs_cjk=any(_contains_cjk_text(column) for column in columns + (caption_text,)),
         latex_group_size=latex_group_size,
+        native_group_width=native_group_width,
     )
     lines.extend(
         [

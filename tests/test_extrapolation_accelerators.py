@@ -85,3 +85,27 @@ def test_levin_variants_run_and_converge(variant: str):
         assert results
         res = results[0]
         assert mp.fabs(res.value - limit) < mp.mpf("1e-2")
+
+
+def test_shanks_diagnostics_use_proper_convergents_not_junk_auxiliary():
+    """In mpmath's Wynn-epsilon table the odd columns are non-convergent auxiliary entries that
+    diverge to huge junk. The cancellation/error diagnostics must derive from the proper convergent
+    difference |last[-1]-last[-3]|, never from the junk last[-2] (audit A6)."""
+    from extrapolation_methods.accelerators import _run_shanks
+
+    with mp.workdps(30):
+        seq6 = [sum(mp.mpf("4") * (-1) ** k / (2 * k + 1) for k in range(n)) for n in range(1, 7)]
+        result = _run_shanks(seq6, "shanks")
+        # The 6-input last row has a junk auxiliary ~82; the diagnostic must be the small convergent
+        # gap, and equal the error_estimate (both from the same proper source).
+        ci = result.metadata["cancellation_indicator"]
+        assert ci < mp.mpf("1"), f"cancellation_indicator {ci} is the junk auxiliary, not a convergent gap"
+        assert result.metadata["error_estimate"] == ci
+
+        # A 3-input sequence yields a 2-element last row (one convergent + one junk aux) — there is
+        # no previous convergent, so neither diagnostic is emitted (consumers fall back sanely).
+        seq3 = [mp.mpf("4"), mp.mpf("4") - mp.mpf("4") / 3, mp.mpf("4") - mp.mpf("4") / 3 + mp.mpf("4") / 5]
+        result3 = _run_shanks(seq3, "shanks")
+        assert "cancellation_indicator" not in result3.metadata
+        assert "error_estimate" not in result3.metadata
+        assert result3.value is not None  # the extrapolated value is still produced

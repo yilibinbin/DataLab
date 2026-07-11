@@ -678,7 +678,12 @@ def fit_custom_model(
                         current_targets,
                         parameter_state.free_params,
                         chi2,
-                        dof if dof > 0 else 1,
+                        # Pass the TRUE dof — _compute_covariance's own `noise = chi2/dof if dof > 0
+                        # else mp.nan` guard then fires for dof<=0, yielding NaN uncertainties like
+                        # the linear auto_models path. Clamping to 1 here defeated that guard and
+                        # produced spuriously precise (~0) errors for an exactly-determined fit
+                        # (audit A5).
+                        dof,
                         applied_weights,
                     )
                     dependent_errors = _propagate_dependent_errors(parameter_state, solved_params, covariance)

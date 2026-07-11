@@ -5,7 +5,6 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from mpmath import mp
 
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
@@ -83,35 +82,3 @@ def test_desktop_comparison_mode_shows_explicit_candidates_editor(window) -> Non
     assert not window.fit_expr_edit.isVisible()
     assert not window.add_variable_btn.isHidden()
     assert not window.remove_variable_btn.isHidden()
-
-
-def test_fitting_visible_units_are_passed_to_core_request(window) -> None:
-    _select_model(window, "custom")
-    window.fit_expr_edit.setPlainText("a*x + b")
-    window.fit_target_edit.setText("B")
-    window.custom_params_table.set_rows(
-        [
-            {"name": "a", "initial": "1", "fixed": "", "lower": "", "upper": ""},
-            {"name": "b", "initial": "0", "fixed": "", "lower": "", "upper": ""},
-        ]
-    )
-    window.fit_units_enabled_checkbox.setChecked(True)
-    window.fit_units_inputs_editor.set_rows([{"name": "A", "value": "s"}])
-    window.fit_units_parameters_editor.set_rows([{"name": "a", "value": "m/s"}])
-    window.fit_units_output_edit.setText("m")
-
-    job = window._prepare_fit_job(
-        (
-            ["A", "B"],
-            [(mp.mpf("1"), mp.mpf("2")), (mp.mpf("2"), mp.mpf("3"))],
-            [(None, None), (None, None)],
-        ),
-        generate_latex=False,
-        output_path="",
-        verbose=False,
-    )
-
-    assert job.core_request is not None
-    assert job.core_request.inputs["units"]["inputs"] == {"A": {"unit": "s"}}
-    assert job.core_request.inputs["units"]["parameters"] == {"a": {"unit": "m/s"}}
-    assert job.core_request.inputs["units"]["outputs"] == {"result": {"unit": "m"}}

@@ -67,6 +67,19 @@ def test_block_uses_group_minimum_digits_for_v2_compat() -> None:
     assert "group-minimum-digits = 3" in block
 
 
+def test_block_groups_integer_part_not_only_decimals() -> None:
+    """When grouping is enabled it must group the INTEGER part (thousands
+    separators) — the common case. ``group-digits = decimal`` grouped only the
+    fractional digits, so 12345678.00 rendered as 12345678.00 (integer ungrouped),
+    which users saw as 'grouping does nothing'. ``group-digits = all`` groups both
+    the integer and decimal parts (12 345 678.00)."""
+    from datalab_latex.sisetup_block import build_sisetup_block
+
+    block = build_sisetup_block(group_size=3, include_dcolumn=False)
+    assert "group-digits = all" in block
+    assert "group-digits = decimal" not in block
+
+
 def test_block_wraps_v3_key_in_ifpackagelater_guard() -> None:
     """``digit-group-size`` is a siunitx-v3 key but the activation
     history is messy: siunitx 3.0.49 (the version Tectonic bundles,
@@ -119,6 +132,38 @@ def test_block_omits_v3_key_when_group_size_matches_v2_default() -> None:
     # group-minimum-digits = 3 stays (v2-safe); digit-group-size
     # is unnecessary because both v2 and v3 default to size 3.
     assert "digit-group-size" not in block
+
+
+def test_emit_digit_group_size_true_emits_unguarded_override() -> None:
+    """When the app has PROBED the engine and knows its siunitx honours
+    digit-group-size, emit the key UNGUARDED (no \\@ifpackagelater date heuristic) — the
+    probe is authoritative. This is how a capable local TeX gets true variable-width S-column
+    grouping."""
+    from datalab_latex.sisetup_block import build_sisetup_block
+
+    block = build_sisetup_block(group_size=6, include_dcolumn=False, emit_digit_group_size=True)
+    assert "digit-group-size = 6" in block
+    assert "@ifpackagelater" not in block  # probe replaces the date guard
+
+
+def test_emit_digit_group_size_false_never_emits_the_key() -> None:
+    """When the app probed the engine as NOT supporting the key (bundled Tectonic), never
+    emit it — the doc must still compile there (app-side grouping handles width instead)."""
+    from datalab_latex.sisetup_block import build_sisetup_block
+
+    block = build_sisetup_block(group_size=6, include_dcolumn=False, emit_digit_group_size=False)
+    assert "digit-group-size" not in block
+    assert "@ifpackagelater" not in block
+
+
+def test_emit_digit_group_size_none_keeps_legacy_date_guard() -> None:
+    """Default (None) preserves the backward-compatible \\@ifpackagelater guard for callers
+    not yet passing a probe result."""
+    from datalab_latex.sisetup_block import build_sisetup_block
+
+    block = build_sisetup_block(group_size=4, include_dcolumn=False)
+    assert "@ifpackagelater" in block
+    assert "digit-group-size = 4" in block
 
 
 def test_block_dcolumn_branch_skips_grouping() -> None:
@@ -196,6 +241,9 @@ def test_no_more_raw_digit_group_size_outside_helper() -> None:
     matches = [
         line for line in result.stdout.splitlines()
         if "sisetup_block.py" not in line  # the central helper is allowed
+        # The capability PROBE (not an emitter) deliberately embeds the key to test whether
+        # the engine's siunitx rejects it — that is its whole purpose, not emitter drift.
+        and "latex_engine.py" not in line
     ]
     assert not matches, (
         "Hard-coded digit-group-size emit found outside the central helper:\n"

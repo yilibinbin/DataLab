@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -29,8 +30,13 @@ from data_extrapolation_latex_latest import (
 )
 from datalab_latex.sisetup_block import build_sisetup_block
 from fitting import (
+    FitRunner,
+    ImplicitModelDefinition,
+    ImplicitSolveOptions,
+    ModelProblem,
     build_inverse_series_definition,
     build_polynomial_definition,
+    infer_parameter_names,
     render_fitting_overview,
     summarize_fit_result,
 )
@@ -53,6 +59,7 @@ from .common import (
     _merged_core_warnings,
     _norm_token,
     _parse_int,
+    _parse_precision,
 )
 from shared.fitting_uncertainty import fit_uncertainty_policy
 from shared.uncertainty import parse_uncertainty_format
@@ -216,6 +223,78 @@ def _pade_template(m: int, n: int) -> tuple[str, dict[str, dict[str, float]]] | 
     return expression, params
 
 
+def _build_self_consistent_problem(
+    form,
+    headers: list[str],
+    rows: list[tuple[mp.mpf, ...]],
+    var_mapping: dict[str, str],
+    x_column: str,
+) -> tuple[ModelProblem, dict[str, list[mp.mpf]]]:
+    """Parse implicit-model form fields into (problem, variable_data).
+
+    Mirrors the desktop's ``_collect_implicit_config`` (window.py). Caller must
+    hold ``_precision_guard`` — ``_column_series`` parses to ``mp.mpf`` at the
+    active ``mp.dps``.
+    """
+    equation = (form.get("fit_implicit_equation") or "").strip()
+    implicit_variable = (form.get("fit_implicit_variable") or "").strip()
+    output_expression = (form.get("fit_implicit_output") or "").strip()
+    if not equation:
+        raise ValueError(_dual_msg("隐式方程不能为空。", "Implicit equation cannot be empty."))
+    if not output_expression:
+        raise ValueError(_dual_msg("输出表达式不能为空。", "Output expression cannot be empty."))
+    if not re.match(r"^[A-Za-z_]\w*$", implicit_variable):
+        raise ValueError(_dual_msg("隐式变量必须是有效标识符。", "Implicit variable must be a valid identifier."))
+
+    method = (form.get("fit_implicit_method") or "fixed_point").strip() or "fixed_point"
+    initial = (form.get("fit_implicit_initial") or "0").strip() or "0"
+    tolerance = (form.get("fit_implicit_tolerance") or "1e-30").strip() or "1e-30"
+    max_iterations = _parse_int(form.get("fit_implicit_max_iter")) or 80
+
+    implicit_params_text = form.get("fit_implicit_params") or ""
+    try:
+        params_cfg = json.loads(implicit_params_text) if str(implicit_params_text).strip() else {}
+    except Exception as exc:
+        # Only JSON syntax errors get wrapped here; the non-dict check below raises
+        # its own already-bilingual message OUTSIDE this try so it is not re-wrapped
+        # into a doubled "汉语 / English / 汉语 / English" string (breaks the locale split).
+        raise ValueError(
+            _dual_msg(f"自洽隐式模型参数解析失败: {exc}", f"Failed to parse self-consistent model parameters: {exc}")
+        ) from exc
+    if not isinstance(params_cfg, dict):
+        raise ValueError(_dual_msg("参数配置必须为 JSON 对象（key 为参数名）。", "Parameter config must be a JSON object."))
+    normalized_cfg: dict[str, dict[str, object]] = {
+        str(name): (conf if isinstance(conf, dict) else {"initial": conf}) for name, conf in params_cfg.items()
+    }
+
+    variable_map = dict(var_mapping) if var_mapping else {"x": x_column}
+    x_variables = tuple(variable_map.keys())
+    variable_data = {name: _column_series(headers, rows, col) for name, col in variable_map.items()}
+
+    parameter_names = infer_parameter_names(
+        f"{equation}\n{output_expression}", list(x_variables) + [implicit_variable], list(normalized_cfg.keys())
+    )
+
+    definition = ImplicitModelDefinition(
+        x_variables=x_variables,
+        implicit_variable=implicit_variable,
+        equation=equation,
+        output_expression=output_expression,
+        parameters=tuple(parameter_names),
+        solve_options=ImplicitSolveOptions(
+            method=method, initial=initial, tolerance=tolerance, max_iterations=max_iterations
+        ),
+    )
+    problem = ModelProblem(
+        model_type="self_consistent",
+        expression=output_expression,
+        variables=x_variables,
+        parameter_config=normalized_cfg,
+        implicit_definition=definition,
+    )
+    return problem, variable_data
+
+
 def _normalize_fit_mode(raw_mode: str | None) -> str:
     mode = (raw_mode or "polynomial").strip()
     legacy_aliases = {
@@ -253,6 +332,17 @@ def _format_fit_rows(
     def _fmt(value) -> str:
         return _format_with_precision(value, mp_precision)
 
+    def _fmt_sigma(value) -> str:
+        # An undefined (non-finite) uncertainty renders as "N/A" so the CSV matches
+        # the params table's rendering (one response must not show 'nan' and 'N/A'
+        # for the same sigma).
+        try:
+            if not mp.isfinite(mp.mpf(value)):
+                return "N/A"
+        except Exception:
+            pass
+        return _fmt(value)
+
     if expression:
         rows.append(
             {
@@ -278,9 +368,9 @@ def _format_fit_rows(
                 "section": "parameter",
                 "name": name,
                 "value": _fmt(value),
-                "uncertainty": _fmt(total_errors.get(name, 0)),
-                "stat_error": _fmt(stat_errors.get(name, "")) if name in stat_errors else "",
-                "sys_error": _fmt(sys_errors.get(name, "")) if name in sys_errors else "",
+                "uncertainty": _fmt_sigma(total_errors.get(name, 0)),
+                "stat_error": _fmt_sigma(stat_errors.get(name, "")) if name in stat_errors else "",
+                "sys_error": _fmt_sigma(sys_errors.get(name, "")) if name in sys_errors else "",
                 "note": "",
             }
         )
@@ -736,7 +826,7 @@ def _generate_fitting_comparison_latex(
 
 @mpmath_synchronized
 def _run_fit(data_text: str, form) -> FitResultBundle:
-    mp_precision = _parse_int(form.get("fit_mp_precision")) or 80
+    mp_precision = _parse_precision(form.get("fit_mp_precision")) or 80
     log_scale = (form.get("fit_log_scale") or "").strip().lower()
     fit_mode = _normalize_fit_mode(form.get("fit_mode"))
     custom_expr = (form.get("fit_custom_expr") or "").strip()
@@ -904,14 +994,24 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                 err = fit_res.param_errors.get(name) if fit_res.param_errors else None
             val = mp.mpf(value)
             sigma = mp.mpf(err) if err is not None else mp.mpf("0")
-            latex = format_result_with_uncertainty_latex(val, sigma, result_digits)
+            # A non-finite uncertainty (e.g. an unused/degenerate parameter whose
+            # covariance is undefined) cannot be formatted with siunitx —
+            # format_result_with_uncertainty_latex would raise a raw, non-bilingual
+            # "cannot convert inf or nan to int". Render the value alone and mark the
+            # uncertainty unavailable instead of 500-crashing the whole fit response.
+            if mp.isfinite(sigma):
+                latex = format_result_with_uncertainty_latex(val, sigma, result_digits)
+                uncertainty_display = _format_number(sigma, 10)
+            else:
+                latex = ""
+                uncertainty_display = "N/A"
             collected.append(
                 {
                     "name": name,
                     "value_raw": val,
                     "uncertainty_raw": sigma,
                     "value": _format_number(val, 10),
-                    "uncertainty": _format_number(sigma, 10),
+                    "uncertainty": uncertainty_display,
                     "latex": _latex_to_plain(latex) if latex else "",
                 }
             )
@@ -1011,67 +1111,83 @@ def _run_fit(data_text: str, form) -> FitResultBundle:
                 )
             try:
                 params_cfg = json.loads(custom_params_text) if str(custom_params_text).strip() else {}
-                if not isinstance(params_cfg, dict):
-                    raise ValueError(
-                        _dual_msg(
-                            "参数配置必须为 JSON 对象（key 为参数名）。",
-                            "Parameter config must be a JSON object.",
-                        )
-                    )
-                normalized_cfg: dict[str, dict[str, object]] = {}
-                for name, conf in params_cfg.items():
-                    if isinstance(conf, dict):
-                        normalized_cfg[str(name)] = conf
-                    else:
-                        normalized_cfg[str(name)] = {"initial": conf}
-                parameter_config = normalized_cfg
-                parameter_names = list(normalized_cfg.keys())
             except Exception as exc:
+                # Only JSON syntax errors get wrapped; the non-dict check below raises
+                # its own already-bilingual message OUTSIDE this try (same CR-1 pattern
+                # as _build_self_consistent_problem) so it is not double-wrapped.
                 raise ValueError(
                     _dual_msg(
                         f"自定义模型解析失败: {exc}",
                         f"Failed to parse custom model: {exc}",
                     )
                 ) from exc
+            if not isinstance(params_cfg, dict):
+                raise ValueError(
+                    _dual_msg(
+                        "参数配置必须为 JSON 对象（key 为参数名）。",
+                        "Parameter config must be a JSON object.",
+                    )
+                )
+            normalized_cfg: dict[str, dict[str, object]] = {}
+            for name, conf in params_cfg.items():
+                if isinstance(conf, dict):
+                    normalized_cfg[str(name)] = conf
+                else:
+                    normalized_cfg[str(name)] = {"initial": conf}
+            parameter_config = normalized_cfg
+            parameter_names = list(normalized_cfg.keys())
             model_expr = custom_expr
             variable_map = dict(var_mapping) if var_mapping else {"x": x_column}
             best_label = "自定义模型 / Custom model"
+        elif fit_mode == "self_consistent":
+            problem, variable_data = _build_self_consistent_problem(form, headers, rows, var_mapping, x_column)
+            definition = problem.implicit_definition
+            assert isinstance(definition, ImplicitModelDefinition)
+            fit_res = FitRunner().fit(
+                problem, variable_data, y_vals, precision=mp_precision, weights=fit_weights, data_sigmas=sigma_list
+            )
+            best_label = "自洽隐式模型 / Self-consistent"
+            expression_for_latex = expression_for_csv = definition.output_expression
         else:
             raise _unsupported_fit_mode_error(fit_mode)
 
-        request = build_fitting_request(
-            model_type=fit_mode,
-            headers=headers,
-            data_rows=rows,
-            variable_map=variable_map,
-            target_column=target_column,
-            model_expr=model_expr,
-            sigma_rows=sigma_rows,
-            sigma_series=sigma_list,
-            parameter_config=parameter_config,
-            parameter_names=parameter_names,
-            template_expr=template_expr,
-            template_params=template_params,
-            poly_degree=max(1, poly_degree),
-            inverse_min=inv_min,
-            inverse_max=inv_max,
-            pade_m=pade_m,
-            pade_n=pade_n,
-            weighted=use_weights,
-            refine_with_mcmc=refine_with_mcmc,
-            label=best_label,
-            weights=fit_weights,
-            precision_digits=mp_precision,
-            uncertainty_digits=result_digits,
-            request_id="web-fitting",
-        )
-        core_result = create_core_session_service().submit(request)
-        if core_result.status is not ResultStatus.SUCCEEDED:
-            raise ValueError(_core_failure_message(core_result.payload, "Fitting failed."))
-        fit_res = fitting_payload_to_fit_result(core_result.payload["fit_result"])
-        warnings.extend(_merged_core_warnings(core_result.payload, core_result.warnings))
-        expression_for_latex = core_result.payload.get("expression") if "expression" in core_result.payload else None
-        expression_for_csv = str(expression_for_latex or model_expr)
+        if fit_res is None:
+            request = build_fitting_request(
+                model_type=fit_mode,
+                headers=headers,
+                data_rows=rows,
+                variable_map=variable_map,
+                target_column=target_column,
+                model_expr=model_expr,
+                sigma_rows=sigma_rows,
+                sigma_series=sigma_list,
+                parameter_config=parameter_config,
+                parameter_names=parameter_names,
+                template_expr=template_expr,
+                template_params=template_params,
+                poly_degree=max(1, poly_degree),
+                inverse_min=inv_min,
+                inverse_max=inv_max,
+                pade_m=pade_m,
+                pade_n=pade_n,
+                weighted=use_weights,
+                refine_with_mcmc=refine_with_mcmc,
+                label=best_label,
+                weights=fit_weights,
+                precision_digits=mp_precision,
+                uncertainty_digits=result_digits,
+                request_id="web-fitting",
+            )
+            core_result = create_core_session_service().submit(request)
+            if core_result.status is not ResultStatus.SUCCEEDED:
+                raise ValueError(_core_failure_message(core_result.payload, "Fitting failed."))
+            fit_res = fitting_payload_to_fit_result(core_result.payload["fit_result"])
+            warnings.extend(_merged_core_warnings(core_result.payload, core_result.warnings))
+            expression_for_latex = (
+                core_result.payload.get("expression") if "expression" in core_result.payload else None
+            )
+            expression_for_csv = str(expression_for_latex or model_expr)
+
         params = _collect_params(fit_res)
         metrics = _collect_metrics(fit_res)
         diagnostic_correlations, diagnostic_residuals = _collect_diagnostic_display(fit_res)

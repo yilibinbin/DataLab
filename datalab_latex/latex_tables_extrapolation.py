@@ -23,6 +23,7 @@ from .latex_formatting import (
     _siunitx_column_spec,
     calculate_dcolumn_format_for_column,
     format_result_with_uncertainty_latex,
+    group_digits_both_sides,
 )
 from .latex_tables_common import (
     _apply_aliases,
@@ -354,12 +355,18 @@ def generate_latex_table(
     table_segments: list[tuple[int, int]] | None = None,
     result_uncertainty_digits: int | None = None,
     latex_group_size: int = 3,
+    native_group_width: bool = True,
 ) -> None:
     """Generate a LaTeX table with the data and extrapolation results."""
     headers = list(headers)
     data_rows = list(data_rows)
     extrapolated_results = list(extrapolated_results)
     latex_content: list[str] = []
+    # App-side grouping when the engine can't vary the siunitx group WIDTH (non-native) and
+    # grouping is on in siunitx (non-dcolumn) mode: pre-group each numeric cell + use plain r
+    # columns instead of S columns siunitx would re-group at a fixed 3.
+    _group = max(0, int(latex_group_size))
+    app_group = (not native_group_width) and (not use_dcolumn) and _group > 0
 
     column_count = len(headers)
     formatted_data_columns: list[list[str]] = [[] for _ in range(column_count)]
@@ -394,6 +401,16 @@ def generate_latex_table(
         )
         formatted_result_strings.append(result_formatted)
 
+    if app_group:
+        def _wrap(cell: str) -> str:
+            # A non-finite value renders as a \multicolumn literal cell; wrapping it
+            # in \text{...} is invalid TeX ("Misplaced \omit") — pass it through.
+            if "\\multicolumn" in cell:
+                return cell
+            return "\\text{" + group_digits_both_sides(cell, _group) + "}"
+        formatted_data_columns = [[_wrap(c) for c in col] for col in formatted_data_columns]
+        formatted_result_strings = [_wrap(c) for c in formatted_result_strings]
+
     for col_strings in formatted_data_columns:
         column_lengths.append(max((_string_length_hint(s) for s in col_strings), default=6))
     column_lengths.append(max((_string_length_hint(s) for s in formatted_result_strings), default=8))
@@ -408,6 +425,7 @@ def generate_latex_table(
             include_dcolumn=use_dcolumn,
             needs_cjk=needs_cjk,
             latex_group_size=latex_group_size,
+            native_group_width=native_group_width,
         )
     )
 
@@ -434,6 +452,10 @@ def generate_latex_table(
                 formatted_result_strings[start_row:end_row],
                 f"extrapolation_result_{block_index}",
             )
+        elif app_group:
+            # Cells are pre-grouped + wrapped in \text{}; plain right-aligned columns.
+            data_format_block = " ".join(["r"] * column_count)
+            result_format = "r"
         else:
             data_formats = [
                 _siunitx_column_spec(formatted_data_columns[col_idx][start_row:end_row])

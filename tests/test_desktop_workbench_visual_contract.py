@@ -14,8 +14,6 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QWidget
 
 from app_desktop.workbench_visual_contract import (
-    CONFIG_RAIL_MIN_WIDTH,
-    CONFIG_RAIL_OBJECT,
     RESULT_RAIL_MIN_WIDTH,
     RESULT_RAIL_OBJECT,
     STATUS_STRIP_OBJECT,
@@ -60,14 +58,15 @@ def _visual_contract_root(
     return root
 
 
-def test_workbench_exposes_three_column_visual_regions(qtbot: Any) -> None:
+def test_workbench_exposes_two_column_visual_regions(qtbot: Any) -> None:
     window = _window(qtbot)
 
     metrics = workbench_region_metrics(window)
 
+    # Two-pane layout: toolbar + merged workspace pane + result rail + status strip.
+    # The config rail merged into the workspace pane and is no longer a visible region.
     for name in (
         TOOLBAR_OBJECT,
-        CONFIG_RAIL_OBJECT,
         WORKSPACE_CANVAS_OBJECT,
         RESULT_RAIL_OBJECT,
         STATUS_STRIP_OBJECT,
@@ -89,26 +88,25 @@ def test_workbench_keeps_legacy_public_widget_attributes(qtbot: Any) -> None:
         "result_tabs",
         "result_edit",
         "latex_edit",
-        "run_button",
         "workbench_run_button",
     ):
         assert getattr(window, name, None) is not None, name
 
 
 def test_visual_contract_reports_minimum_width_violations(qtbot: Any) -> None:
+    # Two-pane: only the merged workspace pane + result rail have width contracts now.
     root = _visual_contract_root(
         qtbot,
         {
             TOOLBAR_OBJECT: (0, 0, 900, 40),
-            CONFIG_RAIL_OBJECT: (0, 40, CONFIG_RAIL_MIN_WIDTH - 1, 500),
             WORKSPACE_CANVAS_OBJECT: (
-                CONFIG_RAIL_MIN_WIDTH,
+                0,
                 40,
                 WORKSPACE_CANVAS_MIN_WIDTH - 1,
                 500,
             ),
             RESULT_RAIL_OBJECT: (
-                CONFIG_RAIL_MIN_WIDTH + WORKSPACE_CANVAS_MIN_WIDTH,
+                WORKSPACE_CANVAS_MIN_WIDTH,
                 40,
                 RESULT_RAIL_MIN_WIDTH - 1,
                 500,
@@ -123,19 +121,19 @@ def test_visual_contract_reports_minimum_width_violations(qtbot: Any) -> None:
         (issue["kind"], issue["widget"])
         for issue in issues
     } >= {
-        ("config_rail_width", CONFIG_RAIL_OBJECT),
         ("workspace_canvas_width", WORKSPACE_CANVAS_OBJECT),
         ("result_rail_width", RESULT_RAIL_OBJECT),
     }
 
 
 def test_visual_contract_reports_missing_regions_and_invalid_order(qtbot: Any) -> None:
+    # Two-pane order: the merged workspace pane must sit left of the result rail. Here
+    # workspace.x (650) > result.x (100) → a region_order issue; toolbar is missing.
     root = _visual_contract_root(
         qtbot,
         {
-            CONFIG_RAIL_OBJECT: (500, 40, CONFIG_RAIL_MIN_WIDTH, 500),
-            WORKSPACE_CANVAS_OBJECT: (100, 40, WORKSPACE_CANVAS_MIN_WIDTH, 500),
-            RESULT_RAIL_OBJECT: (650, 40, RESULT_RAIL_MIN_WIDTH, 500),
+            WORKSPACE_CANVAS_OBJECT: (650, 40, WORKSPACE_CANVAS_MIN_WIDTH, 500),
+            RESULT_RAIL_OBJECT: (100, 40, RESULT_RAIL_MIN_WIDTH, 500),
             STATUS_STRIP_OBJECT: (0, 540, 900, 40),
         },
     )
@@ -146,7 +144,6 @@ def test_visual_contract_reports_missing_regions_and_invalid_order(qtbot: Any) -
     order_issue = next(issue for issue in issues if issue["kind"] == "region_order")
     assert order_issue["widget"] == "workbench"
     assert order_issue["positions"] == {
-        "config": 500,
-        "workspace": 100,
-        "result": 650,
+        "workspace": 650,
+        "result": 100,
     }

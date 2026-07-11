@@ -126,12 +126,16 @@ def _run_shanks(
         "epsilon_depth": mp.mpf(len(table)),
         "last_row_length": mp.mpf(len(last_row)),
     }
+    # In mpmath's Wynn-epsilon table the ODD columns are auxiliary (non-convergent) entries that
+    # diverge to huge junk magnitudes — only the even columns are convergents. So last_row[-1] is
+    # the best convergent and last_row[-3] is the previous convergent, while last_row[-2] is junk.
+    # Derive both diagnostics from the proper convergent difference |[-1] - [-3]| (audit A6); a
+    # 2-element last row (a 3-input sequence) has no previous convergent, so emit neither rather
+    # than a garbage value taken from the auxiliary entry (consumers fall back sanely on absence).
     if len(last_row) >= 3:
-        metadata["error_estimate"] = mp.fabs(last_row[-1] - last_row[-3])
-    elif len(last_row) == 2:
-        metadata["error_estimate"] = mp.fabs(last_row[-1] - last_row[-2])
-    if len(last_row) >= 2:
-        metadata["cancellation_indicator"] = mp.fabs(last_row[-2])
+        convergent_gap = mp.fabs(last_row[-1] - last_row[-3])
+        metadata["error_estimate"] = convergent_gap
+        metadata["cancellation_indicator"] = convergent_gap
     metadata["wynn_variant"] = variant
     metadata["note"] = "mp.shanks uses Wynn epsilon algorithm"
     return SequenceAcceleratorResult(value=limit, metadata=metadata)

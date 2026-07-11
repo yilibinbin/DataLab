@@ -16,9 +16,14 @@ SPACE_LG = 12   # workspace gutter           (== WORKSPACE_GUTTER)
 
 # Inner titled-box content margin (replaces ad-hoc 8,8,8,8).
 INNER_BOX_MARGIN = SPACE_MD            # 8
-# Card content margins (replaces ad-hoc 12,10,12,12).
+# Card content margins (legacy — kept as aliases; no card actually used (12,10,12,12)).
 CARD_MARGIN_H = SPACE_LG               # 12
 CARD_MARGIN_V = PANEL_MARGIN           # 10
+# The ONE canonical card content padding (design review R2/R3). Every titled card content layout
+# uses this so the six cards stop each hard-coding a slightly different tuple
+# ((10,8,10,10)/(10,8,10,8)/(10,10,10,10)/(8,8,8,8)). Order: (left, top, right, bottom) — a hair
+# less on top for the title baseline.
+CARD_PADDING = (PANEL_MARGIN, SPACE_MD, PANEL_MARGIN, PANEL_MARGIN)  # (10, 8, 10, 10)
 
 # Vertical space a *styled* QGroupBox (one whose QSS sets a border) must reserve
 # above its content so the title band never overlaps the first control. Must be
@@ -35,7 +40,15 @@ STATUS_STRIP_HEIGHT = 26
 CONFIG_RAIL_WIDTH = 320
 RESULT_RAIL_WIDTH = 380
 WORKSPACE_GUTTER = 12
+# --- Radius scale (design review R2) ---
+# Two tiers instead of the previous 3/4/5/6/8 drift: cards/panes/tab-panes/status-chips = CARD (8),
+# buttons + small controls + preview surfaces = CONTROL (6). (Scrollbar handle 3px and the tutorial
+# overlay 10px stay bespoke; embedded constants stays 0px on purpose.)
+# REGION_RADIUS is the historical card-radius name still used across the codebase; RADIUS_CARD is
+# an alias for it (one value, two names) so the two never drift.
 REGION_RADIUS = 8
+RADIUS_CARD = REGION_RADIUS
+RADIUS_CONTROL = 6
 WORKBENCH_FORMULA_PANEL_SINGLE_MAX_HEIGHT = 268
 WORKBENCH_FORMULA_PANEL_MULTI_MAX_HEIGHT = 392
 WORKBENCH_FORMULA_TITLE_ROW_MAX_HEIGHT = 42
@@ -47,6 +60,30 @@ def is_dark_theme() -> bool:
     if app is None:
         return True
     return app.palette().window().color().lightness() < 128
+
+
+# --- Semantic color tokens (single source of truth per role) ---
+# Each role had 3–4 near-duplicate hexes scattered across the *_style functions (design review P1).
+# These collapse them to one value per (role, theme). Style functions resolve through _tok() so a
+# role's color is defined exactly once. Values chosen to match the previous dominant hex per role.
+_TOKENS: dict[str, tuple[str, str]] = {
+    # role: (light, dark)
+    "text_primary": ("#0f172a", "#e5e7eb"),   # titles + primary body (was #1f2328/#111827/#111111/#dfe1e5/#f8fafc)
+    "text_muted": ("#64748b", "#9aa4b2"),      # secondary/caption text (was #4b5563/#475569/#57606a/#a5b4c3/#bfc1c5)
+    "border": ("#d8dee8", "rgba(255, 255, 255, 0.10)"),  # card border (was #d0d7de/#cbd5e1/#e5e7eb/.14/.16)
+    "card_bg": ("#ffffff", "#20242b"),         # base card background
+    "card_bg_muted": ("#f8fafc", "#20242b"),   # inset/muted card background
+    "region_bg": ("#f3f5f7", "#181a1f"),       # app/region background
+    "surface_raised": ("#f8fafc", "#262b34"),  # buttons / tab base (was #303746/#2b313a/#2a313c/#222833 dark)
+    "surface_hover": ("#eef2f7", "#303746"),   # button/tab hover
+}
+
+
+def _tok(name: str, dark: bool | None = None) -> str:
+    """Resolve a semantic color token for the active (or forced) theme."""
+    dark = is_dark_theme() if dark is None else bool(dark)
+    light_value, dark_value = _TOKENS[name]
+    return dark_value if dark else light_value
 
 
 def scrollbar_style(*, dark: bool | None = None) -> str:
@@ -159,9 +196,7 @@ def workbench_title_text_style() -> str:
 
 
 def workbench_muted_text_style(*, dark: bool | None = None) -> str:
-    dark = is_dark_theme() if dark is None else bool(dark)
-    color = "#9aa4b2" if dark else "#4b5563"
-    return f"color: {color};"
+    return f"color: {_tok('text_muted', dark)};"
 
 
 def workbench_warning_text_style(*, dark: bool | None = None) -> str:
@@ -185,26 +220,20 @@ def workbench_message_surface_style(
         background = "#431407" if dark else "#fff7ed"
         border = "#9a3412" if dark else "#fed7aa"
     elif kind == "description":
-        color = "#9aa4b2" if dark else "#4b5563"
-        background = "#20242b" if dark else "#f9fafb"
-        border = "rgba(255, 255, 255, 0.10)" if dark else "#e5e7eb"
+        color = _tok("text_muted", dark)
+        background = _tok("card_bg", dark) if dark else "#f9fafb"
+        border = _tok("border", dark)
     else:
         raise ValueError(f"Unknown workbench message surface kind: {kind}")
-    return f"color: {color}; background: {background}; border: 1px solid {border}; border-radius: 6px; padding: 6px;"
+    return f"color: {color}; background: {background}; border: 1px solid {border}; border-radius: {RADIUS_CONTROL}px; padding: 6px;"
 
 
 def workbench_section_card_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    if dark:
-        card_bg = "#20242b"
-        border = "rgba(255, 255, 255, 0.10)"
-        title_fg = "#e5e7eb"
-        muted_fg = "#a5b4c3"
-    else:
-        card_bg = "#ffffff"
-        border = "#d8dee8"
-        title_fg = "#0f172a"
-        muted_fg = "#64748b"
+    card_bg = _tok("card_bg", dark)
+    border = _tok("border", dark)
+    title_fg = _tok("text_primary", dark)
+    muted_fg = _tok("text_muted", dark)
     return f"""
 QGroupBox[datalab_workbench_section_host="true"] {{
     border: none;
@@ -228,10 +257,10 @@ QLabel[datalab_workbench_section_description="true"] {{
 
 def formula_preview_surface_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    background = "#1f2328" if dark else "#ffffff"
-    color = "#f8fafc" if dark else "#111111"
-    border = "rgba(255, 255, 255, 0.16)" if dark else "#d0d7de"
-    return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: 4px; padding: 12px;"
+    background = "#1f2328" if dark else _tok("card_bg", dark)
+    color = _tok("text_primary", dark)
+    border = _tok("border", dark)
+    return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: {RADIUS_CONTROL}px; padding: 12px;"
 
 
 def formula_preview_error_surface_style(*, dark: bool | None = None) -> str:
@@ -239,23 +268,23 @@ def formula_preview_error_surface_style(*, dark: bool | None = None) -> str:
     background = "#431407" if dark else "#fff4f2"
     color = "#fed7aa" if dark else "#8a1c13"
     border = "#9a3412" if dark else "#f2b8b5"
-    return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: 4px; padding: 8px;"
+    return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: {RADIUS_CONTROL}px; padding: 8px;"
 
 
 def formula_preview_source_edit_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    background = "#1f2328" if dark else "#ffffff"
-    color = "#f8fafc" if dark else "#111111"
-    border = "rgba(255, 255, 255, 0.16)" if dark else "#d0d7de"
+    background = "#1f2328" if dark else _tok("card_bg", dark)
+    color = _tok("text_primary", dark)
+    border = _tok("border", dark)
     return f"background: {background}; color: {color}; border: 1px solid {border};"
 
 
 def formula_inline_preview_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    background = "#20242b" if dark else "#f8fafc"
-    color = "#f8fafc" if dark else "#111827"
-    border = "rgba(255, 255, 255, 0.14)" if dark else "#cbd5e1"
-    return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: 6px; padding: 12px;"
+    background = _tok("card_bg_muted", dark)
+    color = _tok("text_primary", dark)
+    border = _tok("border", dark)
+    return f"background: {background}; color: {color}; border: 1px solid {border}; border-radius: {RADIUS_CONTROL}px; padding: 12px;"
 
 
 def pdf_preview_viewport_style(*, inverted: bool = False) -> str:
@@ -280,11 +309,16 @@ QWidget#card {
 
 
 def tutorial_overlay_title_style() -> str:
-    return "font-size: 16pt; font-weight: 600;"
+    # The tutorial card is always white — pin the title to dark text (like the body) so it stays
+    # readable when the OS is in dark mode (otherwise it inherits the near-white default). (G-1.)
+    return f"font-size: 16pt; font-weight: 600; color: {_tok('text_primary', False)};"
 
 
 def tutorial_overlay_body_style() -> str:
-    return "font-size: 11pt; color: #333;"
+    # The tutorial card is ALWAYS white (single-theme by design), so body text must be DARK in both
+    # themes — use the light-theme primary text, not the theme-following token (which would be the
+    # near-white dark-theme value on a white card → unreadable). (Codex review R-2.)
+    return f"font-size: 11pt; color: {_tok('text_primary', False)};"
 
 
 def result_tab_pane_style() -> str:
@@ -297,14 +331,9 @@ QTabWidget::pane {
 
 def config_card_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    if dark:
-        panel_bg = "#20242b"
-        border = "rgba(255, 255, 255, 0.10)"
-        title_fg = "#e5e7eb"
-    else:
-        panel_bg = "#ffffff"
-        border = "#d8dee8"
-        title_fg = "#1f2328"
+    panel_bg = _tok("card_bg", dark)
+    border = _tok("border", dark)
+    title_fg = _tok("text_primary", dark)
     return f"""
 QWidget[datalab_config_card="true"] {{
     background: {panel_bg};
@@ -326,50 +355,19 @@ QWidget[datalab_config_card="true"] QGroupBox::title {{
     top: 0px;
     padding: 0px;
 }}
-QWidget[datalab_config_card="true"] QPushButton[datalab_primary_run_button="true"] {{
-    min-height: 28px;
-    padding: 4px 10px;
-    color: #ffffff;
-    background: #2563eb;
-    border: 1px solid #2563eb;
-    border-radius: 6px;
-    font-weight: 600;
-}}
-QWidget[datalab_config_card="true"] QPushButton[datalab_primary_run_button="true"]:hover {{
-    background: #1d4ed8;
-    border-color: #1d4ed8;
-}}
-QWidget[datalab_config_card="true"] QPushButton[datalab_primary_run_button="true"][datalab_run_state="stop"] {{
-    background: #dc2626;
-    border-color: #dc2626;
-}}
-QWidget[datalab_config_card="true"] QPushButton[datalab_primary_run_button="true"][datalab_run_state="stop"]:hover {{
-    background: #b91c1c;
-    border-color: #b91c1c;
-}}
 """
 
 
 def result_detail_card_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    if dark:
-        panel_bg = "#20242b"
-        tab_bg = "#262b34"
-        tab_hover = "#303746"
-        selected_bg = "#1f2937"
-        border = "rgba(255, 255, 255, 0.10)"
-        title_fg = "#e5e7eb"
-        muted_fg = "#a5b4c3"
-        selected_fg = "#f8fafc"
-    else:
-        panel_bg = "#ffffff"
-        tab_bg = "#f6f8fb"
-        tab_hover = "#eef2f7"
-        selected_bg = "#ffffff"
-        border = "#d8dee8"
-        title_fg = "#0f172a"
-        muted_fg = "#64748b"
-        selected_fg = "#0f172a"
+    panel_bg = _tok("card_bg", dark)
+    border = _tok("border", dark)
+    title_fg = _tok("text_primary", dark)
+    muted_fg = _tok("text_muted", dark)
+    selected_fg = _tok("text_primary", dark)
+    tab_bg = _tok("surface_raised", dark)
+    tab_hover = _tok("surface_hover", dark)
+    selected_bg = "#1f2937" if dark else "#ffffff"
     return f"""
 QWidget#workbench_result_details_panel {{
     background: {panel_bg};
@@ -389,7 +387,7 @@ QLabel#workbench_result_details_empty_label {{
 }}
 QTabWidget#result_detail_tabs::pane {{
     border: 1px solid {border};
-    border-radius: 6px;
+    border-radius: {RADIUS_CARD}px;
     background: {panel_bg};
     top: -1px;
 }}
@@ -416,15 +414,60 @@ QTabWidget#result_detail_tabs QTabBar::scroller {{
 """
 
 
+def input_data_tabs_style(*, dark: bool | None = None) -> str:
+    """Rounded, modern styling for the 输入数据 / 常数 sheet tabs (input_data_tabs). Mirrors the
+    result-detail tab chrome so the input area matches the rest of the workbench."""
+    dark = is_dark_theme() if dark is None else bool(dark)
+    # Resolve every surface through the design tokens so the 输入数据/常数 tab strip matches the
+    # result-detail tab strip across the splitter (this function's whole point) — the P1 token pass
+    # missed these four hardcoded dark hexes, so the two mirror-intended tab strips diverged in dark
+    # mode (audit B5). Mirrors result_detail_card_style's token mapping exactly.
+    border = _tok("border", dark)
+    selected_fg = _tok("text_primary", dark)
+    muted_fg = _tok("text_muted", dark)
+    panel_bg = _tok("card_bg", dark)
+    tab_bg = _tok("surface_raised", dark)
+    tab_hover = _tok("surface_hover", dark)
+    selected_bg = "#1f2937" if dark else "#ffffff"
+    return f"""
+QTabWidget#input_data_tabs::pane {{
+    border: 1px solid {border};
+    border-radius: {RADIUS_CARD}px;
+    background: {panel_bg};
+    top: -1px;
+}}
+QTabWidget#input_data_tabs QTabBar::tab {{
+    min-width: 60px;
+    padding: 6px 14px;
+    font-size: 13px;
+    color: {muted_fg};
+    background: {tab_bg};
+    border: 1px solid {border};
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    margin-right: 2px;
+}}
+QTabWidget#input_data_tabs QTabBar::tab:selected {{
+    color: {selected_fg};
+    background: {selected_bg};
+    font-weight: 600;
+}}
+QTabWidget#input_data_tabs QTabBar::tab:hover {{
+    background: {tab_hover};
+}}
+"""
+
+
 def result_overview_card_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
+    panel_bg = _tok("card_bg", dark)
+    border = _tok("border", dark)
+    title_fg = _tok("text_primary", dark)
+    body_fg = _tok("text_primary", dark)
+    muted_fg = _tok("text_muted", dark)
+    summary_bg = _tok("surface_raised", dark)
     if dark:
-        panel_bg = "#20242b"
-        summary_bg = "#262b34"
-        border = "rgba(255, 255, 255, 0.10)"
-        title_fg = "#e5e7eb"
-        body_fg = "#f8fafc"
-        muted_fg = "#a5b4c3"
         waiting_bg = "#334155"
         waiting_fg = "#cbd5e1"
         running_bg = "#1e3a8a"
@@ -436,12 +479,6 @@ def result_overview_card_style(*, dark: bool | None = None) -> str:
         complete_bg = "#78350f"
         complete_fg = "#fde68a"
     else:
-        panel_bg = "#ffffff"
-        summary_bg = "#f8fafc"
-        border = "#d0d7de"
-        title_fg = "#0f172a"
-        body_fg = "#111827"
-        muted_fg = "#64748b"
         waiting_bg = "#f1f5f9"
         waiting_fg = "#475569"
         running_bg = "#dbeafe"
@@ -462,29 +499,35 @@ QLabel#workbench_result_overview_title {{
     color: {title_fg};
     font-weight: 600;
 }}
-QLabel#workbench_result_status_badge {{
-    border-radius: 8px;
+QLabel#workbench_result_status_badge,
+QLabel#result_status_strip_status {{
+    border-radius: {RADIUS_CARD}px;
     font-size: 11px;
     font-weight: 600;
     padding: 2px 7px;
 }}
-QLabel#workbench_result_status_badge[datalab_result_status="waiting"] {{
+QLabel#workbench_result_status_badge[datalab_result_status="waiting"],
+QLabel#result_status_strip_status[datalab_result_status="waiting"] {{
     background: {waiting_bg};
     color: {waiting_fg};
 }}
-QLabel#workbench_result_status_badge[datalab_result_status="running"] {{
+QLabel#workbench_result_status_badge[datalab_result_status="running"],
+QLabel#result_status_strip_status[datalab_result_status="running"] {{
     background: {running_bg};
     color: {running_fg};
 }}
-QLabel#workbench_result_status_badge[datalab_result_status="ready"] {{
+QLabel#workbench_result_status_badge[datalab_result_status="ready"],
+QLabel#result_status_strip_status[datalab_result_status="ready"] {{
     background: {ready_bg};
     color: {ready_fg};
 }}
-QLabel#workbench_result_status_badge[datalab_result_status="failed"] {{
+QLabel#workbench_result_status_badge[datalab_result_status="failed"],
+QLabel#result_status_strip_status[datalab_result_status="failed"] {{
     background: {failed_bg};
     color: {failed_fg};
 }}
-QLabel#workbench_result_status_badge[datalab_result_status="complete"] {{
+QLabel#workbench_result_status_badge[datalab_result_status="complete"],
+QLabel#result_status_strip_status[datalab_result_status="complete"] {{
     background: {complete_bg};
     color: {complete_fg};
 }}
@@ -497,7 +540,7 @@ QLabel#workbench_result_overview_meta {{
 QWidget#workbench_result_summary_grid {{
     background: {summary_bg};
     border: 1px solid {border};
-    border-radius: 5px;
+    border-radius: {RADIUS_CONTROL}px;
 }}
 QLabel[datalab_result_summary_label="true"] {{
     color: {muted_fg};
@@ -512,22 +555,13 @@ QLabel[datalab_result_summary_value="true"] {{
 
 def data_input_card_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    if dark:
-        panel_bg = "#20242b"
-        button_bg = "#262b34"
-        button_hover = "#303746"
-        border = "rgba(255, 255, 255, 0.10)"
-        title_fg = "#e5e7eb"
-        muted_fg = "#a5b4c3"
-        button_fg = "#e5e7eb"
-    else:
-        panel_bg = "#ffffff"
-        button_bg = "#f8fafc"
-        button_hover = "#eef2f7"
-        border = "#d8dee8"
-        title_fg = "#0f172a"
-        muted_fg = "#64748b"
-        button_fg = "#1f2328"
+    panel_bg = _tok("card_bg", dark)
+    border = _tok("border", dark)
+    title_fg = _tok("text_primary", dark)
+    muted_fg = _tok("text_muted", dark)
+    button_fg = _tok("text_primary", dark)
+    button_bg = _tok("surface_raised", dark)
+    button_hover = _tok("surface_hover", dark)
     return f"""
 QGroupBox#manual_box {{
     background: {panel_bg};
@@ -548,7 +582,7 @@ QPushButton[datalab_data_toolbar_button="true"] {{
     color: {button_fg};
     background: {button_bg};
     border: 1px solid {border};
-    border-radius: 5px;
+    border-radius: {RADIUS_CONTROL}px;
 }}
 QPushButton[datalab_data_toolbar_button="true"]:hover {{
     background: {button_hover};
@@ -558,24 +592,18 @@ QPushButton[datalab_data_toolbar_button="true"]:hover {{
 
 def variable_panel_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    if dark:
-        panel_bg = "#20242b"
-        card_bg = "#20242b"
-        button_bg = "#262b34"
-        button_hover = "#303746"
-        border = "rgba(255, 255, 255, 0.10)"
-        title_fg = "#e5e7eb"
-        muted_fg = "#a5b4c3"
-        button_fg = "#e5e7eb"
-    else:
-        panel_bg = "#f3f5f7"
-        card_bg = "#ffffff"
-        button_bg = "#f8fafc"
-        button_hover = "#eef2f7"
-        border = "#d8dee8"
-        title_fg = "#0f172a"
-        muted_fg = "#64748b"
-        button_fg = "#1f2328"
+    border = _tok("border", dark)
+    title_fg = _tok("text_primary", dark)
+    muted_fg = _tok("text_muted", dark)
+    button_fg = _tok("text_primary", dark)
+    panel_bg = _tok("card_bg", dark) if dark else _tok("region_bg", dark)
+    button_bg = _tok("surface_raised", dark)
+    button_hover = _tok("surface_hover", dark)
+    # Section cards get a complete border like the data/constants cards (a subtle inset bg keeps
+    # them distinct from the config card they sit in). A full 1px border reads as a clean, complete
+    # card — preferred over the borderless-inset variant which left the inner table's native frame
+    # edge exposed (incomplete-looking top border).
+    section_bg = _tok("surface_raised", dark) if dark else _tok("card_bg_muted", dark)
     return f"""
 QWidget#workbench_variable_panel {{
     background: {panel_bg};
@@ -585,9 +613,9 @@ QLabel#workbench_variable_title {{
     font-weight: 600;
 }}
 QFrame[datalab_variable_section_card="true"] {{
-    background: {card_bg};
+    background: {section_bg};
     border: 1px solid {border};
-    border-radius: {REGION_RADIUS}px;
+    border-radius: {RADIUS_CARD}px;
 }}
 QFrame[datalab_variable_section_card="true"] QLabel {{
     color: {title_fg};
@@ -602,7 +630,7 @@ QPushButton[datalab_variable_toolbar_button="true"] {{
     color: {button_fg};
     background: {button_bg};
     border: 1px solid {border};
-    border-radius: 5px;
+    border-radius: {RADIUS_CONTROL}px;
 }}
 QPushButton[datalab_variable_toolbar_button="true"]:hover {{
     background: {button_hover};
@@ -616,24 +644,17 @@ def constants_editor_style(
     dark: bool | None = None,
 ) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    if dark:
-        card_bg = "#20242b"
-        button_bg = "#262b34"
-        button_hover = "#303746"
-        border = "rgba(255, 255, 255, 0.10)"
-        button_fg = "#e5e7eb"
-    else:
-        card_bg = "#f8fafc"
-        button_bg = "#f8fafc"
-        button_hover = "#eef2f7"
-        border = "#d8dee8"
-        button_fg = "#1f2328"
+    card_bg = _tok("card_bg_muted", dark)
+    border = _tok("border", dark)
+    button_fg = _tok("text_primary", dark)
+    button_bg = _tok("surface_raised", dark)
+    button_hover = _tok("surface_hover", dark)
     if embedded:
         return f"""
 QWidget[datalab_constants_card="true"] {{
-    background: transparent;
-    border: none;
-    border-radius: 0px;
+    background: {card_bg};
+    border: 1px solid {border};
+    border-radius: {RADIUS_CARD}px;
 }}
 QWidget[datalab_constants_card="true"] QCheckBox {{
     font-weight: 600;
@@ -644,7 +665,7 @@ QWidget[datalab_constants_card="true"] QPushButton {{
     color: {button_fg};
     background: {button_bg};
     border: 1px solid {border};
-    border-radius: 5px;
+    border-radius: {RADIUS_CONTROL}px;
 }}
 QWidget[datalab_constants_card="true"] QPushButton:hover {{
     background: {button_hover};
@@ -654,7 +675,7 @@ QWidget[datalab_constants_card="true"] QPushButton:hover {{
 QWidget[datalab_constants_card="true"] {{
     background: {card_bg};
     border: 1px solid {border};
-    border-radius: 6px;
+    border-radius: {RADIUS_CONTROL}px;
 }}
 QWidget[datalab_constants_card="true"] QCheckBox {{
     font-weight: 600;
@@ -672,7 +693,7 @@ def workbench_toolbar_style(*, dark: bool | None = None) -> str:
     border = "rgba(255, 255, 255, 0.10)" if dark else "rgba(31, 35, 40, 0.12)"
     bg = "#20242b" if dark else "#f8fafc"
     fg = "#e5e7eb" if dark else "#1f2328"
-    hover = "#2b313a" if dark else "#eef2f7"
+    hover = _tok("surface_hover", dark)
     active = "#2563eb" if dark else "#2563eb"
     return f"""
 QFrame#workbench_toolbar {{
@@ -687,7 +708,7 @@ QFrame#workbench_toolbar QPushButton {{
     min-height: 34px;
     padding: 4px 8px;
     border: 1px solid transparent;
-    border-radius: 6px;
+    border-radius: {RADIUS_CONTROL}px;
     color: {fg};
 }}
 QFrame#workbench_toolbar QToolButton:hover,
@@ -705,10 +726,10 @@ QFrame#workbench_toolbar QToolButton#workbench_run_button {{
 
 def workbench_region_style(*, dark: bool | None = None) -> str:
     dark = is_dark_theme() if dark is None else bool(dark)
-    app_bg = "#181a1f" if dark else "#f3f5f7"
-    panel_bg = "#20242b" if dark else "#ffffff"
-    border = "rgba(255, 255, 255, 0.10)" if dark else "#d8dee8"
-    fg = "#e5e7eb" if dark else "#1f2328"
+    app_bg = _tok("region_bg", dark)
+    panel_bg = _tok("card_bg", dark)
+    border = _tok("border", dark)
+    fg = _tok("text_primary", dark)
     return f"""
 QWidget#workbench_root {{
     background: {app_bg};
@@ -763,6 +784,8 @@ QPushButton {
 
 
 def round_icon_button_style() -> str:
+    # Plain (non-f) QSS string with literal braces elsewhere — keep the radius literal (6 = CONTROL)
+    # rather than convert the whole block to an f-string just for one value.
     return """
 QPushButton {
     border-radius: 6px;

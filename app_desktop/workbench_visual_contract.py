@@ -47,11 +47,14 @@ def widget_metric(root: QWidget, object_name: str) -> WorkbenchRegionMetric:
 
 
 def workbench_region_metrics(root: QWidget) -> dict[str, WorkbenchRegionMetric]:
+    # Two-pane layout: the config rail merged into the workspace pane, so the visible
+    # regions are toolbar + merged workspace pane + result rail + status strip. The
+    # config rail is no longer a visible pane (kept as a detached compatibility widget),
+    # so it is not enumerated here.
     return {
         name: widget_metric(root, name)
         for name in (
             TOOLBAR_OBJECT,
-            CONFIG_RAIL_OBJECT,
             WORKSPACE_CANVAS_OBJECT,
             RESULT_RAIL_OBJECT,
             STATUS_STRIP_OBJECT,
@@ -66,13 +69,8 @@ def visual_contract_issues(root: QWidget) -> list[dict[str, object]]:
         if not metric.visible or metric.width <= 0 or metric.height <= 0:
             issues.append({"kind": "missing_workbench_region", "widget": name})
 
-    config = metrics[CONFIG_RAIL_OBJECT]
     workspace = metrics[WORKSPACE_CANVAS_OBJECT]
     result = metrics[RESULT_RAIL_OBJECT]
-    if config.visible and config.width < CONFIG_RAIL_MIN_WIDTH:
-        issues.append(
-            {"kind": "config_rail_width", "widget": CONFIG_RAIL_OBJECT, "width": config.width}
-        )
     if workspace.visible and workspace.width < WORKSPACE_CANVAS_MIN_WIDTH:
         issues.append(
             {
@@ -85,13 +83,14 @@ def visual_contract_issues(root: QWidget) -> list[dict[str, object]]:
         issues.append(
             {"kind": "result_rail_width", "widget": RESULT_RAIL_OBJECT, "width": result.width}
         )
-    if config.visible and workspace.visible and result.visible:
-        if not (config.x < workspace.x < result.x):
+    # Two-pane order: the merged workspace pane sits left of the result rail.
+    if workspace.visible and result.visible:
+        if not (workspace.x < result.x):
             issues.append(
                 {
                     "kind": "region_order",
                     "widget": "workbench",
-                    "positions": {"config": config.x, "workspace": workspace.x, "result": result.x},
+                    "positions": {"workspace": workspace.x, "result": result.x},
                 }
             )
     return issues

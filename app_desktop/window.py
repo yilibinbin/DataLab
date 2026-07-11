@@ -477,7 +477,9 @@ class ExtrapolationWindow(
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DataLab")
-        self.resize(1280, 760)
+        # Open wider so the left config/data pane (min ~528px) + the result pane form a
+        # result-heavy ~1:3 split without cramping either (see build_workbench_main_splitter).
+        self.resize(1680, 900)
         self._window_icon = None
         self._apply_window_icon()
         # OS light/dark preference, detected cross-platform (Qt colorScheme on
@@ -566,7 +568,6 @@ class ExtrapolationWindow(
         self._initialize_workspace_tracking()
         self._init_theme_tracking()
         self._update_method_state()
-        self._toggle_latex_options(self.generate_latex_checkbox.isChecked())
         self._apply_language(self._system_lang if self._lang_mode == _LANG_AUTO else self._lang_mode)
         self._update_workspace_window_title()
         QTimer.singleShot(500, self._update_controller.maybe_show_startup_update_notice)
@@ -593,6 +594,66 @@ class ExtrapolationWindow(
     def _refresh_main_splitter_left_min_width(self) -> None:
         from . import panels as _panels
         _panels._refresh_main_splitter_left_min_width(self)
+
+    def showEvent(self, event):  # type: ignore[no-untyped-def]
+        super().showEvent(event)
+        # Apply the default result-heavy ~1:3 pane ratio ONCE, at the real shown width (build-time
+        # width is stale). The left pane is clamped to its content minimum, so on narrow windows
+        # the ratio widens toward the left; on wide windows it approaches 1:3.
+        if getattr(self, "_pane_ratio_applied", False):
+            return
+        splitter = getattr(self, "_main_splitter", None)
+        if splitter is None or splitter.count() < 2:
+            return
+        self._pane_ratio_applied = True
+        total = max(1, splitter.width())
+        left_min = splitter.widget(0).minimumWidth()
+        left = max(left_min, total // 4)
+        splitter.setSizes([left, total - left])
+
+    def _toggle_input_area_expanded(self) -> None:
+        """Expand the input area rightward to show many data columns, or collapse it back — with a
+        smooth width animation on the main splitter. Toggling always returns to the previous
+        (collapsed) width, so it never "expands and stays expanded"."""
+        from PySide6.QtCore import QEasingCurve, QVariantAnimation
+
+        splitter = getattr(self, "_main_splitter", None)
+        button = getattr(self, "input_expand_button", None)
+        if splitter is None or splitter.count() < 2:
+            return
+        total = max(1, sum(splitter.sizes()[:2]))
+        expanding = button.isChecked() if button is not None else True
+        if expanding:
+            # Remember the current (collapsed) left width to restore on collapse.
+            self._input_collapsed_left = splitter.sizes()[0]
+            left_min = splitter.widget(0).minimumWidth()
+            # Expand to ~72% of the width (leave the result pane usable), never below the min.
+            target_left = max(left_min, int(total * 0.72))
+        else:
+            # Collapse only ever runs after an expand recorded the pre-expand width; if it somehow
+            # runs first, fall back to the current width (a no-op) rather than re-deriving a ratio.
+            target_left = getattr(self, "_input_collapsed_left", None)
+            if target_left is None:
+                target_left = splitter.sizes()[0]
+        target_left = min(target_left, total - splitter.widget(1).minimumWidth())
+        if button is not None:
+            button.setText("⤡" if expanding else "⤢")
+
+        # Stop any in-flight animation first — otherwise a rapid re-click leaves the previous
+        # animation running and BOTH drive the splitter, so they fight (visible stutter).
+        previous = getattr(self, "_input_expand_anim", None)
+        if previous is not None:
+            previous.stop()
+        start_left = splitter.sizes()[0]
+        anim = QVariantAnimation(self)
+        anim.setDuration(220)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        anim.setStartValue(int(start_left))
+        anim.setEndValue(int(target_left))
+        anim.valueChanged.connect(lambda v: splitter.setSizes([int(v), total - int(v)]))
+        # Keep a reference so the animation isn't garbage-collected mid-flight.
+        self._input_expand_anim = anim
+        anim.start()
 
     def _bind_workbench_spec_schema_keys(self) -> None:
         from . import panels as _panels
@@ -654,12 +715,16 @@ class ExtrapolationWindow(
         # the default "Run" text even mid-run. Re-run the state-specific setter so
         # a running (Stop) button keeps its Stop label and state in the new
         # language, and the shortcut is restored either way.
-        run_state = self.run_button.property("datalab_run_state") if hasattr(self, "run_button") else None
+        # The bottom 开始执行 toggle was removed (4·4c); run-state now lives on the
+        # _datalab_run_state attribute, reflected by the toolbar 运行/停止 pair. Replay
+        # the state-specific setter so a running (stop) toolbar state survives a language
+        # switch, and re-install the Ctrl+Return shortcut on the toolbar run button.
+        run_state = getattr(self, "_datalab_run_state", "run")
         if run_state == "stop" and hasattr(self, "_set_button_to_stop_mode"):
             self._set_button_to_stop_mode()
-        elif run_state == "run" and hasattr(self, "_set_button_to_run_mode"):
+        elif hasattr(self, "_set_button_to_run_mode"):
             self._set_button_to_run_mode()
-        elif hasattr(self, "_reapply_run_button_shortcut"):
+        if hasattr(self, "_reapply_run_button_shortcut"):
             self._reapply_run_button_shortcut()
         if hasattr(self, "_update_constants_visibility"):
             self._update_constants_visibility()
@@ -756,7 +821,6 @@ class ExtrapolationWindow(
             getattr(self, "stats_hypothesis_alpha_edit", None),
             getattr(self, "stats_time_series_time_column_edit", None),
             getattr(self, "stats_time_series_ewma_value_edit", None),
-            getattr(self, "error_units_output_edit", None),
             getattr(self, "output_file_edit", None),
             getattr(self, "caption_edit", None),
             getattr(self, "latex_edit", None),
@@ -783,8 +847,6 @@ class ExtrapolationWindow(
             "custom_constants_editor",
             "implicit_constants_editor",
             "root_constants_editor",
-            "error_units_inputs_editor",
-            "error_units_constants_editor",
         ):
             editor = getattr(self, editor_name, None)
             if editor is None or id(editor) in connected_constant_editors:
@@ -798,7 +860,6 @@ class ExtrapolationWindow(
             "method_combo",
             "levin_variant_combo",
             "error_method_combo",
-            "error_units_mode_combo",
             "stats_workflow_combo",
             "stats_mode_combo",
             "stats_bootstrap_target_combo",
@@ -822,10 +883,8 @@ class ExtrapolationWindow(
         for check_name in (
             "use_file_checkbox",
             "use_constants_file_checkbox",
-            "generate_latex_checkbox",
             "generate_plots_checkbox",
             "verbose_checkbox",
-            "error_units_enabled_checkbox",
             "scientific_checkbox",
             "dcolumn_checkbox",
             "caption_checkbox",
@@ -867,6 +926,32 @@ class ExtrapolationWindow(
             spin = getattr(self, spin_name, None)
             if spin is not None:
                 spin.valueChanged.connect(self._mark_workspace_dirty)
+
+        # File-precedence feedback (Codex/Claude review): entering a data/constants file path makes
+        # the manual editor below inactive at run time, so reflect that live — grey the data card and
+        # refresh constants visibility whenever the file path changes.
+        data_file_edit = getattr(self, "data_file_edit", None)
+        if data_file_edit is not None:
+            data_file_edit.textChanged.connect(lambda *_a: self._update_data_source_visibility())
+            self._update_data_source_visibility()
+        constants_file_edit = getattr(self, "constants_file_edit", None)
+        if constants_file_edit is not None and hasattr(self, "_update_constants_visibility"):
+            self._constants_file_was_empty = not constants_file_edit.text().strip()
+            constants_file_edit.textChanged.connect(self._on_constants_file_path_changed)
+
+    def _on_constants_file_path_changed(self, *_args) -> None:
+        # _update_constants_visibility is a full-panel refresh (QSS reparse, column re-stretch, i18n
+        # labels) — only the manual-inputs enabled state depends on the path here, and that only
+        # changes when the path flips between empty and non-empty. Gate to that transition so typing
+        # a path doesn't re-run the whole refresh per keystroke (efficiency review).
+        edit = getattr(self, "constants_file_edit", None)
+        if edit is None:
+            return
+        is_empty = not edit.text().strip()
+        if is_empty == getattr(self, "_constants_file_was_empty", True):
+            return
+        self._constants_file_was_empty = is_empty
+        self._update_constants_visibility()
 
     def _workspace_guard_running(self) -> bool:
         if self._has_running_worker():
@@ -922,6 +1007,7 @@ class ExtrapolationWindow(
                 self.result_plot_label.setText(self._tr("尚无图片", "No image yet"))
             self._last_result_kind = None
             self._last_result_payloads = {}
+            self._last_latex_inputs = {}
         finally:
             self._workspace_restoring = False
         self._update_workspace_window_title()
@@ -1073,6 +1159,28 @@ class ExtrapolationWindow(
                 self._workspace_snapshot_only = False
                 self._workspace_snapshot_stale = False
                 self._set_snapshot_controls_enabled(True)
+            if as_template:
+                # Example workspaces are shipped in "file" data-source mode, whose
+                # source_path is a RELATIVE path into the bundled examples/ dir. When
+                # the app happens to run from the repo root that path resolves, so the
+                # file-precedence rule greys out the manual table + its +列/-列/+行/-行
+                # toolbar — the user opens an example and the add/remove buttons are
+                # dead (user-reported). The example rows are already inlined into the
+                # table/editor by the restore, so drop the bundled paths and fall back
+                # to the editable manual inputs. Clearing the path edits re-enables the
+                # manual data box / constants editor (via _update_data_source_visibility
+                # and the constants file-path textChanged handler). Applies to BOTH the
+                # data table and the constants editor (e.g. error-propagation ships its
+                # constants in file mode too).
+                data_file_edit = getattr(self, "data_file_edit", None)
+                if data_file_edit is not None and data_file_edit.text().strip():
+                    data_file_edit.clear()
+                    self._update_data_source_visibility()
+                constants_file_edit = getattr(self, "constants_file_edit", None)
+                if constants_file_edit is not None and constants_file_edit.text().strip():
+                    constants_file_edit.clear()
+                    if hasattr(self, "_update_constants_visibility"):
+                        self._update_constants_visibility()
         except Exception as exc:  # noqa: BLE001
             self._workspace_restoring = False
             QMessageBox.critical(self, self._tr("打开失败", "Open failed"), str(exc))
@@ -1275,11 +1383,6 @@ class ExtrapolationWindow(
         lang = "en" if self._is_en() else "zh"
         show_about_dialog(parent=self, lang=lang)
 
-    def _toggle_latex_options(self, checked: bool):
-        self.latex_options_widget.setVisible(checked)
-        # Sync caption row visibility when LaTeX toggle changes
-        self._toggle_caption_input(self.caption_checkbox.isChecked() if hasattr(self, "caption_checkbox") else False)
-
     def _toggle_caption_input(self, checked: bool):
         if hasattr(self, "caption_edit"):
             self.caption_edit.setVisible(bool(checked))
@@ -1316,15 +1419,15 @@ class ExtrapolationWindow(
         if hasattr(self, "error_mc_seed_edit"):
             self.error_mc_seed_edit.setEnabled(is_mc)
 
-    def _on_data_source_toggle(self, checked: bool):
-        if hasattr(self, "file_box"):
-            self.file_box.setVisible(checked)
-        if hasattr(self, "manual_box"):
-            self.manual_box.setVisible(not checked)
-        if hasattr(self, "use_file_hint_btn"):
-            hint_text = getattr(self, "_current_example_text", "") or self.manual_data_edit.placeholderText()
-            self.use_file_hint_btn.setToolTip(hint_text)
-            self.use_file_hint_btn.setVisible(checked)
+    def _update_data_source_visibility(self):
+        """File-precedence feedback (Codex/Claude review): when a data-file path is entered the
+        manual table below is ignored at run time, so DISABLE it (grey, non-editable) rather than
+        leave it looking active. Disabling — not hiding — avoids a layout jump while typing."""
+        manual_box = getattr(self, "manual_box", None)
+        file_edit = getattr(self, "data_file_edit", None)
+        if manual_box is None or file_edit is None:
+            return
+        manual_box.setEnabled(not bool(file_edit.text().strip()))
 
     def _on_stats_mode_change(self):
         workflow = (
@@ -2170,11 +2273,40 @@ class ExtrapolationWindow(
             self.refresh_workbench_result_details_card()
         if hasattr(self, "refresh_workbench_variable_panel"):
             self.refresh_workbench_variable_panel()
+        # Re-apply theme-dependent styles that are otherwise set once at construction, so a live
+        # light↔dark toggle updates them too (Codex review P2/P3):
+        # - the formula rendered-preview surface (restyled inside refresh_workbench_formula_panel);
+        # - the input_data_tabs rounded chrome.
+        if hasattr(self, "refresh_workbench_formula_panel"):
+            self.refresh_workbench_formula_panel()
+        input_tabs = getattr(self, "input_data_tabs", None)
+        if input_tabs is not None:
+            from app_desktop.theme import input_data_tabs_style
+
+            input_tabs.setStyleSheet(input_data_tabs_style(dark=new_dark))
+        # The constants editor's style (incl. theme-varying button colors) is set once at
+        # construction/embedding — refresh it too so its buttons follow a live theme toggle
+        # (same class as the formula-preview/tabs stale-style fix, Claude self-review C-G).
+        constants_editor = getattr(self, "input_constants_editor", None)
+        if constants_editor is not None and hasattr(constants_editor, "refresh_theme_style"):
+            constants_editor.refresh_theme_style()
         if hasattr(self, "_refresh_main_splitter_left_min_width"):
             self._refresh_main_splitter_left_min_width()
 
     def _update_theme_from_palette(self, *args):
-        self._apply_desktop_theme()
+        # This is a Qt slot wired to the app-global ``paletteChanged`` signal, so it must never let
+        # an exception escape into the event loop. A palette change is purely cosmetic; a stale
+        # formula-population failure cached from an earlier (unrelated) population attempt must not
+        # crash a theme restyle. Log and move on — the real population error is surfaced at its own
+        # call site, not here.
+        try:
+            self._apply_desktop_theme()
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "Theme restyle from palette change skipped after an error", exc_info=True
+            )
 
     def _on_mode_change(self):
         mode = self.mode_combo.currentData()
@@ -2207,6 +2339,25 @@ class ExtrapolationWindow(
             self._refresh_main_splitter_left_min_width()
         self._update_constants_visibility()
 
+    def _set_constants_tab_visible(self, visible: bool) -> None:
+        """Add or remove the 常数 sheet tab from the input-data tabs so it only appears in
+        constant-using modes. The constants editor widget is reused (added/removed, not
+        rebuilt), so its state + serialization are untouched."""
+        tabs = getattr(self, "input_data_tabs", None)
+        const_tab = getattr(self, "_constants_tab", None)
+        if tabs is None or const_tab is None:
+            return
+        index = tabs.indexOf(const_tab)
+        if visible and index == -1:
+            tabs.addTab(const_tab, self._tr("常数", "Constants"))
+        elif not visible and index != -1:
+            tabs.removeTab(index)  # removeTab does not delete the widget; state is preserved
+            data_tab = getattr(self, "_data_tab", None)
+            if tabs.currentWidget() is not data_tab:
+                data_index = tabs.indexOf(data_tab)
+                if data_index != -1:
+                    tabs.setCurrentIndex(data_index)
+
     def _update_constants_visibility(self):
         if not hasattr(self, "input_constants_editor") or self.input_constants_editor is None:
             return
@@ -2223,7 +2374,11 @@ class ExtrapolationWindow(
                 and self.use_constants_file_checkbox.isChecked()
             )
 
-        self.input_constants_editor.setVisible(visible)
+        # Constants now live in a sheet tab (输入数据 / 常数). The TAB's presence controls
+        # visibility — do NOT also call editor.setVisible(), which fought the tab hosting and
+        # made the hidden editor render over the active tab (overlap regression). The 常数 tab
+        # shows only in constant-using modes; other modes show just 输入数据.
+        self._set_constants_tab_visible(visible)
         self.input_constants_editor.set_inputs_visible(inputs_visible)
         self.input_constants_editor.set_control_labels(
             add_row=self._tr("+ 行", "+ Row"),
@@ -2418,8 +2573,6 @@ class ExtrapolationWindow(
         self._current_data_help_text = base.strip()
         placeholder = base + example
         self.manual_data_edit.setPlaceholderText(placeholder)
-        if hasattr(self, "use_file_hint_btn"):
-            self.use_file_hint_btn.setToolTip(base + example)
         # 根据行数动态调整高度，保证示例完整可见
         line_count = placeholder.count("\n") + 1
         target_height = max(120, int(line_count * 18 + 40))
@@ -2513,6 +2666,9 @@ class ExtrapolationWindow(
         else:
             self.result_edit.setPlainText(text)
             text_format = "plain"
+        # setMarkdown/setPlainText reset the document's default font to the app default, so the
+        # user's chosen font size would be lost on every new result — re-apply it.
+        self._reapply_result_font_size()
         self._last_result_text = text
         self._last_result_text_format = text_format
         self._last_result_rendered_text = self.result_edit.toPlainText()
@@ -2552,6 +2708,13 @@ class ExtrapolationWindow(
             "setToolTip",
         )
         spin.valueChanged.connect(lambda value, target=editor: self._apply_editor_font_size(target, value))
+        # Remember which spin drives which editor so the size can be re-applied after content
+        # is re-rendered (setMarkdown resets the effective font — see _set_result_text).
+        registry = getattr(self, "_editor_font_spins", None)
+        if registry is None:
+            registry = {}
+            self._editor_font_spins = registry
+        registry[id(editor)] = (editor, spin)
         control_layout.addWidget(spin)
         control_layout.addStretch()
         parent_layout.addLayout(control_layout)
@@ -2560,6 +2723,22 @@ class ExtrapolationWindow(
         font = editor.font()
         font.setPointSize(size)
         editor.setFont(font)
+        # setMarkdown renders through the DOCUMENT's default font; set that too so the size
+        # takes effect on already-rendered markdown content, not just future plain text.
+        doc = editor.document() if hasattr(editor, "document") else None
+        if doc is not None:
+            doc.setDefaultFont(font)
+
+    def _reapply_result_font_size(self):
+        """Re-apply the user's chosen font size to the result editor after its content was
+        re-rendered (setMarkdown resets the document's default font to the app default)."""
+        registry = getattr(self, "_editor_font_spins", None)
+        if not registry:
+            return
+        entry = registry.get(id(self.result_edit)) if hasattr(self, "result_edit") else None
+        if entry is not None:
+            _editor, spin = entry
+            self._apply_editor_font_size(self.result_edit, spin.value())
 
     # Display formatting helpers (only affect presentation; core calculations remain at mpmath precision)
     def _display_digits_limit(self) -> int:
@@ -2786,6 +2965,7 @@ class ExtrapolationWindow(
             self._last_result_rendered_text = ""
             self._last_result_kind = None
             self._last_result_payloads = {}
+            self._last_latex_inputs = {}
             self._last_result_semantic_snapshot = None
             self._last_result_semantic_snapshot_kind = None
             self.result_plot_bytes = None
@@ -2844,9 +3024,50 @@ class ExtrapolationWindow(
 
         if hasattr(self, "workbench_result_overview"):
             refresh_result_overview(self)
+        if hasattr(self, "_result_status_strip_status"):
+            from app_desktop.result_status_strip import refresh_result_status_strip
+
+            refresh_result_status_strip(self)
         history_panel = getattr(self, "workbench_history_panel", None)
         if history_panel is not None:
             history_panel.refresh()
+        self._refresh_toolbar_status_chip()
+
+    def _refresh_toolbar_status_chip(self, *, running: bool | None = None) -> None:
+        """Drive the toolbar status chip from the shared result state: a rich 5-state word
+        (已就绪/计算中/失败/完成/等待) + a one-line summary (· N 行表格). The chip is the sole
+        result-overview entry point now that the left-rail card is gone.
+
+        ``running`` forces the running state for the run/stop button-mode path, which fires
+        before the worker-state source reflects the transition."""
+        chip = getattr(self, "job_status_label", None)
+        if chip is None:
+            return
+        from app_desktop.workbench_results import _overview_state, _status_badge
+        from app_desktop.result_overview_popover import _value_summary
+
+        if running:
+            chip.setText(self._tr("运行中", "Running"))
+            return
+        state = _overview_state(self)
+        _status, label = _status_badge(self, state)
+        summary = _value_summary(self, state, _status)
+        # Drop the summary when it is empty, a dash, or identical to the status word — otherwise
+        # failed/running states rendered "Failed · Failed" / "Running · Running" (review S5).
+        show_summary = bool(summary) and summary != "—" and summary != label
+        chip.setText(f"{label} · {summary}" if show_summary else label)
+
+    def _open_result_overview_from_toolbar(self) -> None:
+        """Open the (existing) result-overview popover, anchored to the toolbar status chip."""
+        from app_desktop.result_overview_popover import open_result_overview_popover
+
+        open_result_overview_popover(self)
+
+    def _toggle_history_popup(self) -> None:
+        """Open/close the history panel in a toolbar-anchored popup (moved off the result rail)."""
+        from app_desktop.history_popup import toggle_history_popup
+
+        toggle_history_popup(self)
 
     def _export_csv_data(self):
         if not getattr(self, "_csv_rows", None):
@@ -2886,6 +3107,88 @@ class ExtrapolationWindow(
             )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, self._tr("导出失败", "Export failed"), str(exc))
+
+    def remember_latex_inputs(self, kind: str, latex_inputs: dict[str, object]) -> None:
+        """Stash the RESULT-DATA needed to rebuild LaTeX tex on demand for ``kind``.
+
+        Kept in a SEPARATE store from ``_last_result_payloads`` on purpose: the latter is
+        splatted into the per-mode display formatter by ``_refresh_display_format``
+        (``formatter(**payload)``), which rejects unexpected keys — so tex-rebuild data must
+        never live there. This store is never splatted; the on-demand tex builder reads
+        result-data from here and format options live from widgets.
+        """
+        store = getattr(self, "_last_latex_inputs", None)
+        if not isinstance(store, dict):
+            store = {}
+            self._last_latex_inputs = store
+        store[kind] = latex_inputs
+
+    def generate_latex_for_current_result(self) -> str | None:
+        """Rebuild the LaTeX tex for the CURRENT result ON DEMAND, routing to the per-mode
+        builder. Returns the tex path, or None if there is no rebuildable result stashed.
+
+        Dispatch prefers the current result kind (``_last_result_kind``); if that has no
+        stash it falls back to whichever mode's data IS stashed. The per-mode builders each
+        read their own ``_last_latex_inputs`` entry + live format widgets.
+        """
+        # stash-key -> builder method name
+        builders = {
+            "root_solving": "generate_root_latex_on_demand",
+            "extrapolation": "generate_extrapolation_latex_on_demand",
+            "error": "generate_error_latex_on_demand",
+            "statistics": "generate_statistics_latex_on_demand",
+            "fit_single": "generate_fitting_latex_on_demand",
+            "fit_batches": "generate_fitting_batches_latex_on_demand",
+            "fitting_comparison": "generate_fitting_comparison_latex_on_demand",
+        }
+        store = getattr(self, "_last_latex_inputs", {}) or {}
+        # Map the current result kind to its stash/builder key. Statistics result kinds are
+        # granular (statistics_single/_batches/_grouped/…) but share the single "statistics"
+        # builder + stash, so collapse them; other kinds already equal their builder key.
+        current = getattr(self, "_last_result_kind", None)
+        if isinstance(current, str) and current.startswith("statistics"):
+            current = "statistics"
+        order = []
+        if current in builders:
+            order.append(current)
+        for key in builders:
+            if key not in order:
+                order.append(key)
+        for key in order:
+            if key in store:
+                method = getattr(self, builders[key], None)
+                if callable(method):
+                    return method()
+        return None
+
+    def open_latex_preview(self, initial_tab: str = "tex") -> None:
+        """Rebuild the current result's LaTeX tex on demand, then open the preview window on
+        the requested tab. If there is no rebuildable result, inform the user instead of
+        opening an empty window."""
+        try:
+            tex_path = self.generate_latex_for_current_result()
+        except (ValueError, OSError, RuntimeError) as exc:
+            # A builder can fail on a bad live format value or a temp-file write error — surface it
+            # as a dialog rather than letting the exception escape the button slot (CodeRabbit).
+            QMessageBox.warning(
+                self,
+                self._tr("生成 LaTeX 失败", "LaTeX generation failed"),
+                self._localize_text(str(exc)),
+            )
+            return
+        if tex_path is None:
+            QMessageBox.information(
+                self,
+                self._tr("暂无结果", "No result"),
+                self._tr(
+                    "请先运行一次计算，然后再生成 LaTeX。",
+                    "Run a calculation first, then generate LaTeX.",
+                ),
+            )
+            return
+        from app_desktop.latex_preview_dialog import open_latex_preview_dialog
+
+        open_latex_preview_dialog(self, initial_tab=initial_tab)
 
     def _remember_last_result(self, kind: str, payload: dict[str, object]):
         """Cache the most recent result payload so we can reformat without recomputation."""

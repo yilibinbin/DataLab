@@ -85,6 +85,25 @@ def test_docs_page_renders_named_markdown_and_navigation(client: Any) -> None:
     assert "datalab_lang=en" in response.headers.get("Set-Cookie", "")
 
 
+def test_docs_headings_get_ids_so_toc_anchors_resolve(client: Any) -> None:
+    """The heading-id injection must actually run so the TOC in-page links resolve; the old
+    `</\\1>` literal-backslash regex never matched and emitted no ids (audit A7)."""
+    import re
+
+    response = client.get("/docs/guide?lang=en")
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+
+    heading_ids = set(re.findall(r'<h[123]\s+id="([^"]+)"', html))
+    assert heading_ids, "no heading id= attributes were emitted (TOC anchors would be dead)"
+    # Every TOC anchor (href="#slug") must point at a heading id that exists on the page.
+    toc_targets = set(re.findall(r'href="#([^"]+)"', html))
+    assert toc_targets, "expected a table of contents with anchor links"
+    assert toc_targets <= heading_ids, (
+        f"TOC anchors without a matching heading id: {sorted(toc_targets - heading_ids)}"
+    )
+
+
 def test_docs_unknown_page_returns_friendly_not_found_page(client: Any) -> None:
     response = client.get("/docs/not-a-page?lang=en")
 

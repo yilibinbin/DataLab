@@ -465,7 +465,11 @@ def test_desktop_runtime_bilingual_inventory_and_accessibility_gate(qtbot: Any) 
     visited: set[tuple[str, str, str, str]] = set()
     try:
         scenarios = _scenarios(window)
-        assert {"numeric", "image", "log", "latex", "pdf"} <= set(_result_tabs(window))
+        # TeX/PDF are no longer result subtabs — the on-demand preview dialog is their
+        # viewer, reached via the result-panel 生成 TeX / 预览 PDF / LaTeX 选项 buttons.
+        assert {"numeric", "image", "log"} <= set(_result_tabs(window))
+        assert "latex" not in set(_result_tabs(window))
+        assert "pdf" not in set(_result_tabs(window))
         for scenario in scenarios:
             _apply_screen_scenario(window, scenario)
             app.processEvents()

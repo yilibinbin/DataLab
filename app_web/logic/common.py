@@ -80,6 +80,24 @@ def _parse_int(text: str | None) -> int | None:
         raise ValueError(f"无法解析整数: {text} / Failed to parse integer: {text}") from exc
 
 
+def _parse_precision(text: str | None, default: int | None = None) -> int | None:
+    """Parse an mpmath-precision (dps) field from a request and CLAMP it to the app's bounded
+    envelope [MIN_MPMATH_DPS, MAX_MPMATH_DPS].
+
+    ``mp.dps`` is process-global and every compute route holds a serial lock while it runs, so an
+    unbounded user value (e.g. 100_000_000) would set an absurd precision and stall the whole
+    worker — a trivial DoS. Clamping at parse time (mirroring the SSE path's precision bounds)
+    ensures the guard downstream can never receive a pathological value. Returns ``default`` when
+    the field is absent/empty.
+    """
+    from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS
+
+    value = _parse_int(text)
+    if value is None:
+        return default
+    return max(MIN_MPMATH_DPS, min(MAX_MPMATH_DPS, value))
+
+
 def _parse_float(text: str | None) -> float | None:
     if text is None:
         return None

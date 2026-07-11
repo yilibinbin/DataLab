@@ -115,6 +115,23 @@ def build_workbench_toolbar(owner: object) -> QWidget:
     layout.addWidget(identity_label)
     layout.addSpacing(6)
 
+    # Compute-mode selector slot (left of the workspace buttons). The real
+    # ``mode_combo`` is created later in ``panels.build_ui`` (after this toolbar),
+    # so we reserve a labelled slot here and let ``panels.py`` insert the combo into
+    # ``_toolbar_mode_slot`` once it exists (lazy/after-build, like the option panels).
+    mode_label = QLabel("模式：")
+    mode_label.setObjectName("workbench_mode_label")
+    register = getattr(owner, "_register_text", None)
+    if callable(register):
+        register(mode_label, "模式：", "Mode:")
+    layout.addWidget(mode_label)
+    mode_slot = QHBoxLayout()
+    mode_slot.setContentsMargins(0, 0, 0, 0)
+    mode_slot.setSpacing(0)
+    dynamic_owner._toolbar_mode_slot = mode_slot
+    layout.addLayout(mode_slot)
+    layout.addSpacing(8)
+
     dynamic_owner.new_workspace_button = make_toolbar_button(
         owner,
         "新建",
@@ -188,8 +205,33 @@ def build_workbench_toolbar(owner: object) -> QWidget:
         tooltip_zh="停止正在运行的计算。",
         tooltip_en="Stop the running calculation.",
     )
+    # Ctrl/⌘+Return runs from the toolbar 运行 button (the bottom 开始执行 button that used
+    # to own this shortcut was removed in 4·4c). 停止 starts disabled — the run/stop state
+    # machine (window_extrapolation_mixin._set_button_to_stop_mode/_run_mode) enables 停止
+    # and disables 运行 while a job runs, then reverses when it finishes.
+    from PySide6.QtGui import QKeySequence
+
+    dynamic_owner.workbench_run_button.setShortcut(QKeySequence("Ctrl+Return"))
+    dynamic_owner.workbench_stop_button.setEnabled(False)
     layout.addWidget(dynamic_owner.workbench_run_button)
     layout.addWidget(dynamic_owner.workbench_stop_button)
+
+    # 计算 options button. Opens a resizable, non-modal QDialog window — see
+    # app_desktop.options_dialogs. Only the button lives here; panels.py builds the dialog
+    # (reparenting the real option controls) once those controls exist (lazy/after-build),
+    # then binds the button to open its dialog. LaTeX options moved to a result-panel entry
+    # (result_latex_options_button) — user: 工具栏不需要 latex, 单独的 LaTeX 选项入口.
+    dynamic_owner.workbench_compute_options_button = make_toolbar_button(
+        owner,
+        "计算",
+        "Compute",
+        "workbench_compute_options_button",
+        QStyle.StandardPixmap.SP_ComputerIcon,
+        tooltip_zh="精度与并行/资源选项。",
+        tooltip_en="Precision and parallel/resource options.",
+    )
+    dynamic_owner.workbench_compute_options_button.setCheckable(True)
+    layout.addWidget(dynamic_owner.workbench_compute_options_button)
 
     layout.addStretch(1)
 
@@ -205,6 +247,18 @@ def build_workbench_toolbar(owner: object) -> QWidget:
     layout.addWidget(dynamic_owner.workspace_status_label)
 
     layout.addSpacing(8)
+
+    dynamic_owner.history_button = make_toolbar_button(
+        owner,
+        "历史",
+        "History",
+        "history_button",
+        QStyle.StandardPixmap.SP_FileDialogDetailedView,
+        "_toggle_history_popup",
+        tooltip_zh="打开结果历史（恢复、对比、删除等）。",
+        tooltip_en="Open the result history (restore, compare, delete, …).",
+    )
+    layout.addWidget(dynamic_owner.history_button)
 
     dynamic_owner.docs_button = make_toolbar_button(
         owner,

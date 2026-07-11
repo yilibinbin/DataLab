@@ -16,6 +16,17 @@ from PySide6.QtWidgets import QApplication
 from app_desktop.workbench_results import MAX_RESULT_OVERVIEW_ROWS
 
 
+@pytest.fixture(autouse=True)
+def _no_blocking_message_boxes(monkeypatch: Any) -> None:
+    """A modal QMessageBox blocks forever in the offscreen/headless CI (no one clicks OK), which
+    hangs the whole serial run. Several tests here drive the fit error path (or feed minimal mock
+    jobs that trip it), so make critical/warning/information non-blocking for every test."""
+    from PySide6.QtWidgets import QMessageBox
+
+    for name in ("critical", "warning", "information"):
+        monkeypatch.setattr(QMessageBox, name, staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
+
+
 def _window(qtbot: Any) -> Any:
     from app_desktop.window import ExtrapolationWindow
 
@@ -95,6 +106,128 @@ def test_result_rail_has_overview_and_data_table(qtbot: Any) -> None:
     assert "QTabWidget#result_detail_tabs" in window.workbench_result_details_panel.styleSheet()
     assert window.result_tabs.tabText(window.result_tabs_indices["numeric"]) == "数值"
     assert window.result_tabs.tabToolTip(window.result_tabs_indices["numeric"]) == "数值结果"
+
+
+def test_uncertainty_digits_lives_in_result_panel_and_live_rerenders(qtbot: Any) -> None:
+    """不确定度位数 moved from the toolbar compute-options into the result panel: it must be
+    parented under the result tabs AND live-re-render the on-screen result when changed (user
+    request — adjustable post-run like decimal places, no recompute)."""
+    from shared.uncertainty import parse_uncertainty_format
+
+    window = _window(qtbot)
+    spin = window.uncertainty_digits_spin
+    # Parented under the result tabs, not the toolbar options.
+    names = []
+    p = spin.parentWidget()
+    for _ in range(8):
+        if p is None:
+            break
+        names.append(p.objectName())
+        p = p.parentWidget()
+    assert any("result" in n for n in names), f"spin not under result panel: {names}"
+
+    # Changing it live-re-renders the error-propagation result (formatter reads the value).
+    kw = dict(
+        headers=["A", "B"],
+        data_rows=[[parse_uncertainty_format("1.0(1)"), parse_uncertainty_format("2.0(2)")]],
+        results=[parse_uncertainty_format("4.123456(789)")],
+        formula="A+B",
+        units=None,
+    )
+    spin.setValue(1)
+    t1, _ = window._format_error_display(**kw)
+    spin.setValue(4)
+    t4, _ = window._format_error_display(**kw)
+    assert t1 != t4
+    assert "4.1235(8)" in t1
+    assert "4.1234560(7890)" in t4
+
+
+def test_fit_model_line_honours_display_digits(qtbot: Any) -> None:
+    """The substituted model line (numbers OUTSIDE the result table) must respond to the
+    display digits / scientific toggles, not stay frozen at the fit's output digits
+    (user-reported)."""
+    import mpmath as mp
+    from fitting.hp_fitter import FitResult
+
+    window = _window(qtbot)
+    fr = FitResult(
+        params={"A": mp.mpf("2.123456789"), "B": mp.mpf("1.987654321")},
+        param_errors={"A": mp.mpf("0.1"), "B": mp.mpf("0.1")},
+        chi2=mp.mpf("0.5"), reduced_chi2=mp.mpf("0.25"), aic=mp.mpf("0"), bic=mp.mpf("0"),
+        r2=mp.mpf("1"), rmse=mp.mpf("0.1"), residuals=[mp.mpf("0.1")], fitted_curve=[],
+        covariance=[[mp.mpf("0.01")]], param_errors_stat={"A": mp.mpf("0.1")},
+        param_errors_sys={}, param_errors_total={"A": mp.mpf("0.1")}, details={"dof": 1},
+    )
+    window.scientific_checkbox.setChecked(False)
+    window.display_digits_spin.setValue(3)
+    text3, _ = window._format_fit_display(fr, "A*x + B", "STALE", units=None)
+    window.display_digits_spin.setValue(6)
+    text6, _ = window._format_fit_display(fr, "A*x + B", "STALE", units=None)
+
+    # Isolate the substituted MODEL line (CodeRabbit CR): asserting on the whole text would
+    # pass via the parameter table, which independently formats A at the same digits — that
+    # wouldn't prove the model-line rebuild itself responds. Assert on the model line only.
+    def _model_line(text: str) -> str:
+        return next(
+            ln for ln in text.splitlines() if "代入参数" in ln or "With params" in ln
+        )
+
+    # The passed-in "STALE" substituted must be ignored; the model line reflects live digits.
+    assert "STALE" not in text3
+    assert "2.123" in _model_line(text3)
+    assert "2.123457" in _model_line(text6)
+    assert text3 != text6
+
+
+def test_result_font_size_survives_content_rerender(qtbot: Any) -> None:
+    """Changing the result font size must live-update the output AND survive the next result
+    render. setMarkdown resets the document's default font, so without re-applying the chosen
+    size, every new result would silently revert to the app default (user-reported)."""
+    window = _window(qtbot)
+    registry = getattr(window, "_editor_font_spins", {})
+    entry = registry.get(id(window.result_edit))
+    assert entry is not None, "result_edit has no registered font-size spin"
+    _editor, spin = entry
+
+    window._set_result_text("# Result\n\nModel: A*x", final_result=True)
+    spin.setValue(20)
+    assert window.result_edit.document().defaultFont().pointSize() == 20
+
+    # A new result re-renders via setMarkdown — the chosen size must persist.
+    window._set_result_text("# New Result\n\nModel: B*x", final_result=True)
+    assert window.result_edit.document().defaultFont().pointSize() == 20
+
+
+def test_latex_pdf_tabs_removed_from_result_tabs_but_widgets_survive(qtbot: Any) -> None:
+    """The TeX/PDF result tabs are gone (the on-demand preview dialog is the viewer),
+    but the underlying widgets stay alive off-screen so the dialog, workspace round-trip,
+    and compile paths keep reading them.
+
+    WHY: latex_edit holds results.latex.source (persisted + read by the preview dialog);
+    latex_engine_combo/pdf_zoom_spin are compile/preview state. Removing the visible tabs
+    must NOT delete these widgets — only relocate them out of result_tabs."""
+    window = _window(qtbot)
+
+    # result_tabs now carries exactly numeric/image/log — no TeX/PDF tab.
+    titles = {window.result_tabs.tabText(i) for i in range(window.result_tabs.count())}
+    assert "TeX" not in titles
+    assert "PDF" not in titles
+    assert window.result_tabs.count() == 3
+    assert set(window.result_tabs_indices) == {"numeric", "image", "log"}
+
+    # The load-bearing widgets still exist and keep their schema keys.
+    assert window.latex_edit.property("datalab_schema_key") == "results.latex.source"
+    assert window.latex_engine_combo.property("datalab_schema_key") == "latex.engine"
+    assert window.pdf_zoom_spin.property("datalab_schema_key") == "pdf.zoom_percent"
+
+    # They live in the off-screen holder, not in result_tabs.
+    holder = window._offscreen_result_views
+    assert window.latex_edit in holder.findChildren(type(window.latex_edit))
+    assert window.pdf_zoom_spin in holder.findChildren(type(window.pdf_zoom_spin))
+    # holder is a child of the window (so findChildren/schema scan see it) but hidden.
+    assert holder.parentWidget() is not None
+    assert holder.isVisibleTo(window) is False
 
 
 def test_result_rail_uses_csv_state_without_hidden_table_projection(qtbot: Any) -> None:
@@ -596,6 +729,10 @@ def test_fit_batches_tabular_success_clears_running_state(qtbot: Any, monkeypatc
             data_rows=[],
             sigma_rows=[],
             render_plots=False,
+            # The success path stashes the run's target column + variable mapping for on-demand TeX
+            # fidelity (commit 5dc9f60); the mock job must carry them or the stash raises AttributeError.
+            target_column="y",
+            variable_map={"x": "x"},
         ),
         expression="A*x",
         fit_result=SimpleNamespace(params={"A": "1"}),
@@ -917,7 +1054,18 @@ def test_fit_batch_post_processing_error_keeps_success_overview(qtbot: Any, monk
     )
     window._mark_workbench_result_running()
     payload = SimpleNamespace(
-        job=SimpleNamespace(model_expr="A*x", render_plots=False, headers=[], data_rows=[], sigma_rows=[]),
+        job=SimpleNamespace(
+            model_expr="A*x",
+            render_plots=False,
+            headers=[],
+            data_rows=[],
+            sigma_rows=[],
+            # The success path stashes target_column + variable_map BEFORE the (patched) latex step
+            # errors, so the mock job must carry them or it fails early instead of exercising the
+            # intended post-processing-error path (commit 5dc9f60).
+            target_column="y",
+            variable_map={"x": "x"},
+        ),
         expression="A*x",
         fit_result=SimpleNamespace(params={"A": "1"}, details={}),
         units=None,
@@ -1006,8 +1154,6 @@ def test_run_validation_error_does_not_leave_result_overview_running(qtbot: Any,
 
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
-    window.generate_latex_checkbox.setChecked(True)
-    window.output_file_edit.setText("")
     monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: None)
     window._apply_language("en")
 
@@ -1020,9 +1166,10 @@ def test_run_validation_error_does_not_reset_results_before_worker(qtbot: Any, m
     from PySide6.QtWidgets import QMessageBox
 
     window = _window(qtbot)
+    # A bare root_solving window (no equations/unknowns) fails validation on run — the
+    # trigger for "results must not be reset before the worker starts". (The
+    # generate_latex_checkbox setup was vestigial; removed in 4·4d.)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
-    window.generate_latex_checkbox.setChecked(True)
-    window.output_file_edit.setText("")
     monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: None)
     reset_called = False
 
@@ -1081,8 +1228,6 @@ def test_run_validation_error_preserves_previous_valid_result_overview(qtbot: An
     assert window.workbench_result_overview.text() == "Result ready; plot and text available; no tabular data"
 
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("root_solving"))
-    window.generate_latex_checkbox.setChecked(True)
-    window.output_file_edit.setText("")
     monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: None)
 
     window.run_calculation()

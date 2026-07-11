@@ -89,21 +89,6 @@ def test_error_method_and_parameter_controls_have_schema_metadata(window: Any) -
     assert window.error_mc_seed_edit.placeholderText()
 
 
-def test_error_unit_controls_have_schema_metadata_and_visibility(window: Any) -> None:
-    assert window.error_units_enabled_checkbox.property("datalab_schema_key") == "error.units.enabled"
-    assert window.error_units_mode_combo.property("datalab_schema_key") == "error.units.mode"
-    assert _combo_data(window.error_units_mode_combo) == ["display_only", "validate_expression"]
-    assert window.error_units_inputs_editor.property("datalab_schema_key") == "error.units.inputs"
-    assert window.error_units_constants_editor.property("datalab_schema_key") == "error.units.constants"
-    assert window.error_units_output_edit.property("datalab_schema_key") == "error.units.outputs.result"
-
-    assert window.error_units_body.isHidden()
-    window.error_units_enabled_checkbox.setChecked(True)
-    QApplication.processEvents()
-    assert not window.error_units_body.isHidden()
-    assert window.error_units_mode_combo.isEnabled()
-
-
 def test_error_panel_has_no_unbound_required_schema_widgets(window: Any) -> None:
     assert find_unbound_required_widgets(window.error_box) == []
 
@@ -161,6 +146,10 @@ def test_error_schema_bound_controls_keep_mode_and_constants_toggle_behavior(win
     window.error_constants_editor.set_rows([{"name": "K", "value": "2.0(1)"}])
     QApplication.processEvents()
     assert window.error_constants_editor.isChecked() is True
+    # Constants now live on the 常数 sheet tab; activate it so its controls are visible.
+    tabs = window.input_data_tabs
+    tabs.setCurrentIndex(tabs.indexOf(window._constants_tab))
+    QApplication.processEvents()
     assert window.error_constants_editor.controls_widget.isVisible()
 
 
@@ -271,10 +260,6 @@ def test_error_run_accepts_sectioned_file_input_constants(
     window.use_file_checkbox.setChecked(True)
     window.data_file_edit.setText(str(sectioned_file))
     window.error_constants_editor.set_rows([])
-    window.error_units_enabled_checkbox.setChecked(True)
-    window.error_units_inputs_editor.set_rows([{"name": "A", "value": "m"}])
-    window.error_units_constants_editor.set_rows([{"name": "K", "value": "m"}])
-    window.error_units_output_edit.setText("m")
 
     window.run_calculation()
 
@@ -287,10 +272,3 @@ def test_error_run_accepts_sectioned_file_input_constants(
     assert job.constants_enabled is True
     assert job.manual_constants == "K = 2.0(1)"
     assert job.use_constants_file is False
-    assert job.units_config == {
-        "enabled": True,
-        "mode": "display_only",
-        "inputs": {"A": "m"},
-        "constants": {"K": "m"},
-        "outputs": {"result": "m"},
-    }

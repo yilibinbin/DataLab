@@ -1,6 +1,6 @@
 """Gunicorn configuration for the DataLab web app (production).
 
-Run with:  gunicorn -c gunicorn.conf.py app_web.server:app
+Run with:  gunicorn -c gunicorn.conf.py 'app_web.server:create_app()'
 
 Why this file exists — the concurrency root-fix (P1-2)
 ------------------------------------------------------

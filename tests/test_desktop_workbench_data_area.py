@@ -41,12 +41,16 @@ def _window(qtbot: Any) -> Any:
 def test_actual_data_editor_lives_in_left_input_area(qtbot: Any) -> None:
     window = _window(qtbot)
 
-    assert window.input_section.parentWidget() is window.workbench_config_content
-    assert window.manual_box.parentWidget() is window.input_section
-    assert window.input_section_layout.indexOf(window.manual_box) >= 0
+    # Two-pane layout: the input section lives in the merged workspace pane.
+    assert window.input_section.parentWidget() is window.workbench_workspace_content
+    # Input data + file picker now live inside the 输入数据 tab (_data_tab), which the
+    # input_data_tabs widget hosts in the input section (sheet-tab restructure).
+    assert window.manual_box.parentWidget() is window._data_tab
+    assert window.file_box.parentWidget() is window._data_tab
+    assert window.input_data_tabs.indexOf(window._data_tab) >= 0
+    assert window.input_section_layout.indexOf(window.input_data_tabs) >= 0
     assert window.manual_table.parentWidget() is window._data_stack
     assert window.manual_data_edit.parentWidget() is window._data_stack
-    assert window.file_box.parentWidget() is window.input_section
 
 
 def test_manual_data_card_has_title_and_live_summary(qtbot: Any) -> None:
@@ -202,7 +206,7 @@ def test_active_input_bundle_parses_sectioned_file_without_regressing_plain_file
     assert window._active_data_source() == (None, "x y\n1 2")
 
 
-def test_left_rail_sections_are_ordered_mode_first(qtbot: Any) -> None:
+def test_left_rail_sections_are_ordered_input_first(qtbot: Any) -> None:
     window = _window(qtbot)
 
     section_names = [
@@ -211,12 +215,14 @@ def test_left_rail_sections_are_ordered_mode_first(qtbot: Any) -> None:
         if (item := window.left_layout.itemAt(index)).widget() is not None
     ]
 
-    assert section_names[:4] == [
-        "mode_section",
-        "input_section",
-        "output_setup_section",
-        "run_section",
-    ]
+    # Two-pane layout: the merged pane starts with 输入 (input_section); the per-mode config
+    # panels follow. The mode selector moved to the toolbar; the empty output_setup_section
+    # and the bottom run_section (开始执行 removed in 4·4c — run is on the toolbar) are no
+    # longer added to the pane.
+    assert section_names[0] == "input_section"
+    assert "mode_section" not in section_names
+    assert "output_setup_section" not in section_names
+    assert "run_section" not in section_names
 
 
 def test_empty_manual_table_uses_one_editable_draft_row(qtbot: Any) -> None:
@@ -324,9 +330,15 @@ def test_table_height_excludes_hidden_horizontal_header(qtbot: Any) -> None:
     assert table.maximumHeight() == _expected_table_height_for_rows(table, 1)
 
 
-def test_configuration_sections_stay_in_left_rail(qtbot: Any) -> None:
+def test_configuration_sections_live_in_the_merged_pane(qtbot: Any) -> None:
     window = _window(qtbot)
-    assert window.mode_section.parentWidget() is window.workbench_config_content
-    assert window.input_section.parentWidget() is window.workbench_config_content
-    assert window.output_setup_section.parentWidget() is window.workbench_config_content
-    assert window.run_section.parentWidget() is window.workbench_config_content
+    merged = window.workbench_workspace_content
+    # Two-pane layout: the config sections merged into the workspace pane.
+    # mode_section moved to the toolbar (parented to neither pane's content).
+    assert window.mode_section.parentWidget() is not merged
+    assert window.mode_section.parentWidget() is not window.workbench_config_content
+    assert window.input_section.parentWidget() is merged
+    # output_setup_section and run_section are detached compatibility widgets (empty; no
+    # longer added to the pane — output options moved to the toolbar, 开始执行 removed in 4·4c).
+    assert window.output_setup_section.parentWidget() is not merged
+    assert window.run_section.parentWidget() is not merged

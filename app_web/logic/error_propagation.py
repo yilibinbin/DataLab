@@ -37,6 +37,7 @@ from .common import (
     _is_checked,
     _latex_to_plain,
     _parse_int,
+    _parse_precision,
 )
 from .plots import _render_contribution_plot, _render_monte_carlo_distribution_plot
 
@@ -174,7 +175,7 @@ def _should_collect_monte_carlo_distribution(
 @mpmath_synchronized
 def _run_error_propagation(data_text: str, constants_text: str, form, lang: str = "zh") -> ErrorPropagationBundle:
     _reject_active_units_on_web(form)
-    mp_precision = _parse_int(form.get("error_mp_precision"))
+    mp_precision = _parse_precision(form.get("error_mp_precision"))
     latex_precision = _parse_int(form.get("error_latex_precision"))
     latex_group_size = _parse_int(form.get("error_latex_group_size"))
     if latex_group_size is None:

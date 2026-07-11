@@ -19,6 +19,7 @@ def write_root_latex(
     include_dcolumn: bool = False,
     language: str = "zh",
     root_units: Mapping[str, str] | None = None,
+    native_group_width: bool = True,
 ) -> Path:
     path = Path(output_path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -32,6 +33,7 @@ def write_root_latex(
             include_dcolumn=include_dcolumn,
             language=language,
             root_units=root_units,
+            native_group_width=native_group_width,
         ),
         encoding="utf-8",
     )

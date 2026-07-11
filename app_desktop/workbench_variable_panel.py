@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app_desktop.theme import variable_panel_style
+from app_desktop.theme import CARD_PADDING, variable_panel_style
 from app_desktop.workbench_layout import reparent_widget
 from app_desktop.workbench_specs import MODE_WORKBENCH_SPECS
 
@@ -32,7 +32,7 @@ def build_variable_workspace_panel(owner: Any) -> QWidget:
     header_layout = QHBoxLayout(header)
     header_layout.setContentsMargins(0, 0, 0, 0)
     header_layout.setSpacing(6)
-    owner.workbench_variable_title = QLabel(owner._tr("参数与常数", "Parameters and constants"))
+    owner.workbench_variable_title = QLabel(owner._tr("参数", "Parameters"))
     owner.workbench_variable_title.setObjectName("workbench_variable_title")
     header_layout.addWidget(owner.workbench_variable_title, 0)
 
@@ -41,18 +41,9 @@ def build_variable_workspace_panel(owner: Any) -> QWidget:
     owner.workbench_variable_summary.setWordWrap(True)
     header_layout.addWidget(owner.workbench_variable_summary, 1)
 
-    owner.workbench_variable_toggle_button = QPushButton(owner._tr("折叠", "Collapse"))
-    owner.workbench_variable_toggle_button.setObjectName("workbench_variable_toggle_button")
-    owner.workbench_variable_toggle_button.setProperty("datalab_variable_toolbar_button", True)
-    owner_ref = weakref.ref(owner)
-
-    def _toggle_from_button() -> None:
-        current_owner = owner_ref()
-        if current_owner is not None:
-            _toggle_variable_workspace_panel(current_owner)
-
-    owner.workbench_variable_toggle_button.clicked.connect(_toggle_from_button)
-    header_layout.addWidget(owner.workbench_variable_toggle_button, 0)
+    # No collapse button: the variable panel (参数/未知量) is compact and always relevant when
+    # visible; a 折叠 toggle added clutter without value (user request). The panel self-hides via
+    # refresh_variable_workspace_panel when the mode has no variables.
     layout.addWidget(header)
 
     owner.workbench_variable_stack = QStackedWidget()
@@ -60,7 +51,6 @@ def build_variable_workspace_panel(owner: Any) -> QWidget:
     layout.addWidget(owner.workbench_variable_stack)
     owner._workbench_variable_pages = {}
     owner._workbench_variable_sections = {}
-    owner._workbench_variable_collapsed = False
     return panel
 
 
@@ -133,11 +123,11 @@ def _connect_variable_change_signal(
 
 
 def _mounts_in_panel_order(spec: Any) -> tuple[Any, ...]:
-    if spec.mode_key == "fitting":
-        return spec.parameters + spec.constants + spec.tables
+    # Constants moved to the 常数 sheet tab, so the variable panel no longer mounts spec.constants
+    # (it is empty for every mode anyway now). Only parameters + tables (未知量) live here.
     if spec.mode_key == "root_solving":
-        return spec.tables + spec.constants + spec.parameters
-    return spec.parameters + spec.tables + spec.constants
+        return spec.tables + spec.parameters
+    return spec.parameters + spec.tables
 
 
 def _make_variable_section(owner: Any, mode: str, mount: Any) -> tuple[QFrame, QHBoxLayout, QVBoxLayout]:
@@ -148,7 +138,7 @@ def _make_variable_section(owner: Any, mode: str, mount: Any) -> tuple[QFrame, Q
     section.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
     outer = QVBoxLayout(section)
-    outer.setContentsMargins(10, 8, 10, 10)
+    outer.setContentsMargins(*CARD_PADDING)
     outer.setSpacing(8)
 
     title_row = QWidget()
@@ -229,7 +219,7 @@ def refresh_variable_workspace_panel(owner: Any) -> None:
     if not has_variables:
         title = getattr(owner, "workbench_variable_title", None)
         if title is not None:
-            title.setText(owner._tr("参数与常数", "Parameters and constants"))
+            title.setText(owner._tr("参数", "Parameters"))
         if summary is not None:
             summary.setText(owner._tr("未填写", "No entries"))
         if panel is not None:
@@ -262,28 +252,8 @@ def refresh_variable_workspace_panel(owner: Any) -> None:
         title.setText(_panel_title(owner, mode))
     if summary is not None:
         summary.setText(_variable_summary_text(owner, mode))
-    _refresh_variable_toggle(owner, page_has_visible_variables)
     if stack is not None:
-        stack.setVisible(page_has_visible_variables and not bool(getattr(owner, "_workbench_variable_collapsed", False)))
-
-
-def _toggle_variable_workspace_panel(owner: Any) -> None:
-    owner._workbench_variable_collapsed = not bool(getattr(owner, "_workbench_variable_collapsed", False))
-    refresh_variable_workspace_panel(owner)
-
-
-def _refresh_variable_toggle(owner: Any, panel_has_variables: bool) -> None:
-    button = getattr(owner, "workbench_variable_toggle_button", None)
-    if button is None:
-        return
-    collapsed = bool(getattr(owner, "_workbench_variable_collapsed", False))
-    button.setVisible(panel_has_variables)
-    button.setText(owner._tr("展开", "Expand") if collapsed else owner._tr("折叠", "Collapse"))
-    button.setToolTip(
-        owner._tr("显示参数、常数和未知量设置", "Show parameter, constant, and unknown settings")
-        if collapsed
-        else owner._tr("隐藏参数、常数和未知量设置", "Hide parameter, constant, and unknown settings")
-    )
+        stack.setVisible(page_has_visible_variables)
 
 
 def _variable_summary_text(owner: Any, mode: str) -> str:
@@ -344,21 +314,12 @@ def _refresh_variable_section_title(owner: Any, section: QFrame) -> None:
 
 
 def _panel_title(owner: Any, mode: str) -> str:
+    # Constants live in the 常数 tab now, so this panel only ever holds parameters and/or unknowns.
     roles = tuple(
         str(section.property("datalab_variable_section_role") or "")
         for section, _attrs in getattr(owner, "_workbench_variable_sections", {}).get(mode, [])
         if section.isVisible()
     )
-    if roles == ("constants",):
-        return owner._tr("常数", "Constants")
-    if "unknowns" in roles and "constants" in roles:
-        return owner._tr("未知量与常数", "Unknowns and constants")
     if "unknowns" in roles:
         return owner._tr("未知量", "Unknowns")
-    if "constants" in roles and "parameters" in roles:
-        if roles.index("parameters") < roles.index("constants"):
-            return owner._tr("参数与常数", "Parameters and constants")
-        return owner._tr("常数与参数", "Constants and parameters")
-    if "parameters" in roles:
-        return owner._tr("参数", "Parameters")
-    return owner._tr("参数与常数", "Parameters and constants")
+    return owner._tr("参数", "Parameters")

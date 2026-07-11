@@ -46,7 +46,11 @@ from shared.latex_engine import (
     UnsupportedPlatformError,
     find_app_root,
     resolve_engine,
+    resolve_engine_for_mode,
+    siunitx_supports_digit_group_size,
 )
+
+import tempfile
 
 from .resources import _ensure_default_path_augmented
 from .workers_core import _safe_read_text, _safe_resolve_path
@@ -60,6 +64,40 @@ from .workers_qt import (
 
 class WindowLatexCompileMixin:
     # ----------------------------------------------------------- LaTeX ops --
+    def latex_output_path_for_run(self, generate_latex: bool, *, reuse: bool = False) -> str:
+        """Return the path the run should write the generated tex to.
+
+        The LaTeX output PATH is no longer a user-facing option — the user chooses a save
+        location only via the TeX window's Save button. So when ``generate_latex`` is on
+        we materialize the tex into a per-run TEMP ``.tex`` file (retained so the editor /
+        PDF preview can read it back); when off, no tex is written (empty path). This
+        decouples "generate + preview" from "save to a user path".
+
+        ``reuse=True`` (on-demand regeneration) returns ONE stable temp path per session and
+        overwrites it, so repeatedly toggling options + regenerating doesn't leak a new temp
+        file each time (CodeRabbit). ``reuse=False`` (a real run) allocates a fresh path.
+        """
+        if not generate_latex:
+            return ""
+        if reuse:
+            path = getattr(self, "_on_demand_latex_temp_path", None)
+            if path:
+                return path
+        tmp = tempfile.NamedTemporaryFile(
+            prefix="datalab_", suffix=".tex", delete=False
+        )
+        tmp.close()
+        path = tmp.name
+        # Track for cleanup on window close (best-effort).
+        paths = getattr(self, "_run_latex_temp_paths", None)
+        if paths is None:
+            paths = []
+            self._run_latex_temp_paths = paths
+        paths.append(path)
+        if reuse:
+            self._on_demand_latex_temp_path = path
+        return path
+
     def open_latex_file(self):
         filename, _ = QFileDialog.getOpenFileName(
             self,
@@ -91,6 +129,40 @@ class WindowLatexCompileMixin:
             return
         self._load_latex_into_editor(self.current_latex_path, show_message=show_message)
 
+    def _latex_engine_selection(self):
+        """The combo's current data: 'auto' (or 'bundled'/'local' legacy modes), or an
+        absolute engine PATH for a concrete pick. None if the combo is absent."""
+        combo = getattr(self, "latex_engine_combo", None)
+        return combo.currentData() if combo is not None else None
+
+    def _latex_engine_mode(self) -> str:
+        """Back-compat mode accessor: 'auto' | 'bundled' | 'local'. A concrete-path selection
+        counts as 'auto' for callers that only care about the mode."""
+        data = self._latex_engine_selection()
+        return str(data) if data in {"auto", "bundled", "local"} else "auto"
+
+    def _resolve_compile_engine(self) -> "EngineChoice | None":
+        """Resolve the compile engine for the current selection (no install prompt here).
+
+        A concrete-engine pick (the combo data is an absolute path) is used directly; the
+        'auto'/'bundled'/'local' modes go through resolve_engine_for_mode."""
+        data = self._latex_engine_selection()
+        if isinstance(data, str) and data not in {"auto", "bundled", "local"} and data:
+            candidate = Path(data)
+            if candidate.exists():
+                source = "auto-tectonic" if candidate.stem.lower().endswith("tectonic") else "system"
+                return EngineChoice(path=str(candidate), source=source)
+        return resolve_engine_for_mode(self._latex_engine_mode(), bundle_root=find_app_root())
+
+    def _engine_supports_group_width(self) -> bool:
+        """True iff the engine that will compile honours siunitx digit-group-size — i.e. the
+        tex writers can use S-column native variable-width grouping. False → app-side text
+        grouping. Resolved + probed (cached in shared.latex_engine)."""
+        choice = self._resolve_compile_engine()
+        if choice is None or not choice.path:
+            return False
+        return siunitx_supports_digit_group_size(choice.path)
+
     def compile_latex_to_pdf(self):
         if getattr(self, "_latex_compile_worker", None) is not None:
             QMessageBox.information(
@@ -102,46 +174,46 @@ class WindowLatexCompileMixin:
         target = self._persist_latex_editor(silent=True)
         if not target:
             return
-        requested_engine = self.latex_engine_combo.currentText()
-        engine = requested_engine
-        used_default_engine_fallback = False
-        is_default_tectonic = requested_engine.strip().lower() == "tectonic"
-        if is_default_tectonic:
-            engine_exec = self._resolve_latex_engine_no_prompt(engine)
+        # Engine per the user's mode (auto/bundled/local). Auto prefers a capable local TeX
+        # (native S-column variable-width grouping) and falls back to the bundled/auto-
+        # installed Tectonic. If nothing resolves and the mode allows Tectonic, offer the
+        # one-shot Tectonic install as the guaranteed fallback.
+        choice = self._resolve_compile_engine()
+        if choice is not None and choice.path and Path(choice.path).exists():
+            engine = Path(choice.path).stem
+            engine_exec = choice.path
+        elif self._latex_engine_mode() != "local":
+            # Only auto/bundled may fall back to the Tectonic auto-install. "local" mode is
+            # an explicit user choice of a local TeX — never prompt a 30 MB Tectonic download
+            # behind their back (CodeRabbit CR-1).
+            engine = "tectonic"
+            engine_exec = self._ensure_latex_engine(engine)
         else:
-            engine_exec = self._ensure_latex_engine(engine)
-        if not engine_exec and is_default_tectonic:
-            for fallback_engine in self._latex_compile_fallback_candidates(requested_engine):
-                fallback_exec = self._resolve_latex_engine_no_prompt(fallback_engine)
-                fallback_path = _safe_resolve_path(fallback_exec) if fallback_exec else None
-                if fallback_path is not None and fallback_path.exists():
-                    engine = fallback_engine
-                    engine_exec = str(fallback_path)
-                    used_default_engine_fallback = True
-                    self._append_log(
-                        self._tr(
-                            f"请求的 LaTeX 引擎 {requested_engine} 不可用，改用 {engine}: {fallback_path}",
-                            f"Requested LaTeX engine {requested_engine} is unavailable; using {engine}: {fallback_path}",
-                        )
-                    )
-                    break
-        if not engine_exec and is_default_tectonic:
-            engine_exec = self._ensure_latex_engine(engine)
+            engine = "local"
+            engine_exec = None
         if not engine_exec:
-            msg_zh = f"未找到 {requested_engine}，请安装或指定路径。"
-            msg_en = f"{requested_engine} not found. Please install it or specify the path."
             QMessageBox.critical(
                 self,
                 self._tr("缺少 LaTeX 引擎", "Missing LaTeX Engine"),
-                self._tr(msg_zh, msg_en),
+                self._tr(
+                    "未找到可用的 LaTeX 引擎。请安装本地 TeX，或切换到内置 Tectonic"
+                    "（自动下载约 30 MB）。",
+                    "No usable LaTeX engine found. Install a local TeX, or switch to the "
+                    "bundled Tectonic (auto-downloads ~30 MB).",
+                ),
             )
             return
-        engine_path = _safe_resolve_path(engine_exec)
+        # Do NOT resolve() the engine binary: TeX Live dispatches the LaTeX format by the
+        # invocation name (argv[0]). ``xelatex``/``pdflatex``/``lualatex`` are typically
+        # symlinks to a shared ``xetex``/``pdftex`` binary; following the symlink would call
+        # it as ``xetex`` and load the PLAIN-TeX format, making \documentclass undefined.
+        # Expand ~ only; keep the name that selects the format.
+        engine_path = Path(engine_exec).expanduser()
         if not engine_path.exists():
             QMessageBox.critical(
                 self,
                 self._tr("缺少 LaTeX 引擎", "Missing LaTeX Engine"),
-                self._tr("指定的 LaTeX 引擎不可用。", "Specified LaTeX engine is not available."),
+                self._tr("LaTeX 引擎不可用。", "The LaTeX engine is not available."),
             )
             return
         self._append_log(
@@ -152,21 +224,6 @@ class WindowLatexCompileMixin:
         )
         pdf_dir = target.parent
         pdf_path = pdf_dir / (target.stem + ".pdf")
-        fallback: str | None = None
-        fallback_path: Path | None = None
-        if used_default_engine_fallback:
-            fallback = "xelatex" if engine.lower() == "pdflatex" else "pdflatex"
-            alt_exec = self._resolve_latex_engine_no_prompt(fallback)
-            fallback_path = _safe_resolve_path(alt_exec) if alt_exec else None
-            if fallback_path is not None and not fallback_path.exists():
-                fallback_path = None
-            if fallback_path is not None:
-                self._append_log(
-                    self._tr(
-                        f"LaTeX 备用引擎: {fallback} ({fallback_path})",
-                        f"LaTeX fallback engine: {fallback} ({fallback_path})",
-                    )
-                )
 
         progress = QProgressDialog(
             self._tr("正在编译 LaTeX…", "Compiling LaTeX…"),
@@ -186,8 +243,8 @@ class WindowLatexCompileMixin:
             engine_name=engine,
             engine_path=engine_path,
             pdf_path=pdf_path,
-            fallback_name=fallback if fallback_path is not None else None,
-            fallback_path=fallback_path,
+            fallback_name=None,
+            fallback_path=None,
             parent=self,
         )
         self._latex_compile_worker = worker
@@ -199,11 +256,6 @@ class WindowLatexCompileMixin:
         worker.finished.connect(worker.deleteLater)
         progress.show()
         worker.start()
-
-    def _latex_compile_fallback_candidates(self, requested_engine: str) -> tuple[str, ...]:
-        requested = (requested_engine or "").strip().lower()
-        candidates = ("xelatex", "pdflatex", "tectonic")
-        return tuple(candidate for candidate in candidates if candidate != requested)
 
     def _on_latex_compile_completed(self, outcome: _LatexCompileOutcome) -> None:
         progress = getattr(self, "_latex_compile_progress", None)
@@ -241,7 +293,19 @@ class WindowLatexCompileMixin:
 
         if outcome.error:
             self._append_log(outcome.error)
-            QMessageBox.critical(self, self._tr("编译失败", "Compilation Failed"), outcome.error)
+            # The compile error can be a full LaTeX log (many lines) — a plain critical box
+            # would grow past the screen and hide OK. Put the log in the scrollable detail pane.
+            from app_desktop.message_dialogs import show_bounded_critical
+
+            show_bounded_critical(
+                self,
+                self._tr("编译失败", "Compilation Failed"),
+                outcome.error,
+                summary=self._tr(
+                    "LaTeX 编译失败。点击“显示详细信息”查看完整日志。",
+                    "LaTeX compilation failed. Click “Show Details” for the full log.",
+                ),
+            )
             return
 
         if outcome.succeeded:
@@ -254,6 +318,16 @@ class WindowLatexCompileMixin:
                 )
                 return
             self.last_pdf_path = pdf_path
+            # One-shot completion callback: the LaTeX preview dialog registers this before
+            # triggering a compile so it can render the freshly-compiled PDF in ITS OWN
+            # scroll when the async worker finishes (compile is a QThread — last_pdf_path is
+            # only valid HERE, not synchronously after compile_latex_to_pdf() returns). When
+            # set, the dialog owns the display, so skip the main-window preview + popup.
+            callback = getattr(self, "_pdf_ready_callback", None)
+            if callable(callback):
+                self._pdf_ready_callback = None
+                callback(pdf_path)
+                return
             if self._render_pdf_preview(pdf_path, force_reload=True):
                 QMessageBox.information(
                     self,
@@ -358,7 +432,11 @@ class WindowLatexCompileMixin:
 
     # -------------------------------------------------------- Engine resolve --
     def _prompt_engine_selection(self):
-        engine = self.latex_engine_combo.currentText()
+        # Manual override: point at a specific LaTeX engine binary. The combo now holds an
+        # engine MODE (auto/bundled/local), so resolve the concrete engine the current mode
+        # would use and cache the picked path against that engine name.
+        choice = self._resolve_compile_engine()
+        engine = Path(choice.path).stem if choice is not None and choice.path else "tectonic"
         selected, _ = QFileDialog.getOpenFileName(
             self,
             self._tr(f"选择 {engine} 可执行文件", f"Select {engine} Executable"),
@@ -419,18 +497,6 @@ class WindowLatexCompileMixin:
         QMessageBox.warning(self, self._tr("提示", "Notice"), self._tr(msg_zh, msg_en))
         self._prompt_engine_selection()
         return self._latex_engine_paths.get(engine)
-
-    def _resolve_latex_engine_no_prompt(self, engine: str) -> str | None:
-        """Resolve an optional fallback engine without showing dialogs."""
-        _ensure_default_path_augmented()
-        cached = self._latex_engine_paths.get(engine)
-        if cached and Path(cached).exists():
-            return cached
-        choice = resolve_engine(engine, bundle_root=find_app_root())
-        if choice is None:
-            return None
-        self._latex_engine_paths[engine] = choice.path
-        return choice.path
 
     def _offer_tectonic_install(self) -> "EngineChoice | None":
         """Ask the user before downloading Tectonic.

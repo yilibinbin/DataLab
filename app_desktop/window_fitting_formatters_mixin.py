@@ -119,7 +119,14 @@ class WindowFittingFormattersMixin:
         headers.append("note")
         return headers
 
-    def _build_substituted_expression(self, expression: str, params: dict[str, mp.mpf], digits: int | None = None) -> str:
+    def _build_substituted_expression(
+        self,
+        expression: str,
+        params: dict[str, mp.mpf],
+        digits: int | None = None,
+        *,
+        use_display_format: bool = False,
+    ) -> str:
         if not expression:
             return ""
 
@@ -133,6 +140,10 @@ class WindowFittingFormattersMixin:
                 mp_value = mp.mpf(params[name])
                 if mp.isnan(mp_value) or mp.isinf(mp_value):
                     return str(mp_value)
+                # use_display_format → honour the live 小数位数/有效位数 + 科学计数法 toggles so
+                # the on-screen model line updates with them (LaTeX/CSV paths keep nstr).
+                if use_display_format and hasattr(self, "_format_display_value"):
+                    return self._format_display_value(mp_value)
                 return mp.nstr(mp_value, precision)
             return name
 
@@ -352,6 +363,14 @@ class WindowFittingFormattersMixin:
 
     def _format_fit_display(self, fit_result: FitResult, expression: str | None, substituted: str | None, batch_idx: int = 1, units: Mapping[str, Any] | None = None, **_ignored) -> tuple[str, list[dict[str, object]]]:
         """Return formatted fit summary text/CSV rows (numbers only; LaTeX unaffected)."""
+        # Re-derive the substituted model line from the live display digits + scientific toggle
+        # so the numbers OUTSIDE the table (the model expression) respond to those controls too
+        # (user-reported: they were frozen at the fit's output digits). Fall back to the passed
+        # substituted if we can't rebuild (e.g. no expression/params).
+        if expression and fit_result.params:
+            substituted = self._build_substituted_expression(
+                expression, fit_result.params, use_display_format=True
+            )
         text = self._format_fit_result_text(fit_result, expression, substituted, units=units)
         csv_rows = self._build_fit_csv_rows(fit_result, expression or "", batch_idx=batch_idx, units=units)
         return text, csv_rows
@@ -502,11 +521,18 @@ class WindowFittingFormattersMixin:
     def _latex_escape(self, text: str) -> str:
         return _fit_latex_writer.latex_escape(text)
 
+    def _fit_native_group_width(self) -> bool:
+        """Whether the compile engine's siunitx honours digit-group-size (native S-column
+        variable-width grouping). False → the writer pre-groups the cells app-side."""
+        probe = getattr(self, "_engine_supports_group_width", None)
+        return bool(probe()) if callable(probe) else True
+
     def _fit_latex_preamble(self, use_dcolumn: bool, digits: int, latex_group_size: int) -> list[str]:
         return _fit_latex_writer.build_fit_latex_preamble(
             use_dcolumn=use_dcolumn,
             digits=digits,
             latex_group_size=latex_group_size,
+            native_group_width=self._fit_native_group_width(),
         )
 
     def _fit_latex_block(
@@ -524,13 +550,26 @@ class WindowFittingFormattersMixin:
         latex_group_size: int = 3,
         batch_index: int | None = None,
         units: Mapping[str, Any] | None = None,
+        target_column: str | None = None,
+        variable_pairs: list[tuple[str, str]] | None = None,
+        default_uncertainty_digits: int | None = None,
     ) -> list[str]:
-        default_unc_digits = self._uncertainty_digits_value()
-        target_column = self.fit_target_edit.text().strip()
-        try:
-            variable_pairs = self._ordered_variable_pairs(headers)
-        except Exception:
-            variable_pairs = []
+        # target_column / variable_pairs / default_uncertainty_digits default to the LIVE
+        # widget values (run-time path), but the on-demand rebuild passes the RUN's values
+        # (from job.target_column / job.variable_map / job.uncertainty_digits) so the tex is
+        # reproduced faithfully regardless of subsequent widget edits.
+        default_unc_digits = (
+            default_uncertainty_digits
+            if default_uncertainty_digits is not None
+            else self._uncertainty_digits_value()
+        )
+        if target_column is None:
+            target_column = self.fit_target_edit.text().strip()
+        if variable_pairs is None:
+            try:
+                variable_pairs = self._ordered_variable_pairs(headers)
+            except Exception:
+                variable_pairs = []
         caption_base = self._caption_value() if hasattr(self, "_caption_value") else None
 
         if expression and fit_result.params:
@@ -558,4 +597,5 @@ class WindowFittingFormattersMixin:
             default_uncertainty_digits=default_unc_digits,
             cleaned_substituted=cleaned_sub,
             units=units,
+            native_group_width=self._fit_native_group_width(),
         )

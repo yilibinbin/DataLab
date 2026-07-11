@@ -15,6 +15,7 @@ import weakref
 from PySide6.QtCore import Qt, QObject, QEvent
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTabWidget,
     QTextBrowser,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -54,10 +56,12 @@ from app_desktop.parallel_preferences import (
 from app_desktop.result_view_titles import result_view_tab_title, result_view_tooltip
 from app_desktop.shell_layout import build_workbench_bar, update_workbench_status
 from app_desktop.theme import (
+    CARD_PADDING,
     CONTROL_SPACING,
     SECTION_SPACING,
     config_card_style,
     data_input_card_style,
+    input_data_tabs_style,
     is_dark_theme,
     result_detail_card_style,
     result_overview_card_style,
@@ -65,6 +69,7 @@ from app_desktop.theme import (
     result_tab_pane_style,
     table_style,
     workbench_section_card_style,
+    workbench_title_text_style,
 )
 from app_desktop.workbench_layout import (
     build_workbench_main_splitter,
@@ -91,7 +96,7 @@ from app_desktop.workbench_variable_panel import (
     populate_variable_workspace_panel,
     refresh_variable_workspace_panel,
 )
-from app_desktop.workbench_visual_contract import CONFIG_RAIL_MIN_WIDTH
+from app_desktop.workbench_visual_contract import WORKSPACE_CANVAS_MIN_WIDTH
 from app_desktop.ui_schema_binder import bind_choices, bind_field
 from app_desktop.ui_schema_runtime import (
     bind_schema_command_button,
@@ -125,12 +130,16 @@ from shared.precision import MAX_MPMATH_DPS, MIN_MPMATH_DPS
 _LANG_ZH = "zh"
 _LANG_EN = "en"
 _LANG_AUTO = "auto"
+# Visible result subtabs, in order. TeX/PDF are intentionally NOT here: the on-demand
+# LaTeX preview dialog is their viewer now (opened by the result-panel 生成 TeX button; the
+# dialog carries both the TeX and PDF tabs). The latex/pdf widgets are still built — hosted off-screen in
+# ``_offscreen_result_views`` — so the dialog, workspace round-trip, and compile paths
+# keep reading them; see build_right_panel and DESKTOP_RESULT_VIEWS (which keeps all 5
+# view specs for the off-screen widgets + result_view_titles).
 _RESULT_VIEW_ORDER = (
     "result.numeric",
     "result.image",
     "result.log",
-    "result.latex",
-    "result.pdf",
 )
 
 
@@ -159,6 +168,32 @@ _REFCOL_AUTO_MAX_DIFF_EN = "Max-diff column"
 # serialiser agree on the mapping.
 _STACK_PAGE_TABLE = 0
 _STACK_PAGE_TEXT = 1
+
+
+class _FilePathChecked:
+    """Compatibility stand-in for the removed 使用数据文件 checkbox.
+
+    The data source is now driven purely by whether a file path is entered (file takes precedence
+    over manual input). Callers still ask ``use_file_checkbox.isChecked()`` / ``_checked(...)``; this
+    reports ``True`` iff the linked path edit is non-empty. ``setChecked`` is a no-op (the path is the
+    source of truth), so workspace-restore's ``setChecked(False)`` doesn't fight it.
+    """
+
+    class _NoopSignal:
+        def connect(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    def __init__(self, path_edit: QLineEdit) -> None:
+        self._path_edit = path_edit
+        # Callers wire the (former) checkbox's ``toggled`` signal to mark-dirty; the path edit's
+        # own textChanged already covers that, so this is a no-op sink.
+        self.toggled = _FilePathChecked._NoopSignal()
+
+    def isChecked(self) -> bool:
+        return bool(self._path_edit.text().strip())
+
+    def setChecked(self, _value: bool) -> None:
+        return None
 
 _MODE_VIEW_BUILDERS: dict[ModeKey, tuple[str, Callable[[object], QGroupBox]]] = {
     "extrapolation": ("extrap_box", build_extrapolation_mode_view),
@@ -202,6 +237,7 @@ def build_menu(self):
     menubar = self.menuBar()
 
     file_menu = menubar.addMenu("文件")
+    file_menu.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
     self._register_text(file_menu, "文件", "File", "setTitle")
 
     new_workspace_action = QAction("新建工作区", self)
@@ -243,10 +279,12 @@ def build_menu(self):
     self._register_text(save_workspace_as_action, "工作区另存为…", "Save Workspace As…", "setText")
 
     examples_menu = menubar.addMenu("示例")
+    examples_menu.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
     self._register_text(examples_menu, "示例", "Examples", "setTitle")
     examples_menu.addAction(open_example_workspace_action)
 
     lang_menu = menubar.addMenu("语言")
+    lang_menu.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation))
     self._register_text(lang_menu, "语言", "Language", "setTitle")
     action_lang_auto = QAction("自动", self)
     action_lang_auto.triggered.connect(lambda: self._on_language_change(0))
@@ -262,6 +300,7 @@ def build_menu(self):
     self._register_text(action_lang_en, "English", "English", "setText")
 
     theme_menu = menubar.addMenu("主题")
+    theme_menu.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DesktopIcon))
     self._register_text(theme_menu, "主题", "Theme", "setTitle")
     theme_group = QActionGroup(self)
     theme_group.setExclusive(True)
@@ -276,6 +315,7 @@ def build_menu(self):
         self._register_text(action, zh, en, "setText")
 
     help_menu = menubar.addMenu("帮助")
+    help_menu.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxQuestion))
     self._register_text(help_menu, "帮助", "Help", "setTitle")
 
     project_action = QAction("项目主页", self)
@@ -340,19 +380,55 @@ def build_ui(self):
     root_layout.addWidget(self.workbench_status_strip)
     layout.addWidget(self.workbench_root)
 
-    self.left_layout = self.workbench_config_layout
-    self.left_container = self.workbench_config_content
-    self._left_scroll = self.workbench_config_rail
+    # Two-pane layout: the left config sections merge into the workspace pane, so the
+    # "left" aliases point at the MERGED (workspace) pane — the new left-pane source of
+    # truth for sizing/scroll. ``workbench_config_*`` survive only as detached
+    # compatibility attributes (never a splitter pane).
+    self.left_layout = self.workbench_workspace_layout
+    self.left_container = self.workbench_workspace_content
+    self._left_scroll = self.workbench_workspace_canvas
 
+    # The left workspace column is exactly TWO blocks: [输入数据 tabs] (added by _build_left_panel)
+    # + [one config card]. The config card wraps the per-mode config in a single QGroupBox, ordered
+    # mode config FIRST (mode_stack — holds the model selector etc.), then the shared formula input,
+    # then the shared variable mapping. All three are per-mode stacked widgets that switch together;
+    # the formula/variable panels self-hide in modes that don't use them (no gap). This replaces the
+    # old three-separate-blocks layout so users "pick the model first, then see its fields".
     self._build_left_panel()
+    self.workbench_config_card = QGroupBox()
+    self.workbench_config_card.setObjectName("workbench_config_card")
+    self.workbench_config_card.setProperty("datalab_config_card", True)
+    _config_card_layout = QVBoxLayout(self.workbench_config_card)
+    _config_card_layout.setSpacing(CONTROL_SPACING)
+    # NB: inner margins are set by _style_config_card (10px) below — it is the single source of
+    # the card padding and also runs on theme change, so we don't set margins here.
+
+    # mode_stack (CurrentPageStack) pins its own height to the active page's sizeHint (no gap / no
+    # clip, review S3); formula/variable panels build per-mode pages and self-hide when unused.
+    reparent_widget(_config_card_layout, self.mode_stack, stretch=0)
     self.workbench_formula_panel = build_formula_workspace_panel(self)
-    self.workbench_workspace_layout.addWidget(self.workbench_formula_panel)
+    _config_card_layout.addWidget(self.workbench_formula_panel)
     populate_formula_workspace_panel(self)
     self.workbench_variable_panel = build_variable_workspace_panel(self)
-    self.workbench_workspace_layout.addWidget(self.workbench_variable_panel)
-    reparent_widget(self.workbench_workspace_layout, self.mode_stack, stretch=1)
+    _config_card_layout.addWidget(self.workbench_variable_panel)
     populate_variable_workspace_panel(self)
+
+    self.workbench_workspace_layout.addWidget(self.workbench_config_card)
+    self.workbench_workspace_layout.addStretch(1)
+    _style_config_card(self.workbench_config_card, dark=is_dark_theme())
+    # ``output_setup_section`` and ``run_section`` are no longer added to the layout — the
+    # first went empty when options moved to the toolbar dialogs, the second when the
+    # bottom 开始执行 button was removed (4·4c; run is on the toolbar). Both attributes are
+    # kept for compatibility but never shown.
     self._build_right_panel(self.workbench_result_layout)
+    # Part C/D: always-visible result status strip (footer of the result rail) +
+    # click-to-open overview popover. Both read the shared result-state source and
+    # create NEW widgets — they never move the existing overview/footer widgets.
+    from app_desktop.result_status_strip import build_result_status_strip
+    from app_desktop.result_overview_popover import install_overview_popover_trigger
+
+    self.workbench_result_layout.addWidget(build_result_status_strip(self))
+    install_overview_popover_trigger(self)
     self._bind_workbench_state_roles()
     self._bind_workbench_spec_schema_keys()
     _connect_workbench_formula_editors(self)
@@ -441,6 +517,12 @@ def _bind_workbench_state_roles(self) -> None:
     self.implicit_params_table.setObjectName("implicit_params_table")
     self.root_unknowns_table.setObjectName("root_unknowns_table")
     self.input_constants_editor.setObjectName("input_constants_editor")
+    # Register the constants card title for bilingual switching + give it the same weight as the
+    # data card's "输入数据" title.
+    _constants_title = getattr(self.input_constants_editor, "title_label", None)
+    if _constants_title is not None:
+        self._register_text(_constants_title, "输入常数", "Constants")
+        _constants_title.setStyleSheet(workbench_title_text_style())
     shared_constants_editor = self.input_constants_editor
     for editor_name in (
         "error_constants_editor",
@@ -581,48 +663,46 @@ def _clamp_workbench_splitter_sizes(sizes: list[int], minimums: list[int], total
 
 
 def _refresh_main_splitter_left_min_width(self) -> None:
-    config_content = getattr(self, "workbench_config_content", None)
-    config_scroll = getattr(self, "workbench_config_rail", None)
-    if config_content is not None and config_scroll is not None:
-        _activate_widget_layouts(config_content)
-        _refresh_visible_table_min_widths(config_content)
-        workspace_content = getattr(self, "workbench_workspace_content", None)
-        if workspace_content is not None:
-            _activate_widget_layouts(workspace_content)
-            _refresh_visible_table_min_widths(workspace_content)
-        _activate_widget_layouts(config_content)
+    # Two-pane layout: the merged (workspace) pane IS the left pane. Its minimum width
+    # is derived from the merged content, NOT the detached config rail. Pane 0 = merged
+    # workspace, pane 1 = result.
+    merged_content = getattr(self, "workbench_workspace_content", None)
+    merged_scroll = getattr(self, "workbench_workspace_canvas", None)
+    if merged_content is not None and merged_scroll is not None:
+        _activate_widget_layouts(merged_content)
+        _refresh_visible_table_min_widths(merged_content)
 
+        # The merged pane holds BOTH input and config, so its floor is the workspace
+        # canvas minimum (wider than the old config-rail minimum).
         content_min_width = max(
-            CONFIG_RAIL_MIN_WIDTH,
-            config_content.minimumSizeHint().width(),
+            WORKSPACE_CANVAS_MIN_WIDTH,
+            merged_content.minimumSizeHint().width(),
         )
-        config_content.setMinimumWidth(content_min_width)
-        left_min_width = content_min_width + scroll_viewport_overhead(config_scroll)
+        merged_content.setMinimumWidth(content_min_width)
+        left_min_width = content_min_width + scroll_viewport_overhead(merged_scroll)
         self._main_splitter_left_min_width = left_min_width
-        config_scroll.setMinimumWidth(left_min_width)
+        merged_scroll.setMinimumWidth(left_min_width)
 
         splitter = getattr(self, "_main_splitter", None)
-        workspace_scroll = getattr(self, "workbench_workspace_canvas", None)
         result_rail = getattr(self, "workbench_result_rail", None)
-        if splitter is None or splitter.count() < 3 or workspace_scroll is None or result_rail is None:
+        if splitter is None or splitter.count() < 2 or result_rail is None:
             return
 
-        center_min_width = max(1, workspace_scroll.minimumWidth())
         right_min_width = max(1, result_rail.minimumWidth())
         sizes = splitter.sizes()
-        if not sizes or len(sizes) < 3:
-            splitter.setSizes([left_min_width, center_min_width, right_min_width])
+        if not sizes or len(sizes) < 2:
+            splitter.setSizes([left_min_width, right_min_width])
             return
-        pane_sizes = sizes[:3]
-        minimums = [left_min_width, center_min_width, right_min_width]
+        pane_sizes = sizes[:2]
+        minimums = [left_min_width, right_min_width]
         if all(size >= minimum for size, minimum in zip(pane_sizes, minimums, strict=True)):
             return
 
         handle_total = splitter.handleWidth() * max(0, splitter.count() - 1)
-        total = sum(pane_sizes) or max(0, splitter.width() - handle_total - sum(sizes[3:]))
+        total = sum(pane_sizes) or max(0, splitter.width() - handle_total - sum(sizes[2:]))
         clamped = _clamp_workbench_splitter_sizes(pane_sizes, minimums, total)
         if clamped != pane_sizes:
-            splitter.setSizes(clamped + sizes[3:])
+            splitter.setSizes(clamped + sizes[2:])
         return
 
 
@@ -671,13 +751,10 @@ def _table_required_min_width(table: QTableWidget) -> int:
 
 
 def _config_card_sections(self) -> tuple[QWidget, ...]:
+    # run_section is no longer a visible card (bottom 开始执行 removed in 4·4c); only the
+    # input section remains a styled config card in the merged pane.
     sections: list[QWidget] = []
-    for attr in (
-        "input_section",
-        "mode_section",
-        "output_setup_section",
-        "run_section",
-    ):
+    for attr in ("input_section", "workbench_config_card"):
         section = getattr(self, attr, None)
         if isinstance(section, QWidget):
             sections.append(section)
@@ -689,7 +766,7 @@ def _style_config_card(section: QWidget, *, dark: bool | None = None) -> None:
     section.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     layout = section.layout()
     if layout is not None:
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(*CARD_PADDING)
     section.setStyleSheet(config_card_style(dark=dark))
     section.style().unpolish(section)
     section.style().polish(section)
@@ -722,10 +799,15 @@ def build_left_panel(self):
 
     refresh_workbench_config_cards(self)
 
-    self.left_layout.addWidget(self.mode_section)
+    # Two-pane layout: the left config sections live in the MERGED workspace pane
+    # (``left_layout`` is aliased to the workspace layout in build_ui). Only the input
+    # section is added here, at the TOP; the per-mode config (formula/mode_stack) is
+    # added by build_ui right after, and ``output_setup_section`` + ``run_section`` are
+    # appended at the BOTTOM by build_ui (see _append_left_footer_sections). This yields
+    # the confirmed order: 输入 (top) → 配置 → 输出设置 → 运行.
+    # ``mode_section``/``mode_box`` are kept as detached compatibility attributes but are
+    # NOT added to any pane (the mode selector is on the toolbar).
     self.left_layout.addWidget(self.input_section)
-    self.left_layout.addWidget(self.output_setup_section)
-    self.left_layout.addWidget(self.run_section)
 
     # Mode selection
     self.mode_box = QGroupBox("计算模式")
@@ -749,52 +831,60 @@ def build_left_panel(self):
         "setToolTip",
     )
     self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
-    mode_layout.addWidget(self.mode_combo)
-    self.mode_section_layout.addWidget(self.mode_box)
+    # The mode selector now lives on the workbench toolbar, not in the left-rail
+    # ``mode_box`` card. Insert the SAME ``mode_combo`` widget into the toolbar's
+    # reserved slot (``_toolbar_mode_slot``, created in build_workbench_toolbar).
+    # ``mode_box``/``mode_section`` are kept as detached compatibility attributes.
+    mode_slot = getattr(self, "_toolbar_mode_slot", None)
+    if mode_slot is not None:
+        mode_slot.addWidget(self.mode_combo)
+    else:  # pragma: no cover - toolbar always builds first in build_ui
+        mode_layout.addWidget(self.mode_combo)
 
-    # Data file
-    self.file_box = QGroupBox("")
+    # Data file — label + path edit + Browse all on ONE row. No 使用数据文件 checkbox: the file
+    # picker sits directly with the data, and a non-empty path takes PRECEDENCE over the manual
+    # input below (see _active_input_bundle).
+    # Plain container (matches the 常数 tab's constants_file_row exactly). A little L/R padding so
+    # the row isn't flush against the tab edge, and the tab layout adds a gap before the card below.
+    self.file_box = QWidget()
     file_layout = QHBoxLayout(self.file_box)
+    file_layout.setContentsMargins(4, 2, 4, 2)
     file_layout.setSpacing(6)
+    self._data_file_label = QLabel(self._tr("数据文件：", "Data file:"))
+    self._register_text(self._data_file_label, "数据文件：", "Data file:")
+    file_layout.addWidget(self._data_file_label)
     self.data_file_edit = QLineEdit()
+    self._register_text(
+        self.data_file_edit,
+        "数据文件路径（可选，填写后忽略下方手动输入）",
+        "Data file path (optional; overrides manual input below)",
+        "setPlaceholderText",
+    )
+    self._register_text(
+        self.data_file_edit,
+        "数据文件路径（可选）。填写后从该文件读取数据，忽略下方手动输入；留空则使用手动输入。",
+        "Data file path (optional). When set, data is read from this file and the manual input below is ignored; leave blank to use manual input.",
+        "setToolTip",
+    )
     file_layout.addWidget(self.data_file_edit)
     browse_btn = QPushButton("浏览…")
     browse_btn.clicked.connect(self.browse_data_file)
     self._register_text(browse_btn, "浏览…", "Browse…")
     file_layout.addWidget(browse_btn)
-    self.use_file_hint_btn = QPushButton("?")
-    self.use_file_hint_btn.setFlat(True)
-    self.use_file_hint_btn.setFixedWidth(22)
-    self.use_file_hint_btn.setFocusPolicy(Qt.NoFocus)
-    self.use_file_hint_btn.setToolTip("")
-    self.use_file_hint_btn.clicked.connect(self._show_data_file_hint)
-    self.use_file_hint_btn.hide()
-    file_layout.addWidget(self.use_file_hint_btn)
-    # 数据来源切换
-    self.use_file_checkbox = QCheckBox("使用数据文件")
-    self.use_file_checkbox.setChecked(False)
-    self._register_text(self.use_file_checkbox, "使用数据文件", "Use data file")
-    self._register_text(
-        self.use_file_checkbox,
-        "启用后从文件读取数据；关闭后在左侧输入区手动输入数据。",
-        "Read data from a file when enabled; otherwise use the manual data input in the left input area.",
-        "setToolTip",
-    )
-    self.use_file_checkbox.toggled.connect(self._on_data_source_toggle)
-    source_row = QHBoxLayout()
-    source_row.setSpacing(6)
-    source_row.addWidget(self.use_file_checkbox)
-    source_row.addStretch()
-    self.input_section_layout.addLayout(source_row)
-    self.input_section_layout.addWidget(self.file_box)
-    self.file_box.hide()
+    # (The data-file "?" help now lives on the data card's toolbar as manual_data_help_btn; the old
+    # permanently-hidden use_file_hint_btn was removed — /simplify.)
+    # Compatibility shim: many callers read `use_file_checkbox.isChecked()` / _checked(...) to
+    # decide file-vs-manual. With the checkbox gone, this shim reports checked==(a file path is
+    # entered), so every existing caller gets file-precedence with no per-caller change.
+    self.use_file_checkbox = _FilePathChecked(self.data_file_edit)
+    self.file_box.show()
 
     # Manual data — table editor + text fallback
     self.manual_box = QGroupBox("")
     self.manual_box.setProperty("datalab_data_card", True)
     self.manual_box.setStyleSheet(data_input_card_style(dark=is_dark_theme()))
     manual_layout = QVBoxLayout(self.manual_box)
-    manual_layout.setContentsMargins(10, 8, 10, 10)
+    manual_layout.setContentsMargins(*CARD_PADDING)
     manual_layout.setSpacing(6)
 
     data_header = QHBoxLayout()
@@ -866,6 +956,25 @@ def build_left_panel(self):
     table_toolbar.addWidget(clear_btn)
     table_toolbar.addWidget(self._data_view_toggle)
     table_toolbar.addStretch()
+    # ? help button on the right of the data toolbar (mirrors the constants editor's ?).
+    self.manual_data_help_btn = QPushButton("?")
+    self.manual_data_help_btn.setFlat(True)
+    self.manual_data_help_btn.setFixedWidth(24)
+    self.manual_data_help_btn.setFocusPolicy(Qt.NoFocus)
+    self.manual_data_help_btn.setToolTip(
+        self._tr(
+            "输入数据：每列一个变量，每行一组数据；也可用上方“数据文件”从文件读取。",
+            "Data input: one variable per column, one sample per row; or read from a file via 数据文件 above.",
+        )
+    )
+    self._register_text(
+        self.manual_data_help_btn,
+        "输入数据：每列一个变量，每行一组数据；也可用上方“数据文件”从文件读取。",
+        "Data input: one variable per column, one sample per row; or read from a file via 数据文件 above.",
+        "setToolTip",
+    )
+    self.manual_data_help_btn.clicked.connect(self._show_data_file_hint)
+    table_toolbar.addWidget(self.manual_data_help_btn)
     manual_layout.addLayout(table_toolbar)
 
     # Stacked widget: table view (0) / text view (1)
@@ -877,6 +986,9 @@ def build_left_panel(self):
     _apply_equal_column_stretch(self.manual_table)
     self.manual_table.setAlternatingRowColors(True)
     self.manual_table.setStyleSheet(view_helpers.get_table_style())
+    # Excel-like block selection + copy: select a rectangular range and Ctrl/Cmd+C copies it
+    # as TSV (paste handled by the same filter).
+    self.manual_table.setSelectionMode(QAbstractItemView.SelectionMode.ContiguousSelection)
     self.manual_table.installEventFilter(_TablePasteFilter(self.manual_table, self))
     self.manual_table.itemChanged.connect(lambda *_args: _update_data_summary(self))
     manual_table_model = self.manual_table.model()
@@ -893,12 +1005,92 @@ def build_left_panel(self):
 
     self._data_stack.setCurrentIndex(_STACK_PAGE_TABLE)  # table view by default
     manual_layout.addWidget(self._data_stack)
-    self.input_section_layout.addWidget(self.manual_box)
 
     from app_desktop.constants_editor import ConstantsEditor
     self.input_constants_editor = ConstantsEditor(min_rows=1, checked=False, numeric_mode="uncertainty")
     self.input_constants_editor.set_embedded_in_workbench(True)
-    self.input_section_layout.addWidget(self.input_constants_editor)
+
+    # Merge input data + constants into sheet-like tabs (输入数据 / 常数) to reuse space instead
+    # of stacking two tables. The 常数 tab is added/removed by mode (see _set_constants_tab_
+    # visible) — only constant-using modes (error/custom-fit/implicit) show it.
+    # Each tab is SELF-CONTAINED: the 输入数据 tab holds its own 使用数据文件 checkbox + file
+    # picker + table, so the data-file toggle can never bleed into the 常数 tab.
+    self._data_tab = QWidget()
+    _data_tab_layout = QVBoxLayout(self._data_tab)
+    _data_tab_layout.setContentsMargins(0, 6, 0, 0)
+    _data_tab_layout.setSpacing(10)  # gap between the file row and the data card below
+    _data_tab_layout.addWidget(self.file_box)
+    _data_tab_layout.addWidget(self.manual_box)
+
+    # 常数 tab: its OWN 使用数据文件 checkbox + file picker (independent from the data tab).
+    # The backend already supports constants-from-file (workers_core reads constants_file_path);
+    # only the UI was missing. Manual constants table hides when the file source is on.
+    self._constants_tab = QWidget()
+    _const_tab_layout = QVBoxLayout(self._constants_tab)
+    _const_tab_layout.setContentsMargins(0, 6, 0, 0)
+    _const_tab_layout.setSpacing(10)  # gap between the file row and the constants card below
+
+    # Symmetric with the data tab: no checkbox — a non-empty constants-file path takes precedence
+    # over the manual constants table below.
+    self.constants_file_row = QWidget()
+    _const_file_layout = QHBoxLayout(self.constants_file_row)
+    _const_file_layout.setContentsMargins(4, 2, 4, 2)
+    _const_file_layout.setSpacing(6)
+    _const_file_label = QLabel(self._tr("常数文件：", "Constants file:"))
+    self._register_text(_const_file_label, "常数文件：", "Constants file:")
+    _const_file_layout.addWidget(_const_file_label)
+    self.constants_file_edit = QLineEdit()
+    self._register_text(
+        self.constants_file_edit,
+        "常数文件路径（可选，填写后忽略下方手动输入）",
+        "Constants file path (optional; overrides manual input below)",
+        "setPlaceholderText",
+    )
+    self._register_text(
+        self.constants_file_edit,
+        "常数文件路径（可选）。填写后从该文件读取常数，忽略下方手动输入；留空则使用手动输入。",
+        "Constants file path (optional). When set, constants are read from this file and the manual input below is ignored; leave blank to use manual input.",
+        "setToolTip",
+    )
+    _const_file_layout.addWidget(self.constants_file_edit)
+    _const_browse = QPushButton("浏览…")
+    _const_browse.clicked.connect(self.browse_constants_file)
+    self._register_text(_const_browse, "浏览…", "Browse…")
+    _const_file_layout.addWidget(_const_browse)
+    self.constants_file_row.show()
+    self.use_constants_file_checkbox = _FilePathChecked(self.constants_file_edit)
+    _const_tab_layout.addWidget(self.constants_file_row)
+    _const_tab_layout.addWidget(self.input_constants_editor)
+
+    self.input_data_tabs = QTabWidget()
+    self.input_data_tabs.setObjectName("input_data_tabs")
+    # documentMode=False so the styled pane border (rounded, from input_data_tabs_style) renders.
+    self.input_data_tabs.setDocumentMode(False)
+    self.input_data_tabs.setStyleSheet(input_data_tabs_style(dark=is_dark_theme()))
+    self.input_data_tabs.addTab(self._data_tab, self._tr("输入数据", "Data input"))
+    self.input_data_tabs.addTab(self._constants_tab, self._tr("常数", "Constants"))
+
+    # Expand/collapse toggle in the tab bar's top-right corner: expands the input area rightward
+    # (widening the left pane) to show many data columns, then collapses back to the default width.
+    # Smooth width animation lives on the window (_toggle_input_area_expanded).
+    self.input_expand_button = QToolButton()
+    self.input_expand_button.setObjectName("input_expand_button")
+    self.input_expand_button.setText("⤢")
+    self.input_expand_button.setCheckable(True)
+    self.input_expand_button.setCursor(Qt.PointingHandCursor)
+    self.input_expand_button.setFocusPolicy(Qt.NoFocus)
+    self.input_expand_button.setAutoRaise(True)
+    self.input_expand_button.setToolTip(self._tr("展开输入区（显示更多数据列）", "Expand the input area (show more data columns)"))
+    self._register_text(
+        self.input_expand_button,
+        "展开输入区（显示更多数据列）",
+        "Expand the input area (show more data columns)",
+        "setToolTip",
+    )
+    self.input_expand_button.clicked.connect(self._toggle_input_area_expanded)
+    self.input_data_tabs.setCornerWidget(self.input_expand_button, Qt.TopRightCorner)
+
+    self.input_section_layout.addWidget(self.input_data_tabs)
 
     self.error_constants_editor = self.input_constants_editor
     self.custom_constants_editor = self.input_constants_editor
@@ -910,6 +1102,9 @@ def build_left_panel(self):
 
     self.mode_stack = CurrentPageStack()
     self.mode_stack.setObjectName("mode_stack")
+    # CurrentPageStack pins its own fixed height to the ACTIVE page's sizeHint (see
+    # current_page_stack.py) — this is what prevents both the hollow gap on short modes and the
+    # clip on modes whose config grows after layout (review S3). No size-policy override needed.
     _build_mode_stack_pages(self)
 
     # Options
@@ -931,18 +1126,20 @@ def build_left_panel(self):
     except Exception:
         pass
 
-    # Uncertainty digits option (always visible, not tied to LaTeX toggle)
+    # Uncertainty digits option (always visible, not tied to LaTeX toggle).
+    # The widget itself is created here so the FormFieldSpec binding + reveal system keep
+    # working, but it is PLACED in the result panel's display-format row (see build_result_*),
+    # next to 小数位数/科学计数法, so it can be adjusted post-run with live re-render. Its label
+    # travels with it; we keep a reference for that placement.
     self.uncertainty_digits_spin = QSpinBox()
     self.uncertainty_digits_spin.setRange(1, 12)
     self.uncertainty_digits_spin.setValue(1)
     unc_label = QLabel("不确定度位数：")
     self._register_text(unc_label, "不确定度位数：", "Uncertainty digits:")
+    self.uncertainty_digits_label = unc_label
 
     precision_layout.addWidget(label_precision)
     precision_layout.addWidget(self.mpmath_precision_spin)
-    precision_layout.addSpacing(16)
-    precision_layout.addWidget(unc_label)
-    precision_layout.addWidget(self.uncertainty_digits_spin)
     precision_layout.addStretch()
     options_layout.addLayout(precision_layout)
 
@@ -1030,25 +1227,20 @@ def build_left_panel(self):
     self.parallel_nested_policy_combo.currentIndexChanged.connect(
         lambda _index: save_current_parallel_config(self)
     )
-    self.generate_latex_checkbox = QCheckBox("生成 LaTeX 文件")
-    self.generate_latex_checkbox.setChecked(False)
-    self.generate_latex_checkbox.toggled.connect(self._toggle_latex_options)
-    self._register_text(self.generate_latex_checkbox, "生成 LaTeX 文件", "Generate LaTeX")
-    options_layout.addWidget(self.generate_latex_checkbox)
-
+    # The "生成 LaTeX 文件" checkbox was removed (4·4d): the run never writes tex (tex is
+    # generated on demand from the result), so it gated nothing. The LaTeX options below are
+    # now always visible in the LaTeX 选项 dialog.
     self.latex_options_widget = QWidget()
     latex_layout = QFormLayout(self.latex_options_widget)
+    # The LaTeX output PATH field is no longer shown in the options — the path is chosen
+    # at save-time via the TeX window's Save dialog (Module 1). ``output_file_edit`` is
+    # kept as a DETACHED widget on ``self`` so the save/persist code paths that reference
+    # ``self.output_file_edit`` keep working; it is simply not placed in the options UI.
     self.output_file_edit = QLineEdit()
     out_btn = QPushButton("选择…")
     out_btn.clicked.connect(self.browse_output_file)
     self._register_text(out_btn, "选择…", "Browse…")
     self.output_browse_button = out_btn
-    output_row = QHBoxLayout()
-    output_row.addWidget(self.output_file_edit)
-    output_row.addWidget(out_btn)
-    lbl_output = QLabel("LaTeX 输出路径：")
-    self._register_text(lbl_output, "LaTeX 输出路径：", "LaTeX output path:")
-    latex_layout.addRow(lbl_output, output_row)
     self.latex_input_precision_spin = QSpinBox()
     self.latex_input_precision_spin.setRange(6, 200)
     self.latex_input_precision_spin.setValue(20)
@@ -1107,7 +1299,6 @@ def build_left_panel(self):
         lbl_nested_policy=lbl_nested_policy,
         parallel_mode_items=parallel_mode_items,
         nested_policy_items=nested_policy_items,
-        lbl_output=lbl_output,
         prec_label=prec_label,
         group_size_label=group_size_label,
     )
@@ -1119,35 +1310,82 @@ def build_left_panel(self):
     # (window_latex_pdf_mixin.compile_latex_to_pdf) keep working
     # unchanged — they reference ``self.latex_engine_combo``.
 
-    self.output_setup_section_layout.addWidget(options_box)
+    # Low-frequency options live in two resizable, non-modal QDialog windows (计算 /
+    # LaTeX), opened from the toolbar buttons (see app_desktop.options_dialogs; user
+    # chose "真独立窗口"). The REAL controls are reparented — never recreated — into each
+    # dialog's content widget, so their schema keys, signal wirings, and parallel-prefs
+    # persistence (all set up above) survive intact. The run pipeline keeps reading
+    # ``self.<widget>`` unchanged; the controls just live in the dialog now.
+    from app_desktop.options_dialogs import (
+        add_separator,
+        bind_options_button,
+        build_options_dialog,
+    )
 
-    self.run_button = QPushButton("开始执行")
-    self.run_button.setObjectName("run_button")
-    self.run_button.setProperty("datalab_primary_run_button", True)
-    self.run_button.setProperty("datalab_run_state", "run")
-    # Ctrl/⌘+Return is the standard "execute" shortcut; a button shortcut fires
-    # the click, so it runs or stops depending on the button's current state.
-    self.run_button.setShortcut(QKeySequence("Ctrl+Return"))
-    # Register the tooltip for retranslation (not a one-shot setToolTip) so it
-    # switches with the UI language like the button text.
-    self._register_text(self.run_button, "开始执行 (Ctrl+Return)", "Run (Ctrl+Return)", "setToolTip")
-    self._register_text(self.run_button, "开始执行", "Run")
-    self.run_button.clicked.connect(lambda _checked=False: self.run_calculation())
-    self.run_section_layout.addWidget(self.run_button)
+    # Detach the already-built groups from options_layout (a layout/widget has one parent
+    # layout), then re-add to each dialog's content — reparenting the SAME instances.
+    options_layout.removeItem(precision_layout)
+    options_layout.removeItem(parallel_layout)
+    options_layout.removeWidget(self.latex_options_widget)
+    options_layout.removeWidget(self.generate_plots_checkbox)
+    options_layout.removeWidget(self.verbose_checkbox)
+
+    compute_content = QWidget()
+    compute_content.setObjectName("compute_options_content")
+    compute_layout = QVBoxLayout(compute_content)
+    compute_layout.addLayout(precision_layout)
+    compute_layout.addLayout(parallel_layout)
+    add_separator(compute_layout)
+    compute_layout.addWidget(self.generate_plots_checkbox)
+    compute_layout.addWidget(self.verbose_checkbox)
+
+    latex_content = QWidget()
+    latex_content.setObjectName("latex_options_content")
+    latex_content_layout = QVBoxLayout(latex_content)
+    latex_content_layout.addWidget(self.latex_options_widget)
+    # The engine selector row is built later (with the off-screen latex widgets); keep a
+    # handle to this layout so it can be appended into the LaTeX 选项 dialog then.
+    self._latex_options_content_layout = latex_content_layout
+
+    self.compute_options_dialog = build_options_dialog(
+        self, "compute_options_dialog", "计算选项", "Compute options", compute_content
+    )
+    self.latex_options_dialog = build_options_dialog(
+        self, "latex_options_dialog", "LaTeX 选项", "LaTeX options", latex_content
+    )
+    bind_options_button(self.workbench_compute_options_button, self.compute_options_dialog)
+    # latex_options_dialog is opened from the result-panel 「LaTeX 选项」 button
+    # (result_latex_options_button), bound in build_right_panel after that button exists.
+
+    # The bottom 开始执行 button was removed (4·4c): it duplicated the toolbar 运行 button.
+    # Run/stop is driven by the toolbar 运行 / 停止 pair (workbench_run_button /
+    # workbench_stop_button); Ctrl+Return runs via the toolbar run button (shortcut set in
+    # workbench_toolbar.py). run_section stays an empty compat widget, not added to the
+    # layout (like output_setup_section).
     self._update_model_controls()
 
 def build_right_panel(self, layout: QVBoxLayout):
+    # The overview card is built but NOT added to the visible layout: the toolbar status chip
+    # is the overview entry point now (user-approved). The widget stays alive off-layout so
+    # refresh_result_overview's writes to its sub-widgets remain valid (mirrors the 4·4b
+    # "remove from view, keep widget" pattern), and the popover reads the same result state.
+    # Parent it to the window and hide it so it is not a leaked top-level widget (CodeRabbit).
     self.workbench_result_overview_panel = build_result_overview(self)
-    layout.addWidget(self.workbench_result_overview_panel)
+    self.workbench_result_overview_panel.setParent(self)
+    self.workbench_result_overview_panel.hide()
+    # History is opened from a toolbar 历史 button as a popup now (user request), so the panel
+    # is NOT added to the result layout — it is parented to the window and hidden until the
+    # popup hosts it (history_popup.toggle_history_popup reparents the real widget in/out).
     self.workbench_history_panel = build_history_panel(self)
-    layout.addWidget(self.workbench_history_panel)
+    self.workbench_history_panel.setParent(self)
+    self.workbench_history_panel.hide()
 
     self.workbench_result_details_panel = QWidget()
     self.workbench_result_details_panel.setObjectName("workbench_result_details_panel")
     self.workbench_result_details_panel.setProperty("datalab_result_detail_card", True)
     self.workbench_result_details_panel.setStyleSheet(result_detail_card_style(dark=is_dark_theme()))
     details_layout = QVBoxLayout(self.workbench_result_details_panel)
-    details_layout.setContentsMargins(10, 8, 10, 10)
+    details_layout.setContentsMargins(*CARD_PADDING)
     details_layout.setSpacing(6)
     self.workbench_result_details_title = QLabel(self._tr("结果详情", "Result details"))
     self.workbench_result_details_title.setObjectName("workbench_result_details_title")
@@ -1181,6 +1419,32 @@ def build_right_panel(self, layout: QVBoxLayout):
     result_layout = QVBoxLayout(result_widget)
     result_layout.setContentsMargins(0, 0, 0, 0)
     result_layout.setSpacing(8)
+    # On-demand LaTeX buttons: 生成 TeX rebuilds the tex from the current result and opens
+    # the LaTeX preview window. That dialog carries BOTH a TeX and a PDF tab (switch to the
+    # PDF tab to preview the compiled PDF), so there is no separate 预览 PDF button here — a
+    # standalone one duplicated the dialog's PDF tab (user-reported).
+    latex_button_row = QHBoxLayout()
+    latex_button_row.setContentsMargins(0, 0, 0, 0)
+    self.result_generate_tex_button = QPushButton("生成 TeX")
+    self.result_generate_tex_button.setObjectName("result_generate_tex_button")
+    self._register_text(self.result_generate_tex_button, "生成 TeX", "Generate TeX")
+    self.result_generate_tex_button.clicked.connect(
+        lambda _c=False: self.open_latex_preview("tex")
+    )
+    # LaTeX 选项 opens the (existing) latex_options_dialog — the entry moved here from the
+    # toolbar (user: 工具栏不需要 latex). The dialog is built later in build_left_panel;
+    # the button→dialog binding happens there once the dialog exists.
+    self.result_latex_options_button = QPushButton("LaTeX 选项")
+    self.result_latex_options_button.setObjectName("result_latex_options_button")
+    self._register_text(self.result_latex_options_button, "LaTeX 选项", "LaTeX options")
+    from app_desktop.options_dialogs import bind_options_button
+
+    bind_options_button(self.result_latex_options_button, self.latex_options_dialog)
+    latex_button_row.addWidget(self.result_generate_tex_button)
+    latex_button_row.addWidget(self.result_latex_options_button)
+    latex_button_row.addStretch(1)
+    result_layout.addLayout(latex_button_row)
+
     self.result_tabs = QTabWidget()
     self.result_tabs.setObjectName("result_detail_tabs")
     self.result_tabs.setDocumentMode(True)
@@ -1237,6 +1501,16 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.display_digits_spin.setValue(10)
     self.display_digits_spin.valueChanged.connect(self._on_display_format_changed)
     fmt_row.addWidget(self.display_digits_spin)
+    # Uncertainty digits sits alongside 小数位数/科学计数法 so it can be tuned AFTER a run with a
+    # live re-render (_format_error/extrapolation_display already read _uncertainty_digits_value
+    # at render time — connecting valueChanged is all that's needed). The widget was created in
+    # build_left_panel (keeping its FormFieldSpec binding); it is reparented into this row.
+    if hasattr(self, "uncertainty_digits_spin"):
+        fmt_row.addSpacing(8)
+        if hasattr(self, "uncertainty_digits_label"):
+            fmt_row.addWidget(self.uncertainty_digits_label)
+        self.uncertainty_digits_spin.valueChanged.connect(self._on_display_format_changed)
+        fmt_row.addWidget(self.uncertainty_digits_spin)
     fmt_row.addStretch()
     numeric_layout.addLayout(fmt_row)
 
@@ -1446,36 +1720,31 @@ def build_right_panel(self, layout: QVBoxLayout):
     )
     latex_controls_row.addWidget(latex_font_spin)
 
-    lbl_engine = QLabel("LaTeX 引擎：")
-    self._register_text(lbl_engine, "LaTeX 引擎：", "LaTeX engine:")
-    latex_controls_row.addSpacing(16)
-    latex_controls_row.addWidget(lbl_engine)
-    self.latex_engine_combo = QComboBox()
-    # ``tectonic`` is offered alongside the traditional engines because
-    # it auto-downloads (~30 MB single binary) and resolves missing
-    # LaTeX packages over the net, so users without a local TeX Live
-    # install can still produce PDFs out of the box. See
-    # ``shared.latex_engine`` for the resolution + install pipeline.
-    self.latex_engine_combo.addItems(["pdflatex", "xelatex", "tectonic"])
-    # Tectonic is the default: it auto-installs (~30 MB single binary)
-    # if missing and resolves LaTeX packages over the net per-document,
-    # so users without a local TeX Live install still get a working
-    # PDF on first run. ``pdflatex`` / ``xelatex`` remain available
-    # for power users with a tuned local TeX install.
-    self.latex_engine_combo.setCurrentText("tectonic")
-    latex_controls_row.addWidget(self.latex_engine_combo)
-    engine_btn = QPushButton("选择引擎路径…")
-    engine_btn.clicked.connect(self._prompt_engine_selection)
-    self._register_text(engine_btn, "选择引擎路径…", "Select engine path…")
-    self.latex_engine_path_button = engine_btn
-    latex_controls_row.addWidget(engine_btn)
     latex_controls_row.addStretch()
     latex_layout.addLayout(latex_controls_row)
 
     latex_layout.addWidget(self.latex_edit)
-    latex_spec = DESKTOP_RESULT_VIEWS["result.latex"]
-    latex_index = self.result_tabs.addTab(latex_widget, result_view_tab_title(latex_spec.key, _LANG_ZH))
-    self.result_tabs.setTabToolTip(latex_index, result_view_tooltip(latex_spec.key, _LANG_ZH))
+
+    # LaTeX ENGINE selector — placed in the LaTeX 选项 dialog (not this off-screen latex tab)
+    # so the user can actually see + pick it. First item 自动; then the engines actually
+    # detected on this machine (populate_latex_engine_combo).
+    lbl_engine = QLabel("LaTeX 引擎：")
+    self._register_text(lbl_engine, "LaTeX 引擎：", "LaTeX engine:")
+    self.latex_engine_combo = QComboBox()
+    populate_latex_engine_combo(self)
+    engine_btn = QPushButton("选择引擎路径…")
+    engine_btn.clicked.connect(self._prompt_engine_selection)
+    self._register_text(engine_btn, "选择引擎路径…", "Select engine path…")
+    self.latex_engine_path_button = engine_btn
+    _engine_row_widget = QWidget()
+    _engine_row = QHBoxLayout(_engine_row_widget)
+    _engine_row.setContentsMargins(0, 0, 0, 0)
+    _engine_row.addWidget(lbl_engine)
+    _engine_row.addWidget(self.latex_engine_combo)
+    _engine_row.addWidget(engine_btn)
+    _engine_row.addStretch()
+    if getattr(self, "_latex_options_content_layout", None) is not None:
+        self._latex_options_content_layout.addWidget(_engine_row_widget)
 
     # PDF result view
     pdf_widget = QWidget()
@@ -1524,9 +1793,20 @@ def build_right_panel(self, layout: QVBoxLayout):
     self.pdf_container_layout.setAlignment(Qt.AlignTop)
     self.pdf_scroll.setWidget(self.pdf_container)
     pdf_layout.addWidget(self.pdf_scroll)
-    pdf_spec = DESKTOP_RESULT_VIEWS["result.pdf"]
-    pdf_index = self.result_tabs.addTab(pdf_widget, result_view_tab_title(pdf_spec.key, _LANG_ZH))
-    self.result_tabs.setTabToolTip(pdf_index, result_view_tooltip(pdf_spec.key, _LANG_ZH))
+
+    # TeX/PDF are NOT added as tabs (the preview dialog is their viewer). The widgets stay
+    # alive in an off-screen holder — a hidden child of the details panel — so schema-scan
+    # /findChildren still see them (schema keys + bindings intact) while nothing shows them
+    # as a tab. latex_edit is read by the preview dialog + workspace + compile; pdf_* by the
+    # PDF preview mixin.
+    self._offscreen_result_views = QWidget(self.workbench_result_details_panel)
+    self._offscreen_result_views.setObjectName("offscreen_result_views")
+    _offscreen_layout = QVBoxLayout(self._offscreen_result_views)
+    _offscreen_layout.setContentsMargins(0, 0, 0, 0)
+    _offscreen_layout.addWidget(latex_widget)
+    _offscreen_layout.addWidget(pdf_widget)
+    self._offscreen_result_views.setVisible(False)
+
     _bind_result_latex_pdf_schema_fields(
         self,
         lbl_digits=lbl_digits,
@@ -1769,6 +2049,46 @@ def _mark_schema_choices(combo: QComboBox) -> None:
     combo.setProperty("datalab_schema_choices", True)
 
 
+# Source labels for detected engines, shown after the engine name in the dropdown.
+_ENGINE_SOURCE_LABELS = {
+    "system": ("系统", "system"),
+    "bundled": ("捆绑", "bundled"),
+    "auto-tectonic": ("内置", "bundled"),
+}
+
+
+def populate_latex_engine_combo(self) -> None:
+    """Fill ``latex_engine_combo`` with 自动 + the engines actually detected on this machine.
+
+    Item data is ``"auto"`` for the auto entry, or the engine's absolute PATH for a concrete
+    pick (the compile mixin uses the path directly). The 自动 label retranslates on language
+    switch; engine names are proper nouns and stay as-is. Called once at build time (and
+    again by a refresh if the environment changes)."""
+    from shared.latex_engine import discover_all_engines
+
+    combo = self.latex_engine_combo
+    current = combo.currentData()
+    combo.blockSignals(True)
+    combo.clear()
+
+    lang_en = bool(getattr(self, "_is_en", lambda: False)())
+    combo.addItem("Auto" if lang_en else "自动", "auto")
+    # NOT registered with _register_combo — that generic sweep would rebuild the whole combo
+    # from a static list and wipe the dynamic engine rows. Instead _apply_language re-runs
+    # this function (see _refresh_engine_combo_language) so 自动↔Auto retranslates while the
+    # detected engine rows are preserved.
+
+    for name, choice in discover_all_engines():
+        src_zh, src_en = _ENGINE_SOURCE_LABELS.get(choice.source, (choice.source, choice.source))
+        label = f"{name} ({src_en if lang_en else src_zh})"
+        combo.addItem(label, choice.path)
+
+    if current is not None:
+        idx = combo.findData(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+    combo.blockSignals(False)
+
+
 def _bind_global_options_schema_fields(
     self,
     *,
@@ -1780,7 +2100,6 @@ def _bind_global_options_schema_fields(
     lbl_nested_policy: QLabel,
     parallel_mode_items: list[tuple[str, str, str]],
     nested_policy_items: list[tuple[str, str, str]],
-    lbl_output: QLabel,
     prec_label: QLabel,
     group_size_label: QLabel,
 ) -> None:
@@ -1853,28 +2172,6 @@ def _bind_global_options_schema_fields(
             for zh, en, data in nested_policy_items
         ],
     )
-    generate_latex_field = FormFieldSpec(
-        key="output.latex.enabled",
-        widget_kind="checkbox",
-        label=LocalizedText("生成 LaTeX 文件", "Generate LaTeX"),
-        tooltip=LocalizedText("启用后将计算结果写入 LaTeX 文件。", "When enabled, write calculation results to a LaTeX file."),
-        required=False,
-    )
-    output_path_field = FormFieldSpec(
-        key="output.latex.path",
-        widget_kind="file",
-        label=LocalizedText("LaTeX 输出路径：", "LaTeX output path:"),
-        placeholder=LocalizedText("选择 .tex 输出文件", "Choose a .tex output file"),
-        tooltip=LocalizedText("LaTeX 结果文件的保存路径。", "Save path for the LaTeX result file."),
-        required=False,
-    )
-    output_browse_field = FormFieldSpec(
-        key="output.latex.path",
-        widget_kind="button",
-        label=LocalizedText("选择 LaTeX 输出路径", "Choose LaTeX output path"),
-        tooltip=LocalizedText("选择 LaTeX 输出文件路径。", "Choose the LaTeX output file path."),
-        required=False,
-    )
     input_digits_field = FormFieldSpec(
         key="output.latex.input_digits",
         widget_kind="number",
@@ -1933,7 +2230,6 @@ def _bind_global_options_schema_fields(
         (max_workers_field, lbl_parallel_workers, self.parallel_max_workers_spin),
         (reserve_cores_field, lbl_parallel_reserve, self.parallel_reserve_cores_spin),
         (nested_policy_field, lbl_nested_policy, self.parallel_nested_policy_combo),
-        (output_path_field, lbl_output, self.output_file_edit),
         (input_digits_field, prec_label, self.latex_input_precision_spin),
         (group_size_field, group_size_label, self.latex_group_size_spin),
     ]
@@ -1945,7 +2241,6 @@ def _bind_global_options_schema_fields(
         _mark_schema_choices(combo)
 
     for field, widget in [
-        (generate_latex_field, self.generate_latex_checkbox),
         (dcolumn_field, self.dcolumn_checkbox),
         (caption_enabled_field, self.caption_checkbox),
         (caption_field, self.caption_edit),
@@ -1955,13 +2250,11 @@ def _bind_global_options_schema_fields(
         bind_field(field=field, widget=widget, lang=lang)
         register_schema_text_refresh(self, field, widget=widget)
 
-    bind_schema_command_button(
-        self,
-        self.output_browse_button,
-        field=output_browse_field,
-        accessible_name=LocalizedText("选择 LaTeX 输出路径", "Choose LaTeX output path"),
-        lang=lang,
-    )
+    # The LaTeX output-PATH field + its browse button are no longer part of the options
+    # UI (the save path is chosen at save-time in the TeX window). ``output_file_edit`` /
+    # ``output_browse_button`` remain as detached widgets on ``self`` for the save/persist
+    # code paths, but carry NO schema binding (so they are not enumerated as reachable
+    # config inputs).
 
 
 def _bind_result_latex_pdf_schema_fields(
@@ -2148,7 +2441,8 @@ def _clear_table(self):
 
 
 class _TablePasteFilter(QObject):
-    """Event filter that intercepts Ctrl/Cmd+V on a QTableWidget to handle CSV paste."""
+    """Event filter for a QTableWidget: Ctrl/Cmd+V pastes CSV/TSV, Ctrl/Cmd+C copies the
+    selected cells as TSV (Excel-compatible)."""
 
     def __init__(self, table_widget, window):
         super().__init__(table_widget)
@@ -2158,6 +2452,9 @@ class _TablePasteFilter(QObject):
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.KeyPress:
             from PySide6.QtGui import QKeySequence
+            if event.matches(QKeySequence.StandardKey.Copy):
+                if self._copy_selection():
+                    return True
             if event.matches(QKeySequence.StandardKey.Paste):
                 clipboard = QApplication.clipboard()
                 text = clipboard.text()
@@ -2167,3 +2464,10 @@ class _TablePasteFilter(QObject):
                         _load_text_into_table(self._window, text)
                         return True
         return super().eventFilter(obj, event)
+
+    def _copy_selection(self) -> bool:
+        """Copy the selected cell block to the clipboard as TSV so it pastes cleanly into
+        Excel/Sheets (shared with the constants table via table_copy)."""
+        from app_desktop.table_copy import _copy_selection_as_tsv
+
+        return _copy_selection_as_tsv(self._table)

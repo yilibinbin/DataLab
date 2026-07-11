@@ -87,8 +87,12 @@ def test_shared_constants_editor_is_input_card_not_variable_panel_card(qtbot: An
     assert editor not in panel.findChildren(type(editor))
     assert editor.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
     assert editor.minimumHeight() >= 52
-    assert editor.layout().contentsMargins().left() == 0
-    assert "border: none" in editor.styleSheet()
+    # The embedded constants card now has its own border + CARD_PADDING inset (like the data card),
+    # per user request — it is no longer transparent/borderless.
+    from app_desktop.theme import CARD_PADDING
+
+    assert editor.layout().contentsMargins().left() == CARD_PADDING[0]
+    assert "border: 1px solid" in editor.styleSheet()
     assert "QPushButton" in editor.styleSheet()
 
 
@@ -146,32 +150,15 @@ def test_variable_panel_summary_updates_when_rows_change(qtbot: Any) -> None:
     assert window.workbench_variable_summary.text() == "1 parameter"
 
 
-def test_variable_panel_can_collapse_without_losing_state(qtbot: Any) -> None:
+def test_variable_panel_has_no_collapse_button(qtbot: Any) -> None:
+    """The 折叠/展开 collapse button was removed from the variable panel (user request) — the
+    panel is compact and always relevant when visible; it self-hides when the mode has none."""
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
-    window.custom_params_table.set_rows([{"name": "A", "initial": "1"}])
     QApplication.processEvents()
-
-    button = window.workbench_variable_toggle_button
+    assert not hasattr(window, "workbench_variable_toggle_button")
     assert window.workbench_variable_stack.isVisible()
-
-    button.click()
-    QApplication.processEvents()
-
-    assert not window.workbench_variable_stack.isVisible()
-    assert window.workbench_variable_summary.isVisible()
-    rows = window.custom_params_table.rows()
-    assert rows[0]["name"] == "A"
-    assert rows[0]["initial"] == "1"
-
-    button.click()
-    QApplication.processEvents()
-
-    assert window.workbench_variable_stack.isVisible()
-    rows = window.custom_params_table.rows()
-    assert rows[0]["name"] == "A"
-    assert rows[0]["initial"] == "1"
 
 
 def test_variable_panel_population_is_idempotent(qtbot: Any) -> None:
@@ -225,17 +212,25 @@ def test_variable_panel_tracks_fitting_submode_visibility(qtbot: Any) -> None:
     window = _window(qtbot)
     window.mode_combo.setCurrentIndex(window.mode_combo.findData("fitting"))
 
+    # The constants editor now lives on the 常数 sheet tab (constants-tab restructure), so its
+    # on-screen visibility is governed by tab activation, not fitting submode. This test tracks
+    # the submode-driven param tables + confirms the constants tab is PRESENT in constant-using
+    # submodes (custom / self_consistent), which is the mode-level signal that still matters.
+    def _constants_tab_present() -> bool:
+        tabs = window.input_data_tabs
+        return tabs.indexOf(window._constants_tab) != -1
+
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("custom"))
     QApplication.processEvents()
     assert window.custom_params_table.isVisible()
-    assert window.custom_constants_editor.isVisible()
+    assert _constants_tab_present()
     assert not window.implicit_params_table.isVisible()
 
     window.fit_model_combo.setCurrentIndex(window.fit_model_combo.findData("self_consistent"))
     QApplication.processEvents()
     assert not window.custom_params_table.isVisible()
     assert window.implicit_params_table.isVisible()
-    assert window.implicit_constants_editor.isVisible()
+    assert _constants_tab_present()
 
     built_in_index = next(
         (
@@ -250,7 +245,8 @@ def test_variable_panel_tracks_fitting_submode_visibility(qtbot: Any) -> None:
     QApplication.processEvents()
 
     assert not window.custom_params_table.isVisible()
-    assert not window.custom_constants_editor.isVisible()
+    # Built-in models don't use constants → the 常数 tab is absent (editor is tab-hosted now).
+    assert window.input_data_tabs.indexOf(window._constants_tab) == -1
     assert not window.implicit_params_table.isVisible()
     assert not window.workbench_variable_panel.isVisible()
 

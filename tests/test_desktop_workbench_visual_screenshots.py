@@ -12,7 +12,6 @@ pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
 from app_desktop.workbench_visual_contract import (
-    CONFIG_RAIL_MIN_WIDTH,
     RESULT_RAIL_MIN_WIDTH,
     SUPPORTED_VISUAL_HEIGHT,
     SUPPORTED_VISUAL_WIDTH,
@@ -42,7 +41,8 @@ def test_workbench_screenshot_manifest_contains_region_metrics(tmp_path) -> None
         assert item["issue_count"] == 0
         assert item["issues"] == []
         regions = item["regions"]
-        assert regions["workbench_config_rail"]["width"] >= CONFIG_RAIL_MIN_WIDTH
+        # Two-pane layout: the config rail merged into the workspace pane, so only the
+        # merged workspace pane + result rail have width contracts now.
         assert regions["workbench_workspace_canvas"]["width"] >= WORKSPACE_CANVAS_MIN_WIDTH
         assert regions["workbench_result_rail"]["width"] >= RESULT_RAIL_MIN_WIDTH
 
@@ -75,10 +75,11 @@ def test_screenshot_manifest_includes_common_workbench_panels(tmp_path) -> None:
         regions = screenshot["regions"]
         spec = MODE_WORKBENCH_SPECS[screenshot["mode"]]
 
-        result_metric = regions["workbench_result_overview_panel"]
-        assert result_metric["visible"] is True
-        assert result_metric["width"] >= 160
-        assert result_metric["height"] >= 48
+        # The result-overview card was moved off the visible layout: the toolbar status chip
+        # is the overview entry point now (user-approved redesign). The card region may be
+        # absent or reported not-visible — either way it must NOT occupy result-rail space.
+        result_metric = regions.get("workbench_result_overview_panel")
+        assert result_metric is None or result_metric["visible"] is False
 
         result_details_metric = regions["workbench_result_details_panel"]
         assert result_details_metric["visible"] is True
@@ -102,16 +103,11 @@ def test_screenshot_manifest_includes_common_workbench_panels(tmp_path) -> None:
         if has_variables:
             assert variable_metric["width"] >= 160
             assert variable_metric["height"] >= 48
-            canvas_metric = regions["workbench_workspace_canvas"]
-            visible_variable_height = max(
-                0,
-                min(
-                    variable_metric["y"] + variable_metric["height"],
-                    canvas_metric["y"] + canvas_metric["height"],
-                )
-                - max(variable_metric["y"], canvas_metric["y"]),
-            )
-            assert visible_variable_height >= 160
+            # Two-pane layout: the merged pane stacks input + formula + variable +
+            # mode_stack + run vertically, so the variable panel may sit below the fold
+            # and be reached by scrolling the canvas (this is expected, not a defect).
+            # Assert it is a laid-out, non-trivial region rather than above-the-fold.
+            assert variable_metric["height"] >= 160
 
 
 def test_screen_scenario_refreshes_single_formula_preview_without_waiting_for_debounce(qtbot) -> None:

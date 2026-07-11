@@ -88,7 +88,9 @@ def test_config_horizontal_scrollbar_gate_detects_overflow(qapp: Any) -> None:
         window.show()
         huge_label = QLabel("X" * 500)
         huge_label.setMinimumWidth(5000)
-        window.workbench_config_layout.addWidget(huge_label)
+        # Two-pane layout: the left pane is the merged workspace canvas, so overflow is
+        # induced there (the gate scans the merged pane, not the detached config rail).
+        window.workbench_workspace_layout.addWidget(huge_label)
 
         issues = _horizontal_scrollbar_issues(
             window,
@@ -123,10 +125,10 @@ def test_config_horizontal_scrollbar_gate_reports_missing_scroll_widget(
             "kind": "missing_scroll_widget",
             "scenario": "zh:statistics",
             "language": "zh",
-            "widget": "workbench_config_rail",
-            "message": "neither workbench_config_rail nor _left_scroll found on window",
+            "widget": "workbench_workspace_canvas",
+            "message": "neither _left_scroll nor workbench_workspace_canvas found on window",
             "details": {
-                "attempted_widgets": ["workbench_config_rail", "_left_scroll"],
+                "attempted_widgets": ["_left_scroll", "workbench_workspace_canvas"],
             },
         }
     ]

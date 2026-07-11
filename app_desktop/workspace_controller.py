@@ -10,6 +10,10 @@ from typing import Any, cast
 
 from PySide6.QtWidgets import QComboBox, QTableWidget, QTableWidgetItem
 
+from app_desktop.latex_inputs_serialization import (
+    decode_latex_inputs,
+    encode_latex_inputs,
+)
 from app_desktop.fitting_input_normalization import (
     normalize_constants_state,
     normalize_parameter_rows,
@@ -252,26 +256,52 @@ def _capture_data_section(window: Any, *, constants: bool = False) -> tuple[dict
 
     raw_path = None
     source_path = path_text or None
-    source_kind = "file" if use_file else ("manual_text" if stack is not None and stack.currentIndex() == 1 else "manual_table")
+    # Only claim source_kind="file" when there is an actual path (review P-C): use_file with an
+    # empty path used to tag the section "file" while capturing the manual table → inconsistent
+    # state with no attachment. Fall back to the manual kind so save/restore stay coherent.
+    _text_view = stack is not None and stack.currentIndex() == 1
+    source_kind = (
+        "file" if (use_file and path_text) else ("manual_text" if _text_view else "manual_table")
+    )
     if constants and editor is not None and not use_file:
         source_kind = "manual_text" if editor.using_text_view() else "manual_table"
     canonical: dict[str, Any]
     if use_file and path_text:
-        raw = Path(path_text).read_bytes()
+        # Guard the file read (review P-A): if the file was moved/deleted/unreadable since the
+        # user picked it, saving the workspace must NOT crash. Keep the source as "file" and the
+        # path (so the user can re-point it), but attach empty content rather than raising.
+        try:
+            raw = Path(path_text).read_bytes()
+        except OSError:
+            raw = b""
         decoded_text, encoding = _decode_bytes(raw)
         raw_path = f"attachments/sources/{section_name}.bin"
         attachments[raw_path] = raw
         canonical = {"rows": []}
     elif constants and editor is not None:
         rows = editor.rows()
-        canonical = {"headers": ["Name", "Value"], "rows": [[row["name"], row["value"]] for row in rows]}
+        # Safe key access (review P-D): a malformed row lacking name/value must not KeyError-crash
+        # the save (mirrors the .get() used in the restore path).
+        canonical = {
+            "headers": ["Name", "Value"],
+            "rows": [[row.get("name", ""), row.get("value", "")] for row in rows],
+        }
         decoded_text = editor.raw_text()
         encoding = "utf-8"
         raw = decoded_text.encode("utf-8")
     elif source_kind == "manual_text":
         decoded_text = _text(text_edit)
         encoding = "utf-8"
-        canonical = {"rows": [line.split() for line in decoded_text.splitlines() if line.strip()]}
+        # The text itself round-trips via decoded_text; this canonical is the derived tabular
+        # view. Split on TAB when present so empty cells are preserved (review P-B: bare .split()
+        # dropped empty cells and shifted columns left); fall back to whitespace otherwise.
+        canonical = {
+            "rows": [
+                (line.split("\t") if "\t" in line else line.split())
+                for line in decoded_text.splitlines()
+                if line.strip()
+            ]
+        }
         raw = decoded_text.encode("utf-8")
     else:
         if table is None:
@@ -537,11 +567,16 @@ def _restore_constants_editor_state(editor: Any, state: Any) -> None:
     if "numeric_mode" in state and hasattr(editor, "set_numeric_mode"):
         editor.set_numeric_mode(str(state.get("numeric_mode") or "uncertainty"))
     editor.set_rows(rows)
-    if text is not None:
-        if hasattr(editor, "set_raw_text"):
-            editor.set_raw_text(str(text))
-        else:
-            editor.set_text(str(text))
+    if text is not None and use_text_view and hasattr(editor, "set_raw_text"):
+        # Only restore the stored text as authoritative when the workspace was saved in TEXT view.
+        # In TABLE view the rows we just restored are authoritative and the saved text is a stale
+        # draft — restoring it (stamped in-sync) defeated the editor's anti-stale guard, so a later
+        # table→text toggle surfaced the stale draft instead of regenerating from the rows. Leaving
+        # the text draft unset keeps _text_source_table_revision out of sync, so the toggle
+        # regenerates from the restored rows (audit A12).
+        editor.set_raw_text(str(text))
+    elif text is not None and not hasattr(editor, "set_raw_text"):
+        editor.set_text(str(text))
     editor.setChecked(bool(state.get("enabled")))
     editor.use_text_view(use_text_view)
 
@@ -752,7 +787,8 @@ def _restore_common_config(window: Any, common: Any, latex: Any) -> None:
         _set_value(getattr(window, "mpmath_precision_spin", None), common.get("mpmath_precision"))
         _set_value(getattr(window, "uncertainty_digits_spin", None), common.get("uncertainty_digits"))
         _set_value(getattr(window, "display_digits_spin", None), common.get("display_digits"))
-        _set_checked_if(window, "generate_latex_checkbox", common.get("generate_latex"))
+        # generate_latex_checkbox was removed (4·4d); an old workspace's "generate_latex"
+        # key in common config is simply ignored on restore.
         _set_checked_if(window, "generate_plots_checkbox", common.get("generate_plots"))
         _set_checked_if(window, "verbose_checkbox", common.get("verbose"))
         _set_checked_if(window, "scientific_checkbox", common.get("display_scientific"))
@@ -763,7 +799,10 @@ def _restore_common_config(window: Any, common: Any, latex: Any) -> None:
         _set_checked_if(window, "caption_checkbox", latex.get("use_caption"))
         _set_text(getattr(window, "output_file_edit", None), str(latex.get("output_path") or ""))
         _set_text(getattr(window, "caption_edit", None), str(latex.get("caption") or ""))
-        _set_combo_data(getattr(window, "latex_engine_combo", None), str(latex.get("engine") or "tectonic"))
+        # engine is now an engine MODE (auto/bundled/local). An old workspace that stored a
+        # binary name (pdflatex/xelatex/tectonic) simply won't match a mode item and the
+        # combo stays at its default (auto) — safe graceful degradation.
+        _set_combo_data(getattr(window, "latex_engine_combo", None), str(latex.get("engine") or "auto"))
 
 
 def _restore_extrapolation_config(window: Any, config: Any) -> None:
@@ -1112,7 +1151,7 @@ def _capture_config(window: Any) -> dict[str, Any]:
         "common": {
             "mpmath_precision": _value(getattr(window, "mpmath_precision_spin", None), 16),
             "uncertainty_digits": _value(getattr(window, "uncertainty_digits_spin", None), 1),
-            "generate_latex": _checked(getattr(window, "generate_latex_checkbox", None)),
+            # generate_latex removed (4·4d — the checkbox is gone; run never writes tex).
             "generate_plots": _checked(getattr(window, "generate_plots_checkbox", None)),
             "verbose": _checked(getattr(window, "verbose_checkbox", None)),
             "display_scientific": _checked(getattr(window, "scientific_checkbox", None)),
@@ -1125,7 +1164,7 @@ def _capture_config(window: Any) -> dict[str, Any]:
             "group_size": _value(getattr(window, "latex_group_size_spin", None), 3),
             "use_caption": _checked(getattr(window, "caption_checkbox", None)),
             "caption": _text(getattr(window, "caption_edit", None)),
-            "engine": _combo_data(getattr(window, "latex_engine_combo", None), "tectonic"),
+            "engine": _combo_data(getattr(window, "latex_engine_combo", None), "auto"),
         },
         "extrapolation": {
             "method": _combo_data(getattr(window, "method_combo", None), "richardson"),
@@ -1787,6 +1826,9 @@ def restore_history_entry_result(window: Any, entry: HistoryEntry) -> None:
         window._last_result_semantic_snapshot_kind = kind
         window._last_result_kind = None
         window._last_result_payloads = {}
+        # Cleared alongside the display payload; 4·2 cross-restore will repopulate this from
+        # the semantic snapshot so on-demand 生成 TeX works after a workspace restore.
+        window._last_latex_inputs = {}
         if hasattr(window, "_set_csv_data"):
             window._set_csv_data(semantic_csv_rows, semantic_csv_headers, final_result=False)
         if hasattr(window, "log_edit"):
@@ -1854,6 +1896,20 @@ def capture_workspace(
         "config": workspace["config"],
         "workspace": workspace,
     }
+    # Persist the on-demand-tex stash so 生成 TeX works after reopening WITHOUT recomputing.
+    # It lives at the manifest top level (not inside `workspace`, which is model-validated and
+    # would drop unknown keys). Encoded to a JSON-safe, full-precision form.
+    latex_inputs = getattr(window, "_last_latex_inputs", None)
+    encoded_latex_inputs = encode_latex_inputs(latex_inputs)
+    if encoded_latex_inputs:
+        manifest["latex_inputs"] = encoded_latex_inputs
+        # The tex-rebuild stash is a best-effort convenience (decode_latex_inputs treats it as
+        # optional; on reopen the user re-runs to regenerate tex). A high-dps fit with many points
+        # can encode to several MiB and blow the 2 MiB manifest budget, which used to make the WHOLE
+        # workspace unsaveable ("manifest exceeds size limit"). Drop the stash rather than fail the
+        # save, so no valid workspace is ever lost to this optional extra (audit A4).
+        if _manifest_json_size_bytes(manifest) > MAX_MANIFEST_BYTES:
+            del manifest["latex_inputs"]
     _fit_history_to_manifest_budget(window, manifest)
     return WorkspaceBundle(manifest=manifest, attachments=attachments)
 
@@ -1877,9 +1933,16 @@ def _restore_data_section(window: Any, section: dict[str, Any], *, constants: bo
         stack = getattr(window, "_data_stack", None)
     source_kind = section.get("source_kind")
     if use_file_checkbox is not None:
+        # Legacy no-op: the file-source flag is now derived from the file-path edit (file-precedence),
+        # not a checkbox. Kept for older callers/tests that still poke it.
         use_file_checkbox.setChecked(False)
     if file_edit is not None:
-        file_edit.setText(str(section.get("source_path_label") or ""))
+        # File-precedence: keep the file path only if the file STILL EXISTS (then the run reads the
+        # live file). If it is gone, clear the path so the run falls back to the inlined data (its
+        # CONTENTS were captured as an attachment on save → the workspace stays self-contained).
+        source_path_label = str(section.get("source_path_label") or "")
+        keep_path = bool(source_path_label) and Path(source_path_label).exists()
+        file_edit.setText(source_path_label if keep_path else "")
     if stack is not None:
         stack.setCurrentIndex(1 if source_kind in {"manual_text", "file"} else 0)
     canonical = section.get("canonical_table") or {}
@@ -2052,6 +2115,12 @@ def _restore_workspace_contents(window: Any, manifest: dict[str, Any], attachmen
         window._last_result_semantic_snapshot_kind = None
     window._last_result_kind = None
     window._last_result_payloads = {}
+    # Rehydrate the on-demand-tex stash so 生成 TeX works after reopening without recomputing.
+    # Best-effort: a malformed/older manifest simply yields an empty stash (old behaviour).
+    try:
+        window._last_latex_inputs = decode_latex_inputs(manifest.get("latex_inputs"))
+    except Exception:
+        window._last_latex_inputs = {}
     _restore_ui_state(window, workspace.get("ui") or {})
     window._workspace_snapshot_only = bool(snapshot.get("present"))
     window._workspace_history_store = history_store

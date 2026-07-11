@@ -115,6 +115,25 @@ class HistoryPanel(QWidget):
         self.message_label.setWordWrap(True)
         layout.addWidget(self.message_label)
 
+        # Collapse-by-default: the history body (list + action buttons + export + message)
+        # is hidden until the user clicks the header, so the section does not hog space in
+        # the result overview. The header shows a ▸/▾ indicator.
+        self._history_collapsible = [
+            self.entry_list,
+            self.restore_button,
+            self.compare_button,
+            self.budget_button,
+            self.rename_button,
+            self.pin_button,
+            self.delete_button,
+            self.export_button,
+            self.message_label,
+        ]
+        self._history_collapsed = True
+        self.title_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.title_label.mousePressEvent = lambda _e: self.toggle_history_collapsed()  # type: ignore[method-assign]
+        self._apply_history_collapsed()
+
         self.restore_button.clicked.connect(self.restore_selected)
         self.compare_button.clicked.connect(self.compare_selected)
         self.budget_button.clicked.connect(self.show_budget_selected)
@@ -125,6 +144,26 @@ class HistoryPanel(QWidget):
 
         self._register_texts()
         self.refresh()
+        # Re-apply after refresh()/_register_texts() so the collapsed state + ▸ indicator win.
+        self._apply_history_collapsed()
+
+    # -- collapse-by-default -------------------------------------------------
+    def is_history_collapsed(self) -> bool:
+        return bool(getattr(self, "_history_collapsed", True))
+
+    def set_history_collapsed(self, collapsed: bool) -> None:
+        self._history_collapsed = bool(collapsed)
+        self._apply_history_collapsed()
+
+    def toggle_history_collapsed(self) -> None:
+        self.set_history_collapsed(not self.is_history_collapsed())
+
+    def _apply_history_collapsed(self) -> None:
+        collapsed = self.is_history_collapsed()
+        for widget in getattr(self, "_history_collapsible", ()):
+            widget.setVisible(not collapsed)
+        base = self._tr("历史", "History")
+        self.title_label.setText(f"{'▸' if collapsed else '▾'} {base}")
 
     def refresh(self) -> None:
         selected = self._selected_ref()
@@ -144,7 +183,9 @@ class HistoryPanel(QWidget):
             self.entry_list.addItem(item)
 
         self.count_label.setText(self._count_text(store))
-        self.entry_list.setVisible(bool(rows))
+        # Respect the collapsed state — when collapsed the whole body stays hidden
+        # regardless of whether there are rows.
+        self.entry_list.setVisible(bool(rows) and not self.is_history_collapsed())
         if not rows:
             self.message_label.setText(self._tr("暂无历史记录。", "No history yet."))
         elif (
@@ -315,6 +356,7 @@ class HistoryPanel(QWidget):
         previous_export_enabled = export_is_enabled() if callable(export_is_enabled) else None
         self._owner._last_result_kind = result_kind
         self._owner._last_result_payloads = {}
+        self._owner._last_latex_inputs = {}
         self._owner._last_result_semantic_snapshot = None
         self._owner._last_result_semantic_snapshot_kind = None
         set_result_text = getattr(self._owner, "_set_result_text", None)

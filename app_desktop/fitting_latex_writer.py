@@ -38,8 +38,13 @@ def latex_escape(text: str) -> str:
     return "".join(mapping.get(ch, ch) for ch in str(text))
 
 
-def build_fit_latex_preamble(*, use_dcolumn: bool, digits: int, latex_group_size: int) -> list[str]:
-    group_size = max(1, int(latex_group_size))
+def build_fit_latex_preamble(
+    *, use_dcolumn: bool, digits: int, latex_group_size: int, native_group_width: bool = True
+) -> list[str]:
+    # max(0, ...) not max(1, ...): group_size 0 must stay 0 so build_sisetup_block emits the
+    # "no grouping" body (group-digits = false). max(1,..) forced 0→1 → grouping stayed ON,
+    # contradicting the UI's "0 = 不分组" (dual-model review F1).
+    group_size = max(0, int(latex_group_size))
     lines = [
         "\\documentclass{article}",
         "\\usepackage{ifxetex}",
@@ -65,12 +70,14 @@ def build_fit_latex_preamble(*, use_dcolumn: bool, digits: int, latex_group_size
             ]
         )
     lines.append("\\usepackage{siunitx}")
-    # Centralized v2/v3-compatible \sisetup{...} block — see helper for
-    # the ``\@ifpackagelater`` guard around v3-only ``digit-group-size``.
+    # native_group_width True → emit siunitx digit-group-size (native S-column variable-width
+    # grouping); False (bundled Tectonic) → don't (cells are pre-grouped app-side).
+    emit_dgs = bool(native_group_width and not use_dcolumn and group_size > 0)
     lines.append(
         build_sisetup_block(
             group_size=group_size,
             include_dcolumn=use_dcolumn,
+            emit_digit_group_size=emit_dgs,
         ).rstrip("\n")
     )
     lines.extend(
@@ -105,10 +112,25 @@ def build_fit_latex_block(
     default_uncertainty_digits: int | None = None,
     cleaned_substituted: str | None = None,
     units: Mapping[str, Any] | None = None,
+    native_group_width: bool = True,
 ) -> list[str]:
+    from datalab_latex.latex_formatting import group_digits_both_sides
+
     default_unc_digits = default_uncertainty_digits
     variable_pairs = variable_pairs or []
     target_column = (target_column or "").strip()
+    # App-side grouping when the engine can't vary the siunitx group WIDTH (non-native) and
+    # grouping is on in siunitx (non-dcolumn) mode: pre-group each value cell + use a plain r
+    # column instead of an S column siunitx would re-group at a fixed 3.
+    _group = max(0, int(latex_group_size))
+    app_group = (not native_group_width) and (not use_dcolumn) and _group > 0
+
+    def _maybe_group(cell: str) -> str:
+        if app_group and "\\multicolumn" not in cell and "\\text" not in cell:
+            # The grouped value goes into a plain r column, so return the grouped string directly —
+            # wrapping it in \text{...} (with its \, thin-spaces) broke TeX compilation (CodeRabbit).
+            return group_digits_both_sides(cell, _group)
+        return cell
 
     def _format_cell_value(val: mp.mpf, sigma_obj, *, is_input: bool) -> str:
         sigma_digits = None if is_input else default_unc_digits
@@ -125,14 +147,16 @@ def build_fit_latex_block(
                 sigma = mp.mpf(sigma)
             except Exception:
                 sigma = None
-        return format_value_for_latex_file(
-            mp.mpf(val),
-            sigma,
-            use_dcolumn=use_dcolumn,
-            latex_input_decimals=digits,
-            is_input=is_input,
-            latex_group_size=latex_group_size,
-            uncertainty_digits=sigma_digits,
+        return _maybe_group(
+            format_value_for_latex_file(
+                mp.mpf(val),
+                sigma,
+                use_dcolumn=use_dcolumn,
+                latex_input_decimals=digits,
+                is_input=is_input,
+                latex_group_size=latex_group_size,
+                uncertainty_digits=sigma_digits,
+            )
         )
 
     def _format_key(key: str) -> str:
@@ -221,26 +245,26 @@ def build_fit_latex_block(
         ("RMSE", fit_result.rmse),
     ]
     for label, value in metrics:
-        val_text = format_value_for_latex_file(
+        val_text = _maybe_group(format_value_for_latex_file(
             mp.mpf(value),
             None,
             use_dcolumn=use_dcolumn,
             latex_input_decimals=digits,
             is_input=True,
             latex_group_size=latex_group_size,
-        )
+        ))
         row_unit = output_unit if label == "RMSE" else ""
         table_rows.append((label, val_text, row_unit))
 
     def _format_diagnostic_value(value: object) -> str:
-        return format_value_for_latex_file(
+        return _maybe_group(format_value_for_latex_file(
             mp.mpf(value),
             None,
             use_dcolumn=use_dcolumn,
             latex_input_decimals=digits,
             is_input=True,
             latex_group_size=latex_group_size,
-        )
+        ))
 
     diagnostic_entries, diagnostic_warnings = build_fitting_diagnostic_latex_entries(
         fit_result,
@@ -296,6 +320,9 @@ def build_fit_latex_block(
     value_cells = [val for _, val, _unit in table_rows]
     if use_dcolumn:
         numeric_spec = calculate_dcolumn_format_for_column(value_cells, "fit_values")
+    elif app_group:
+        # Cells are pre-grouped + wrapped in \text{}; a plain right-aligned column.
+        numeric_spec = "r"
     else:
         numeric_spec = siunitx_column_spec(value_cells)
     include_unit_column = any(unit for _key, _val, unit in table_rows)

@@ -32,9 +32,11 @@ def test_shell_preserves_legacy_widget_attributes(qtbot: Any) -> None:
         "root_box",
         "stats_box",
         "options_box",
-        "run_button",
     ):
         assert getattr(window, name, None) is not None, name
+    # run_button was removed in 4·4c (run is on the toolbar); it must NOT survive as a
+    # compat attribute — the run/stop state machine drives the toolbar 运行/停止 pair.
+    assert not hasattr(window, "run_button")
 
 
 def test_shell_exposes_workbench_bar_controls(qtbot: Any) -> None:
@@ -48,6 +50,7 @@ def test_shell_exposes_workbench_bar_controls(qtbot: Any) -> None:
         "open_examples_button",
         "workbench_run_button",
         "workbench_stop_button",
+        "workbench_compute_options_button",
         "docs_button",
         "check_updates_button",
         "workspace_status_label",
@@ -63,27 +66,41 @@ def test_shell_sections_are_visible_in_expected_order(qtbot: Any) -> None:
 
     assert not hasattr(window, "parameters_section")
     assert not hasattr(window, "parameters_section_layout")
-    # The mode selector sits at the top of the left panel (pick the analysis
-    # mode first, then enter data), above the input section.
-    assert [
-        window.mode_section.objectName(),
-        window.input_section.objectName(),
-        window.output_setup_section.objectName(),
-        window.run_section.objectName(),
-    ] == ["mode_section", "input_section", "output_setup_section", "run_section"]
 
+    # Two-pane layout: the left config sections merged into the workspace pane. The
+    # merged pane stacks (top→bottom): input_section, then the per-mode config
+    # (formula/variable/mode_stack), then run_section (the empty output_setup_section is
+    # no longer added).
     layout_names = [
         window.left_layout.itemAt(index).widget().objectName()
         for index in range(window.left_layout.count())
         if window.left_layout.itemAt(index).widget() is not None
     ]
-    assert layout_names[:4] == [
-        "mode_section",
-        "input_section",
-        "output_setup_section",
-        "run_section",
+    # The column is now exactly TWO direct blocks: [input_section] + [workbench_config_card]. The
+    # per-mode config (mode_stack + formula + variable) was merged INTO the card (config-card
+    # restructure), so those are no longer direct children of the column.
+    assert layout_names[0] == "input_section"
+    assert "mode_section" not in layout_names
+    assert "output_setup_section" not in layout_names
+    assert "run_section" not in layout_names
+    assert "workbench_config_card" in layout_names
+    input_idx = layout_names.index("input_section")
+    card_idx = layout_names.index("workbench_config_card")
+    assert input_idx < card_idx, "order must be 输入 → 配置卡片"
+    # Inside the card, mode config is ABOVE formula, which is above variable.
+    card_layout = window.workbench_config_card.layout()
+    card_names = [
+        card_layout.itemAt(i).widget().objectName()
+        for i in range(card_layout.count())
+        if card_layout.itemAt(i).widget() is not None
     ]
-    assert window.mode_stack.parentWidget() is window.workbench_workspace_content
+    assert (
+        card_names.index("mode_stack")
+        < card_names.index("workbench_formula_panel")
+        < card_names.index("workbench_variable_panel")
+    )
+
+    assert window.mode_stack.parentWidget() is window.workbench_config_card
     assert window.custom_params_table is not None
     assert window.custom_constants_editor is not None
 
@@ -94,12 +111,9 @@ def test_left_configuration_sections_are_visual_cards(qtbot: Any) -> None:
     window.show()
     QApplication.processEvents()
 
-    for section in (
-        window.input_section,
-        window.mode_section,
-        window.output_setup_section,
-        window.run_section,
-    ):
+    # mode_section moved to the toolbar; output_setup_section + run_section removed. Only
+    # the input section remains a left-rail config card.
+    for section in (window.input_section,):
         assert section.property("datalab_config_card") is True
         assert "border-radius" in section.styleSheet()
 
@@ -107,22 +121,30 @@ def test_left_configuration_sections_are_visual_cards(qtbot: Any) -> None:
 
     assert window.input_section.property("datalab_config_card") is True
     assert "border-radius" in window.input_section.styleSheet()
-    assert window.run_button.property("datalab_primary_run_button") is True
-    assert window.run_button.property("datalab_run_state") == "run"
-    assert 'QPushButton[datalab_primary_run_button="true"]' in window.run_section.styleSheet()
-    assert window.mode_combo.geometry().top() >= 24
-    assert window.mpmath_precision_spin.geometry().top() >= 24
+    # The bottom 开始执行 run_button was removed (4·4c) — run is on the toolbar.
+    assert not hasattr(window, "run_button")
+    # The mode selector now lives on the workbench toolbar (dedicated coverage in
+    # test_desktop_mode_selector_on_toolbar.py), not as a left-rail card.
+    from PySide6.QtWidgets import QComboBox
+
+    assert window.mode_combo in window.workbench_bar.findChildren(QComboBox)
+    # NOTE: mpmath_precision_spin moved OUT of the left rail into the 计算 toolbar panel
+    # (collapsed by default), so it no longer has a laid-out rail-card position — that
+    # assertion was removed with the options-panel migration.
 
 
-def test_legacy_run_button_click_reaches_current_run_calculation(
+def test_toolbar_run_button_reaches_current_run_calculation(
     qtbot: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The bottom 开始执行 button was removed (4·4c); the toolbar 运行 button runs now.
     window = _make_window(qtbot)
     calls: list[str] = []
 
-    monkeypatch.setattr(window, "run_calculation", lambda: calls.append("run"))
+    # The toolbar run button resolves run_extrapolation → run_calculation at click time
+    # (workbench_toolbar._call_owner); the window exposes run_calculation.
+    monkeypatch.setattr(window, "run_calculation", lambda *a, **k: calls.append("run"))
 
-    qtbot.mouseClick(window.run_button, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(window.workbench_run_button, Qt.MouseButton.LeftButton)
 
     assert calls == ["run"]
 
@@ -134,7 +156,8 @@ def test_workbench_status_labels_refresh_after_english_language_switch(qtbot: An
     window._on_language_change(2)
 
     assert window.workspace_status_label.text() == "Saved"
-    assert window.job_status_label.text() == "Ready"
+    # Rich status chip: no result yet → Waiting (was the old bare Ready).
+    assert window.job_status_label.text() == "Waiting"
 
     window._workspace_dirty = True
     window._update_workspace_window_title()
@@ -152,11 +175,17 @@ def test_workbench_job_status_refreshes_on_run_stop_mode_methods(
     window._set_button_to_stop_mode()
 
     assert window.job_status_label.text() == "Running"
-    assert window.run_button.property("datalab_run_state") == "stop"
-    assert window.run_button.styleSheet() == ""
+    # Run-state now lives on _datalab_run_state and drives the toolbar 运行/停止 pair
+    # (bottom 开始执行 removed in 4·4c): running → 运行 disabled, 停止 enabled.
+    assert window._datalab_run_state == "stop"
+    assert window.workbench_run_button.isEnabled() is False
+    assert window.workbench_stop_button.isEnabled() is True
 
     monkeypatch.setattr(window, "_has_running_worker", lambda: False)
     window._set_button_to_run_mode()
 
-    assert window.job_status_label.text() == "Ready"
-    assert window.run_button.property("datalab_run_state") == "run"
+    # No result → rich chip reads Waiting (was the old bare Ready).
+    assert window.job_status_label.text() == "Waiting"
+    assert window._datalab_run_state == "run"
+    assert window.workbench_run_button.isEnabled() is True
+    assert window.workbench_stop_button.isEnabled() is False

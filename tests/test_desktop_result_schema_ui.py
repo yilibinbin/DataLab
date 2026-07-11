@@ -15,12 +15,13 @@ from app_desktop.result_view_titles import result_view_tab_title
 from shared.ui_specs import DESKTOP_RESULT_VIEWS
 
 
+# Visible result subtabs. TeX/PDF are NOT tabs anymore — their widgets live off-screen
+# (the on-demand preview dialog is their viewer), so result_tabs publishes only these
+# three views. The latex/pdf widget-level schema keys still exist and are asserted below.
 RESULT_VIEW_ORDER = (
     "result.numeric",
     "result.image",
     "result.log",
-    "result.latex",
-    "result.pdf",
 )
 
 
@@ -57,9 +58,11 @@ def test_result_tabs_and_status_widgets_have_schema_metadata(window: Any) -> Non
         _result_alias(view_key): _result_schema_key(view_key)
         for view_key in RESULT_VIEW_ORDER
     }
-    assert window.result_tabs.property("datalab_result_view_specs")["pdf"]["attachment_key"] == "pdf"
-    assert "latex.compile" in window.result_tabs.property("datalab_result_view_specs")["latex"]["controls"]
-    assert "results.image.zoom_percent" in window.result_tabs.property("datalab_result_view_specs")["image"]["controls"]
+    # TeX/PDF are no longer published as result_tabs views (widgets moved off-screen).
+    specs = window.result_tabs.property("datalab_result_view_specs")
+    assert "pdf" not in specs
+    assert "latex" not in specs
+    assert "results.image.zoom_percent" in specs["image"]["controls"]
     assert window.result_tabs.count() == len(RESULT_VIEW_ORDER)
     for index, view_key in enumerate(RESULT_VIEW_ORDER):
         spec = DESKTOP_RESULT_VIEWS[view_key]

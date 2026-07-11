@@ -285,6 +285,68 @@ class WindowStatisticsMixin:
             message = f"{prefix}{warning}" if prefix else warning
             self._append_log(message)
 
+    def generate_statistics_latex_on_demand(self) -> str | None:
+        """Rebuild the statistics LaTeX tex ON DEMAND from the stashed result-data
+        (rows/sigma_rows/display_batches) + LIVE format widgets — no recompute. Mirrors the
+        run-time single-batch vs batches split."""
+        store = getattr(self, "_last_latex_inputs", {}) or {}
+        latex_inputs = store.get("statistics")
+        if not isinstance(latex_inputs, dict):
+            return None
+        display_batches = latex_inputs.get("display_batches")
+        rows = latex_inputs.get("rows")
+        sigma_rows = latex_inputs.get("sigma_rows")
+        if not isinstance(display_batches, list) or not display_batches:
+            return None
+        output_path = self.latex_output_path_for_run(True, reuse=True)
+        digits = (
+            self.latex_input_precision_spin.value()
+            if hasattr(self, "latex_input_precision_spin")
+            else 16
+        )
+        group_size = (
+            self.latex_group_size_spin.value()
+            if hasattr(self, "latex_group_size_spin")
+            else 3
+        )
+        use_dcolumn = (
+            self.dcolumn_checkbox.isChecked() if hasattr(self, "dcolumn_checkbox") else False
+        )
+        # Engine-adaptive grouping: if the compile engine's siunitx honours digit-group-size
+        # (local TeX) use native S-column variable-width grouping; otherwise (bundled
+        # Tectonic) the writer pre-groups the cells itself.
+        native = self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True
+        if len(display_batches) == 1:
+            entry = display_batches[0]
+            generate_statistics_latex(
+                str(entry["value_col"]),
+                rows,
+                sigma_rows,
+                entry["result"],
+                digits,
+                output_path,
+                use_dcolumn,
+                uncertainty_digits=self._uncertainty_digits_value(),
+                caption=self._caption_value(),
+                latex_group_size=group_size,
+                units=entry.get("units") if isinstance(entry.get("units"), Mapping) else None,
+                native_group_width=native,
+            )
+        else:
+            generate_statistics_latex_batches(
+                str(latex_inputs.get("value_col_joined") or ""),
+                display_batches,
+                digits,
+                output_path,
+                use_dcolumn,
+                caption=self._caption_value(),
+                uncertainty_digits=self._uncertainty_digits_value(),
+                latex_group_size=group_size,
+                native_group_width=native,
+            )
+        self._load_latex_into_editor(output_path)
+        return str(output_path)
+
     def _run_statistics_mode(self, generate_latex: bool, output_path: str):
         precision = self._read_precision()
         with _mp_precision_guard(precision):
@@ -427,6 +489,18 @@ class WindowStatisticsMixin:
             self._display_statistics_batches(display_batches, ", ".join(value_columns), render_plots=render_plots)
 
         self._append_log(self._tr("统计平均计算完成。", "Statistics completed."))
+        # Stash tex-rebuild DATA (rows/sigma_rows/display_batches) so 生成 TeX rebuilds on
+        # demand from live format widgets — the plain-stats display payload never carries
+        # rows/sigma_rows, so they must be retained here.
+        self.remember_latex_inputs(
+            "statistics",
+            {
+                "rows": rows,
+                "sigma_rows": sigma_rows,
+                "display_batches": display_batches,
+                "value_col_joined": ", ".join(group.value_col for group in column_groups),
+            },
+        )
         if generate_latex and output_path:
             digits = self.latex_input_precision_spin.value() if hasattr(self, "latex_input_precision_spin") else 16
             if len(display_batches) == 1:
@@ -442,6 +516,7 @@ class WindowStatisticsMixin:
                     uncertainty_digits=self._uncertainty_digits_value(),
                     caption=self._caption_value(),
                     latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                    native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
                     units=entry.get("units") if isinstance(entry.get("units"), Mapping) else None,
                 )
             else:
@@ -454,6 +529,7 @@ class WindowStatisticsMixin:
                     caption=self._caption_value(),
                     uncertainty_digits=self._uncertainty_digits_value(),
                     latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                    native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
                 )
             self._append_log(f"统计平均 LaTeX 已写入: {output_path}")
             self._load_latex_into_editor(output_path)
@@ -562,6 +638,7 @@ class WindowStatisticsMixin:
                 digits=self.latex_input_precision_spin.value() if hasattr(self, "latex_input_precision_spin") else 16,
                 uncertainty_digits=self._uncertainty_digits_value(),
                 latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
                 units=snapshot.get("units") if isinstance(snapshot.get("units"), Mapping) else None,
             )
             self._append_log(f"分组统计 LaTeX 已写入: {output_path}")
@@ -663,6 +740,7 @@ class WindowStatisticsMixin:
                 caption_text=self._caption_value(),
                 use_dcolumn=self.dcolumn_checkbox.isChecked(),
                 latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
                 units=snapshot.get("units") if isinstance(snapshot.get("units"), Mapping) else None,
             )
             self._append_log(f"协方差/相关矩阵 LaTeX 已写入: {output_path}")
@@ -977,6 +1055,7 @@ class WindowStatisticsMixin:
                 caption=self._caption_value(),
                 uncertainty_digits=self._uncertainty_digits_value(),
                 latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
             )
             self._append_log(f"时间序列统计 LaTeX 已写入: {output_path}")
             self._load_latex_into_editor(output_path)
@@ -1207,6 +1286,7 @@ class WindowStatisticsMixin:
                 caption=self._caption_value(),
                 uncertainty_digits=self._uncertainty_digits_value(),
                 latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
             )
             self._append_log(f"假设检验 LaTeX 已写入: {output_path}")
             self._load_latex_into_editor(output_path)
@@ -1341,6 +1421,7 @@ class WindowStatisticsMixin:
                 caption=self._caption_value(),
                 uncertainty_digits=self._uncertainty_digits_value(),
                 latex_group_size=self.latex_group_size_spin.value() if hasattr(self, "latex_group_size_spin") else 3,
+                native_group_width=self._engine_supports_group_width() if hasattr(self, "_engine_supports_group_width") else True,
             )
             self._append_log(f"Bootstrap 统计 LaTeX 已写入: {output_path}")
             self._load_latex_into_editor(output_path)

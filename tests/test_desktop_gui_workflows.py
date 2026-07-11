@@ -52,7 +52,7 @@ def _enter_manual_text(window: Any, text: str) -> None:
 
 
 def _click_run_and_wait(qtbot: Any, window: Any, *, timeout: int = 10000) -> None:
-    qtbot.mouseClick(window.run_button, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(window.workbench_run_button, Qt.MouseButton.LeftButton)
     qtbot.waitUntil(lambda: not window._has_running_worker(), timeout=timeout)
     QApplication.processEvents()
 
@@ -109,9 +109,6 @@ def test_error_propagation_click_workflow_zh(window: Any, qtbot: Any, tmp_path: 
     window.formula_edit.setPlainText("x*y")
     _select_combo_data(window.error_method_combo, "taylor")
     window.generate_plots_checkbox.setChecked(False)
-    window.generate_latex_checkbox.setChecked(True)
-    output_path = tmp_path / "error.tex"
-    window.output_file_edit.setText(str(output_path))
 
     _click_run_and_wait(qtbot, window)
 
@@ -121,6 +118,8 @@ def test_error_propagation_click_workflow_zh(window: Any, qtbot: Any, tmp_path: 
     assert "不确定度" in text
     assert window._csv_rows
     assert any(str(row.get("latex", "")).strip() for row in window._csv_rows)
+    # On-demand LaTeX: the run no longer writes tex; generate it on demand, then assert.
+    assert window.generate_latex_for_current_result() is not None
     latex_source = window.latex_edit.toPlainText()
     assert "\\begin{document}" in latex_source
     assert "x \\cdot y" in latex_source
@@ -169,9 +168,6 @@ def test_fitting_click_workflow_selected_comparison(window: Any, qtbot: Any, tmp
         "]"
     )
     window.generate_plots_checkbox.setChecked(False)
-    tex_path = tmp_path / "comparison.tex"
-    window.generate_latex_checkbox.setChecked(True)
-    window.output_file_edit.setText(str(tex_path))
 
     _click_run_and_wait(qtbot, window, timeout=15000)
 
@@ -182,7 +178,10 @@ def test_fitting_click_workflow_selected_comparison(window: Any, qtbot: Any, tmp
     assert window._csv_headers == list(COMPARISON_TABLE_HEADERS)
     assert [row["candidate_id"] for row in window._csv_rows] == ["linear", "quadratic"]
     assert window._csv_suggest_name == "fitting_comparison_results.csv"
-    latex_source = tex_path.read_text(encoding="utf-8")
+    # On-demand LaTeX: the run no longer writes tex; generate it on demand, then read the
+    # source from the editor.
+    assert window.generate_latex_for_current_result() is not None
+    latex_source = window.latex_edit.toPlainText()
     assert "\\begin{table}" in latex_source
     assert "$\\chi^2$" in latex_source
     assert "Linear" in latex_source
@@ -197,9 +196,6 @@ def test_root_solving_click_workflow_and_workspace_round_trip(window: Any, qtbot
     _select_combo_data(window.root_mode_combo, "scalar")
     window.root_unknowns_table.set_rows([{"name": "x", "initial": "1", "lower": "", "upper": ""}])
     window.generate_plots_checkbox.setChecked(True)
-    window.generate_latex_checkbox.setChecked(True)
-    output_path = tmp_path / "root.tex"
-    window.output_file_edit.setText(str(output_path))
 
     _click_run_and_wait(qtbot, window, timeout=15000)
 
@@ -207,6 +203,8 @@ def test_root_solving_click_workflow_and_workspace_round_trip(window: Any, qtbot
     assert "x" in text
     assert "2" in text
     assert window._csv_rows
+    # On-demand LaTeX: generate the tex on demand, then the editor is populated.
+    assert window.generate_latex_for_current_result() is not None
     assert window.latex_edit.toPlainText().strip()
     assert isinstance(window.result_plot_bytes, bytes)
     assert window.result_plot_bytes.startswith(b"\x89PNG")
@@ -230,6 +228,8 @@ def test_root_solving_click_workflow_and_workspace_round_trip(window: Any, qtbot
     assert reopened.root_unknowns_table.rows()[0]["name"] == "x"
     assert reopened.result_edit.toPlainText() == text
     assert reopened._csv_rows == window._csv_rows
+    # The workspace persists the generated tex SOURCE (latex_edit's results.latex.source),
+    # so a restored window shows the same tex without re-generating.
     assert reopened.latex_edit.toPlainText() == window.latex_edit.toPlainText()
     assert reopened.result_plot_bytes == window.result_plot_bytes
     assert reopened.tabs.currentIndex() == window.result_tab_index

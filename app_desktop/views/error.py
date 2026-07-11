@@ -4,7 +4,6 @@ from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFormLayout,
     QGroupBox,
@@ -14,11 +13,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
-    QVBoxLayout,
     QWidget,
 )
 
-from app_desktop.constants_editor import ConstantsEditor
 from app_desktop.schema_widgets import make_editor_header
 from app_desktop.ui_schema_binder import bind_choices, bind_field
 from app_desktop.ui_schema_runtime import register_schema_text_refresh
@@ -88,101 +85,6 @@ def build_error_mode_view(owner: Any) -> QGroupBox:
     # owner.error_constants_editor is aliased to input_constants_editor
     owner.error_constants_editor.table_view.setMinimumHeight(160)
     owner.error_constants_editor.text_view.setMinimumHeight(160)
-
-    owner.error_units_box = QGroupBox(owner._tr("单位标注", "Units"))
-    owner._register_text(owner.error_units_box, "单位标注", "Units", "setTitle")
-    units_layout = QVBoxLayout(owner.error_units_box)
-    units_layout.setContentsMargins(8, 8, 8, 8)
-    units_layout.setSpacing(6)
-
-    units_header = QHBoxLayout()
-    owner.error_units_enabled_checkbox = QCheckBox(owner._tr("启用单位标注", "Enable units"))
-    owner._register_text(owner.error_units_enabled_checkbox, "启用单位标注", "Enable units")
-    owner.error_units_enabled_checkbox.setProperty("datalab_schema_key", "error.units.enabled")
-    # Register tooltips/label for retranslation (not one-shot _tr) so they switch
-    # with the UI language.
-    owner._register_text(
-        owner.error_units_enabled_checkbox,
-        "启用后，运行误差传递时会保存并可选验证输入、常数和输出单位。",
-        "When enabled, error propagation stores and can validate input, constant, and output units.",
-        "setToolTip",
-    )
-    units_header.addWidget(owner.error_units_enabled_checkbox)
-    error_units_mode_label = QLabel(owner._tr("模式：", "Mode:"))
-    owner._register_text(error_units_mode_label, "模式：", "Mode:")
-    units_header.addWidget(error_units_mode_label)
-    owner.error_units_mode_combo = QComboBox()
-    units_mode_items = [
-        ("仅显示", "Display only", "display_only"),
-        ("验证公式", "Validate expression", "validate_expression"),
-    ]
-    for zh, _en, data in units_mode_items:
-        owner.error_units_mode_combo.addItem(zh, data)
-    owner._register_combo(owner.error_units_mode_combo, units_mode_items)
-    owner.error_units_mode_combo.setProperty("datalab_schema_key", "error.units.mode")
-    owner._register_text(
-        owner.error_units_mode_combo,
-        "仅显示只保存/渲染单位；验证公式会在数值计算前检查量纲兼容性。",
-        "Display only stores/renders units; validate expression checks dimensional compatibility before numeric evaluation.",
-        "setToolTip",
-    )
-    units_header.addWidget(owner.error_units_mode_combo)
-    units_header.addStretch()
-    units_layout.addLayout(units_header)
-
-    owner.error_units_body = QWidget()
-    units_body_layout = QVBoxLayout(owner.error_units_body)
-    units_body_layout.setContentsMargins(0, 0, 0, 0)
-    units_body_layout.setSpacing(6)
-    owner.error_units_inputs_editor = ConstantsEditor(min_rows=2, checked=True, checkbox_text="")
-    owner.error_units_inputs_editor.setObjectName("error_units_inputs_editor")
-    owner.error_units_inputs_editor.set_table_headers(owner._tr("符号", "Symbol"), owner._tr("单位", "Unit"))
-    owner.error_units_inputs_editor.setToolTip(
-        owner._tr(
-            "输入列的单位。符号使用公式中的列名或规范化后的变量名，例如 A 或 distance。",
-            "Units for input columns. Symbols use formula column names or canonical variable names, such as A or distance.",
-        )
-    )
-    owner.error_units_inputs_editor.setProperty("datalab_schema_key", "error.units.inputs")
-    owner.error_units_constants_editor = ConstantsEditor(min_rows=2, checked=True, checkbox_text="")
-    owner.error_units_constants_editor.setObjectName("error_units_constants_editor")
-    owner.error_units_constants_editor.set_table_headers(owner._tr("符号", "Symbol"), owner._tr("单位", "Unit"))
-    owner.error_units_constants_editor.setToolTip(
-        owner._tr(
-            "常数的单位。符号必须与左侧常数表中的常数名一致。",
-            "Units for constants. Symbols must match names in the left constants table.",
-        )
-    )
-    owner.error_units_constants_editor.setProperty("datalab_schema_key", "error.units.constants")
-    output_row = QHBoxLayout()
-    output_row.addWidget(QLabel(owner._tr("输出 result 单位：", "Output result unit:")))
-    owner.error_units_output_edit = QLineEdit()
-    owner.error_units_output_edit.setPlaceholderText(owner._tr("例如 m", "e.g. m"))
-    owner.error_units_output_edit.setProperty("datalab_schema_key", "error.units.outputs.result")
-    owner.error_units_output_edit.setToolTip(
-        owner._tr(
-            "可选。验证模式下，公式结果单位必须与这里填写的 result 单位完全一致。",
-            "Optional. In validate mode, the formula result unit must exactly match this result unit.",
-        )
-    )
-    output_row.addWidget(owner.error_units_output_edit)
-    units_body_layout.addWidget(QLabel(owner._tr("输入单位：", "Input units:")))
-    units_body_layout.addWidget(owner.error_units_inputs_editor)
-    units_body_layout.addWidget(QLabel(owner._tr("常数单位：", "Constant units:")))
-    units_body_layout.addWidget(owner.error_units_constants_editor)
-    units_body_layout.addLayout(output_row)
-    units_layout.addWidget(owner.error_units_body)
-    error_layout.addWidget(owner.error_units_box)
-
-    def _update_error_units_controls() -> None:
-        enabled = owner.error_units_enabled_checkbox.isChecked()
-        owner.error_units_mode_combo.setEnabled(enabled)
-        owner.error_units_body.setVisible(enabled)
-        owner.error_units_body.setEnabled(enabled)
-
-    owner._update_error_units_controls = _update_error_units_controls
-    owner.error_units_enabled_checkbox.toggled.connect(lambda *_args: owner._update_error_units_controls())
-    owner._update_error_units_controls()
 
     method_row = QHBoxLayout()
     lbl_err_method = QLabel("方法：")

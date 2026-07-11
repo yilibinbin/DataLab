@@ -311,16 +311,18 @@ def test_web_fitting_template_exposes_only_explicit_supported_choices():
         'value="pade"',
         'value="power_limit"',
         'value="custom"',
+        'value="self_consistent"',
         'value="comparison"',
     ):
         assert allowed in text
 
     assert 'name="fit_comparison_candidates"' in text
 
-    # The exact six-model Task 1 set applies to desktop. The current web
-    # flow has no self-consistent/implicit input fields, so it exposes only
-    # the supported explicit subset and does not pretend to route it.
-    assert 'value="self_consistent"' not in text
+    # Task B4: the web flow now offers self-consistent/implicit fitting (mirroring
+    # desktop), wired via fitting.FitRunner() with a dedicated implicit-model field
+    # block (fit_implicit_equation / _variable / _output / _params). It routes
+    # through the same explicit-choice `<select>`, not the removed auto/preset mode.
+    assert 'name="fit_implicit_equation"' in text
 
 
 def test_web_fitting_docs_describe_explicit_selected_fit_comparison():

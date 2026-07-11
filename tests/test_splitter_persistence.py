@@ -99,7 +99,8 @@ def test_splitter_state_round_trips_across_window_lifetimes(qtbot, _fake_setting
     # state is correctly clamped/rejected on reopen.
     win1._refresh_main_splitter_left_min_width()
     left_width = win1._main_splitter_left_min_width + 64
-    splitter.setSizes([left_width, 660, 420])
+    # Two-pane layout: [merged left | result].
+    splitter.setSizes([left_width, 420])
     expected_state = QByteArray(splitter.saveState())
     assert not expected_state.isEmpty()
 
@@ -118,10 +119,10 @@ def test_splitter_state_round_trips_across_window_lifetimes(qtbot, _fake_setting
     assert _fake_settings.get(KEY_MAIN_SPLITTER_STATE) is not None, (
         "valid splitter state must not be discarded during restore"
     )
-    assert win2._main_splitter.count() == 3
-    assert len(win2._main_splitter.sizes()) == 3
+    assert win2._main_splitter.count() == 2
+    assert len(win2._main_splitter.sizes()) == 2
     assert win2._main_splitter.sizes()[0] >= win2._main_splitter_left_min_width
-    assert win2._main_splitter.sizes()[2] >= win2.workbench_result_rail.minimumWidth()
+    assert win2._main_splitter.sizes()[1] >= win2.workbench_result_rail.minimumWidth()
     assert win2._left_scroll.horizontalScrollBar().maximum() == 0
     win2.close()
 
@@ -149,10 +150,10 @@ def test_corrupted_splitter_state_blob_is_discarded(qtbot, _fake_settings):
 def test_valid_looking_stale_blob_with_wrong_pane_count_reverts(
     qtbot, _fake_settings
 ):
-    """A blob from the legacy 2-pane layout in an older version
-    may ``restoreState() -> True`` but apply sizes for the wrong
-    number of panes. Post-restore semantic validation must revert and
-    drop the blob."""
+    """A blob from the legacy THREE-pane layout in an older app version may
+    ``restoreState() -> True`` but apply sizes for the wrong number of panes. The
+    pane-count guard must reject it and the post-restore invariant must hold: the new
+    window is TWO-pane, so a saved 3-pane blob is dropped rather than applied."""
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QLabel, QSplitter
 
@@ -160,12 +161,13 @@ def test_valid_looking_stale_blob_with_wrong_pane_count_reverts(
 
     app = QApplication.instance() or QApplication([])  # noqa: F841
 
-    # Construct a 2-pane splitter state, save it, then open a real
-    # window (which has a 3-pane splitter) and confirm rollback.
+    # Construct a legacy THREE-pane splitter state (config | workspace | result),
+    # save it, then open a real window (which now has a TWO-pane splitter) and confirm
+    # the stale-pane-count blob is rejected.
     fake_splitter = QSplitter(Qt.Horizontal)
-    for _ in range(2):
+    for _ in range(3):
         fake_splitter.addWidget(QLabel("pane"))
-    fake_splitter.setSizes([520, 820])
+    fake_splitter.setSizes([320, 820, 380])
     _fake_settings[KEY_MAIN_SPLITTER_STATE] = QByteArray(
         fake_splitter.saveState()
     )
@@ -173,9 +175,9 @@ def test_valid_looking_stale_blob_with_wrong_pane_count_reverts(
     win = ExtrapolationWindow()
     qtbot.addWidget(win)
     splitter = win._main_splitter
-    # The validator saw a pane-count mismatch and reverted to the
-    # pre-restore defaults. Either way, sizes must match pane count.
-    assert splitter.count() == 3
+    # The validator saw a pane-count mismatch (3-pane blob vs 2-pane splitter) and
+    # reverted to the pre-restore defaults. Sizes must match the current pane count.
+    assert splitter.count() == 2
     assert len(splitter.sizes()) == splitter.count(), (
         "post-restore invariant: sizes() length must match count()"
     )

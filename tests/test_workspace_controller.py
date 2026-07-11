@@ -225,7 +225,10 @@ def test_workspace_round_trips_common_and_latex_precision_settings(qtbot) -> Non
     # caption text + TeX engine are also captured at save; they must round-trip
     # too, or the F11 "captured but never restored" fix is incomplete.
     source.caption_edit.setText("Table 1: extrapolated limits")
-    source.latex_engine_combo.setCurrentText("pdflatex")
+    # The engine combo is 自动 + detected engines (data = "auto" or an engine PATH). "auto"
+    # is the portable default and must round-trip; a machine-specific path that no longer
+    # matches on restore falls back to auto (graceful — asserted separately below).
+    source.latex_engine_combo.setCurrentIndex(source.latex_engine_combo.findData("auto"))
 
     bundle = capture_workspace(source, title="precision settings")
 
@@ -240,7 +243,7 @@ def test_workspace_round_trips_common_and_latex_precision_settings(qtbot) -> Non
     assert target.latex_input_precision_spin.value() == 40
     assert target.latex_group_size_spin.value() == 5
     assert target.caption_edit.text() == "Table 1: extrapolated limits"
-    assert target.latex_engine_combo.currentText() == "pdflatex"
+    assert target.latex_engine_combo.currentData() == "auto"
 
 
 def test_workspace_round_trips_fitting_log_axes(qtbot) -> None:
@@ -802,7 +805,7 @@ def test_workspace_restore_clamps_invalid_ui_indices(qtbot) -> None:
 
     source = ExtrapolationWindow()
     qtbot.addWidget(source)
-    source.result_tabs.setCurrentIndex(source.result_tabs_indices["latex"])
+    source.result_tabs.setCurrentIndex(source.result_tabs_indices["log"])
     source.result_edit.setPlainText("Result")
     bundle = capture_workspace(source, title="invalid ui")
     bundle.manifest["workspace"]["ui"].update(
@@ -1642,139 +1645,6 @@ def test_workspace_restores_error_rows_from_uncertainty_semantic_snapshot(qtbot)
 
     recaptured = capture_workspace(target, title="semantic uncertainty restored")
     assert recaptured.manifest["workspace"]["result_snapshot"]["semantic"] == semantic
-
-
-def test_workspace_round_trips_error_units_config(qtbot) -> None:
-    from app_desktop.window import ExtrapolationWindow
-    from app_desktop.workspace_controller import capture_workspace, restore_workspace
-
-    source = ExtrapolationWindow()
-    qtbot.addWidget(source)
-    source.formula_edit.setPlainText("distance")
-    source.error_units_enabled_checkbox.setChecked(True)
-    source.error_units_inputs_editor.set_rows([{"name": "distance", "value": "m"}])
-    source.error_units_output_edit.setText("m")
-
-    bundle = capture_workspace(source, title="error units")
-    normalized_units = bundle.manifest["workspace"]["config"]["error"]["units"]
-
-    assert normalized_units["inputs"] == {"distance": {"unit": "m"}}
-    assert normalized_units["outputs"] == {"result": {"unit": "m"}}
-
-    target = ExtrapolationWindow()
-    qtbot.addWidget(target)
-    restore_workspace(target, bundle.manifest, bundle.attachments)
-
-    assert target.error_units_config == normalized_units
-    assert target.error_units_enabled_checkbox.isChecked()
-    assert target.error_units_inputs_editor.rows() == [{"name": "distance", "value": "m"}]
-    assert target.error_units_output_edit.text() == "m"
-
-
-def test_workspace_round_trips_display_units_for_root_statistics_and_fitting(qtbot) -> None:
-    from app_desktop.window import ExtrapolationWindow
-    from app_desktop.workspace_controller import capture_workspace, restore_workspace
-
-    source = ExtrapolationWindow()
-    qtbot.addWidget(source)
-    source.root_units_enabled_checkbox.setChecked(True)
-    source.root_units_inputs_editor.set_rows([{"name": "A", "value": "m^2"}])
-    source.root_units_constants_editor.set_rows([{"name": "K", "value": "J"}])
-    source.root_units_output_edit.setText("m")
-    source.stats_units_enabled_checkbox.setChecked(True)
-    source.stats_units_inputs_editor.set_rows([{"name": "B", "value": "K"}])
-    source.stats_units_output_edit.setText("K")
-    source.fit_units_enabled_checkbox.setChecked(True)
-    source.fit_units_inputs_editor.set_rows([{"name": "x", "value": "s"}])
-    source.fit_units_constants_editor.set_rows([{"name": "C", "value": "m"}])
-    source.fit_units_parameters_editor.set_rows([{"name": "a", "value": "m/s"}])
-    source.fit_units_output_edit.setText("m")
-
-    bundle = capture_workspace(source, title="display units")
-    config = bundle.manifest["workspace"]["config"]
-
-    assert config["root_solving"]["units"]["inputs"] == {"A": {"unit": "m^2"}}
-    assert config["root_solving"]["units"]["constants"] == {"K": {"unit": "J"}}
-    assert config["statistics"]["units"]["outputs"] == {"result": {"unit": "K"}}
-    assert config["fitting"]["units"]["parameters"] == {"a": {"unit": "m/s"}}
-
-    target = ExtrapolationWindow()
-    qtbot.addWidget(target)
-    restore_workspace(target, bundle.manifest, bundle.attachments)
-
-    assert target.root_units_enabled_checkbox.isChecked()
-    assert target.root_units_inputs_editor.rows() == [{"name": "A", "value": "m^2"}]
-    assert target.root_units_constants_editor.rows() == [{"name": "K", "value": "J"}]
-    assert target.root_units_output_edit.text() == "m"
-    assert target.stats_units_enabled_checkbox.isChecked()
-    assert target.stats_units_inputs_editor.rows() == [{"name": "B", "value": "K"}]
-    assert target.stats_units_output_edit.text() == "K"
-    assert target.fit_units_enabled_checkbox.isChecked()
-    assert target.fit_units_inputs_editor.rows() == [{"name": "x", "value": "s"}]
-    assert target.fit_units_constants_editor.rows() == [{"name": "C", "value": "m"}]
-    assert target.fit_units_parameters_editor.rows() == [{"name": "a", "value": "m/s"}]
-    assert target.fit_units_output_edit.text() == "m"
-
-
-def test_workspace_restore_without_error_config_clears_visible_error_units(qtbot) -> None:
-    from app_desktop.window import ExtrapolationWindow
-    from app_desktop.workspace_controller import capture_workspace, restore_workspace
-
-    source = ExtrapolationWindow()
-    qtbot.addWidget(source)
-    bundle = capture_workspace(source, title="legacy without error config")
-    workspace = bundle.manifest["workspace"]
-    workspace["config"].pop("error", None)
-
-    target = ExtrapolationWindow()
-    qtbot.addWidget(target)
-    target.error_units_enabled_checkbox.setChecked(True)
-    target.error_units_inputs_editor.set_rows([{"name": "stale", "value": "m"}])
-    target.error_units_constants_editor.set_rows([{"name": "K", "value": "s"}])
-    target.error_units_output_edit.setText("m")
-    target.error_units_config = {"enabled": True, "mode": "display_only", "inputs": {"stale": "m"}}
-
-    restore_workspace(target, bundle.manifest, bundle.attachments)
-
-    assert target.error_units_config is None
-    assert not target.error_units_enabled_checkbox.isChecked()
-    assert target.error_units_inputs_editor.rows() == []
-    assert target.error_units_constants_editor.rows() == []
-    assert target.error_units_output_edit.text() == ""
-
-
-def test_workspace_restore_without_display_units_clears_root_statistics_and_fitting_units(qtbot) -> None:
-    from app_desktop.window import ExtrapolationWindow
-    from app_desktop.workspace_controller import capture_workspace, restore_workspace
-
-    source = ExtrapolationWindow()
-    qtbot.addWidget(source)
-    bundle = capture_workspace(source, title="legacy without display units")
-    config = bundle.manifest["workspace"]["config"]
-    config["root_solving"].pop("units", None)
-    config["statistics"].pop("units", None)
-    config["fitting"].pop("units", None)
-
-    target = ExtrapolationWindow()
-    qtbot.addWidget(target)
-    target.root_units_enabled_checkbox.setChecked(True)
-    target.root_units_inputs_editor.set_rows([{"name": "stale", "value": "m"}])
-    target.stats_units_enabled_checkbox.setChecked(True)
-    target.stats_units_inputs_editor.set_rows([{"name": "stale", "value": "s"}])
-    target.fit_units_enabled_checkbox.setChecked(True)
-    target.fit_units_parameters_editor.set_rows([{"name": "stale", "value": "J"}])
-
-    restore_workspace(target, bundle.manifest, bundle.attachments)
-
-    assert target.root_units_config is None
-    assert target.stats_units_config is None
-    assert target.fit_units_config is None
-    assert not target.root_units_enabled_checkbox.isChecked()
-    assert not target.stats_units_enabled_checkbox.isChecked()
-    assert not target.fit_units_enabled_checkbox.isChecked()
-    assert target.root_units_inputs_editor.rows() == []
-    assert target.stats_units_inputs_editor.rows() == []
-    assert target.fit_units_parameters_editor.rows() == []
 
 
 def test_workspace_uncertainty_snapshot_nulls_inactive_taylor_monte_carlo_options(qtbot) -> None:
@@ -4350,3 +4220,29 @@ def test_workspace_round_trip_preserves_workbench_variable_panel_state(qtbot, tm
 
     assert restored.custom_params_table.rows()[0]["name"] == "A"
     assert restored.custom_constants_editor.rows()[0]["name"] == "CR"
+
+
+def test_oversized_latex_inputs_stash_is_dropped_not_a_save_failure(qtbot) -> None:
+    """A high-dps fit with many points can encode _last_latex_inputs to several MiB, over the 2 MiB
+    manifest budget. The optional tex-rebuild stash must be DROPPED so the workspace stays
+    saveable, rather than making the whole save fail (audit A4)."""
+    from app_desktop.window import ExtrapolationWindow
+    from app_desktop.workspace_controller import _manifest_json_size_bytes, capture_workspace
+    from shared.precision import precision_guard
+    from shared.workspace_schema import MAX_MANIFEST_BYTES
+    from mpmath import mp
+
+    win = ExtrapolationWindow()
+    qtbot.addWidget(win)
+
+    with precision_guard(80):
+        big = [mp.sqrt(i + 2) for i in range(6000)]
+    win._last_latex_inputs = {"extrapolation": {"rows": big, "sigma_rows": big, "predicted": big}}
+    bundle = capture_workspace(win, title="big")
+    assert _manifest_json_size_bytes(bundle.manifest) <= MAX_MANIFEST_BYTES
+    assert "latex_inputs" not in bundle.manifest  # oversized stash dropped
+
+    # A small stash stays — the drop only fires when it would blow the budget.
+    win._last_latex_inputs = {"extrapolation": {"rows": [mp.mpf("1.5")]}}
+    small_bundle = capture_workspace(win, title="small")
+    assert "latex_inputs" in small_bundle.manifest

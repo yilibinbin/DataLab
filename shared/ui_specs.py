@@ -357,6 +357,17 @@ WYNN_EPSILON_PARAMS = form_section(
     visible_when=VisibilityRule.equals("method", "wynn_epsilon"),
 )
 
+# quadratic ("默认三点公式") derives its three values from the data columns themselves, so it takes
+# no tunable parameters (empty group, like shanks/wynn_epsilon). Added so the desktop offers the
+# backend's default three-point method that the web already exposes (audit B3).
+QUADRATIC_PARAMS = form_section(
+    key="quadratic_params",
+    title_zh="默认三点公式",
+    title_en="Default three-point formula",
+    fields=[],
+    visible_when=VisibilityRule.equals("method", "quadratic"),
+)
+
 
 # ============================================================
 # Complete Method Specifications
@@ -389,6 +400,14 @@ EXTRAPOLATION_METHOD_SPECS: dict[str, MethodSpec] = {
         description_zh=get_method_description("power_law", "zh"),
         description_en=get_method_description("power_law", "en"),
         parameter_groups=[POWER_LAW_PARAMS],
+    ),
+    "quadratic": MethodSpec(
+        key="quadratic",
+        name_zh="默认三点公式",
+        name_en="Default three-point formula",
+        description_zh=get_method_description("quadratic", "zh"),
+        description_en=get_method_description("quadratic", "en"),
+        parameter_groups=[QUADRATIC_PARAMS],
     ),
     "richardson": MethodSpec(
         key="richardson",
@@ -440,6 +459,7 @@ EXTRAPOLATION_METHOD_SPECS: dict[str, MethodSpec] = {
 # Order of methods in the dropdown (desktop GUI order)
 METHOD_DISPLAY_ORDER = [
     "power_law",
+    "quadratic",
     "richardson",
     "shanks",
     "levin_u",
@@ -517,7 +537,11 @@ FITTING_MODEL_FIELD = select_field(
     choices=[
         _choice("polynomial", "多项式", "Polynomial"),
         _choice("inverse_power", "反幂级数", "Inverse-power series"),
+        _choice("pade", "Padé 拟合", "Padé"),
+        _choice("power_limit", "幂律极限拟合", "Power-law limit"),
         _choice("custom", "自定义模型", "Custom model"),
+        _choice("self_consistent", "自洽隐式模型", "Self-consistent / implicit"),
+        _choice("comparison", "选定拟合比较", "Selected-fit comparison"),
     ],
     tooltip_zh="选择曲线拟合模型。",
     tooltip_en="Choose the curve fitting model.",
@@ -700,14 +724,15 @@ RESULT_LATEX_ENGINE_FIELD = select_field(
     key="latex.engine",
     label_zh="LaTeX 引擎：",
     label_en="LaTeX engine:",
-    default_value="tectonic",
+    default_value="auto",
     choices=(
-        _choice("pdflatex", "pdflatex", "pdflatex"),
-        _choice("xelatex", "xelatex", "xelatex"),
-        _choice("tectonic", "tectonic", "tectonic"),
+        # Engine MODE, not a specific binary — the app resolves the actual engine per mode.
+        _choice("auto", "自动", "Auto"),
+        _choice("bundled", "内置 Tectonic", "Bundled Tectonic"),
+        _choice("local", "本地 TeX", "Local TeX"),
     ),
-    tooltip_zh="选择用于编译 PDF 的 LaTeX 引擎。",
-    tooltip_en="Choose the LaTeX engine used to compile PDF output.",
+    tooltip_zh="自动优先本地 TeX（支持任意分组宽度），否则使用内置 Tectonic。",
+    tooltip_en="Auto prefers a local TeX (supports any group width), else the bundled Tectonic.",
     required=False,
 )
 RESULT_LATEX_ENGINE_PATH_FIELD = button_field(

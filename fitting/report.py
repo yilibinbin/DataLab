@@ -22,9 +22,15 @@ def summarize_fit_result(result: FitResult) -> str:
         stat = stat if stat is not None else result.param_errors.get(name, mp.mpf("0"))
         sys = sys if sys is not None else mp.mpf("0")
         total = total if total is not None else result.param_errors.get(name, stat)
-        entry = f"{name} = {_format_value(value)} ± {_format_value(total)}"
-        if sys and not mp.almosteq(sys, mp.mpf("0")):
-            entry += f" (stat {_format_value(stat)}, sys {_format_value(sys)})"
+        # An undefined (non-finite) total uncertainty renders as "N/A" so the text
+        # summary matches the frontends' tables instead of printing "± nan". The
+        # stat/sys split is likewise suppressed when sys is undefined — a NaN sys
+        # passes the truthiness/almosteq checks and would print "(stat nan, sys nan)".
+        total_text = _format_value(total) if mp.isfinite(total) else "N/A"
+        entry = f"{name} = {_format_value(value)} ± {total_text}"
+        if sys and mp.isfinite(sys) and not mp.almosteq(sys, mp.mpf("0")):
+            stat_text = _format_value(stat) if mp.isfinite(stat) else "N/A"
+            entry += f" (stat {stat_text}, sys {_format_value(sys)})"
         lines.append(entry)
     lines.extend(
         [

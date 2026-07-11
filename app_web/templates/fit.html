@@ -79,6 +79,7 @@
         <option value="pade" {% if mode == 'pade' %}selected{% endif %} data-i18n="fit.modePade">Padé 拟合</option>
         <option value="power_limit" {% if mode == 'power_limit' %}selected{% endif %} data-i18n="fit.modePowerLimit">幂律极限拟合</option>
         <option value="custom" {% if mode == 'custom' %}selected{% endif %} data-i18n="fit.modeCustom">自定义模型表达式</option>
+        <option value="self_consistent" {% if mode == 'self_consistent' %}selected{% endif %} data-i18n="fit.modeSelfConsistent">自洽隐式模型 / Self-consistent</option>
         <option value="comparison" {% if mode == 'comparison' %}selected{% endif %} data-i18n="fit.modeComparison">选定拟合比较</option>
       </select>
 
@@ -90,6 +91,32 @@
         <textarea id="fit_custom_params" name="fit_custom_params" rows="6" spellcheck="false">{{ request.form.get('fit_custom_params', '{\n  \"A\": {\"initial\": 1.0},\n  \"p\": {\"initial\": 1.0},\n  \"C\": {\"initial\": 0.0}\n}') }}</textarea>
         <label class="field-label" for="fit_var_mapping" data-i18n="fit.varMappingLabel">变量映射 (var: 列名，每行一对，留空默认 x)</label>
         <textarea id="fit_var_mapping" name="fit_var_mapping" rows="4" spellcheck="false">{{ request.form.get('fit_var_mapping', '') }}</textarea>
+      </div>
+
+      <div class="method-block" data-fit-mode="self_consistent" style="{% if mode == 'self_consistent' %}display:block{% endif %}">
+        <label class="field-label" for="fit_implicit_equation" data-i18n="fit.implicitEquationLabel">隐式方程</label>
+        <textarea id="fit_implicit_equation" name="fit_implicit_equation" rows="3" spellcheck="false" data-i18n-placeholder="fit.implicitEquationPlaceholder" placeholder="如 y - A*exp(-B/x*y)">{{ request.form.get('fit_implicit_equation', '') }}</textarea>
+        <label class="field-label" for="fit_implicit_variable" data-i18n="fit.implicitVariableLabel">隐式变量</label>
+        <input id="fit_implicit_variable" name="fit_implicit_variable" type="text" data-i18n-placeholder="fit.implicitVariablePlaceholder" placeholder="如 y" value="{{ request.form.get('fit_implicit_variable', '') }}">
+        <label class="field-label" for="fit_implicit_output" data-i18n="fit.implicitOutputLabel">输出表达式</label>
+        <textarea id="fit_implicit_output" name="fit_implicit_output" rows="2" spellcheck="false" data-i18n-placeholder="fit.implicitOutputPlaceholder" placeholder="如 y">{{ request.form.get('fit_implicit_output', '') }}</textarea>
+        <label class="field-label" for="fit_implicit_params" data-i18n="fit.implicitParamsLabel">参数配置 (JSON，可选)</label>
+        <textarea id="fit_implicit_params" name="fit_implicit_params" rows="5" spellcheck="false">{{ request.form.get('fit_implicit_params', '') }}</textarea>
+        <div class="split">
+          <div>
+            <label class="field-label" for="fit_implicit_initial" data-i18n="fit.implicitInitialLabel">初值</label>
+            <input id="fit_implicit_initial" name="fit_implicit_initial" type="text" value="{{ request.form.get('fit_implicit_initial', '0') }}">
+          </div>
+          <div>
+            <label class="field-label" for="fit_implicit_tolerance" data-i18n="fit.implicitToleranceLabel">收敛容差</label>
+            <input id="fit_implicit_tolerance" name="fit_implicit_tolerance" type="text" value="{{ request.form.get('fit_implicit_tolerance', '1e-30') }}">
+          </div>
+          <div>
+            <label class="field-label" for="fit_implicit_max_iter" data-i18n="fit.implicitMaxIterLabel">最大迭代次数</label>
+            <input id="fit_implicit_max_iter" name="fit_implicit_max_iter" type="number" min="1" max="10000" value="{{ request.form.get('fit_implicit_max_iter', '80') }}">
+          </div>
+        </div>
+        <input id="fit_implicit_method" name="fit_implicit_method" type="hidden" value="{{ request.form.get('fit_implicit_method', 'fixed_point') }}">
       </div>
 
       <div class="method-block" data-fit-mode="polynomial" style="{% if mode == 'polynomial' %}display:block{% endif %}">

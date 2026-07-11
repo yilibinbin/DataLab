@@ -510,21 +510,23 @@ def _horizontal_scrollbar_issues(window: Any, scenarios: list[ScreenScenario]) -
         _apply_screen_scenario(window, scenario)
         QApplication.processEvents()
         _force_smallest_left_splitter(window)
-        scroll = window.findChild(QScrollArea, "workbench_config_rail")
+        # Two-pane layout: the left pane IS the merged workspace canvas (the config rail
+        # merged into it). Scan that pane for horizontal overflow. ``_left_scroll`` is the
+        # canonical alias for the current left pane; fall back to the object name.
+        scroll = getattr(window, "_left_scroll", None)
         kind = "workbench_config_horizontal_scrollbar"
-        widget = "workbench_config_rail"
+        widget = "_left_scroll"
         if scroll is None:
-            scroll = getattr(window, "_left_scroll", None)
-            kind = "horizontal_scrollbar"
-            widget = "_left_scroll"
+            scroll = window.findChild(QScrollArea, "workbench_workspace_canvas")
+            widget = "workbench_workspace_canvas"
         if scroll is None:
             issues.append(
                 _issue(
                     "missing_scroll_widget",
                     scenario,
-                    "workbench_config_rail",
-                    "neither workbench_config_rail nor _left_scroll found on window",
-                    attempted_widgets=["workbench_config_rail", "_left_scroll"],
+                    "workbench_workspace_canvas",
+                    "neither _left_scroll nor workbench_workspace_canvas found on window",
+                    attempted_widgets=["_left_scroll", "workbench_workspace_canvas"],
                 )
             )
             continue
@@ -812,10 +814,32 @@ def _legacy_language_issues(window: Any, lang: str) -> list[dict[str, Any]]:
         )
     if _find_unbound_required_widgets(window.root_box):
         issues.append(_issue("schema_binding", scenario, "root_box", "root box has unbound required schema widgets"))
-    if _find_unbound_required_widgets(window.options_box):
-        issues.append(
-            _issue("schema_binding", scenario, "options_box", "options box has unbound required schema widgets")
-        )
+    # Global options moved out of ``options_box`` into the two inline toolbar panels
+    # (计算 / LaTeX). Audit the panels — the now-empty ``options_box`` would pass
+    # vacuously and mask an unbound required widget. A MISSING panel attribute must
+    # also fail loudly: if a refactor drops a panel entirely, the audit would otherwise
+    # pass vacuously and hide that the options are unreachable.
+    for panel_attr in ("compute_options_dialog", "latex_options_dialog"):
+        if not hasattr(window, panel_attr) or getattr(window, panel_attr) is None:
+            issues.append(
+                _issue(
+                    "schema_binding",
+                    scenario,
+                    panel_attr,
+                    f"{panel_attr} is missing from the window (options panel absent)",
+                )
+            )
+            continue
+        panel = getattr(window, panel_attr)
+        if _find_unbound_required_widgets(panel):
+            issues.append(
+                _issue(
+                    "schema_binding",
+                    scenario,
+                    panel_attr,
+                    f"{panel_attr} has unbound required schema widgets",
+                )
+            )
     return issues
 
 

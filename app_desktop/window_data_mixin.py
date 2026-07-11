@@ -443,8 +443,11 @@ class WindowDataMixin:
         manual_content: str | None = None,
         source_kind: str | None = None,
     ) -> InputBundle:
-        _cb = getattr(self, "use_file_checkbox", None)
-        use_file = _cb.isChecked() if _cb is not None else False
+        # No checkbox any more: a non-empty data-file path takes PRECEDENCE over the manual input
+        # (user request — fill the file field and the manual table/text below is ignored).
+        _file_edit = getattr(self, "data_file_edit", None)
+        _file_path_text = _file_edit.text().strip() if _file_edit is not None else ""
+        use_file = bool(_file_path_text)
         if data_path is not None or manual_content is not None:
             return self._input_bundle_from_source(
                 data_path=data_path,
@@ -456,8 +459,7 @@ class WindowDataMixin:
         active_manual_content = ""
         active_source_kind = "manual_table"
         if use_file:
-            data_path_text = self.data_file_edit.text().strip()
-            active_data_path = _safe_resolve_path(data_path_text) if data_path_text else None
+            active_data_path = _safe_resolve_path(_file_path_text)
             active_source_kind = "file"
         else:
             # Read from table view if active, otherwise from text view

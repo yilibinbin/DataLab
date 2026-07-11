@@ -1202,6 +1202,9 @@ def _execute_calc_job(
             "results": results,
             "table_segments": table_segments,
             "constants": constants_used,
+            # ``used_columns`` (used_headers) was local-only; retain it so the on-demand
+            # LaTeX rebuild can reproduce the run-time tex without recomputing.
+            "used_columns": used_headers,
             "formula": job.formula or "",
             "precision_used": applied_precision,
             "propagation": normalize_uncertainty_propagation_config(
@@ -1508,6 +1511,10 @@ class FitJob:
     verbose: bool = False
     render_plots: bool = True
     latex_digits: int = 16
+    # Retained so on-demand LaTeX rebuild reproduces the run-time tex (comparison job
+    # already carries these; single-fit lacked them and re-read live widgets).
+    latex_group_size: int = 3
+    uncertainty_digits: int = 1
     weighted: bool = False
     label: str = ""
     is_multidim: bool = False

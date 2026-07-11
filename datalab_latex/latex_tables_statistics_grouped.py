@@ -27,6 +27,7 @@ def generate_statistics_grouped_latex(
     uncertainty_digits: int | None = None,
     latex_group_size: int = 3,
     units: Mapping[str, Any] | None = None,
+    native_group_width: bool = True,
 ) -> str:
     """Generate a standalone LaTeX document for grouped statistics payloads."""
 
@@ -78,6 +79,7 @@ def generate_statistics_grouped_latex(
         include_dcolumn=use_dcolumn,
         needs_cjk=_needs_cjk_support(*(str(segment) for segment in text_segments)),
         latex_group_size=group_size,
+        native_group_width=native_group_width,
     )
     value_columns = ", ".join(str(column) for column in payload["value_columns"])
     lines.extend(

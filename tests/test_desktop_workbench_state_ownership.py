@@ -125,13 +125,6 @@ def test_no_unowned_parameter_or_constant_state_widgets(qtbot: Any) -> None:
     for owner_type in owner_types:
         owner_widgets.extend(window.findChildren(owner_type))
     for widget in owner_widgets:
-        # Units editors reuse the ConstantsEditor widget to map symbols → units;
-        # they are not constant/parameter *state* owners (they carry a
-        # ``*.units.*`` schema key and never a ``datalab_state_role``), so they
-        # are outside this ownership guard.
-        schema_key = str(widget.property("datalab_schema_key") or "")
-        if ".units." in schema_key:
-            continue
         assert widget in expected_widgets, (
             "unexpected editable state owner",
             widget.__class__.__name__,

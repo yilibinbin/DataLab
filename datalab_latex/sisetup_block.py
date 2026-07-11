@@ -27,6 +27,7 @@ def build_sisetup_block(
     *,
     group_size: int,
     include_dcolumn: bool,
+    emit_digit_group_size: bool | None = None,
 ) -> str:
     """Return the preamble block for siunitx number formatting.
 
@@ -85,7 +86,10 @@ def build_sisetup_block(
     # guard below.
     lines.extend(
         [
-            "    group-digits = decimal,",
+            # ``all`` groups BOTH the integer and decimal parts (thousands separators);
+            # ``decimal`` grouped only the fractional digits, so integers like 12345678
+            # rendered ungrouped and users saw "grouping does nothing".
+            "    group-digits = all,",
             r"    group-separator = {\,},",
             f"    group-minimum-digits = {group_size},",
             "    tight-spacing = true,",
@@ -94,35 +98,27 @@ def build_sisetup_block(
         ]
     )
 
-    if group_size != 3:
-        # ``digit-group-size`` is a siunitx-v3 key but its presence in
-        # the source tree predates its activation in the dispatcher:
-        # siunitx 3.0.49 (date 2022-02-15) — the version Tectonic
-        # currently bundles — has ``digit-group-size`` defined in
-        # siunitx.sty yet still rejects ``\sisetup{digit-group-size = N}``
-        # at runtime with ``LaTeX3 Error: The key 'siunitx/digit-group-
-        # size' is unknown``. The key reaches a working dispatcher
-        # only in later 3.x releases (verified working on 3.4.14
-        # from 2025-07-09).
-        #
-        # The cutoff was originally pinned to 2020/01/01 (siunitx v3
-        # introduction date), then 2020/02/08 (3.0.0 release). Both
-        # were too early — the 2022-02-15 Tectonic siunitx slips past
-        # those guards and fires the override against an installation
-        # that doesn't honour the key. ``2024/01/01`` is the empirical
-        # safe cutoff: confirmed Tectonic-bundled v3.0.49 evaluates as
-        # earlier (override skipped, fall back to size 3 default which
-        # still compiles) and TeX Live 2025 v3.4.14 evaluates as later
-        # (override fires, requested size honoured).
-        #
-        # ``\@ifpackagelater`` is an internal LaTeX2e command, so it
-        # has to live inside ``\makeatletter ... \makeatother``.
-        # Previous revisions tried wrapping in ``\begingroup ... \endgroup``
-        # for catcode-flip safety; that was a regression because TeX
-        # groups also scope ``\sisetup``'s package-state assignments,
-        # silently reverting the override. Plain
-        # ``\makeatletter ... \makeatother`` is the right pattern for
-        # a preamble-level package-state mutation.
+    # ``digit-group-size`` sets the WIDTH of each group (not just the threshold). It is a
+    # siunitx-v3 key that some v3 builds (Tectonic-bundled 3.0.49) still REJECT at runtime
+    # with ``LaTeX3 Error: The key 'siunitx/digit-group-size' is unknown`` while newer builds
+    # (TeX Live 3.4.14) honour it. Whether to emit it:
+    #   emit_digit_group_size is True  -> the app PROBED the engine and knows it is honoured;
+    #                                     emit UNGUARDED (probe is authoritative).
+    #   emit_digit_group_size is False -> probed as NOT honoured; never emit (doc must still
+    #                                     compile; app-side text grouping handles width).
+    #   emit_digit_group_size is None  -> no probe result; fall back to the legacy
+    #                                     \@ifpackagelater date heuristic (backward compatible
+    #                                     for callers not yet probe-aware). Skipped when the
+    #                                     requested size is 3 (both v2/v3 default to 3 anyway).
+    if emit_digit_group_size is True:
+        lines.append(f"\\sisetup{{digit-group-size = {group_size}}}")
+    elif emit_digit_group_size is None and group_size != 3:
+        # ``\@ifpackagelater`` is an internal LaTeX2e command, so it has to live inside
+        # ``\makeatletter ... \makeatother``. NOT wrapped in ``\begingroup ... \endgroup``:
+        # TeX groups scope ``\sisetup``'s package-state assignments and would silently
+        # revert the override at ``\endgroup`` time. 2024/01/01 is the empirical cutoff:
+        # Tectonic-bundled v3.0.49 evaluates as earlier (skipped → default size 3, still
+        # compiles), TeX Live v3.4.14 as later (fires → requested size honoured).
         lines.append(r"\makeatletter")
         lines.append(
             r"\@ifpackagelater{siunitx}{2024/01/01}{"

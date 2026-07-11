@@ -44,28 +44,6 @@ def _combo_current_data(owner, attr_name: str, default: str) -> str:
     return default
 
 
-def _unit_rows_to_map(owner, editor_attr: str, label_zh: str, label_en: str) -> dict[str, str]:
-    editor = getattr(owner, editor_attr, None)
-    if editor is None:
-        return {}
-    rows_func = getattr(editor, "rows", None)
-    rows = rows_func() if callable(rows_func) else []
-    values: dict[str, str] = {}
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        name = str(row.get("name") or "").strip()
-        unit = str(row.get("value") or "").strip()
-        if not name and not unit:
-            continue
-        if not name or not unit:
-            raise ValueError(owner._tr(f"{label_zh}的符号和单位都需要填写。", f"{label_en} requires both symbol and unit."))
-        if name in values:
-            raise ValueError(owner._tr(f"{label_zh}重复：{name}", f"Duplicate {label_en}: {name}"))
-        values[name] = unit
-    return values
-
-
 def _error_output_unit(units: object) -> str:
     if not isinstance(units, Mapping):
         return ""
@@ -119,38 +97,41 @@ class WindowExtrapolationMixin:
         )
 
     def _reapply_run_button_shortcut(self):
-        """Re-apply the run button's execute shortcut.
+        """Re-apply the toolbar run button's execute shortcut.
 
-        QPushButton.setText() clears an explicitly-set shortcut in PySide6, so
-        every retranslation or run/stop text swap silently drops Ctrl/⌘+Return
-        (it only survived when the new text equalled the old). Re-apply it after
-        any text change to keep the shortcut installed in every language.
+        QPushButton.setText() clears an explicitly-set shortcut in PySide6, so any
+        retranslation could silently drop Ctrl/⌘+Return. Re-apply it after any text
+        change to keep the shortcut installed in every language. The bottom 开始执行
+        button was removed (4·4c) — Ctrl+Return now runs via the toolbar 运行 button.
         """
-        button = getattr(self, "run_button", None)
+        button = getattr(self, "workbench_run_button", None)
         if button is not None:
             from PySide6.QtGui import QKeySequence
 
             button.setShortcut(QKeySequence("Ctrl+Return"))
 
     def _set_button_to_stop_mode(self):
-        """Change the run button to stop mode (red color, stop text)."""
-        if hasattr(self, "run_button"):
-            self.run_button.setText(self._tr("停止", "Stop"))
-            self._reapply_run_button_shortcut()
-            self.run_button.setStyleSheet("")
-            self.run_button.setProperty("datalab_run_state", "stop")
-            self.run_button.style().unpolish(self.run_button)
-            self.run_button.style().polish(self.run_button)
+        """Reflect a running job on the toolbar: disable 运行, enable 停止.
+
+        The bottom 开始执行 toggle was removed (4·4c); the toolbar's dedicated 运行 /
+        停止 pair + the job-status label carry run-state feedback now."""
+        self._datalab_run_state = "stop"
+        run_button = getattr(self, "workbench_run_button", None)
+        if run_button is not None:
+            run_button.setEnabled(False)
+        stop_button = getattr(self, "workbench_stop_button", None)
+        if stop_button is not None:
+            stop_button.setEnabled(True)
 
     def _set_button_to_run_mode(self):
-        """Restore the run button to normal run mode."""
-        if hasattr(self, "run_button"):
-            self.run_button.setText(self._tr("开始执行", "Run"))
-            self._reapply_run_button_shortcut()
-            self.run_button.setStyleSheet("")
-            self.run_button.setProperty("datalab_run_state", "run")
-            self.run_button.style().unpolish(self.run_button)
-            self.run_button.style().polish(self.run_button)
+        """Restore the idle toolbar state: enable 运行, disable 停止."""
+        self._datalab_run_state = "run"
+        run_button = getattr(self, "workbench_run_button", None)
+        if run_button is not None:
+            run_button.setEnabled(True)
+        stop_button = getattr(self, "workbench_stop_button", None)
+        if stop_button is not None:
+            stop_button.setEnabled(False)
 
     def _stop_current_worker(self):
         """Request all running workers to stop."""
@@ -191,18 +172,10 @@ class WindowExtrapolationMixin:
             return
         data_path, manual_content = input_bundle.data_path, input_bundle.data_text
         if mode == "root_solving":
-            generate_latex = self.generate_latex_checkbox.isChecked()
-            output_path = ""
-            if generate_latex:
-                output_path_text = self.output_file_edit.text().strip()
-                if not output_path_text:
-                    QMessageBox.critical(
-                        self,
-                        self._tr("错误", "Error"),
-                        self._tr("请在「选项」中设置 LaTeX 输出路径。", "Please set LaTeX output path in Options."),
-                    )
-                    return
-                output_path = str(_safe_resolve_path(output_path_text))
+            # On-demand LaTeX: the run does not write tex (it stashes the rebuild data);
+            # the user generates tex on demand via 生成 TeX.
+            generate_latex = False
+            output_path = self.latex_output_path_for_run(generate_latex)
             self._run_root_solving_mode(
                 data_path=data_path,
                 manual_content=manual_content,
@@ -239,35 +212,19 @@ class WindowExtrapolationMixin:
             )
             return
 
-        generate_latex = self.generate_latex_checkbox.isChecked()
+        # On-demand LaTeX: the run no longer writes tex — it only computes and stashes the
+        # tex-rebuild data (ungated). The user generates tex on demand via 生成 TeX. So we
+        # never gate the run on a checkbox.
+        generate_latex = False
         generate_plots = self.generate_plots_checkbox.isChecked() if hasattr(self, "generate_plots_checkbox") else True
         try:
             caption = self._caption_value(require=generate_latex)
         except ValueError as exc:
             QMessageBox.critical(self, self._tr("错误", "Error"), self._localize_text(str(exc)))
             return
-        output_path_text = self.output_file_edit.text().strip()
-        if generate_latex:
-            if not output_path_text:
-                QMessageBox.critical(
-                    self,
-                    self._tr("错误", "Error"),
-                    self._tr("请在「选项」中设置 LaTeX 输出路径。", "Please set LaTeX output path in Options."),
-                )
-                return
-            output_candidate = _safe_resolve_path(output_path_text)
-            if not output_candidate.parent.exists():
-                msg_zh = f"输出目录不存在: {output_candidate.parent}"
-                msg_en = f"Output directory does not exist: {output_candidate.parent}"
-                QMessageBox.critical(
-                    self,
-                    self._tr("错误", "Error"),
-                    self._tr(msg_zh, msg_en),
-                )
-                return
-            output_path = str(output_candidate)
-        else:
-            output_path = ""
+        # The tex is written to a per-run temp path (no user output-path field); the user
+        # saves to a chosen location later via the TeX window.
+        output_path = self.latex_output_path_for_run(generate_latex)
 
         use_dcolumn = self.dcolumn_checkbox.isChecked()
         verbose = self.verbose_checkbox.isChecked()
@@ -542,6 +499,17 @@ class WindowExtrapolationMixin:
                     plot_bytes_list=plot_bytes,
                     render_plots=render_plots,
                 )
+                # Stash tex-rebuild DATA (incl. table_segments, which the display path drops)
+                # so 生成 TeX can rebuild on demand from live format widgets, no recompute.
+                self.remember_latex_inputs(
+                    "extrapolation",
+                    {
+                        "headers": headers,
+                        "data_rows": data_rows,
+                        "results": results,
+                        "table_segments": result.payload.get("table_segments"),
+                    },
+                )
             elif result.mode == "error":
                 headers = result.payload.get("headers", [])
                 parsed = result.payload.get("parsed_data", [])
@@ -559,6 +527,21 @@ class WindowExtrapolationMixin:
                     warnings=result.warnings,
                     propagation=result.payload.get("propagation"),
                     units=result.payload.get("units"),
+                )
+                # Stash tex-rebuild DATA (table_segments/constants/used_columns are dropped
+                # or local-only in the display path) so 生成 TeX rebuilds on demand.
+                self.remember_latex_inputs(
+                    "error",
+                    {
+                        "headers": headers,
+                        "parsed_data": parsed,
+                        "results": results,
+                        "constants": result.payload.get("constants") or {},
+                        "used_columns": result.payload.get("used_columns"),
+                        "table_segments": result.payload.get("table_segments"),
+                        "formula": formula,
+                        "units": result.payload.get("units"),
+                    },
                 )
                 breakdown = result.payload.get("contribution_breakdown")
                 plot_bytes = result.payload.get("contribution_plot")
@@ -701,6 +684,12 @@ class WindowExtrapolationMixin:
             self._reset_csv_data()
         self._write_root_latex_if_requested(payload)
         self._remember_last_result("root_solving", dict(payload))
+        # Stash the tex-rebuild DATA (raw_rows + units) so 生成 TeX can rebuild on demand
+        # without recomputing. Format options are read live from widgets at generate time.
+        self.remember_latex_inputs(
+            "root_solving",
+            {"raw_rows": payload.get("raw_rows"), "units": payload.get("units")},
+        )
         QMessageBox.information(
             self,
             self._tr("完成", "Done"),
@@ -735,6 +724,146 @@ class WindowExtrapolationMixin:
             self._load_latex_into_editor(tex_path)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, self._tr("写入失败", "Write Failed"), str(exc))
+
+    def generate_root_latex_on_demand(self) -> str | None:
+        """Rebuild the root-solving LaTeX tex ON DEMAND from the stashed result-data +
+        LIVE format-option widgets — no recompute, no run-time intent flags.
+
+        Reads ``raw_rows``/``units`` from ``self._last_latex_inputs['root_solving']`` and the
+        format options (caption/digits/uncertainty/group_size/dcolumn/language) from the
+        current widget values, then writes tex to a per-run temp path and returns it (or
+        ``None`` if there is no stashed root result to rebuild from).
+        """
+        store = getattr(self, "_last_latex_inputs", {}) or {}
+        latex_inputs = store.get("root_solving")
+        if not isinstance(latex_inputs, dict):
+            return None
+        raw_rows = latex_inputs.get("raw_rows")
+        if not isinstance(raw_rows, list):
+            return None
+        from .root_latex_writer import write_root_latex
+
+        output_path = self.latex_output_path_for_run(True, reuse=True)
+        caption = self._caption_value() if hasattr(self, "_caption_value") else ""
+        tex_path = write_root_latex(
+            output_path=output_path,
+            rows=raw_rows,
+            caption=caption,
+            digits=self.latex_input_precision_spin.value()
+            if hasattr(self, "latex_input_precision_spin")
+            else 16,
+            uncertainty_digits=self._uncertainty_digits_value(),
+            group_size=self.latex_group_size_spin.value()
+            if hasattr(self, "latex_group_size_spin")
+            else 3,
+            include_dcolumn=self.dcolumn_checkbox.isChecked()
+            if hasattr(self, "dcolumn_checkbox")
+            else False,
+            language="en" if self._is_en() else "zh",
+            root_units=_root_units_for_rows(raw_rows, latex_inputs.get("units")),
+            native_group_width=self._engine_supports_group_width()
+            if hasattr(self, "_engine_supports_group_width")
+            else True,
+        )
+        self._load_latex_into_editor(tex_path)
+        return str(tex_path)
+
+    def generate_extrapolation_latex_on_demand(self) -> str | None:
+        """Rebuild the extrapolation LaTeX tex ON DEMAND from the stashed result-data
+        (headers/data_rows/results/table_segments) + LIVE format widgets — no recompute."""
+        store = getattr(self, "_last_latex_inputs", {}) or {}
+        latex_inputs = store.get("extrapolation")
+        if not isinstance(latex_inputs, dict):
+            return None
+        headers = latex_inputs.get("headers")
+        data_rows = latex_inputs.get("data_rows")
+        results = latex_inputs.get("results")
+        if headers is None or data_rows is None or results is None:
+            return None
+        from datalab_latex.latex_tables_extrapolation import generate_latex_table
+
+        output_path = self.latex_output_path_for_run(True, reuse=True)
+        caption = self._caption_value() if hasattr(self, "_caption_value") else None
+        generate_latex_table(
+            headers,
+            data_rows,
+            results,
+            output_path,
+            caption=caption,
+            precision=self.latex_input_precision_spin.value()
+            if hasattr(self, "latex_input_precision_spin")
+            else None,
+            verbose=self.verbose_checkbox.isChecked()
+            if hasattr(self, "verbose_checkbox")
+            else False,
+            use_dcolumn=self.dcolumn_checkbox.isChecked()
+            if hasattr(self, "dcolumn_checkbox")
+            else False,
+            table_segments=latex_inputs.get("table_segments"),
+            result_uncertainty_digits=self._uncertainty_digits_value(),
+            latex_group_size=self.latex_group_size_spin.value()
+            if hasattr(self, "latex_group_size_spin")
+            else 3,
+            native_group_width=self._engine_supports_group_width()
+            if hasattr(self, "_engine_supports_group_width")
+            else True,
+        )
+        self._load_latex_into_editor(output_path)
+        return str(output_path)
+
+    def generate_error_latex_on_demand(self) -> str | None:
+        """Rebuild the error-propagation LaTeX tex ON DEMAND from the stashed result-data
+        (headers/parsed_data/results/constants/used_columns/table_segments/formula/units) +
+        LIVE format widgets — no recompute."""
+        store = getattr(self, "_last_latex_inputs", {}) or {}
+        latex_inputs = store.get("error")
+        if not isinstance(latex_inputs, dict):
+            return None
+        headers = latex_inputs.get("headers")
+        parsed_data = latex_inputs.get("parsed_data")
+        results = latex_inputs.get("results")
+        if headers is None or parsed_data is None or results is None:
+            return None
+        from datalab_latex.latex_tables_error_propagation import (
+            generate_error_propagation_table,
+        )
+
+        from .workers_core import _input_units_for_headers, _result_unit_from_units
+
+        units_payload = latex_inputs.get("units")
+        output_path = self.latex_output_path_for_run(True, reuse=True)
+        caption = self._caption_value() if hasattr(self, "_caption_value") else None
+        generate_error_propagation_table(
+            headers,
+            parsed_data,
+            results,
+            latex_inputs.get("constants") or {},
+            str(latex_inputs.get("formula") or ""),
+            output_path,
+            caption=caption,
+            verbose=self.verbose_checkbox.isChecked()
+            if hasattr(self, "verbose_checkbox")
+            else False,
+            use_dcolumn=self.dcolumn_checkbox.isChecked()
+            if hasattr(self, "dcolumn_checkbox")
+            else False,
+            table_segments=latex_inputs.get("table_segments"),
+            precision=self.latex_input_precision_spin.value()
+            if hasattr(self, "latex_input_precision_spin")
+            else None,
+            result_uncertainty_digits=self._uncertainty_digits_value(),
+            used_columns=latex_inputs.get("used_columns"),
+            latex_group_size=self.latex_group_size_spin.value()
+            if hasattr(self, "latex_group_size_spin")
+            else 3,
+            input_units=_input_units_for_headers(headers, units_payload),
+            result_unit=_result_unit_from_units(units_payload),
+            native_group_width=self._engine_supports_group_width()
+            if hasattr(self, "_engine_supports_group_width")
+            else True,
+        )
+        self._load_latex_into_editor(output_path)
+        return str(output_path)
 
     def _on_root_solving_failed(self, message: str):
         self._mark_workbench_result_failed()
@@ -1033,93 +1162,21 @@ class WindowExtrapolationMixin:
             payload["units"] = units
         self._remember_last_result("error", payload)
 
+    # The units feature (启用单位标注 + per-variable unit tables) was removed — it was not general
+    # enough and duplicated the data/constants symbol columns. The run/compute/LaTeX paths are all
+    # None-safe for units, so every mode now passes units_config=None. These collectors return None
+    # for any legacy caller that still asks.
     def _collect_error_units_config(self):
-        checkbox = getattr(self, "error_units_enabled_checkbox", None)
-        if checkbox is None:
-            units = getattr(self, "error_units_config", None)
-            return units if isinstance(units, Mapping) else None
-        if not checkbox.isChecked():
-            return None
-        units: dict[str, object] = {
-            "enabled": True,
-            "mode": _combo_current_data(self, "error_units_mode_combo", "display_only"),
-            "inputs": _unit_rows_to_map(self, "error_units_inputs_editor", "输入单位", "input units"),
-            "constants": _unit_rows_to_map(self, "error_units_constants_editor", "常数单位", "constant units"),
-        }
-        output_edit = getattr(self, "error_units_output_edit", None)
-        output_unit = output_edit.text().strip() if output_edit is not None else ""
-        if output_unit:
-            units["outputs"] = {"result": output_unit}
-        return units
-
-    def _collect_display_units_config(
-        self,
-        attr_prefix: str,
-        *,
-        label_zh: str,
-        label_en: str,
-        include_constants: bool = False,
-        include_parameters: bool = False,
-    ):
-        checkbox = getattr(self, f"{attr_prefix}_units_enabled_checkbox", None)
-        if checkbox is None:
-            units = getattr(self, f"{attr_prefix}_units_config", None)
-            return units if isinstance(units, Mapping) else None
-        if not checkbox.isChecked():
-            return None
-        units: dict[str, object] = {
-            "enabled": True,
-            "mode": "display_only",
-            "inputs": _unit_rows_to_map(
-                self,
-                f"{attr_prefix}_units_inputs_editor",
-                f"{label_zh}输入单位",
-                f"{label_en} input units",
-            ),
-        }
-        if include_constants:
-            units["constants"] = _unit_rows_to_map(
-                self,
-                f"{attr_prefix}_units_constants_editor",
-                f"{label_zh}常数单位",
-                f"{label_en} constant units",
-            )
-        if include_parameters:
-            units["parameters"] = _unit_rows_to_map(
-                self,
-                f"{attr_prefix}_units_parameters_editor",
-                f"{label_zh}参数单位",
-                f"{label_en} parameter units",
-            )
-        output_edit = getattr(self, f"{attr_prefix}_units_output_edit", None)
-        output_unit = output_edit.text().strip() if output_edit is not None else ""
-        if output_unit:
-            units["outputs"] = {"result": output_unit}
-        return units
+        return None
 
     def _collect_root_units_config(self):
-        return self._collect_display_units_config(
-            "root",
-            label_zh="求根",
-            label_en="root-solving",
-            include_constants=True,
-        )
+        return None
 
     def _collect_statistics_units_config(self):
-        return self._collect_display_units_config(
-            "stats",
-            label_zh="统计",
-            label_en="statistics",
-        )
+        return None
 
     def _collect_fitting_units_config(self):
-        return self._collect_display_units_config(
-            "fit",
-            label_zh="拟合",
-            label_en="fitting",
-            include_constants=True,
-            include_parameters=True,
-        )
+        return None
 
     def _split_extrapolation_result(self, result):
         return split_extrapolation_result(result)

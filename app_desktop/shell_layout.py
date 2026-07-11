@@ -32,6 +32,13 @@ def update_workbench_status(owner: object) -> None:
 
 
 def set_workbench_job_status(owner: object, *, running: bool) -> None:
+    # Prefer the rich status chip (5-state word + one-line summary) so this run/stop signal
+    # doesn't clobber it back to a bare 运行中/就绪. The chip reads the shared result state,
+    # which already reports "running" during a job.
+    refresh_chip = getattr(owner, "_refresh_toolbar_status_chip", None)
+    if callable(refresh_chip):
+        refresh_chip(running=running)
+        return
     job_label = getattr(owner, "job_status_label", None)
     if job_label is not None:
         job_label.setText(
