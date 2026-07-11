@@ -131,8 +131,8 @@ _LANG_ZH = "zh"
 _LANG_EN = "en"
 _LANG_AUTO = "auto"
 # Visible result subtabs, in order. TeX/PDF are intentionally NOT here: the on-demand
-# LaTeX preview dialog is their viewer now (opened by the result-panel 生成 TeX / 预览 PDF
-# buttons). The latex/pdf widgets are still built — hosted off-screen in
+# LaTeX preview dialog is their viewer now (opened by the result-panel 生成 TeX button; the
+# dialog carries both the TeX and PDF tabs). The latex/pdf widgets are still built — hosted off-screen in
 # ``_offscreen_result_views`` — so the dialog, workspace round-trip, and compile paths
 # keep reading them; see build_right_panel and DESKTOP_RESULT_VIEWS (which keeps all 5
 # view specs for the off-screen widgets + result_view_titles).
@@ -1420,7 +1420,9 @@ def build_right_panel(self, layout: QVBoxLayout):
     result_layout.setContentsMargins(0, 0, 0, 0)
     result_layout.setSpacing(8)
     # On-demand LaTeX buttons: 生成 TeX rebuilds the tex from the current result and opens
-    # the LaTeX preview window on the TeX tab; 预览 PDF also compiles + shows the PDF tab.
+    # the LaTeX preview window. That dialog carries BOTH a TeX and a PDF tab (switch to the
+    # PDF tab to preview the compiled PDF), so there is no separate 预览 PDF button here — a
+    # standalone one duplicated the dialog's PDF tab (user-reported).
     latex_button_row = QHBoxLayout()
     latex_button_row.setContentsMargins(0, 0, 0, 0)
     self.result_generate_tex_button = QPushButton("生成 TeX")
@@ -1428,12 +1430,6 @@ def build_right_panel(self, layout: QVBoxLayout):
     self._register_text(self.result_generate_tex_button, "生成 TeX", "Generate TeX")
     self.result_generate_tex_button.clicked.connect(
         lambda _c=False: self.open_latex_preview("tex")
-    )
-    self.result_preview_pdf_button = QPushButton("预览 PDF")
-    self.result_preview_pdf_button.setObjectName("result_preview_pdf_button")
-    self._register_text(self.result_preview_pdf_button, "预览 PDF", "Preview PDF")
-    self.result_preview_pdf_button.clicked.connect(
-        lambda _c=False: self.open_latex_preview("pdf")
     )
     # LaTeX 选项 opens the (existing) latex_options_dialog — the entry moved here from the
     # toolbar (user: 工具栏不需要 latex). The dialog is built later in build_left_panel;
@@ -1445,7 +1441,6 @@ def build_right_panel(self, layout: QVBoxLayout):
 
     bind_options_button(self.result_latex_options_button, self.latex_options_dialog)
     latex_button_row.addWidget(self.result_generate_tex_button)
-    latex_button_row.addWidget(self.result_preview_pdf_button)
     latex_button_row.addWidget(self.result_latex_options_button)
     latex_button_row.addStretch(1)
     result_layout.addLayout(latex_button_row)

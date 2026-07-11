@@ -96,10 +96,11 @@ def test_save_button_writes_tex_to_chosen_path(window: Any, monkeypatch: Any, tm
     dialog.close()
 
 
-def test_result_buttons_open_dialog_on_right_tab(window: Any, monkeypatch: Any) -> None:
-    """The 生成 TeX / 预览 PDF result-panel buttons rebuild tex on demand and open the
-    dialog on the matching tab. We stub the rebuild (tested elsewhere) + the async compile
-    (tested elsewhere) to isolate the button→dialog wiring."""
+def test_generate_tex_button_opens_dialog_with_both_tabs(window: Any, monkeypatch: Any) -> None:
+    """生成 TeX rebuilds the tex on demand and opens the LaTeX preview dialog on the TeX
+    tab. There is NO separate 预览 PDF button in the result panel — the dialog itself
+    carries the PDF tab, which a standalone button would only duplicate (user-reported).
+    We stub the rebuild (tested elsewhere) to isolate the button→dialog wiring."""
     window.latex_edit.setPlainText(_TEX)
     # A rebuildable result exists → the dispatcher returns a path (so the dialog opens).
     monkeypatch.setattr(window, "generate_latex_for_current_result", lambda: "/tmp/x.tex")
@@ -107,21 +108,18 @@ def test_result_buttons_open_dialog_on_right_tab(window: Any, monkeypatch: Any) 
     monkeypatch.setattr(window, "compile_latex_to_pdf", lambda: None)
     monkeypatch.setattr(window, "_latex_compile_worker", None, raising=False)
 
-    tex_btn = window.result_generate_tex_button
-    pdf_btn = window.result_preview_pdf_button
+    # The redundant standalone 预览 PDF button no longer exists.
+    assert not hasattr(window, "result_preview_pdf_button")
 
-    tex_btn.click()
+    window.result_generate_tex_button.click()
     QApplication.processEvents()
     dialog = window._latex_preview_dialog
     tabs = dialog.findChild(QTabWidget)
+    # Opens on the TeX tab...
     assert "TeX" in tabs.tabText(tabs.currentIndex())
-    dialog.close()
-
-    pdf_btn.click()
-    QApplication.processEvents()
-    dialog = window._latex_preview_dialog
-    tabs = dialog.findChild(QTabWidget)
-    assert "PDF" in tabs.tabText(tabs.currentIndex())
+    # ...and the PDF preview is still available as a tab inside the same dialog.
+    tab_titles = [tabs.tabText(i) for i in range(tabs.count())]
+    assert any("PDF" in title for title in tab_titles)
     dialog.close()
 
 
