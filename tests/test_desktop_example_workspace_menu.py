@@ -280,7 +280,7 @@ def test_example_with_file_mode_constants_keeps_constants_editor_editable(qtbot)
     constants path too, so the constants editor + its +行/-行/清除 buttons stay
     editable and the inlined constants rows survive.
     """
-    from PySide6.QtWidgets import QAbstractButton, QTableWidget, QWidget
+    from PySide6.QtWidgets import QAbstractButton, QWidget
 
     from app_desktop.window import ExtrapolationWindow, list_example_workspaces
 
@@ -301,9 +301,12 @@ def test_example_with_file_mode_constants_keeps_constants_editor_editable(qtbot)
     buttons = {b.text(): b for b in editor.findChildren(QAbstractButton) if b.text() in labels}
     assert labels <= set(buttons)
     assert all(b.isEnabled() for b in buttons.values())
-    # The inlined constants rows survive the fall-back to manual mode.
-    table = editor.findChild(QTableWidget)
-    assert table is not None and table.rowCount() > 0
+    # The inlined constants CONTENT survives the fall-back to manual mode — assert the
+    # actual example constant (ALPHA) is present, not merely a non-zero row count (the
+    # editor has min_rows=1, so an empty restore would still leave one blank row and a
+    # rowCount()>0 check could not catch content loss — Codex review).
+    names = {str(row.get("name", "")).strip() for row in win.input_constants_editor.rows()}
+    assert "ALPHA" in names, sorted(names)
 
 
 def test_opening_narrow_example_clears_stale_manual_table_columns(qtbot):
